@@ -6,6 +6,7 @@ pub mod printer;
 pub mod reader;
 pub mod runner;
 pub mod value;
+pub mod wit;
 
 pub use form::{Arena, Node, NodeId};
 pub use lexer::ReadError;
@@ -266,6 +267,60 @@ Def quarter Fn {n}
         assert_eq!(eval_str("fold[Fn {a b} add[a b] 0 range[1 5]]"), "10");
         assert_eq!(eval_str("to-string({a: 1})"), "\"{a: 1}\"");
         assert_eq!(eval_str("read(\"ok(5)\")"), "ok(ok(5))");
+    }
+
+    #[test]
+    fn wit_synthesis_matches_spec() {
+        // §6.1: the exact WIT the design doc shows for shout.wvl
+        let src = "Package \"demo:shout@0.1.0\"\n\
+                   Export shout\n\
+                   Def shout Fn {phrase: string}\n\
+                     str-cat[upper(phrase) \"!\"]";
+        let (arena, roots) = read_file(src).unwrap();
+        let got = wit::synthesize(&arena, &roots).unwrap();
+        let want = "\
+package demo:shout@0.1.0;
+
+interface api {
+  shout: func(phrase: string) -> string;
+}
+
+world shout {
+  export api;
+}
+";
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn wit_synthesis_world_imports() {
+        let src = "Package \"demo:main@0.1.0\"\n\
+                   Target \"wasi:cli/command\"\n\
+                   Import {pkg: \"demo:shout/api\" as: sh}\n\
+                   Export run\n\
+                   Def run Fn {} println(\"hi\")";
+        let (arena, roots) = read_file(src).unwrap();
+        let got = wit::synthesize(&arena, &roots).unwrap();
+        assert!(got.contains("run: func();"), "{got}");
+        assert!(got.contains("include wasi:cli/command;"), "{got}");
+        assert!(got.contains("import demo:shout/api;"), "{got}");
+    }
+
+    #[test]
+    fn wit_synthesis_types_and_explicit_exports() {
+        let src = "Package \"demo:t@0.1.0\"\n\
+                   DefType pair {x: s32 y: s32}\n\
+                   DefType ttl [days(u32) forever]\n\
+                   Export {name: pick params: {seed: u64} result: result(string string)}\n\
+                   Def pick Fn {seed} ok(\"w\")";
+        let (arena, roots) = read_file(src).unwrap();
+        let got = wit::synthesize(&arena, &roots).unwrap();
+        assert!(got.contains("record pair { x: s32, y: s32 }"), "{got}");
+        assert!(got.contains("variant ttl { days(u32), forever }"), "{got}");
+        assert!(
+            got.contains("pick: func(seed: u64) -> result<string, string>;"),
+            "{got}"
+        );
     }
 
     #[test]
