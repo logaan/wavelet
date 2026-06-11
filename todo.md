@@ -32,24 +32,37 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       lookup ignores the alias; revisit with macro imports in Phase 2)
 
 ## Phase 2 — expander (§2.4, §6.3)
-- [ ] Core special-form arity table (the 17 forms, §4.2) seeded into reader
-- [ ] `DefMacro` registration while reading top-to-bottom (define-before-use)
-- [ ] `Quote` / `Quasi` / `Unquote` / `Splice` semantics over form trees
-- [ ] `gensym`
-- [ ] Expansion to fixpoint
-- [ ] (later) macro components: instantiate wasm at compile time, `manifest`/
-      `expand` interface, `Import {… macros: true}`
+- [x] Core special-form arity table (the 17 forms, §4.2) seeded into reader
+- [x] `DefMacro` registration while reading top-to-bottom (define-before-use)
+- [x] `Quote` / `Quasi` / `Unquote` / `Splice` semantics over form trees
+- [x] `gensym`
+- [x] Expansion (lazy, at eval time: a call whose head is bound to a Macro
+      value expands and jumps into the result — fixpoint by re-evaluation)
+- [ ] Nested `Quasi` depth handling (currently single-level, Clojure-style)
+- [ ] Separate ahead-of-time expand pass (needed for the wasm backend)
+- [ ] Macro components: instantiate wasm at compile time, `manifest`/`expand`
+      interface, `Import {… macros: true}`
 
 ## Phase 3 — interpreter (validate semantics before emitting wasm)
-- [ ] Value repr = WIT value space only (§3); structural `eq`
-- [ ] Eval rules 1–4 (§4.1); Lisp-1 lexical env
-- [ ] Special forms: `Def`, `Fn` (record/list/tuple/scalar payload binding §4.2),
-      `If`, `Let` (sequential record bindings), `Do`, `Match` (patterns §4.2),
-      `The`
-- [ ] Tail-call elimination in the interpreter (trampoline) — §5 positions
-- [ ] Builtin `wavelet:std/core` subset: eq/lt/…, add/sub/…, list ops, str ops,
-      to-string/read, print/println, apply, form accessors
-- [ ] Run the §1 and §8 examples end to end (single-component, no composition)
+- [x] Value repr = WIT value space (`src/value.rs`); structural `eq`,
+      identity for closures/cells; canonical WAVE value printer
+- [x] Eval rules 1–4 (§4.1); Lisp-1 lexical env (`src/interp.rs`)
+- [x] Special forms: `Def`, `Fn`, `If`, `Let`, `Do`, `Match`, `Quote`, `Quasi`,
+      `DefMacro`, `The` (primitive-type ascription checks)
+- [x] §4.2 payload binding: record→by name, list/tuple→by order, sole param
+      →direct; typed params checked at bind time
+- [x] Tail-call elimination via Jump loop — verified with 200k-deep recursion
+- [x] Pattern matching incl. payload-less variant cases matching by equality
+      when the name is bound to one (e.g. `none`); bare names bind otherwise
+- [x] Builtins (`src/builtins.rs`): predicates, arithmetic, sequences, strings,
+      conversions, I/O, apply/gensym, form accessors, ok/err/some/none, cells
+- [x] §7.2 `TryLet` macro works exactly as written in the spec (test)
+- [x] Multi-file `wavelet run` (`src/runner.rs`): resolves `Import` by package
+      id across files, honors `Export`/`as:`/`open:`, calls exported `run`
+- [x] §1 example runs: `wavelet run examples/main.wvl examples/shout.wvl -- wasm`
+      prints `WASM!`
+- [ ] `expand` builtin (stub errors for now)
+- [ ] Resource handles beyond `cell`; owned-handle drop semantics (§6.1)
 
 ## Phase 4 — module/component model surface (§6.1)
 - [ ] `Package`, `Target`, `Import`, `Export`, `DefType` forms parsed + checked

@@ -1,7 +1,11 @@
+pub mod builtins;
 pub mod form;
+pub mod interp;
 pub mod lexer;
 pub mod printer;
 pub mod reader;
+pub mod runner;
+pub mod value;
 
 pub use form::{Arena, Node, NodeId};
 pub use lexer::ReadError;
@@ -127,6 +131,141 @@ mod tests {
             read1("Match r [ (ok(text) process(text)) (err(e) handle(e)) ]"),
             "match-MACRO((r, [(ok(text), process(text)), (err(e), handle(e))]))"
         );
+    }
+
+    fn eval_str(src: &str) -> String {
+        let (arena, roots) = read_file(src).expect(src);
+        let arena = std::rc::Rc::new(arena);
+        let env = value::Env::root();
+        builtins::install(&env);
+        let env = env.child();
+        let interp = interp::Interp::new(vec![]);
+        let mut last = value::unit();
+        for root in roots {
+            last = interp.eval(&arena, root, &env).expect(src);
+        }
+        value::print_value(&last)
+    }
+
+    #[test]
+    fn eval_atoms_and_calls() {
+        assert_eq!(eval_str("add[1 2]"), "3");
+        assert_eq!(eval_str("str-cat[upper(\"wasm\") \"!\"]"), "\"WASM!\"");
+        assert_eq!(eval_str("eq[(1 2) (1 2)]"), "true");
+        assert_eq!(eval_str("If lt[1 2] \"yes\" \"no\""), "\"yes\"");
+    }
+
+    #[test]
+    fn eval_def_fn_and_payload_binding() {
+        // record payload binds by name, list payload by order (§4.2)
+        let src = "Def f Fn {path force} (path force)";
+        assert_eq!(eval_str(&format!("{src} f{{path: \"a\" force: true}}")), "(\"a\", true)");
+        assert_eq!(eval_str(&format!("{src} f[\"a\" true]")), "(\"a\", true)");
+        // a sole parameter receives the payload directly
+        assert_eq!(eval_str("Def id Fn {x} x id([1 2 3])"), "[1, 2, 3]");
+        assert_eq!(eval_str("head([1 2 3])"), "1");
+    }
+
+    #[test]
+    fn eval_typed_params() {
+        assert_eq!(eval_str("Def s Fn {phrase: string} upper(phrase) s(\"hi\")"), "\"HI\"");
+        let (arena, roots) = read_file("Def s Fn {phrase: string} phrase s(42)").unwrap();
+        let arena = std::rc::Rc::new(arena);
+        let env = value::Env::root();
+        builtins::install(&env);
+        let interp = interp::Interp::new(vec![]);
+        let mut result = Ok(value::unit());
+        for root in roots {
+            result = interp.eval(&arena, root, &env);
+            if result.is_err() {
+                break;
+            }
+        }
+        assert!(result.is_err(), "type check should reject 42 for string");
+    }
+
+    #[test]
+    fn eval_let_do_match() {
+        assert_eq!(eval_str("Let {x: 2 y: mul[x 3]} add[x y]"), "8");
+        assert_eq!(eval_str("Do [print(\"\") 7]"), "7");
+        assert_eq!(
+            eval_str("Match ok(5) [ (ok(n) add[n 1]) (err(e) 0) ]"),
+            "6"
+        );
+        assert_eq!(
+            eval_str("Match err(\"boom\") [ (ok(n) n) (err(e) e) ]"),
+            "\"boom\""
+        );
+        assert_eq!(eval_str("Match none [ (none 1) (some(x) x) ]"), "1");
+        assert_eq!(eval_str("Match some(9) [ (none 1) (some(x) x) ]"), "9");
+    }
+
+    #[test]
+    fn eval_tail_recursion_constant_stack() {
+        assert_eq!(
+            eval_str(
+                "Def count-down Fn {n} If eq[n 0] \"liftoff\" count-down(sub[n 1])\n\
+                 count-down(200000)"
+            ),
+            "\"liftoff\""
+        );
+    }
+
+    #[test]
+    fn eval_closures_capture() {
+        assert_eq!(
+            eval_str("Def make Fn {n} Fn {m} add[n m] Def add5 make(5) add5(3)"),
+            "8"
+        );
+        assert_eq!(eval_str("map[Fn {x} mul[x x] [1 2 3]]"), "[1, 4, 9]");
+    }
+
+    #[test]
+    fn eval_quote_quasi_macro() {
+        assert_eq!(eval_str("Quote add[1 2]"), "add([1, 2])");
+        assert_eq!(eval_str("Let {x: 2} Quasi add[1 Unquote(x)]"), "add([1, 2])");
+        assert_eq!(eval_str("Quasi [1 Splice([2 3]) 4]"), "[1, 2, 3, 4]");
+        assert_eq!(
+            eval_str(
+                "DefMacro and {a b} Quasi If Unquote(a) Unquote(b) false\n\
+                 And lt[1 2] lt[2 3]"
+            ),
+            "true"
+        );
+        assert_eq!(
+            eval_str(
+                "DefMacro and {a b} Quasi If Unquote(a) Unquote(b) false\n\
+                 And lt[2 1] boom-unbound(1)"
+            ),
+            "false"
+        );
+    }
+
+    #[test]
+    fn eval_try_let_macro_from_spec() {
+        // §7.2: error propagation as a binding form, in user space
+        let src = "\
+DefMacro try-let {binding body}
+  Let {name: rec-key(binding) expr: rec-val(binding)}
+    Quasi Match Unquote(expr) [
+      (ok(Unquote(name))  Unquote(body))
+      (err(e)             err(e))
+    ]
+Def half Fn {n} If eq[rem[n 2] 0] ok(div[n 2]) err(\"odd\")
+Def quarter Fn {n}
+  TryLet {h: half(n)}
+  TryLet {q: half(h)}
+  ok(q)
+(quarter(12) quarter(6))";
+        assert_eq!(eval_str(src), "(ok(3), err(\"odd\"))");
+    }
+
+    #[test]
+    fn eval_cells_and_misc() {
+        assert_eq!(eval_str("Let {c: cell-new(1)} Do [cell-set[c 5] cell-get(c)]"), "5");
+        assert_eq!(eval_str("fold[Fn {a b} add[a b] 0 range[1 5]]"), "10");
+        assert_eq!(eval_str("to-string({a: 1})"), "\"{a: 1}\"");
+        assert_eq!(eval_str("read(\"ok(5)\")"), "ok(ok(5))");
     }
 
     #[test]
