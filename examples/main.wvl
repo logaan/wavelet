@@ -1,0 +1,11 @@
+// main.wvl — compiles to demo:main.wasm
+Package "demo:main@0.1.0"
+Target "wasi:cli/command"
+
+Import {pkg: "demo:shout/api" as: sh}
+
+Export run
+Def run Fn {}
+  If eq[len(args[]) 0]
+     println("usage: main <word>")
+     println(sh/shout{phrase: head(args[])})
