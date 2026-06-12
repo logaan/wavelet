@@ -83,6 +83,8 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       Export record form)
 - [ ] Richer inference for lists/options/results — currently errors and asks
       for annotations when it cannot infer
+- [x] Result inference through `Match` (unify all clause results; pattern-bound
+      names left untyped) — unblocks exports whose body ends in a Match
 - [ ] Boundary coercions + `safely` wrapper semantics (§3)
 - [x] Grouped exports `Export {iface: "render" ...}`: wit synthesis, runner
       import filtering, and the wasm backend (per-iface export names + dep
@@ -120,9 +122,15 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
 - [x] Lists across boundaries: `list<T>` params/results lowered/lifted per
       the canonical ABI (strings, ints, bools, f64, nested lists); generic
       retptr path; verified composed on wasmtime (list<string>, list<s64>)
-- [ ] v0 backend gaps: records/variants across boundaries,
-      record/variant/tuple patterns in Match, GC (currently leaks
-      by design), `compose.wave` manifest, `--fuse`
+- [x] Records in the wasm backend: `TAG_REC` boxes `[tag, n, (key str box,
+      value box)…]`, record literal construction, `rec_get` helper (field
+      lookup by interned key, 0 when absent), and record patterns in Match
+      (tag check + subset-of-fields, mirrors the interpreter); verified on
+      wasmtime against interpreter output (`{x: 3 y: 7 label: "pt"}`)
+- [ ] v0 backend gaps: records/variants *across boundaries* (in-process records
+      now work; canonical-ABI lift/lower still TODO), variant boxes +
+      variant/tuple patterns in Match, GC (currently leaks by design),
+      `compose.wave` manifest, `--fuse`
 
 ## Phase 6 — beyond
 - [ ] Closures across boundaries → resource lifting (§6.4)

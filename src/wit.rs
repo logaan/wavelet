@@ -479,6 +479,29 @@ fn infer(
                     }
                     _ => Inferred::Unknown,
                 },
+                "match-MACRO" => match arena.node(*payload) {
+                    // unify every clause's result type; pattern-bound names are
+                    // left untyped (best effort, as elsewhere)
+                    Node::Tup(items) if items.len() == 2 => match arena.node(items[1]) {
+                        Node::Lst(clauses) => {
+                            let mut acc: Option<Inferred> = None;
+                            for &c in clauses {
+                                if let Node::Tup(pair) = arena.node(c) {
+                                    if pair.len() == 2 {
+                                        let r = infer(arena, pair[1], params, defs, visiting);
+                                        acc = Some(match acc {
+                                            None => r,
+                                            Some(prev) => unify(prev, r),
+                                        });
+                                    }
+                                }
+                            }
+                            acc.unwrap_or(Inferred::Unknown)
+                        }
+                        _ => Inferred::Unknown,
+                    },
+                    _ => Inferred::Unknown,
+                },
                 "the-MACRO" => match arena.node(*payload) {
                     Node::Tup(items) if items.len() == 2 => match type_text(arena, items[0]) {
                         Ok(t) => Inferred::Known(t),

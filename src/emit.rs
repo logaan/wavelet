@@ -42,6 +42,7 @@ const TAG_STR: i32 = 2;
 const TAG_LIST: i32 = 3;
 const TAG_DEC: i32 = 4;
 const TAG_FN: i32 = 5; // table-slot i32 @4, n-captures @8, capture boxes @12…
+const TAG_REC: i32 = 6; // n-fields i32 @4, then (key str box, value box) pairs @8+8i
 
 fn ma(offset: u64, align: u32) -> MemArg {
     MemArg { offset, align, memory_index: 0 }
@@ -207,6 +208,7 @@ struct Helpers {
     strcat2: u32,
     case_h: u32,
     to_str: u32,
+    rec_get: u32,
     print_str: Option<u32>,
     println_h: Option<u32>,
     get_args: Option<u32>,
@@ -367,8 +369,9 @@ impl<'a> Emitter<'a> {
             },
             Node::Call(head, payload) => return self.call(fx, head, payload, tail),
             Node::Lst(items) => return self.list_box(fx, &items),
-            Node::Tup(_) | Node::Rec(_) | Node::Flg(_) => {
-                return Err("tuple/record/flag literals not supported by the wasm backend yet".into());
+            Node::Rec(fields) => return self.rec_box(fx, &fields),
+            Node::Tup(_) | Node::Flg(_) => {
+                return Err("tuple/flag literals not supported by the wasm backend yet".into());
             }
             Node::Qsym(a, n) => {
                 return Err(format!("`{a}/{n}` used as a value (only calls are supported)"));
@@ -432,6 +435,33 @@ impl<'a> Emitter<'a> {
             fx.op(I::LocalGet(p));
             self.expr(fx, item, false)?;
             fx.op(I::I32Store(ma(8 + 4 * i as u64, 2)));
+        }
+        fx.op(I::LocalGet(p));
+        Ok(())
+    }
+
+    /// Build a record box `[TAG_REC, n, (key str box, value box)…]` from field
+    /// forms. Keys are interned static string boxes; insertion order preserved.
+    fn rec_box(&mut self, fx: &mut FnCtx, fields: &[(String, NodeId)]) -> Result<(), String> {
+        let n = fields.len();
+        let p = fx.local(ValType::I32);
+        fx.op(I::I32Const(8 + 8 * n as i32));
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(p));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(TAG_REC));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(n as i32));
+        fx.op(I::I32Store(ma(4, 2)));
+        for (i, (k, v)) in fields.iter().enumerate() {
+            let kaddr = self.intern_str(k);
+            fx.op(I::LocalGet(p));
+            fx.op(I::I32Const(kaddr as i32));
+            fx.op(I::I32Store(ma(8 + 8 * i as u64, 2)));
+            fx.op(I::LocalGet(p));
+            self.expr(fx, *v, false)?;
+            fx.op(I::I32Store(ma(12 + 8 * i as u64, 2)));
         }
         fx.op(I::LocalGet(p));
         Ok(())
@@ -767,8 +797,30 @@ impl<'a> Emitter<'a> {
                 }
                 Ok(())
             }
+            Node::Rec(fields) => {
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_REC));
+                fx.op(I::I32Ne);
+                fx.op(I::BrIf(fail));
+                // A record pattern matches a subset of fields: each named field
+                // must be present (rec_get returns 0 when absent) and its
+                // sub-pattern must match. Extra value fields are ignored.
+                for (k, p) in &fields {
+                    let kaddr = self.intern_str(k);
+                    let elem = fx.local(ValType::I32);
+                    fx.op(I::LocalGet(v));
+                    fx.op(I::I32Const(kaddr as i32));
+                    fx.op(I::Call(self.h.rec_get));
+                    fx.op(I::LocalTee(elem));
+                    fx.op(I::I32Eqz);
+                    fx.op(I::BrIf(fail));
+                    self.pattern(fx, *p, elem, fail)?;
+                }
+                Ok(())
+            }
             _ => Err("pattern not supported by the wasm backend yet \
-                      (literals, names, and list patterns only)"
+                      (literals, names, list, and record patterns)"
                 .into()),
         }
     }
@@ -1258,6 +1310,7 @@ fn emit_core_module(
             strcat2: 0,
             case_h: 0,
             to_str: 0,
+            rec_get: 0,
             print_str: None,
             println_h: None,
             get_args: None,
@@ -1361,6 +1414,7 @@ fn emit_core_module(
     em.h.strcat2 = take();
     em.h.case_h = take();
     em.h.to_str = take();
+    em.h.rec_get = take();
     if feats.needs_stdout {
         em.h.print_str = Some(take());
         em.h.println_h = Some(take());
@@ -2194,6 +2248,59 @@ fn emit_helpers(em: &mut Emitter, feats: &Features) -> Result<(), String> {
         fx.op(I::I32Sub);
         fx.op(I::Call(em.h.box_str));
         let t = em.ty_idx(vec![I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // rec_get(rec, key) -> box   returns the value box for `key`, or 0 if the
+    // record has no such field.   [locals n=2, i=3, base=4]
+    {
+        let mut fx = FnCtx::new(2);
+        let n = fx.local(I32);
+        let i = fx.local(I32);
+        let base = fx.local(I32);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_REC));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(n));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(n));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        // base = rec + 8*i ; field key @ ma(8), value @ ma(12)
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(base));
+        fx.op(I::LocalGet(base));
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(base));
+        fx.op(I::I32Load(ma(12, 2)));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        let t = em.ty_idx(vec![I32, I32], vec![I32]);
         em.bodies.push((t, fx.finish()));
     }
 

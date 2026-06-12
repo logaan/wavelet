@@ -411,6 +411,36 @@ world shout {
     }
 
     #[test]
+    fn emit_records_componentize() {
+        // record literal construction + record-pattern Match (subset of fields);
+        // run's result is inferred through Let/Match to Unit
+        let src = "Package \"demo:rec@0.1.0\"\n\
+                   Target \"wasi:cli/command\"\n\
+                   Export run\n\
+                   Def run Fn {}\n\
+                     Let {p: {x: 3 y: 7 label: \"pt\"}}\n\
+                       Match p [\n\
+                         ({x: a label: l} println(str-cat[l to-string(a)]))\n\
+                         (other println(\"no\"))]";
+        let (arena, roots) = read_file(src).unwrap();
+        let info = wit::collect(&arena, &roots).unwrap();
+        let bytes =
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
+                .unwrap();
+        assert!(bytes.starts_with(b"\0asm"));
+    }
+
+    #[test]
+    fn eval_record_construct_and_match() {
+        // the interpreter and wasm backend agree on this program's result
+        assert_eq!(
+            eval_str("Let {p: {x: 3 y: 7 label: \"pt\"}}\n\
+                      Match p [({x: a y: b label: l} l) (other \"no\")]"),
+            "\"pt\""
+        );
+    }
+
+    #[test]
     fn doc_comments_attach_and_reach_wit() {
         let src = "Package \"demo:doc@0.1.0\"\n\
                    /// A pair.\n\
