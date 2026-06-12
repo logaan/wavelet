@@ -140,10 +140,24 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       synthesis bug (record/variant/flags decls had an invalid trailing `;`).
       Verified composed on wasmtime: `make-point`/`sum-coords` and a mixed
       s32/bool/s64/f64 record both round-trip and match the interpreter.
-- [ ] v0 backend gaps still open: string/list/nested-record *fields inside* a
-      boundary record (scalar fields only for now); records as `list<record>`;
-      >16-flat param spill-to-memory; variant/option/result *across*
-      boundaries; GC (leaks by design), `compose.wave` manifest, `--fuse`
+- [x] option/result across component boundaries: `WitTy::Option`/`Result`
+      with canonical 2-case variant layout (1-byte discriminant + aligned
+      payload union). Returns go through the in-memory path (retptr +
+      `store_to_mem`/`load_from_mem`), so mismatched arm shapes like
+      `result<s64, string>` work; params are lowered flattened (disc + joined
+      payload, `lower_variant_case`) / lifted (`lift_variant_case`) when the
+      arms are flat-compatible. `flat_len` decides direct-vs-retptr without
+      needing the variant-join. Verified composed on wasmtime:
+      `option<s64>` (some/none) and `result<s64,string>` (ok/err) match the
+      interpreter.
+- [x] string fields inside boundary aggregates: a string in canonical memory is
+      just `(ptr, len)`, so record/option/result payloads of type `string` now
+      marshal (records with string fields verified composed on wasmtime).
+- [ ] v0 backend gaps still open: `list` fields inside a boundary aggregate and
+      `list<record/option/result>`; option/result *params* with mismatched arm
+      flat shapes; >16-flat param spill-to-memory; general (3+ case, named)
+      variant types across boundaries; GC (leaks by design), `compose.wave`
+      manifest, `--fuse`
 
 ## Phase 6 — beyond
 - [ ] Closures across boundaries → resource lifting (§6.4)

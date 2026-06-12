@@ -653,6 +653,46 @@ world shout {
     }
 
     #[test]
+    fn emit_option_result_across_boundaries() {
+        // provider returns option<s64> and result<s64, string> (the latter has
+        // differing arm flat shapes, exercising the in-memory variant path)
+        let psrc = "Package \"demo:opt@0.1.0\"\n\
+                    Export {name: lookup params: {k: s64} result: option(s64)}\n\
+                    Def lookup Fn {k} If gt(k 0) some(mul[k 10]) none\n\
+                    Export {name: checked params: {k: s64} result: result(s64 string)}\n\
+                    Def checked Fn {k} If gt(k 0) ok(k) err(\"nonpositive\")";
+        let (pa, pr) = read_file(psrc).unwrap();
+        let pinfo = wit::collect(&pa, &pr).unwrap();
+        let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
+            .expect("option/result provider componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
+
+        let msrc = "Package \"demo:optmain@0.1.0\"\n\
+                    Target \"wasi:cli/command\"\n\
+                    Import {pkg: \"demo:opt/api\" as: o}\n\
+                    Export run\n\
+                    Def run Fn {}\n\
+                      Do [\n\
+                        println(Match o/lookup{k: 4} [(some(v) to-string(v)) (none \"none\")])\n\
+                        println(Match o/checked{k: 0} [(ok(v) to-string(v)) (err(e) e)])]";
+        let (ma, mr) = read_file(msrc).unwrap();
+        let minfo = wit::collect(&ma, &mr).unwrap();
+        let mut deps = std::collections::HashMap::new();
+        deps.insert(
+            "demo:opt".to_string(),
+            emit::Dep {
+                package: pinfo.package.clone(),
+                funcs: pinfo.exports.clone(),
+                package_wit: emit::dep_package_wit(&pa, &pinfo).unwrap(),
+                types: emit::dep_record_types(&pa, &pinfo),
+            },
+        );
+        let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
+            .expect("option/result consumer componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
+    }
+
+    #[test]
     fn aot_expansion_feeds_the_wasm_backend() {
         let src = r#"
             Package "demo:twice@0.1.0"

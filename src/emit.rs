@@ -53,6 +53,15 @@ fn ma(offset: u64, align: u32) -> MemArg {
     MemArg { offset, align, memory_index: 0 }
 }
 
+/// Push a zero of the given flat type (variant payload padding).
+fn push_zero(fx: &mut FnCtx, vt: ValType) {
+    match vt {
+        ValType::I64 => fx.op(I::I64Const(0)),
+        ValType::F64 => fx.op(I::F64Const(0.0.into())),
+        _ => fx.op(I::I32Const(0)),
+    }
+}
+
 // ---------------------------------------------------------------- WIT types
 
 #[derive(Clone, PartialEq)]
@@ -65,6 +74,43 @@ enum WitTy {
     Str,
     List(Box<WitTy>),
     Record(Vec<(String, WitTy)>), // named record type, fully expanded
+    Option(Box<WitTy>),
+    Result(Box<WitTy>, Box<WitTy>),
+}
+
+impl WitTy {
+    /// option/result viewed as a 2-case discriminated variant: the canonical
+    /// case order (none=0/some=1, ok=0/err=1) with each case's payload type.
+    fn variant_cases(&self) -> Option<Vec<(&'static str, Option<&WitTy>)>> {
+        match self {
+            WitTy::Option(t) => Some(vec![("none", None), ("some", Some(t))]),
+            WitTy::Result(t, e) => Some(vec![("ok", Some(t)), ("err", Some(e))]),
+            _ => None,
+        }
+    }
+}
+
+/// Split the comma-separated args of `ctor<...>`, respecting nested `<>`.
+fn split_type_args(inner: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for (i, c) in inner.char_indices() {
+        match c {
+            '<' => depth += 1,
+            '>' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(inner[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = inner[start..].trim();
+    if !last.is_empty() {
+        out.push(last.to_string());
+    }
+    out
 }
 
 /// Named record types, by name → field (name, type-string), for resolving
@@ -74,6 +120,21 @@ type TypeEnv = HashMap<String, Vec<(String, String)>>;
 fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
     if let Some(inner) = s.strip_prefix("list<").and_then(|r| r.strip_suffix('>')) {
         return Ok(WitTy::List(Box::new(wit_ty(inner.trim(), env)?)));
+    }
+    if let Some(inner) = s.strip_prefix("option<").and_then(|r| r.strip_suffix('>')) {
+        return Ok(WitTy::Option(Box::new(wit_ty(inner.trim(), env)?)));
+    }
+    if let Some(inner) = s.strip_prefix("result<").and_then(|r| r.strip_suffix('>')) {
+        let args = split_type_args(inner);
+        if args.len() != 2 {
+            return Err(format!(
+                "`{s}`: only `result<T, E>` (both arms typed) is supported by the wasm backend"
+            ));
+        }
+        return Ok(WitTy::Result(
+            Box::new(wit_ty(&args[0], env)?),
+            Box::new(wit_ty(&args[1], env)?),
+        ));
     }
     Ok(match s {
         "bool" => WitTy::Bool,
@@ -95,14 +156,75 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
     })
 }
 
+/// Join two flat representations position-wise (canonical-ABI variant flatten).
+/// We only support cases that don't need numeric widening: the shorter list
+/// must be a prefix of the longer, and shared positions must match exactly.
+fn join_flat(a: &[ValType], b: &[ValType]) -> Result<Vec<ValType>, String> {
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    for (i, t) in short.iter().enumerate() {
+        if long[i] != *t {
+            return Err("option/result arms with differing flat shapes are not \
+                        supported by the wasm backend yet (use a record, or keep \
+                        the arms' types flat-compatible)"
+                .into());
+        }
+    }
+    Ok(long.to_vec())
+}
+
 fn flat(ty: &WitTy) -> Vec<ValType> {
+    flat_checked(ty).expect("flat() on an unsupported boundary type")
+}
+
+/// Number of flat (core) values a type lowers to. Unlike [`flat_checked`] this
+/// never needs the variant-join to succeed — it just counts — so it is safe to
+/// use when only the count matters (deciding direct return vs retptr).
+fn flat_len(ty: &WitTy) -> usize {
     match ty {
+        WitTy::Bool | WitTy::IntS | WitTy::IntU | WitTy::S64 | WitTy::F64 => 1,
+        WitTy::Str | WitTy::List(_) => 2,
+        WitTy::Record(fields) => fields.iter().map(|(_, t)| flat_len(t)).sum(),
+        WitTy::Option(_) | WitTy::Result(..) => {
+            let payload = ty
+                .variant_cases()
+                .unwrap()
+                .iter()
+                .filter_map(|(_, p)| p.map(flat_len))
+                .max()
+                .unwrap_or(0);
+            1 + payload
+        }
+    }
+}
+
+fn flat_checked(ty: &WitTy) -> Result<Vec<ValType>, String> {
+    Ok(match ty {
         WitTy::Bool | WitTy::IntS | WitTy::IntU => vec![ValType::I32],
         WitTy::S64 => vec![ValType::I64],
         WitTy::F64 => vec![ValType::F64],
         WitTy::Str | WitTy::List(_) => vec![ValType::I32, ValType::I32],
-        WitTy::Record(fields) => fields.iter().flat_map(|(_, t)| flat(t)).collect(),
-    }
+        WitTy::Record(fields) => {
+            let mut v = Vec::new();
+            for (_, t) in fields {
+                v.extend(flat_checked(t)?);
+            }
+            v
+        }
+        WitTy::Option(_) | WitTy::Result(..) => {
+            let cases = ty.variant_cases().unwrap();
+            let mut joined: Vec<ValType> = Vec::new();
+            for (_, pay) in &cases {
+                let f = match pay {
+                    Some(t) => flat_checked(t)?,
+                    None => vec![],
+                };
+                joined = join_flat(&joined, &f)?;
+            }
+            let mut v = vec![ValType::I32]; // discriminant
+            v.extend(joined);
+            v
+        }
+    })
 }
 
 /// Canonical-ABI alignment (bytes) for a type's in-memory representation.
@@ -113,7 +235,23 @@ fn align_of(ty: &WitTy) -> u64 {
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 4, // (ptr, len), pointer-aligned
         WitTy::Record(fields) => fields.iter().map(|(_, t)| align_of(t)).max().unwrap_or(1),
+        WitTy::Option(_) | WitTy::Result(..) => {
+            // disc is 1-byte; align is the max of disc and any payload align
+            ty.variant_cases()
+                .unwrap()
+                .iter()
+                .filter_map(|(_, p)| p.map(align_of))
+                .max()
+                .unwrap_or(1)
+                .max(1)
+        }
     }
+}
+
+/// Offset of a variant's payload (after the 1-byte discriminant, padded to the
+/// payload alignment).
+fn variant_payload_offset(ty: &WitTy) -> u64 {
+    align_up(1, align_of(ty))
 }
 
 /// Canonical-ABI size (bytes) in memory.
@@ -130,6 +268,16 @@ fn size_of(ty: &WitTy) -> u64 {
                 off = o + size_of(&t);
             }
             align_up(off, a)
+        }
+        WitTy::Option(_) | WitTy::Result(..) => {
+            let payload = ty
+                .variant_cases()
+                .unwrap()
+                .iter()
+                .filter_map(|(_, p)| p.map(size_of))
+                .max()
+                .unwrap_or(0);
+            align_up(variant_payload_offset(ty) + payload, align_of(ty))
         }
     }
 }
@@ -157,7 +305,7 @@ fn elem_size(ty: &WitTy) -> u64 {
         WitTy::Bool => 1,
         WitTy::IntS | WitTy::IntU => 4,
         WitTy::S64 | WitTy::F64 | WitTy::Str | WitTy::List(_) => 8,
-        WitTy::Record(_) => size_of(ty),
+        WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..) => size_of(ty),
     }
 }
 
@@ -172,7 +320,8 @@ fn flat_result(sig: &FuncSig, env: &TypeEnv) -> Result<FlatRes, String> {
         None => Ok(FlatRes::None),
         Some(t) => {
             let ty = wit_ty(t, env)?;
-            if flat(&ty).len() > 1 { Ok(FlatRes::Retptr) } else { Ok(FlatRes::One(ty)) }
+            // count flats (always defined); retptr never needs the variant-join
+            if flat_len(&ty) > 1 { Ok(FlatRes::Retptr) } else { Ok(FlatRes::One(ty)) }
         }
     }
 }
@@ -616,6 +765,27 @@ impl<'a> Emitter<'a> {
         self.put_i32(0);
         self.var_box_cache.insert(case.to_string(), addr);
         addr
+    }
+
+    /// Stack `[payload_box]` → `[variant_box]`: allocate `[TAG_VAR, case, pay]`.
+    fn wrap_variant(&mut self, fx: &mut FnCtx, case: &str) {
+        let caddr = self.intern_str(case);
+        let pay = fx.local(ValType::I32);
+        let p = fx.local(ValType::I32);
+        fx.op(I::LocalSet(pay));
+        fx.op(I::I32Const(12));
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(p));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(TAG_VAR));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(caddr as i32));
+        fx.op(I::I32Store(ma(4, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::LocalGet(pay));
+        fx.op(I::I32Store(ma(8, 2)));
+        fx.op(I::LocalGet(p));
     }
 
     /// Static closure box for a named def used as a value: `[TAG_FN, slot, 0]`
@@ -1119,9 +1289,9 @@ impl<'a> Emitter<'a> {
             }
             FlatRes::Retptr => {
                 let rty = wit_ty(sig.result.as_deref().unwrap(), &self.type_env)?;
-                if let WitTy::Record(_) = &rty {
-                    // allocate a result area sized to the record, pass it as the
-                    // canonical retptr, then read the record back out of it
+                if matches!(rty, WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..)) {
+                    // allocate a result area sized to the value, pass it as the
+                    // canonical retptr, then read the value back out of it
                     let area = fx.local(ValType::I32);
                     fx.op(I::I32Const(size_of(&rty) as i32));
                     fx.op(I::Call(self.h.alloc));
@@ -1185,6 +1355,51 @@ impl<'a> Emitter<'a> {
                     self.lower(fx, ft);
                 }
             }
+            WitTy::Option(_) | WitTy::Result(..) => {
+                // variant box → [disc i32] ++ joined payload flats; both arms
+                // produce the same flat shape (zero-padded where shorter)
+                let cases = ty.variant_cases().unwrap();
+                let full = flat(ty);
+                let joined: Vec<ValType> = full[1..].to_vec();
+                let resty = self.ty_idx(vec![], full);
+                let b = fx.local(ValType::I32);
+                fx.op(I::LocalSet(b));
+                let n0 = self.intern_str(cases[0].0);
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::I32Const(n0 as i32));
+                fx.op(I::Call(self.h.eq_raw));
+                fx.op(I::If(BlockType::FunctionType(resty)));
+                self.lower_variant_case(fx, b, 0, cases[0].1, &joined);
+                fx.op(I::Else);
+                self.lower_variant_case(fx, b, 1, cases[1].1, &joined);
+                fx.op(I::End);
+            }
+        }
+    }
+
+    /// One arm of a lowered option/result: push the discriminant, the payload's
+    /// flats (if any), then zero-pad the remaining joined positions.
+    fn lower_variant_case(
+        &mut self,
+        fx: &mut FnCtx,
+        b: u32,
+        disc: i32,
+        pay: Option<&WitTy>,
+        joined: &[ValType],
+    ) {
+        fx.op(I::I32Const(disc));
+        let consumed = match pay {
+            Some(pt) => {
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(8, 2)));
+                self.lower(fx, pt);
+                flat(pt).len()
+            }
+            None => 0,
+        };
+        for &vt in &joined[consumed..] {
+            push_zero(fx, vt);
         }
     }
 
@@ -1272,7 +1487,9 @@ impl<'a> Emitter<'a> {
             }
             // list<record> is rejected before emission (wit_ty never yields it
             // through a supported boundary path in v0)
-            WitTy::Record(_) => unreachable!("list<record> across boundaries unsupported"),
+            WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..) => {
+                unreachable!("list<aggregate> across boundaries unsupported")
+            }
         }
         fx.op(I::LocalGet(i));
         fx.op(I::I32Const(1));
@@ -1358,7 +1575,9 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalSet(l));
                 self.lift_list(fx, p, l, inner);
             }
-            WitTy::Record(_) => unreachable!("list<record> across boundaries unsupported"),
+            WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..) => {
+                unreachable!("list<aggregate> across boundaries unsupported")
+            }
         }
         fx.op(I::I32Store(ma(8, 2)));
         fx.op(I::LocalGet(i));
@@ -1385,7 +1604,7 @@ impl<'a> Emitter<'a> {
             }
             WitTy::S64 => fx.op(I::Call(self.h.box_int)),
             WitTy::F64 => fx.op(I::Call(self.h.box_dec)),
-            WitTy::Str | WitTy::List(_) | WitTy::Record(_) => {
+            WitTy::Str | WitTy::List(_) | WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..) => {
                 unreachable!("never a single flat value")
             }
         }
@@ -1428,9 +1647,42 @@ impl<'a> Emitter<'a> {
                 }
                 fx.op(I::LocalGet(p));
             }
+            WitTy::Option(_) | WitTy::Result(..) => {
+                // disc at `base`, payload union starting at `base + 1`
+                let cases = ty.variant_cases().unwrap();
+                fx.op(I::LocalGet(base));
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                self.lift_variant_case(fx, cases[1].0, cases[1].1, base + 1)?;
+                fx.op(I::Else);
+                self.lift_variant_case(fx, cases[0].0, cases[0].1, base + 1)?;
+                fx.op(I::End);
+            }
             _ => {
                 fx.op(I::LocalGet(base));
                 self.lift(fx, ty);
+            }
+        }
+        Ok(())
+    }
+
+    /// Build one arm of a lifted option/result: a payload-carrying case lifts
+    /// its payload from the flat locals and wraps it; a payload-less case is the
+    /// static box.
+    fn lift_variant_case(
+        &mut self,
+        fx: &mut FnCtx,
+        case: &str,
+        pay: Option<&WitTy>,
+        payload_base: u32,
+    ) -> Result<(), String> {
+        match pay {
+            Some(pt) => {
+                self.lift_flat(fx, pt, payload_base)?;
+                self.wrap_variant(fx, case);
+            }
+            None => {
+                let a = self.none_like_box(case);
+                fx.op(I::I32Const(a as i32));
             }
         }
         Ok(())
@@ -1485,11 +1737,63 @@ impl<'a> Emitter<'a> {
                     self.store_to_mem(fx, &ft, fld, dst, off + o)?;
                 }
             }
-            WitTy::Str | WitTy::List(_) => {
-                return Err("string/list fields inside a record crossing a component \
+            WitTy::Option(_) | WitTy::Result(..) => {
+                let cases = ty.variant_cases().unwrap();
+                let poff = variant_payload_offset(ty);
+                let n0 = self.intern_str(cases[0].0);
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load(ma(4, 2))); // TAG_VAR case-name box
+                fx.op(I::I32Const(n0 as i32));
+                fx.op(I::Call(self.h.eq_raw));
+                fx.op(I::If(BlockType::Empty));
+                self.store_variant_case(fx, src, 0, cases[0].1, dst, off, poff)?;
+                fx.op(I::Else);
+                self.store_variant_case(fx, src, 1, cases[1].1, dst, off, poff)?;
+                fx.op(I::End);
+            }
+            WitTy::Str => {
+                // canonical string in memory is (ptr, len); the component adapter
+                // copies the bytes via our cabi_realloc when lifting
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add); // bytes begin after the [tag, len] header
+                fx.op(I::I32Store(ma(off, 2)));
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::I32Store(ma(off + 4, 2)));
+            }
+            WitTy::List(_) => {
+                return Err("list fields inside an aggregate crossing a component \
                             boundary are not supported by the wasm backend yet"
                     .into());
             }
+        }
+        Ok(())
+    }
+
+    /// Store one arm of an option/result to memory: the 1-byte discriminant at
+    /// `off`, then (if present) the payload at `off + payload_offset`.
+    fn store_variant_case(
+        &mut self,
+        fx: &mut FnCtx,
+        src: u32,
+        disc: i32,
+        pay: Option<&WitTy>,
+        dst: u32,
+        off: u64,
+        poff: u64,
+    ) -> Result<(), String> {
+        fx.op(I::LocalGet(dst));
+        fx.op(I::I32Const(disc));
+        fx.op(I::I32Store8(ma(off, 0)));
+        if let Some(pt) = pay {
+            let fld = fx.local(ValType::I32);
+            fx.op(I::LocalGet(src));
+            fx.op(I::I32Load(ma(8, 2))); // variant payload box
+            fx.op(I::LocalSet(fld));
+            self.store_to_mem(fx, pt, fld, dst, off + poff)?;
         }
         Ok(())
     }
@@ -1556,10 +1860,51 @@ impl<'a> Emitter<'a> {
                 }
                 fx.op(I::LocalGet(p));
             }
-            WitTy::Str | WitTy::List(_) => {
-                return Err("string/list fields inside a record crossing a component \
+            WitTy::Option(_) | WitTy::Result(..) => {
+                let cases = ty.variant_cases().unwrap();
+                let poff = variant_payload_offset(ty);
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load8U(ma(off, 0))); // discriminant
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                self.load_variant_case(fx, cases[1].0, cases[1].1, src, off + poff)?;
+                fx.op(I::Else);
+                self.load_variant_case(fx, cases[0].0, cases[0].1, src, off + poff)?;
+                fx.op(I::End);
+            }
+            WitTy::Str => {
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load(ma(off, 2))); // ptr (into our memory)
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load(ma(off + 4, 2))); // len
+                fx.op(I::Call(self.h.box_str));
+            }
+            WitTy::List(_) => {
+                return Err("list fields inside an aggregate crossing a component \
                             boundary are not supported by the wasm backend yet"
                     .into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Build one arm of an option/result loaded from memory: read the payload at
+    /// `payload_addr` and wrap it, or yield the static payload-less box.
+    fn load_variant_case(
+        &mut self,
+        fx: &mut FnCtx,
+        case: &str,
+        pay: Option<&WitTy>,
+        src: u32,
+        payload_off: u64,
+    ) -> Result<(), String> {
+        match pay {
+            Some(pt) => {
+                self.load_from_mem(fx, pt, src, payload_off)?;
+                self.wrap_variant(fx, case);
+            }
+            None => {
+                let a = self.none_like_box(case);
+                fx.op(I::I32Const(a as i32));
             }
         }
         Ok(())
@@ -1809,7 +2154,7 @@ fn emit_core_module(
             .ok_or(format!("`{}` does not export `{fname}` in `{iface}`", imp.package))?;
         let mut p = Vec::new();
         for (_, t) in &sig.params {
-            p.extend_from_slice(&flat(&wit_ty(t, &em.type_env)?));
+            p.extend_from_slice(&flat_checked(&wit_ty(t, &em.type_env)?)?);
         }
         let r = match flat_result(sig, &em.type_env)? {
             FlatRes::None => vec![],
@@ -1921,7 +2266,7 @@ fn emit_core_module(
         for (_, t) in &sig.params {
             let ty = wit_ty(t, &em.type_env)?;
             lifted.push((ty.clone(), fparams.len() as u32));
-            fparams.extend_from_slice(&flat(&ty));
+            fparams.extend_from_slice(&flat_checked(&ty)?);
         }
         if fparams.len() > 16 {
             return Err(format!(
@@ -1948,8 +2293,8 @@ fn emit_core_module(
             FlatRes::Retptr => {
                 let ty = wit_ty(sig.result.as_deref().unwrap(), &em.type_env)?;
                 let area = fx.local(I32);
-                if let WitTy::Record(_) = &ty {
-                    // store the record's canonical layout into a callee-owned area
+                if matches!(ty, WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..)) {
+                    // store the value's canonical layout into a callee-owned area
                     let rbox = fx.local(I32);
                     fx.op(I::LocalSet(rbox));
                     fx.op(I::I32Const(size_of(&ty) as i32));
