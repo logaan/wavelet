@@ -1764,10 +1764,20 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Load(ma(4, 2)));
                 fx.op(I::I32Store(ma(off + 4, 2)));
             }
-            WitTy::List(_) => {
-                return Err("list fields inside an aggregate crossing a component \
-                            boundary are not supported by the wasm backend yet"
-                    .into());
+            WitTy::List(elem) => {
+                // lower to a canonical (ptr, len) buffer, then store both words
+                fx.op(I::LocalGet(src));
+                self.lower_list(fx, elem);
+                let len = fx.local(ValType::I32);
+                let ptr = fx.local(ValType::I32);
+                fx.op(I::LocalSet(len));
+                fx.op(I::LocalSet(ptr));
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(ptr));
+                fx.op(I::I32Store(ma(off, 2)));
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(len));
+                fx.op(I::I32Store(ma(off + 4, 2)));
             }
         }
         Ok(())
@@ -1878,10 +1888,16 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Load(ma(off + 4, 2))); // len
                 fx.op(I::Call(self.h.box_str));
             }
-            WitTy::List(_) => {
-                return Err("list fields inside an aggregate crossing a component \
-                            boundary are not supported by the wasm backend yet"
-                    .into());
+            WitTy::List(elem) => {
+                let ptr = fx.local(ValType::I32);
+                let len = fx.local(ValType::I32);
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::LocalSet(ptr));
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load(ma(off + 4, 2)));
+                fx.op(I::LocalSet(len));
+                self.lift_list(fx, ptr, len, elem);
             }
         }
         Ok(())
@@ -2022,8 +2038,9 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.get_args.expect("args helper emitted when used")));
             }
             "some" | "ok" | "err" => {
-                nargs(1)?;
-                return self.var_box(fx, name, items[0]);
+                // the single argument is the whole payload (which may itself be
+                // a list/tuple/record), exactly as the interpreter binds it
+                return self.var_box(fx, name, payload);
             }
             other => return Err(format!("builtin `{other}` not supported by the wasm backend yet")),
         }

@@ -693,6 +693,23 @@ world shout {
     }
 
     #[test]
+    fn emit_list_fields_in_aggregates_across_boundaries() {
+        // a record with a list field, and option<list<s64>>, both crossing the
+        // boundary (list in memory is (ptr, len) with a canonical element buffer)
+        let psrc = "Package \"demo:lrec@0.1.0\"\n\
+                    DefType bag {tag: string items: list(s64)}\n\
+                    Export {name: mk params: {tag: string items: list(s64)} result: bag}\n\
+                    Def mk Fn {tag: string items: list(s64)} {tag: tag items: items}\n\
+                    Export {name: maybe params: {k: s64} result: option(list(s64))}\n\
+                    Def maybe Fn {k} If gt(k 0) some([k mul[k 2]]) none";
+        let (pa, pr) = read_file(psrc).unwrap();
+        let pinfo = wit::collect(&pa, &pr).unwrap();
+        let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
+            .expect("list-aggregate provider componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
+    }
+
+    #[test]
     fn aot_expansion_feeds_the_wasm_backend() {
         let src = r#"
             Package "demo:twice@0.1.0"

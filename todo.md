@@ -150,14 +150,20 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       needing the variant-join. Verified composed on wasmtime:
       `option<s64>` (some/none) and `result<s64,string>` (ok/err) match the
       interpreter.
-- [x] string fields inside boundary aggregates: a string in canonical memory is
-      just `(ptr, len)`, so record/option/result payloads of type `string` now
-      marshal (records with string fields verified composed on wasmtime).
-- [ ] v0 backend gaps still open: `list` fields inside a boundary aggregate and
-      `list<record/option/result>`; option/result *params* with mismatched arm
-      flat shapes; >16-flat param spill-to-memory; general (3+ case, named)
-      variant types across boundaries; GC (leaks by design), `compose.wave`
-      manifest, `--fuse`
+- [x] string + list fields inside boundary aggregates: both are `(ptr, len)`
+      in canonical memory (list with a canonical element buffer from
+      `lower_list`), so record/option/result payloads of type `string` or
+      `list<T>` now marshal. Verified composed on wasmtime: a `{tag: string,
+      items: list(s64)}` record and `option<list<s64>>` round-trip.
+      (Also fixed `some`/`ok`/`err` in the wasm backend to take the whole
+      payload as one argument, matching the interpreter, so `some([a b])` works.)
+- [ ] v0 backend gaps still open: `list<record/option/result>` (list elements
+      that are themselves aggregates); option/result *params* with mismatched
+      arm flat shapes (needs numeric-widening join); >16-flat param
+      spill-to-memory; named 3+-case `variant`/`enum` DefTypes across boundaries
+      (blocked anyway — the dynamic core has no constructor for user variant
+      cases, only the `ok`/`some`/`err`/`none` builtins); GC (leaks by design),
+      `compose.wave` manifest, `--fuse`
 
 ## Phase 6 — beyond
 - [ ] Closures across boundaries → resource lifting (§6.4)
