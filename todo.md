@@ -178,3 +178,19 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
 ## Notes / decisions log
 - 2026-06-12: Rust from the start (user choice). Reader has zero deps to keep
   first builds fast on this Raspberry Pi; wasm-tools deps deferred to Phase 5.
+- 2026-06-13: Closed out the wasm-backend value-type frontier. In-process:
+  records, variants (`ok`/`some`/`err`/`none`), tuples, with Match patterns for
+  all three. Across component boundaries (canonical ABI, all verified composed
+  on wasmtime v45 against the interpreter): records, option, result, and
+  arbitrary nesting — record fields and option/result/list payloads may be
+  scalars, strings, lists, or further aggregates (`list<record>`,
+  `{… items: list(s64)}`, `option<list<s64>>`, `result<s64, string>`). Key
+  design points: `flat_len` decides direct-return vs retptr without the
+  variant-join, so retptr results dodge the join's restrictions; aggregate
+  marshalling funnels through `store_to_mem`/`load_from_mem`, and
+  `lower_list`/`lift_list` delegate to them so list elements compose. Also
+  fixed a latent WIT-synthesis bug (record/variant/flags emitted a trailing
+  `;`) that no test had caught because nothing componentized a record before.
+  Remaining backend gaps are niche (mismatched-shape option/result *params*,
+  >16-flat param spill) or blocked by language design (user 3+-case variant
+  constructors don't exist in the dynamic core).
