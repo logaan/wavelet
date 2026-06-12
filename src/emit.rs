@@ -261,6 +261,8 @@ struct Emitter<'a> {
     import_fn: HashMap<(String, String), u32>,
     h: Helpers,
     funcs: HashMap<String, (u32, Vec<String>)>, // internal defs
+    value_globals: HashMap<String, u32>,        // module-level value defs → global idx
+    compiling_values: Vec<String>,              // cycle guard for value-def inits
     bodies: Vec<(u32, Function)>,               // (type idx, body) for defined funcs
     false_addr: u32,
     true_addr: u32,
@@ -332,21 +334,67 @@ impl<'a> Emitter<'a> {
             Node::Char(_) => return Err("char values not supported by the wasm backend yet".into()),
             Node::Sym(name) => match fx.lookup(&name) {
                 Some(idx) => fx.op(I::LocalGet(idx)),
-                None => {
-                    return Err(format!(
-                        "`{name}` is not a local binding (first-class functions and \
-                         module-level values are not supported by the wasm backend yet)"
-                    ));
-                }
+                None => return self.value_def_ref(fx, &name),
             },
             Node::Call(head, payload) => return self.call(fx, head, payload, tail),
-            Node::Tup(_) | Node::Lst(_) | Node::Rec(_) | Node::Flg(_) => {
-                return Err("composite literals not supported by the wasm backend yet".into());
+            Node::Lst(items) => {
+                let n = items.len();
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8 + 4 * n as i32));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(n as i32));
+                fx.op(I::I32Store(ma(4, 2)));
+                for (i, &item) in items.iter().enumerate() {
+                    fx.op(I::LocalGet(p));
+                    self.expr(fx, item, false)?;
+                    fx.op(I::I32Store(ma(8 + 4 * i as u64, 2)));
+                }
+                fx.op(I::LocalGet(p));
+            }
+            Node::Tup(_) | Node::Rec(_) | Node::Flg(_) => {
+                return Err("tuple/record/flag literals not supported by the wasm backend yet".into());
             }
             Node::Qsym(a, n) => {
                 return Err(format!("`{a}/{n}` used as a value (only calls are supported)"));
             }
         }
+        Ok(())
+    }
+
+    /// A name that is no local binding: a module-level value `Def`, compiled
+    /// as a lazily initialized global (0 = uncomputed; no box lives at 0).
+    fn value_def_ref(&mut self, fx: &mut FnCtx, name: &str) -> Result<(), String> {
+        let Some(&g) = self.value_globals.get(name) else {
+            return Err(format!(
+                "`{name}` is not a local binding (first-class functions are \
+                 not supported by the wasm backend yet)"
+            ));
+        };
+        if self.compiling_values.iter().any(|v| v == name) {
+            return Err(format!("module-level value `{name}` is defined in terms of itself"));
+        }
+        let init = self
+            .info
+            .value_defs
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, e)| *e)
+            .expect("value_globals entries come from value_defs");
+        fx.op(I::GlobalGet(g));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        self.compiling_values.push(name.to_string());
+        let r = self.expr(fx, init, false);
+        self.compiling_values.pop();
+        r?;
+        fx.op(I::GlobalSet(g));
+        fx.op(I::End);
+        fx.op(I::GlobalGet(g));
         Ok(())
     }
 
@@ -816,6 +864,8 @@ fn emit_core_module(
             get_args: None,
         },
         funcs: HashMap::new(),
+        value_globals: HashMap::new(),
+        compiling_values: Vec::new(),
         bodies: Vec::new(),
         false_addr: 0,
         true_addr: 0,
@@ -931,11 +981,8 @@ fn emit_core_module(
             }
         }
     }
-    if !info.value_defs.is_empty() {
-        return Err(format!(
-            "module-level value `Def {}` not supported by the wasm backend yet",
-            info.value_defs[0].0
-        ));
+    for (i, (name, _)) in info.value_defs.iter().enumerate() {
+        em.value_globals.insert(name.clone(), 1 + i as u32); // global 0 = heap ptr
     }
     for name in &internal_order {
         let (params_id, _) = info.defs[name];
@@ -1079,6 +1126,12 @@ fn emit_core_module(
         GlobalType { val_type: I32, mutable: true, shared: false },
         &ConstExpr::i32_const(heap_base as i32),
     );
+    for _ in &info.value_defs {
+        gs.global(
+            GlobalType { val_type: I32, mutable: true, shared: false },
+            &ConstExpr::i32_const(0),
+        );
+    }
     module.section(&gs);
 
     let mut es = ExportSection::new();

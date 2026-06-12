@@ -346,6 +346,26 @@ world shout {
     }
 
     #[test]
+    fn emit_value_defs_and_list_literals() {
+        let src = "Package \"demo:vals@0.1.0\"\n\
+                   Target \"wasi:cli/command\"\n\
+                   Def greeting str-cat[\"hello\" \", world\"]\n\
+                   Export run\n\
+                   Def run Fn {}\n\
+                     Do [\n\
+                       println(greeting)\n\
+                       println(Match [\"a\" \"b\"] [\n\
+                         ([\"a\" x] x)\n\
+                         (other \"no\")])]";
+        let (arena, roots) = read_file(src).unwrap();
+        let info = wit::collect(&arena, &roots).unwrap();
+        let bytes =
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
+                .unwrap();
+        assert!(bytes.starts_with(b"\0asm"));
+    }
+
+    #[test]
     fn wit_inference_follows_calls_to_other_defs() {
         let src = "Package \"demo:i@0.1.0\"\n\
                    Export double\n\

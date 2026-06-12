@@ -103,9 +103,11 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       `wasmtime run out/app.wasm wasm` → `WASM!`; no args → usage line
 - [x] Match in the wasm backend: literal/name/list patterns compiled to
       block-per-clause tests; no clause → trap (verified on wasmtime)
+- [x] List literals (heap list boxes) and module-level value defs (lazily
+      initialized globals, cycle-guarded) in the wasm backend
 - [ ] v0 backend gaps: closures/first-class fns, user macros (needs
-      AOT expand pass), lists/records/variants across boundaries, module-level
-      value defs, record/variant/tuple patterns in Match, GC (currently leaks
+      AOT expand pass), lists/records/variants across boundaries,
+      record/variant/tuple patterns in Match, GC (currently leaks
       by design), `compose.wave` manifest, `--fuse`
 
 ## Phase 6 — beyond
