@@ -6,10 +6,14 @@ fn main() -> ExitCode {
         [cmd, path] if cmd == "read" => read_cmd(path),
         [cmd, path] if cmd == "wit" => wit_cmd(path),
         [cmd, rest @ ..] if cmd == "run" && !rest.is_empty() => run_cmd(rest),
+        [cmd, rest @ ..] if cmd == "build" && !rest.is_empty() => build_cmd(rest),
+        [cmd, rest @ ..] if cmd == "compose" && !rest.is_empty() => compose_cmd(rest),
         _ => {
             eprintln!("usage: wavelet read <file.wvl>");
             eprintln!("       wavelet wit <file.wvl>");
             eprintln!("       wavelet run <file.wvl>... [-- <args>...]");
+            eprintln!("       wavelet build <file.wvl>... [-o <dir>]");
+            eprintln!("       wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]");
             ExitCode::from(2)
         }
     }
@@ -32,6 +36,47 @@ fn wit_cmd(path: &str) -> ExitCode {
         }
         Err(e) => {
             eprintln!("{path}: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn split_out<'a>(rest: &'a [String], default: &str) -> (Vec<String>, String) {
+    match rest.iter().position(|a| a == "-o") {
+        Some(i) if i + 1 < rest.len() => (rest[..i].to_vec(), rest[i + 1].clone()),
+        _ => (rest.to_vec(), default.to_string()),
+    }
+}
+
+fn build_cmd(rest: &[String]) -> ExitCode {
+    let (files, out_dir) = split_out(rest, "out");
+    match wavelet::build::build_files(&files, &out_dir) {
+        Ok(outputs) => {
+            for o in outputs {
+                println!("{o}");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn compose_cmd(rest: &[String]) -> ExitCode {
+    let (files, out) = split_out(rest, "app.wasm");
+    if files.is_empty() {
+        eprintln!("compose: no input components");
+        return ExitCode::from(2);
+    }
+    match wavelet::build::compose_files(&files, &out) {
+        Ok(()) => {
+            println!("{out}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
             ExitCode::FAILURE
         }
     }

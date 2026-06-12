@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+wac-graph = "0.10.0"
+wasm-encoder = "0.251.0"
+wit-component = "0.251.0"
+wit-parser = "0.251.0"

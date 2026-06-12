@@ -2,14 +2,57 @@ use std::collections::HashMap;
 
 use crate::form::{Arena, Node, NodeId};
 
-/// Synthesize a WIT world from a file's surface forms (§6.1).
-pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
+/// Everything the toolchain knows about one file's component surface (§6.1).
+pub struct FileInfo {
+    /// package id with version, e.g. `demo:shout@0.1.0`
+    pub package: String,
+    /// package id without version, e.g. `demo:shout`
+    pub package_path: String,
+    /// world name, e.g. `shout`
+    pub world: String,
+    pub target: Option<String>,
+    pub imports: Vec<ImportInfo>,
+    pub exports: Vec<FuncSig>,
+    pub types: Vec<(String, NodeId)>,
+    /// all module-level `Def name Fn …` definitions: name -> (params, body)
+    pub defs: HashMap<String, (NodeId, NodeId)>,
+    /// non-function module-level defs, in file order: (name, expr)
+    pub value_defs: Vec<(String, NodeId)>,
+}
+
+pub struct ImportInfo {
+    /// interface path as written, version stripped, e.g. `demo:shout/api`
+    pub path: String,
+    /// package part, e.g. `demo:shout`
+    pub package: String,
+    pub alias: String,
+}
+
+#[derive(Clone)]
+pub struct FuncSig {
+    pub name: String,
+    pub params: Vec<(String, String)>,
+    pub result: Option<String>,
+}
+
+impl FuncSig {
+    pub fn to_wit(&self) -> String {
+        let ps: Vec<String> = self.params.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+        match &self.result {
+            Some(r) => format!("{}: func({}) -> {r};", self.name, ps.join(", ")),
+            None => format!("{}: func({});", self.name, ps.join(", ")),
+        }
+    }
+}
+
+pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     let mut package = None;
     let mut target = None;
-    let mut imports: Vec<String> = Vec::new();
-    let mut exports: Vec<(String, Option<ExplicitSig>)> = Vec::new();
-    let mut types: Vec<(String, NodeId)> = Vec::new();
-    let mut defs: HashMap<String, (NodeId, NodeId)> = HashMap::new();
+    let mut imports = Vec::new();
+    let mut export_decls: Vec<(String, Option<FuncSig>)> = Vec::new();
+    let mut types = Vec::new();
+    let mut defs = HashMap::new();
+    let mut value_defs = Vec::new();
 
     for &root in roots {
         let Node::Call(head, payload) = arena.node(root) else { continue };
@@ -25,25 +68,38 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
                     target = Some(s.clone());
                 }
             }
-            "import-MACRO" => match arena.node(*payload) {
-                Node::Str(s) => imports.push(s.clone()),
-                Node::Rec(fields) => {
-                    if let Some((_, v)) = fields.iter().find(|(k, _)| k == "pkg") {
-                        if let Node::Str(s) = arena.node(*v) {
-                            imports.push(s.clone());
+            "import-MACRO" => {
+                let spec = match arena.node(*payload) {
+                    Node::Str(s) => Some((s.clone(), None)),
+                    Node::Rec(fields) => {
+                        let mut pkg = None;
+                        let mut alias = None;
+                        for (k, v) in fields {
+                            match (k.as_str(), arena.node(*v)) {
+                                ("pkg", Node::Str(s)) => pkg = Some(s.clone()),
+                                ("as", Node::Sym(s)) => alias = Some(s.clone()),
+                                _ => {}
+                            }
                         }
+                        pkg.map(|p| (p, alias))
                     }
-                }
-                _ => {}
-            },
+                    _ => None,
+                };
+                let (pkg_str, alias) = spec.ok_or("malformed Import")?;
+                let path = strip_version(&pkg_str);
+                let pkg_part = path.split('/').next().unwrap_or(&path).to_string();
+                let alias = alias.unwrap_or_else(|| {
+                    path.rsplit('/').next().unwrap_or(&path).to_string()
+                });
+                imports.push(ImportInfo { path, package: pkg_part, alias });
+            }
             "export-MACRO" => match arena.node(*payload) {
-                Node::Sym(s) => exports.push((s.clone(), None)),
+                Node::Sym(s) => export_decls.push((s.clone(), None)),
                 Node::Rec(fields) => {
-                    if let Some(sig) = ExplicitSig::parse(arena, fields) {
-                        exports.push((sig.name.clone(), Some(sig)));
-                    }
+                    let sig = parse_explicit_sig(arena, fields).ok_or("malformed Export")?;
+                    export_decls.push((sig.name.clone(), Some(sig)));
                 }
-                _ => {}
+                _ => return Err("malformed Export".into()),
             },
             "def-type-MACRO" => {
                 if let Node::Tup(items) = arena.node(*payload) {
@@ -57,15 +113,23 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
             "def-MACRO" => {
                 if let Node::Tup(items) = arena.node(*payload) {
                     if items.len() == 2 {
-                        if let (Node::Sym(name), Node::Call(fh, fp)) =
-                            (arena.node(items[0]), arena.node(items[1]))
-                        {
-                            if matches!(arena.node(*fh), Node::Sym(s) if s == "fn-MACRO") {
-                                if let Node::Tup(fn_parts) = arena.node(*fp) {
-                                    if fn_parts.len() == 2 {
-                                        defs.insert(name.clone(), (fn_parts[0], fn_parts[1]));
+                        if let Node::Sym(name) = arena.node(items[0]) {
+                            let mut is_fn = false;
+                            if let Node::Call(fh, fp) = arena.node(items[1]) {
+                                if matches!(arena.node(*fh), Node::Sym(s) if s == "fn-MACRO") {
+                                    if let Node::Tup(fn_parts) = arena.node(*fp) {
+                                        if fn_parts.len() == 2 {
+                                            defs.insert(
+                                                name.clone(),
+                                                (fn_parts[0], fn_parts[1]),
+                                            );
+                                            is_fn = true;
+                                        }
                                     }
                                 }
+                            }
+                            if !is_fn {
+                                value_defs.push((name.clone(), items[1]));
                             }
                         }
                     }
@@ -76,90 +140,70 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
     }
 
     let package = package.ok_or("file has no Package declaration")?;
-    let world_name = package
-        .split('@')
-        .next()
-        .unwrap_or(&package)
+    let package_path = strip_version(&package);
+    let world = package_path
         .rsplit(':')
         .next()
         .unwrap_or("component")
         .to_string();
 
-    let mut out = String::new();
-    out.push_str(&format!("package {package};\n"));
-
-    if !exports.is_empty() || !types.is_empty() {
-        out.push_str("\ninterface api {\n");
-        for (name, ty) in &types {
-            out.push_str(&format!("  {};\n", type_decl(arena, name, *ty)?));
-        }
-        for (name, explicit) in &exports {
-            let sig = match explicit {
-                Some(e) => e.to_wit(),
-                None => match defs.get(name) {
-                    Some((params, body)) => func_sig(arena, name, *params, *body)?,
-                    None => return Err(format!("Export `{name}` has no definition")),
-                },
-            };
-            out.push_str(&format!("  {sig}\n"));
-        }
-        out.push_str("}\n");
-    }
-
-    out.push_str(&format!("\nworld {world_name} {{\n"));
-    if let Some(t) = &target {
-        out.push_str(&format!("  include {t};\n"));
-    }
-    for imp in &imports {
-        out.push_str(&format!("  import {imp};\n"));
-    }
-    if !exports.is_empty() {
-        out.push_str("  export api;\n");
-    }
-    out.push_str("}\n");
-    Ok(out)
-}
-
-struct ExplicitSig {
-    name: String,
-    params: Vec<(String, String)>,
-    result: Option<String>,
-}
-
-impl ExplicitSig {
-    fn parse(arena: &Arena, fields: &[(String, NodeId)]) -> Option<ExplicitSig> {
-        let mut name = None;
-        let mut params = Vec::new();
-        let mut result = None;
-        for (k, v) in fields {
-            match (k.as_str(), arena.node(*v)) {
-                ("name", Node::Sym(s)) => name = Some(s.clone()),
-                ("params", Node::Rec(pfields)) => {
-                    for (pk, pv) in pfields {
-                        params.push((pk.clone(), type_text(arena, *pv).ok()?));
-                    }
-                }
-                ("result", _) => result = Some(type_text(arena, *v).ok()?),
-                _ => {}
+    let mut exports = Vec::new();
+    for (name, explicit) in export_decls {
+        let sig = match explicit {
+            Some(sig) => sig,
+            None => {
+                let (params_id, body) = defs
+                    .get(&name)
+                    .ok_or(format!("Export `{name}` has no definition"))?;
+                infer_sig(arena, &name, *params_id, *body)?
             }
+        };
+        exports.push(sig);
+    }
+
+    Ok(FileInfo {
+        package,
+        package_path,
+        world,
+        target,
+        imports,
+        exports,
+        types,
+        defs,
+        value_defs,
+    })
+}
+
+/// `"demo:shout@0.1.0"` -> `"demo:shout"`
+fn strip_version(s: &str) -> String {
+    s.split('@').next().unwrap_or(s).to_string()
+}
+
+fn parse_explicit_sig(arena: &Arena, fields: &[(String, NodeId)]) -> Option<FuncSig> {
+    let mut name = None;
+    let mut params = Vec::new();
+    let mut result = None;
+    for (k, v) in fields {
+        match (k.as_str(), arena.node(*v)) {
+            ("name", Node::Sym(s)) => name = Some(s.clone()),
+            ("params", Node::Rec(pfields)) => {
+                for (pk, pv) in pfields {
+                    params.push((pk.clone(), type_text(arena, *pv).ok()?));
+                }
+            }
+            ("result", _) => result = Some(type_text(arena, *v).ok()?),
+            _ => {}
         }
-        Some(ExplicitSig { name: name?, params, result })
     }
-
-    fn to_wit(&self) -> String {
-        func_text(&self.name, &self.params, self.result.as_deref())
-    }
+    Some(FuncSig { name: name?, params, result })
 }
 
-fn func_text(name: &str, params: &[(String, String)], result: Option<&str>) -> String {
-    let ps: Vec<String> = params.iter().map(|(n, t)| format!("{n}: {t}")).collect();
-    match result {
-        Some(r) => format!("{name}: func({}) -> {r};", ps.join(", ")),
-        None => format!("{name}: func({});", ps.join(", ")),
-    }
-}
-
-fn func_sig(arena: &Arena, name: &str, params_id: NodeId, body: NodeId) -> Result<String, String> {
+fn infer_sig(
+    arena: &Arena,
+    name: &str,
+    params_id: NodeId,
+    body: NodeId,
+) -> Result<FuncSig, String> {
     let mut params = Vec::new();
     let mut param_types = HashMap::new();
     match arena.node(params_id) {
@@ -188,10 +232,41 @@ fn func_sig(arena: &Arena, name: &str, params_id: NodeId, body: NodeId) -> Resul
             ));
         }
     };
-    Ok(func_text(name, &params, result.as_deref()))
+    Ok(FuncSig { name: name.to_string(), params, result })
 }
 
-fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String> {
+/// Synthesize WIT text for a file (§6.1), as shown by `wavelet wit`.
+pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
+    let info = collect(arena, roots)?;
+    let mut out = String::new();
+    out.push_str(&format!("package {};\n", info.package));
+
+    if !info.exports.is_empty() || !info.types.is_empty() {
+        out.push_str("\ninterface api {\n");
+        for (name, ty) in &info.types {
+            out.push_str(&format!("  {};\n", type_decl(arena, name, *ty)?));
+        }
+        for sig in &info.exports {
+            out.push_str(&format!("  {}\n", sig.to_wit()));
+        }
+        out.push_str("}\n");
+    }
+
+    out.push_str(&format!("\nworld {} {{\n", info.world));
+    if let Some(t) = &info.target {
+        out.push_str(&format!("  include {t};\n"));
+    }
+    for imp in &info.imports {
+        out.push_str(&format!("  import {};\n", imp.path));
+    }
+    if !info.exports.is_empty() {
+        out.push_str("  export api;\n");
+    }
+    out.push_str("}\n");
+    Ok(out)
+}
+
+pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String> {
     match arena.node(ty) {
         Node::Rec(fields) => {
             let mut parts = Vec::new();
@@ -223,7 +298,7 @@ fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String> {
 
 /// A type form as WIT text: `string`, `list(u8)` -> `list<u8>`,
 /// `result(t e)` -> `result<t, e>`, `tuple[a b]` -> `tuple<a, b>`.
-fn type_text(arena: &Arena, id: NodeId) -> Result<String, String> {
+pub fn type_text(arena: &Arena, id: NodeId) -> Result<String, String> {
     match arena.node(id) {
         Node::Sym(s) => Ok(s.clone()),
         Node::Call(head, payload) => {

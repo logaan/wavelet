@@ -1,4 +1,6 @@
+pub mod build;
 pub mod builtins;
+pub mod emit;
 pub mod form;
 pub mod interp;
 pub mod lexer;
@@ -333,5 +335,31 @@ world shout {
         ] {
             assert_eq!(read1(src), src, "canonical text must read back unchanged");
         }
+    }
+
+    #[test]
+    fn emit_components_for_spec_demo() {
+        // shout.wvl: no deps, exports api#shout
+        let (sa, sr) = read_file(include_str!("../examples/shout.wvl")).unwrap();
+        let sinfo = wit::collect(&sa, &sr).unwrap();
+        let bytes = emit::emit_component(&sa, &sr, &sinfo, &Default::default())
+            .expect("shout componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
+
+        // main.wvl: targets wasi:cli/command, imports demo:shout/api
+        let (ma, mr) = read_file(include_str!("../examples/main.wvl")).unwrap();
+        let minfo = wit::collect(&ma, &mr).unwrap();
+        let mut deps = std::collections::HashMap::new();
+        deps.insert(
+            "demo:shout".to_string(),
+            emit::Dep {
+                package: sinfo.package.clone(),
+                funcs: sinfo.exports.clone(),
+                package_wit: emit::dep_package_wit(&sa, &sinfo).unwrap(),
+            },
+        );
+        let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
+            .expect("main componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
     }
 }

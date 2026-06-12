@@ -77,12 +77,28 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
 - [ ] Grouped exports `Export {iface: "render" ...}` (only default `api` now)
 
 ## Phase 5 — emit + componentize (§9)
-- [ ] Pick wasm-tools crates: wasm-encoder, wit-parser, wit-component
-- [ ] Analysis: binding resolution, tail-position classification, closure capture
-- [ ] Emit core wasm (GC types; `return_call` for tail positions)
-- [ ] Canonical-ABI lift/lower wrapping via wit-component
-- [ ] `wavelet build` CLI
-- [ ] `wavelet compose` (auto-plug + WAVE manifest, §6.5); `--fuse` later
+- [x] Crates: wasm-encoder 0.251, wit-parser 0.251, wit-component 0.251,
+      wac-graph 0.10
+- [x] `src/wit.rs` refactor: structured `FileInfo`/`FuncSig`/`ImportInfo`
+      via `collect()` (synthesize() output unchanged)
+- [x] Emit core wasm (`src/emit.rs`): boxed values in linear memory (tag
+      i32: bool/int/str/list/dec), bump allocator + `cabi_realloc`, static
+      string boxes in data section, `return_call` for tail positions
+- [x] Canonical-ABI lift/lower wrappers (string/s64/bool/f64 sigs; string
+      results via callee retptr area); vendored trimmed WASI WIT @0.2.0
+      (io/streams, cli/stdout+environment+run); `Target "wasi:cli/command"`
+      maps exported `run` to `wasi:cli/run@0.2.0#run`
+- [x] Componentize: synthesized nested-package WIT → embed_component_metadata
+      → ComponentEncoder (validated)
+- [x] `wavelet build <files...> [-o dir]` — one component per file
+- [x] `wavelet compose <entry> <plugs...> [-o app.wasm]` via wac-graph
+      auto-plug (§6.5)
+- [x] End-to-end §1 demo on wasmtime v45: `wavelet build && wavelet compose`,
+      `wasmtime run out/app.wasm wasm` → `WASM!`; no args → usage line
+- [ ] v0 backend gaps: closures/first-class fns, Match, user macros (needs
+      AOT expand pass), lists/records/variants across boundaries, module-level
+      value defs, GC (currently leaks by design), `compose.wave` manifest,
+      `--fuse`
 
 ## Phase 6 — beyond
 - [ ] Closures across boundaries → resource lifting (§6.4)
