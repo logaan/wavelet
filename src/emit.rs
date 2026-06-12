@@ -242,6 +242,14 @@ fn features_of(arena: &Arena, info: &FileInfo) -> Features {
     feats
 }
 
+/// `"demo:shout/render"` → `"render"`; a bare package path means `api`.
+fn import_iface(path: &str) -> String {
+    match path.split_once('/') {
+        Some((_, iface)) => iface.to_string(),
+        None => "api".to_string(),
+    }
+}
+
 /// `("demo:shout@0.1.0", "api")` → `"demo:shout/api@0.1.0"`
 fn versioned_iface(pkg: &str, iface: &str) -> String {
     match pkg.split_once('@') {
@@ -629,14 +637,14 @@ impl<'a> Emitter<'a> {
             .deps
             .get(&imp.package)
             .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
+        let iface = import_iface(&imp.path);
         let sig = dep
             .funcs
             .iter()
-            .find(|f| f.name == fname)
-            .ok_or(format!("`{}` does not export `{fname}`", imp.package))?
+            .find(|f| f.name == fname && f.iface == iface)
+            .ok_or(format!("`{}` does not export `{fname}` in `{iface}`", imp.package))?
             .clone();
-        let iface = imp.path.rsplit('/').next().unwrap_or("api");
-        let module = versioned_iface(&dep.package, iface);
+        let module = versioned_iface(&dep.package, &iface);
         let fidx = self.import_idx(&module, fname);
 
         let param_names: Vec<String> = sig.params.iter().map(|(n, _)| n.clone()).collect();
@@ -915,11 +923,12 @@ fn emit_core_module(
         let dep = deps
             .get(&imp.package)
             .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
+        let iface = import_iface(&imp.path);
         let sig = dep
             .funcs
             .iter()
-            .find(|f| &f.name == fname)
-            .ok_or(format!("`{}` does not export `{fname}`", imp.package))?;
+            .find(|f| &f.name == fname && f.iface == iface)
+            .ok_or(format!("`{}` does not export `{fname}` in `{iface}`", imp.package))?;
         let mut p = Vec::new();
         for (_, t) in &sig.params {
             p.extend_from_slice(flat(wit_ty(t)?));
@@ -932,8 +941,7 @@ fn emit_core_module(
                 vec![]
             }
         };
-        let iface = imp.path.rsplit('/').next().unwrap_or("api");
-        let module = versioned_iface(&dep.package, iface);
+        let module = versioned_iface(&dep.package, &iface);
         add_import(&mut em, &module, fname, p, r);
     }
 
@@ -1011,7 +1019,6 @@ fn emit_core_module(
     }
 
     // ---- export wrappers
-    let own_iface = versioned_iface(&info.package, "api");
     let mut exports: Vec<(String, u32)> = Vec::new(); // (export name, fn idx)
     for sig in &info.exports {
         let (fidx, _) = *em
@@ -1082,6 +1089,7 @@ fn emit_core_module(
         };
         let t = em.ty_idx(fparams, fresults);
         em.bodies.push((t, fx.finish()));
+        let own_iface = versioned_iface(&info.package, &sig.iface);
         exports.push((format!("{own_iface}#{}", sig.name), take()));
     }
 
@@ -1801,14 +1809,20 @@ package wasi:cli@0.2.0 {
 
 /// Render a dependency's nested-package WIT from its parsed surface.
 pub fn dep_package_wit(arena: &Arena, info: &FileInfo) -> Result<String, String> {
-    let mut out = format!("package {} {{\n  interface api {{\n", info.package);
-    for (name, ty) in &info.types {
-        out.push_str(&format!("    {};\n", type_decl(arena, name, *ty)?));
+    let mut out = format!("package {} {{\n", info.package);
+    for iface in crate::wit::iface_order(&info.exports, !info.types.is_empty()) {
+        out.push_str(&format!("  interface {iface} {{\n"));
+        if iface == "api" {
+            for (name, ty) in &info.types {
+                out.push_str(&format!("    {};\n", type_decl(arena, name, *ty)?));
+            }
+        }
+        for sig in info.exports.iter().filter(|s| s.iface == iface) {
+            out.push_str(&format!("    {}\n", sig.to_wit()));
+        }
+        out.push_str("  }\n");
     }
-    for sig in &info.exports {
-        out.push_str(&format!("    {}\n", sig.to_wit()));
-    }
-    out.push_str("  }\n}\n");
+    out.push_str("}\n");
     Ok(out)
 }
 
@@ -1826,12 +1840,18 @@ fn synthesize_world_wit(
         .iter()
         .filter(|s| !(is_command && s.name == "run"))
         .collect();
-    if !api_exports.is_empty() || !info.types.is_empty() {
-        out.push_str("interface api {\n");
-        for (name, ty) in &info.types {
-            out.push_str(&format!("  {};\n", type_decl(arena, name, *ty)?));
+    let ifaces = crate::wit::iface_order(
+        &api_exports.iter().map(|s| (*s).clone()).collect::<Vec<_>>(),
+        !info.types.is_empty(),
+    );
+    for iface in &ifaces {
+        out.push_str(&format!("interface {iface} {{\n"));
+        if iface == "api" {
+            for (name, ty) in &info.types {
+                out.push_str(&format!("  {};\n", type_decl(arena, name, *ty)?));
+            }
         }
-        for sig in &api_exports {
+        for sig in api_exports.iter().filter(|s| &s.iface == iface) {
             out.push_str(&format!("  {}\n", sig.to_wit()));
         }
         out.push_str("}\n\n");
@@ -1848,11 +1868,11 @@ fn synthesize_world_wit(
         let dep = deps
             .get(&imp.package)
             .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
-        let iface = imp.path.rsplit('/').next().unwrap_or("api");
-        out.push_str(&format!("  import {};\n", versioned_iface(&dep.package, iface)));
+        let iface = import_iface(&imp.path);
+        out.push_str(&format!("  import {};\n", versioned_iface(&dep.package, &iface)));
     }
-    if !api_exports.is_empty() || !info.types.is_empty() {
-        out.push_str("  export api;\n");
+    for iface in &ifaces {
+        out.push_str(&format!("  export {iface};\n"));
     }
     if is_command {
         out.push_str("  export wasi:cli/run@0.2.0;\n");

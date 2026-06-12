@@ -12,7 +12,8 @@ pub struct Module {
     pub roots: Vec<NodeId>,
     pub package: Option<String>,
     pub env: Env,
-    pub exports: Vec<String>,
+    /// (iface, name) — `api` unless the Export record form groups otherwise
+    pub exports: Vec<(String, String)>,
     pub state: ModState,
 }
 
@@ -97,9 +98,9 @@ fn eval_module(
         match head_name {
             "package-MACRO" | "target-MACRO" | "def-type-MACRO" => {}
             "export-MACRO" => {
-                let name = export_name(&arena, *payload)
+                let entry = export_entry(&arena, *payload)
                     .ok_or(format!("{path}: malformed Export"))?;
-                modules[idx].exports.push(name);
+                modules[idx].exports.push(entry);
             }
             "import-MACRO" => {
                 let spec = parse_import(&arena, *payload)
@@ -109,7 +110,22 @@ fn eval_module(
                     spec.path, spec.package
                 ))?;
                 eval_module(interp, modules, by_package, dep)?;
-                let names = modules[dep].exports.clone();
+                let want_iface = match spec.path.split_once('/') {
+                    Some((_, i)) => i.to_string(),
+                    None => "api".to_string(),
+                };
+                let names: Vec<String> = modules[dep]
+                    .exports
+                    .iter()
+                    .filter(|(i, _)| *i == want_iface)
+                    .map(|(_, n)| n.clone())
+                    .collect();
+                if names.is_empty() && !modules[dep].exports.is_empty() {
+                    return Err(format!(
+                        "{path}: `{}` exports nothing in interface `{want_iface}`",
+                        modules[dep].path
+                    ));
+                }
                 let dep_env = modules[dep].env.clone();
                 for name in names {
                     let v = dep_env.lookup(&name).ok_or(format!(
@@ -151,15 +167,26 @@ fn strip_version(s: &str) -> String {
     s.split('@').next().unwrap_or(s).to_string()
 }
 
-fn export_name(arena: &Arena, payload: NodeId) -> Option<String> {
+fn export_entry(arena: &Arena, payload: NodeId) -> Option<(String, String)> {
     match arena.node(payload) {
-        Node::Sym(s) => Some(s.clone()),
-        Node::Rec(fields) => fields.iter().find(|(k, _)| k == "name").and_then(|(_, v)| {
-            match arena.node(*v) {
-                Node::Sym(s) => Some(s.clone()),
-                _ => None,
-            }
-        }),
+        Node::Sym(s) => Some(("api".to_string(), s.clone())),
+        Node::Rec(fields) => {
+            let name = fields.iter().find(|(k, _)| k == "name").and_then(|(_, v)| {
+                match arena.node(*v) {
+                    Node::Sym(s) => Some(s.clone()),
+                    _ => None,
+                }
+            })?;
+            let iface = fields
+                .iter()
+                .find(|(k, _)| k == "iface")
+                .and_then(|(_, v)| match arena.node(*v) {
+                    Node::Str(s) => Some(s.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "api".to_string());
+            Some((iface, name))
+        }
         _ => None,
     }
 }

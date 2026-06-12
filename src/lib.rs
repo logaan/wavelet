@@ -376,6 +376,21 @@ world shout {
     }
 
     #[test]
+    fn wit_grouped_exports() {
+        let src = "Package \"demo:gfx@0.1.0\"\n\
+                   Export {iface: \"render\" name: frame}\n\
+                   Def frame Fn {label: string} str-cat[\"<\" label \">\"]\n\
+                   Export ping\n\
+                   Def ping Fn {} \"pong\"";
+        let (arena, roots) = read_file(src).unwrap();
+        let got = wit::synthesize(&arena, &roots).unwrap();
+        assert!(got.contains("interface render {\n  frame: func(label: string) -> string;"), "{got}");
+        assert!(got.contains("interface api {\n  ping: func() -> string;"), "{got}");
+        assert!(got.contains("export render;"), "{got}");
+        assert!(got.contains("export api;"), "{got}");
+    }
+
+    #[test]
     fn wit_inference_follows_calls_to_other_defs() {
         let src = "Package \"demo:i@0.1.0\"\n\
                    Export double\n\

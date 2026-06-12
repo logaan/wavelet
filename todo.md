@@ -81,7 +81,9 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
 - [ ] Richer inference for lists/options/results — currently errors and asks
       for annotations when it cannot infer
 - [ ] Boundary coercions + `safely` wrapper semantics (§3)
-- [ ] Grouped exports `Export {iface: "render" ...}` (only default `api` now)
+- [x] Grouped exports `Export {iface: "render" ...}`: wit synthesis, runner
+      import filtering, and the wasm backend (per-iface export names + dep
+      lookup); name-only record forms still get inferred signatures
 
 ## Phase 5 — emit + componentize (§9)
 - [x] Crates: wasm-encoder 0.251, wit-parser 0.251, wit-component 0.251,

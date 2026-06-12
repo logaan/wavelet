@@ -31,6 +31,8 @@ pub struct ImportInfo {
 #[derive(Clone)]
 pub struct FuncSig {
     pub name: String,
+    /// interface this export lands in — `api` unless grouped (§6.1)
+    pub iface: String,
     pub params: Vec<(String, String)>,
     pub result: Option<String>,
 }
@@ -150,6 +152,13 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     let mut exports = Vec::new();
     for (name, explicit) in export_decls {
         let sig = match explicit {
+            // a record form that only names/groups still gets an inferred sig
+            Some(sig) if sig.params.is_empty() && sig.result.is_none() && defs.contains_key(&name) => {
+                let (params_id, body) = defs[&name];
+                let mut inferred = infer_sig(arena, &name, params_id, body, &defs)?;
+                inferred.iface = sig.iface;
+                inferred
+            }
             Some(sig) => sig,
             None => {
                 let (params_id, body) = defs
@@ -174,6 +183,21 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     })
 }
 
+/// Distinct export interfaces in first-appearance order; `api` is forced
+/// first when type declarations exist (they always live in `api`).
+pub fn iface_order(exports: &[FuncSig], has_types: bool) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    if has_types {
+        out.push("api".to_string());
+    }
+    for sig in exports {
+        if !out.contains(&sig.iface) {
+            out.push(sig.iface.clone());
+        }
+    }
+    out
+}
+
 /// `"demo:shout@0.1.0"` -> `"demo:shout"`
 fn strip_version(s: &str) -> String {
     s.split('@').next().unwrap_or(s).to_string()
@@ -181,11 +205,13 @@ fn strip_version(s: &str) -> String {
 
 fn parse_explicit_sig(arena: &Arena, fields: &[(String, NodeId)]) -> Option<FuncSig> {
     let mut name = None;
+    let mut iface = None;
     let mut params = Vec::new();
     let mut result = None;
     for (k, v) in fields {
         match (k.as_str(), arena.node(*v)) {
             ("name", Node::Sym(s)) => name = Some(s.clone()),
+            ("iface", Node::Str(s)) => iface = Some(s.clone()),
             ("params", Node::Rec(pfields)) => {
                 for (pk, pv) in pfields {
                     params.push((pk.clone(), type_text(arena, *pv).ok()?));
@@ -195,7 +221,12 @@ fn parse_explicit_sig(arena: &Arena, fields: &[(String, NodeId)]) -> Option<Func
             _ => {}
         }
     }
-    Some(FuncSig { name: name?, params, result })
+    Some(FuncSig {
+        name: name?,
+        iface: iface.unwrap_or_else(|| "api".to_string()),
+        params,
+        result,
+    })
 }
 
 fn infer_sig(
@@ -234,7 +265,7 @@ fn infer_sig(
             ));
         }
     };
-    Ok(FuncSig { name: name.to_string(), params, result })
+    Ok(FuncSig { name: name.to_string(), iface: "api".to_string(), params, result })
 }
 
 /// Synthesize WIT text for a file (§6.1), as shown by `wavelet wit`.
@@ -243,12 +274,15 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
     let mut out = String::new();
     out.push_str(&format!("package {};\n", info.package));
 
-    if !info.exports.is_empty() || !info.types.is_empty() {
-        out.push_str("\ninterface api {\n");
-        for (name, ty) in &info.types {
-            out.push_str(&format!("  {};\n", type_decl(arena, name, *ty)?));
+    let ifaces = iface_order(&info.exports, !info.types.is_empty());
+    for iface in &ifaces {
+        out.push_str(&format!("\ninterface {iface} {{\n"));
+        if iface == "api" {
+            for (name, ty) in &info.types {
+                out.push_str(&format!("  {};\n", type_decl(arena, name, *ty)?));
+            }
         }
-        for sig in &info.exports {
+        for sig in info.exports.iter().filter(|s| &s.iface == iface) {
             out.push_str(&format!("  {}\n", sig.to_wit()));
         }
         out.push_str("}\n");
@@ -261,8 +295,8 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
     for imp in &info.imports {
         out.push_str(&format!("  import {};\n", imp.path));
     }
-    if !info.exports.is_empty() {
-        out.push_str("  export api;\n");
+    for iface in &ifaces {
+        out.push_str(&format!("  export {iface};\n"));
     }
     out.push_str("}\n");
     Ok(out)
