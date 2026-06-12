@@ -127,10 +127,23 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       lookup by interned key, 0 when absent), and record patterns in Match
       (tag check + subset-of-fields, mirrors the interpreter); verified on
       wasmtime against interpreter output (`{x: 3 y: 7 label: "pt"}`)
-- [ ] v0 backend gaps: records/variants *across boundaries* (in-process records
-      now work; canonical-ABI lift/lower still TODO), variant boxes +
-      variant/tuple patterns in Match, GC (currently leaks by design),
-      `compose.wave` manifest, `--fuse`
+- [x] Variants in the wasm backend: `TAG_VAR` boxes `[tag, case str box,
+      payload box]`; `some`/`ok`/`err` constructors, static `none`; variant
+      patterns in Match (`ok(x)`/`err(e)`/`some(x)`/bare `none`)
+- [x] Tuples in the wasm backend: `TAG_TUP` (list layout, distinct identity);
+      literal construction + tuple patterns in Match (shared with lists)
+- [x] Records across component boundaries: `WitTy::Record` (named DefType
+      resolution via a TypeEnv merging local + dep types), canonical field
+      layout (`align_of`/`size_of`/offsets), record params lowered flattened
+      and lifted via `lift_flat`, record results returned by retptr with
+      `store_to_mem`/`load_from_mem` over the field layout. Fixed a latent WIT
+      synthesis bug (record/variant/flags decls had an invalid trailing `;`).
+      Verified composed on wasmtime: `make-point`/`sum-coords` and a mixed
+      s32/bool/s64/f64 record both round-trip and match the interpreter.
+- [ ] v0 backend gaps still open: string/list/nested-record *fields inside* a
+      boundary record (scalar fields only for now); records as `list<record>`;
+      >16-flat param spill-to-memory; variant/option/result *across*
+      boundaries; GC (leaks by design), `compose.wave` manifest, `--fuse`
 
 ## Phase 6 — beyond
 - [ ] Closures across boundaries → resource lifting (§6.4)

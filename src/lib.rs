@@ -558,6 +558,7 @@ world shout {
                 package: sinfo.package.clone(),
                 funcs: sinfo.exports.clone(),
                 package_wit: emit::dep_package_wit(&sa, &sinfo).unwrap(),
+                types: emit::dep_record_types(&sa, &sinfo),
             },
         );
         let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
@@ -601,10 +602,53 @@ world shout {
                 package: pinfo.package.clone(),
                 funcs: pinfo.exports.clone(),
                 package_wit: emit::dep_package_wit(&pa, &pinfo).unwrap(),
+                types: emit::dep_record_types(&pa, &pinfo),
             },
         );
         let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
             .expect("list consumer componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
+    }
+
+    #[test]
+    fn emit_records_across_boundaries() {
+        // provider: returns a record (retptr w/ field layout) and takes one
+        // (flattened params); mixed scalar widths exercise alignment
+        let psrc = "Package \"demo:geo@0.1.0\"\n\
+                    DefType point {x: s64 y: s64}\n\
+                    Export {name: make-point params: {x: s64 y: s64} result: point}\n\
+                    Def make-point Fn {x: s64 y: s64} {x: x y: y}\n\
+                    Export {name: sum-coords params: {p: point} result: s64}\n\
+                    Def sum-coords Fn {p}\n\
+                      Match p [({x: a y: b} add(a b)) (other 0)]";
+        let (pa, pr) = read_file(psrc).unwrap();
+        let pinfo = wit::collect(&pa, &pr).unwrap();
+        // the synthesized WIT (record decl, no trailing `;`) must parse + encode
+        let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
+            .expect("record provider componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
+
+        let msrc = "Package \"demo:geomain@0.1.0\"\n\
+                    Target \"wasi:cli/command\"\n\
+                    Import {pkg: \"demo:geo/api\" as: g}\n\
+                    Export run\n\
+                    Def run Fn {}\n\
+                      Let {p: g/make-point{x: 3 y: 39}}\n\
+                        println(to-string(g/sum-coords{p: p}))";
+        let (ma, mr) = read_file(msrc).unwrap();
+        let minfo = wit::collect(&ma, &mr).unwrap();
+        let mut deps = std::collections::HashMap::new();
+        deps.insert(
+            "demo:geo".to_string(),
+            emit::Dep {
+                package: pinfo.package.clone(),
+                funcs: pinfo.exports.clone(),
+                package_wit: emit::dep_package_wit(&pa, &pinfo).unwrap(),
+                types: emit::dep_record_types(&pa, &pinfo),
+            },
+        );
+        let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
+            .expect("record consumer componentizes");
         assert_eq!(&bytes[0..4], b"\0asm");
     }
 

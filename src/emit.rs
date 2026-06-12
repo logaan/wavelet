@@ -32,6 +32,9 @@ pub struct Dep {
     pub funcs: Vec<FuncSig>,
     /// nested-package WIT text: `package demo:shout@0.1.0 { interface api {…} }`
     pub package_wit: String,
+    /// record types the dep defines, name → field (name, type-string), so we
+    /// can lay out record params/results we pass to/receive from it
+    pub types: Vec<(String, Vec<(String, String)>)>,
 }
 
 const SCRATCH: i32 = 0; // 0..16 reserved as canonical-ABI return area
@@ -61,11 +64,16 @@ enum WitTy {
     F64,
     Str,
     List(Box<WitTy>),
+    Record(Vec<(String, WitTy)>), // named record type, fully expanded
 }
 
-fn wit_ty(s: &str) -> Result<WitTy, String> {
+/// Named record types, by name → field (name, type-string), for resolving
+/// record references at component boundaries.
+type TypeEnv = HashMap<String, Vec<(String, String)>>;
+
+fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
     if let Some(inner) = s.strip_prefix("list<").and_then(|r| r.strip_suffix('>')) {
-        return Ok(WitTy::List(Box::new(wit_ty(inner.trim())?)));
+        return Ok(WitTy::List(Box::new(wit_ty(inner.trim(), env)?)));
     }
     Ok(match s {
         "bool" => WitTy::Bool,
@@ -74,17 +82,73 @@ fn wit_ty(s: &str) -> Result<WitTy, String> {
         "s64" | "u64" => WitTy::S64,
         "f64" => WitTy::F64,
         "string" => WitTy::Str,
-        other => return Err(format!("type `{other}` not supported by the wasm backend yet")),
+        other => match env.get(other) {
+            Some(fields) => {
+                let mut resolved = Vec::with_capacity(fields.len());
+                for (fname, fty) in fields {
+                    resolved.push((fname.clone(), wit_ty(fty, env)?));
+                }
+                WitTy::Record(resolved)
+            }
+            None => return Err(format!("type `{other}` not supported by the wasm backend yet")),
+        },
     })
 }
 
-fn flat(ty: &WitTy) -> &'static [ValType] {
+fn flat(ty: &WitTy) -> Vec<ValType> {
     match ty {
-        WitTy::Bool | WitTy::IntS | WitTy::IntU => &[ValType::I32],
-        WitTy::S64 => &[ValType::I64],
-        WitTy::F64 => &[ValType::F64],
-        WitTy::Str | WitTy::List(_) => &[ValType::I32, ValType::I32],
+        WitTy::Bool | WitTy::IntS | WitTy::IntU => vec![ValType::I32],
+        WitTy::S64 => vec![ValType::I64],
+        WitTy::F64 => vec![ValType::F64],
+        WitTy::Str | WitTy::List(_) => vec![ValType::I32, ValType::I32],
+        WitTy::Record(fields) => fields.iter().flat_map(|(_, t)| flat(t)).collect(),
     }
+}
+
+/// Canonical-ABI alignment (bytes) for a type's in-memory representation.
+fn align_of(ty: &WitTy) -> u64 {
+    match ty {
+        WitTy::Bool => 1,
+        WitTy::IntS | WitTy::IntU => 4, // s8/s16 widen to 4 here (we only box i32)
+        WitTy::S64 | WitTy::F64 => 8,
+        WitTy::Str | WitTy::List(_) => 4, // (ptr, len), pointer-aligned
+        WitTy::Record(fields) => fields.iter().map(|(_, t)| align_of(t)).max().unwrap_or(1),
+    }
+}
+
+/// Canonical-ABI size (bytes) in memory.
+fn size_of(ty: &WitTy) -> u64 {
+    match ty {
+        WitTy::Bool => 1,
+        WitTy::IntS | WitTy::IntU => 4,
+        WitTy::S64 | WitTy::F64 => 8,
+        WitTy::Str | WitTy::List(_) => 8,
+        WitTy::Record(_) => {
+            let a = align_of(ty);
+            let mut off = 0u64;
+            for (o, t) in record_field_offsets(ty) {
+                off = o + size_of(&t);
+            }
+            align_up(off, a)
+        }
+    }
+}
+
+fn align_up(off: u64, align: u64) -> u64 {
+    (off + align - 1) / align * align
+}
+
+/// (offset, field-type) for each field of a record, in declaration order.
+fn record_field_offsets(ty: &WitTy) -> Vec<(u64, WitTy)> {
+    let WitTy::Record(fields) = ty else { return vec![] };
+    let mut off = 0u64;
+    let mut out = Vec::with_capacity(fields.len());
+    for (_, ft) in fields {
+        off = align_up(off, align_of(ft));
+        out.push((off, ft.clone()));
+        off += size_of(ft);
+    }
+    out
 }
 
 /// canonical-ABI element size for list payloads
@@ -93,20 +157,21 @@ fn elem_size(ty: &WitTy) -> u64 {
         WitTy::Bool => 1,
         WitTy::IntS | WitTy::IntU => 4,
         WitTy::S64 | WitTy::F64 | WitTy::Str | WitTy::List(_) => 8,
+        WitTy::Record(_) => size_of(ty),
     }
 }
 
 enum FlatRes {
     None,
     One(WitTy),
-    Retptr, // flattened result > 1 value (string/list): pass/return a pointer
+    Retptr, // flattened result > 1 value (string/list/record): pass/return a pointer
 }
 
-fn flat_result(sig: &FuncSig) -> Result<FlatRes, String> {
+fn flat_result(sig: &FuncSig, env: &TypeEnv) -> Result<FlatRes, String> {
     match &sig.result {
         None => Ok(FlatRes::None),
         Some(t) => {
-            let ty = wit_ty(t)?;
+            let ty = wit_ty(t, env)?;
             if flat(&ty).len() > 1 { Ok(FlatRes::Retptr) } else { Ok(FlatRes::One(ty)) }
         }
     }
@@ -262,6 +327,38 @@ fn features_of(arena: &Arena, info: &FileInfo) -> Features {
     feats
 }
 
+/// Record types from a file's `DefType` forms: name → field (name, type-string).
+/// Only record-shaped types are collected (variants/flags/aliases are skipped;
+/// the boundary ABI for those is not implemented in the wasm backend yet).
+fn record_types(arena: &Arena, types: &[(String, NodeId)]) -> Vec<(String, Vec<(String, String)>)> {
+    let mut out = Vec::new();
+    for (name, node) in types {
+        if let Node::Rec(fields) = arena.node(*node) {
+            let mut fs = Vec::with_capacity(fields.len());
+            let mut ok = true;
+            for (fname, fnode) in fields {
+                match crate::wit::type_text(arena, *fnode) {
+                    Ok(t) => fs.push((fname.clone(), t)),
+                    Err(_) => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                out.push((name.clone(), fs));
+            }
+        }
+    }
+    out
+}
+
+/// Public: record types a dependency file defines, for the build driver to put
+/// on its [`Dep`].
+pub fn dep_record_types(arena: &Arena, info: &FileInfo) -> Vec<(String, Vec<(String, String)>)> {
+    record_types(arena, &info.types)
+}
+
 /// `"demo:shout/render"` → `"render"`; a bare package path means `api`.
 fn import_iface(path: &str) -> String {
     match path.split_once('/') {
@@ -282,6 +379,7 @@ struct Emitter<'a> {
     arena: &'a Arena,
     info: &'a FileInfo,
     deps: &'a HashMap<String, Dep>,
+    type_env: TypeEnv, // record types in scope (local + deps), for boundary ABI
     data: Vec<u8>, // segment contents, lives at DATA_BASE
     str_cache: HashMap<String, u32>,
     types: Vec<(Vec<ValType>, Vec<ValType>)>,
@@ -1007,9 +1105,10 @@ impl<'a> Emitter<'a> {
         let args = self.bind_args(payload, &param_names)?;
         for (a, (_, t)) in args.iter().zip(&sig.params) {
             self.expr(fx, *a, false)?;
-            self.lower(fx, &wit_ty(t)?);
+            let pty = wit_ty(t, &self.type_env)?;
+            self.lower(fx, &pty);
         }
-        match flat_result(&sig)? {
+        match flat_result(&sig, &self.type_env)? {
             FlatRes::None => {
                 fx.op(I::Call(fidx));
                 fx.op(I::I32Const(self.unit_addr() as i32));
@@ -1019,23 +1118,35 @@ impl<'a> Emitter<'a> {
                 self.lift(fx, &t);
             }
             FlatRes::Retptr => {
-                fx.op(I::I32Const(SCRATCH));
-                fx.op(I::Call(fidx));
-                // (ptr, len) written at the scratch area
-                let p = fx.local(ValType::I32);
-                let l = fx.local(ValType::I32);
-                fx.op(I::I32Const(SCRATCH));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::LocalSet(p));
-                fx.op(I::I32Const(SCRATCH));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::LocalSet(l));
-                match wit_ty(sig.result.as_deref().unwrap())? {
-                    WitTy::List(elem) => self.lift_list(fx, p, l, &elem),
-                    _ => {
-                        fx.op(I::LocalGet(p));
-                        fx.op(I::LocalGet(l));
-                        fx.op(I::Call(self.h.box_str));
+                let rty = wit_ty(sig.result.as_deref().unwrap(), &self.type_env)?;
+                if let WitTy::Record(_) = &rty {
+                    // allocate a result area sized to the record, pass it as the
+                    // canonical retptr, then read the record back out of it
+                    let area = fx.local(ValType::I32);
+                    fx.op(I::I32Const(size_of(&rty) as i32));
+                    fx.op(I::Call(self.h.alloc));
+                    fx.op(I::LocalTee(area));
+                    fx.op(I::Call(fidx));
+                    self.load_from_mem(fx, &rty, area, 0)?;
+                } else {
+                    fx.op(I::I32Const(SCRATCH));
+                    fx.op(I::Call(fidx));
+                    // (ptr, len) written at the scratch area
+                    let p = fx.local(ValType::I32);
+                    let l = fx.local(ValType::I32);
+                    fx.op(I::I32Const(SCRATCH));
+                    fx.op(I::I32Load(ma(0, 2)));
+                    fx.op(I::LocalSet(p));
+                    fx.op(I::I32Const(SCRATCH));
+                    fx.op(I::I32Load(ma(4, 2)));
+                    fx.op(I::LocalSet(l));
+                    match rty {
+                        WitTy::List(elem) => self.lift_list(fx, p, l, &elem),
+                        _ => {
+                            fx.op(I::LocalGet(p));
+                            fx.op(I::LocalGet(l));
+                            fx.op(I::Call(self.h.box_str));
+                        }
                     }
                 }
             }
@@ -1062,6 +1173,18 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Load(ma(4, 2)));
             }
             WitTy::List(elem) => self.lower_list(fx, elem),
+            WitTy::Record(fields) => {
+                // record box on stack → field flats pushed in declaration order
+                let b = fx.local(ValType::I32);
+                fx.op(I::LocalSet(b));
+                for (k, ft) in fields {
+                    let kaddr = self.intern_str(k);
+                    fx.op(I::LocalGet(b));
+                    fx.op(I::I32Const(kaddr as i32));
+                    fx.op(I::Call(self.h.rec_get));
+                    self.lower(fx, ft);
+                }
+            }
         }
     }
 
@@ -1147,6 +1270,9 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(ll));
                 fx.op(I::I32Store(ma(4, 2)));
             }
+            // list<record> is rejected before emission (wit_ty never yields it
+            // through a supported boundary path in v0)
+            WitTy::Record(_) => unreachable!("list<record> across boundaries unsupported"),
         }
         fx.op(I::LocalGet(i));
         fx.op(I::I32Const(1));
@@ -1232,6 +1358,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalSet(l));
                 self.lift_list(fx, p, l, inner);
             }
+            WitTy::Record(_) => unreachable!("list<record> across boundaries unsupported"),
         }
         fx.op(I::I32Store(ma(8, 2)));
         fx.op(I::LocalGet(i));
@@ -1258,8 +1385,184 @@ impl<'a> Emitter<'a> {
             }
             WitTy::S64 => fx.op(I::Call(self.h.box_int)),
             WitTy::F64 => fx.op(I::Call(self.h.box_dec)),
-            WitTy::Str | WitTy::List(_) => unreachable!("never a single flat value"),
+            WitTy::Str | WitTy::List(_) | WitTy::Record(_) => {
+                unreachable!("never a single flat value")
+            }
         }
+    }
+
+    /// Lift a value passed flattened across the boundary: read `flat(ty)`
+    /// consecutive flat locals starting at `base`, leave a boxed value on the
+    /// stack. Generalizes the per-type lifting for scalars, strings, lists, and
+    /// (recursively) records.
+    fn lift_flat(&mut self, fx: &mut FnCtx, ty: &WitTy, base: u32) -> Result<(), String> {
+        match ty {
+            WitTy::Str => {
+                fx.op(I::LocalGet(base));
+                fx.op(I::LocalGet(base + 1));
+                fx.op(I::Call(self.h.box_str));
+            }
+            WitTy::List(elem) => self.lift_list(fx, base, base + 1, elem),
+            WitTy::Record(fields) => {
+                let n = fields.len();
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8 + 8 * n as i32));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_REC));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(n as i32));
+                fx.op(I::I32Store(ma(4, 2)));
+                let mut off = base;
+                for (i, (k, ft)) in fields.iter().enumerate() {
+                    let kaddr = self.intern_str(k);
+                    fx.op(I::LocalGet(p));
+                    fx.op(I::I32Const(kaddr as i32));
+                    fx.op(I::I32Store(ma(8 + 8 * i as u64, 2)));
+                    fx.op(I::LocalGet(p));
+                    self.lift_flat(fx, ft, off)?;
+                    fx.op(I::I32Store(ma(12 + 8 * i as u64, 2)));
+                    off += flat(ft).len() as u32;
+                }
+                fx.op(I::LocalGet(p));
+            }
+            _ => {
+                fx.op(I::LocalGet(base));
+                self.lift(fx, ty);
+            }
+        }
+        Ok(())
+    }
+
+    /// Store the canonical in-memory representation of `src` (a boxed value in
+    /// the given local) at `dst + off`. Records lay fields out at aligned
+    /// offsets; scalar fields only (string/list inside a boundary record are
+    /// not supported by the wasm backend yet).
+    fn store_to_mem(
+        &mut self,
+        fx: &mut FnCtx,
+        ty: &WitTy,
+        src: u32,
+        dst: u32,
+        off: u64,
+    ) -> Result<(), String> {
+        match ty {
+            WitTy::Bool => {
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(src));
+                fx.op(I::Call(self.h.truthy));
+                fx.op(I::I32Store8(ma(off, 0)));
+            }
+            WitTy::IntS | WitTy::IntU => {
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(src));
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::I32WrapI64);
+                fx.op(I::I32Store(ma(off, 2)));
+            }
+            WitTy::S64 => {
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(src));
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::I64Store(ma(off, 3)));
+            }
+            WitTy::F64 => {
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(src));
+                fx.op(I::Call(self.h.unbox_dec));
+                fx.op(I::F64Store(ma(off, 3)));
+            }
+            WitTy::Record(fields) => {
+                for ((o, ft), (k, _)) in record_field_offsets(ty).into_iter().zip(fields) {
+                    let kaddr = self.intern_str(k);
+                    let fld = fx.local(ValType::I32);
+                    fx.op(I::LocalGet(src));
+                    fx.op(I::I32Const(kaddr as i32));
+                    fx.op(I::Call(self.h.rec_get));
+                    fx.op(I::LocalSet(fld));
+                    self.store_to_mem(fx, &ft, fld, dst, off + o)?;
+                }
+            }
+            WitTy::Str | WitTy::List(_) => {
+                return Err("string/list fields inside a record crossing a component \
+                            boundary are not supported by the wasm backend yet"
+                    .into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Inverse of [`store_to_mem`]: read the canonical representation of `ty`
+    /// at `src + off` and leave a boxed value on the stack.
+    fn load_from_mem(
+        &mut self,
+        fx: &mut FnCtx,
+        ty: &WitTy,
+        src: u32,
+        off: u64,
+    ) -> Result<(), String> {
+        match ty {
+            WitTy::Bool => {
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load8U(ma(off, 0)));
+                fx.op(I::Call(self.h.box_bool));
+            }
+            WitTy::IntS => {
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::I64ExtendI32S);
+                fx.op(I::Call(self.h.box_int));
+            }
+            WitTy::IntU => {
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::I64ExtendI32U);
+                fx.op(I::Call(self.h.box_int));
+            }
+            WitTy::S64 => {
+                fx.op(I::LocalGet(src));
+                fx.op(I::I64Load(ma(off, 3)));
+                fx.op(I::Call(self.h.box_int));
+            }
+            WitTy::F64 => {
+                fx.op(I::LocalGet(src));
+                fx.op(I::F64Load(ma(off, 3)));
+                fx.op(I::Call(self.h.box_dec));
+            }
+            WitTy::Record(fields) => {
+                let n = fields.len();
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8 + 8 * n as i32));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_REC));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(n as i32));
+                fx.op(I::I32Store(ma(4, 2)));
+                for (i, ((o, ft), (k, _))) in
+                    record_field_offsets(ty).into_iter().zip(fields).enumerate()
+                {
+                    let kaddr = self.intern_str(k);
+                    fx.op(I::LocalGet(p));
+                    fx.op(I::I32Const(kaddr as i32));
+                    fx.op(I::I32Store(ma(8 + 8 * i as u64, 2)));
+                    fx.op(I::LocalGet(p));
+                    self.load_from_mem(fx, &ft, src, off + o)?;
+                    fx.op(I::I32Store(ma(12 + 8 * i as u64, 2)));
+                }
+                fx.op(I::LocalGet(p));
+            }
+            WitTy::Str | WitTy::List(_) => {
+                return Err("string/list fields inside a record crossing a component \
+                            boundary are not supported by the wasm backend yet"
+                    .into());
+            }
+        }
+        Ok(())
     }
 
     fn builtin(&mut self, fx: &mut FnCtx, name: &str, payload: NodeId) -> Result<(), String> {
@@ -1400,10 +1703,22 @@ fn emit_core_module(
     let feats = features_of(arena, info);
     let is_command = info.target.as_deref() == Some("wasi:cli/command");
 
+    // record types in scope: this file's own DefTypes, plus those of every dep
+    let mut type_env: TypeEnv = HashMap::new();
+    for (name, fields) in record_types(arena, &info.types) {
+        type_env.insert(name, fields);
+    }
+    for dep in deps.values() {
+        for (name, fields) in &dep.types {
+            type_env.entry(name.clone()).or_insert_with(|| fields.clone());
+        }
+    }
+
     let mut em = Emitter {
         arena,
         info,
         deps,
+        type_env,
         data: Vec::new(),
         str_cache: HashMap::new(),
         types: Vec::new(),
@@ -1494,11 +1809,11 @@ fn emit_core_module(
             .ok_or(format!("`{}` does not export `{fname}` in `{iface}`", imp.package))?;
         let mut p = Vec::new();
         for (_, t) in &sig.params {
-            p.extend_from_slice(flat(&wit_ty(t)?));
+            p.extend_from_slice(&flat(&wit_ty(t, &em.type_env)?));
         }
-        let r = match flat_result(sig)? {
+        let r = match flat_result(sig, &em.type_env)? {
             FlatRes::None => vec![],
-            FlatRes::One(t) => flat(&t).to_vec(),
+            FlatRes::One(t) => flat(&t),
             FlatRes::Retptr => {
                 p.push(I32);
                 vec![]
@@ -1604,55 +1919,61 @@ fn emit_core_module(
         let mut fparams = Vec::new();
         let mut lifted: Vec<(WitTy, u32)> = Vec::new(); // (ty, first flat local)
         for (_, t) in &sig.params {
-            let ty = wit_ty(t)?;
+            let ty = wit_ty(t, &em.type_env)?;
             lifted.push((ty.clone(), fparams.len() as u32));
-            fparams.extend_from_slice(flat(&ty));
+            fparams.extend_from_slice(&flat(&ty));
+        }
+        if fparams.len() > 16 {
+            return Err(format!(
+                "`{}` flattens to {} parameters; spilling >16 params to memory \
+                 is not supported by the wasm backend yet",
+                sig.name,
+                fparams.len()
+            ));
         }
         let mut fx = FnCtx::new(fparams.len() as u32);
         for (ty, base) in &lifted {
-            match ty {
-                WitTy::Str => {
-                    fx.op(I::LocalGet(*base));
-                    fx.op(I::LocalGet(*base + 1));
-                    fx.op(I::Call(em.h.box_str));
-                }
-                WitTy::List(elem) => {
-                    em.lift_list(&mut fx, *base, *base + 1, elem);
-                }
-                _ => {
-                    fx.op(I::LocalGet(*base));
-                    em.lift(&mut fx, ty);
-                }
-            }
+            em.lift_flat(&mut fx, ty, *base)?;
         }
         fx.op(I::Call(fidx));
-        let fresults = match flat_result(sig)? {
+        let fresults = match flat_result(sig, &em.type_env)? {
             FlatRes::None => {
                 fx.op(I::Drop);
                 vec![]
             }
             FlatRes::One(t) => {
                 em.lower(&mut fx, &t);
-                flat(&t).to_vec()
+                flat(&t)
             }
             FlatRes::Retptr => {
-                // lower to (ptr, len) and park them in a callee-owned area
-                let ty = wit_ty(sig.result.as_deref().unwrap())?;
-                em.lower(&mut fx, &ty);
-                let lp = fx.local(I32);
-                let ll = fx.local(I32);
+                let ty = wit_ty(sig.result.as_deref().unwrap(), &em.type_env)?;
                 let area = fx.local(I32);
-                fx.op(I::LocalSet(ll));
-                fx.op(I::LocalSet(lp));
-                fx.op(I::I32Const(8));
-                fx.op(I::Call(em.h.alloc));
-                fx.op(I::LocalTee(area));
-                fx.op(I::LocalGet(lp));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(area));
-                fx.op(I::LocalGet(ll));
-                fx.op(I::I32Store(ma(4, 2)));
-                fx.op(I::LocalGet(area));
+                if let WitTy::Record(_) = &ty {
+                    // store the record's canonical layout into a callee-owned area
+                    let rbox = fx.local(I32);
+                    fx.op(I::LocalSet(rbox));
+                    fx.op(I::I32Const(size_of(&ty) as i32));
+                    fx.op(I::Call(em.h.alloc));
+                    fx.op(I::LocalSet(area));
+                    em.store_to_mem(&mut fx, &ty, rbox, area, 0)?;
+                    fx.op(I::LocalGet(area));
+                } else {
+                    // string/list: lower to (ptr, len) parked in an 8-byte area
+                    em.lower(&mut fx, &ty);
+                    let lp = fx.local(I32);
+                    let ll = fx.local(I32);
+                    fx.op(I::LocalSet(ll));
+                    fx.op(I::LocalSet(lp));
+                    fx.op(I::I32Const(8));
+                    fx.op(I::Call(em.h.alloc));
+                    fx.op(I::LocalTee(area));
+                    fx.op(I::LocalGet(lp));
+                    fx.op(I::I32Store(ma(0, 2)));
+                    fx.op(I::LocalGet(area));
+                    fx.op(I::LocalGet(ll));
+                    fx.op(I::I32Store(ma(4, 2)));
+                    fx.op(I::LocalGet(area));
+                }
                 vec![I32]
             }
         };
@@ -2579,7 +2900,7 @@ pub fn dep_package_wit(arena: &Arena, info: &FileInfo) -> Result<String, String>
         out.push_str(&format!("  interface {iface} {{\n"));
         if iface == "api" {
             for (name, ty) in &info.types {
-                out.push_str(&format!("    {};\n", type_decl(arena, name, *ty)?));
+                out.push_str(&format!("    {}\n", type_decl(arena, name, *ty)?));
             }
         }
         for sig in info.exports.iter().filter(|s| s.iface == iface) {
@@ -2613,7 +2934,7 @@ fn synthesize_world_wit(
         out.push_str(&format!("interface {iface} {{\n"));
         if iface == "api" {
             for (name, ty) in &info.types {
-                out.push_str(&format!("  {};\n", type_decl(arena, name, *ty)?));
+                out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
             }
         }
         for sig in api_exports.iter().filter(|s| &s.iface == iface) {

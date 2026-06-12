@@ -314,7 +314,7 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
         if iface == "api" {
             for (name, ty) in &info.types {
                 doc_lines(&mut out, name);
-                out.push_str(&format!("  {};\n", type_decl(arena, name, *ty)?));
+                out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
             }
         }
         for sig in info.exports.iter().filter(|s| &s.iface == iface) {
@@ -364,7 +364,7 @@ pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String
             }
             Ok(format!("variant {name} {{ {} }}", parts.join(", ")))
         }
-        _ => Ok(format!("type {name} = {}", type_text(arena, ty)?)),
+        _ => Ok(format!("type {name} = {};", type_text(arena, ty)?)),
     }
 }
 
