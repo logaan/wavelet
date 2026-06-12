@@ -117,7 +117,10 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       locals, named defs as values via cached wrappers + static boxes;
       `to-string` helper (int/bool/str); verified on wasmtime against
       interpreter output (make-adder / twice / value-def closures)
-- [ ] v0 backend gaps: lists/records/variants across boundaries,
+- [x] Lists across boundaries: `list<T>` params/results lowered/lifted per
+      the canonical ABI (strings, ints, bools, f64, nested lists); generic
+      retptr path; verified composed on wasmtime (list<string>, list<s64>)
+- [ ] v0 backend gaps: records/variants across boundaries,
       record/variant/tuple patterns in Match, GC (currently leaks
       by design), `compose.wave` manifest, `--fuse`
 

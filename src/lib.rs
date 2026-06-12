@@ -497,6 +497,49 @@ world shout {
     }
 
     #[test]
+    fn emit_lists_across_boundaries() {
+        // provider: list<string> param and result, list<s64> param
+        let psrc = "Package \"demo:lists@0.1.0\"\n\
+                    Export {name: first-up params: {words: list(string)} result: string}\n\
+                    Def first-up Fn {words}\n\
+                      If gt(len(words) 0) upper(head(words)) \"EMPTY\"\n\
+                    Export {name: echo params: {words: list(string)} result: list(string)}\n\
+                    Def echo Fn {words} words\n\
+                    Export {name: sum3 params: {ns: list(s64)} result: s64}\n\
+                    Def sum3 Fn {ns}\n\
+                      Match ns [([a b c] add(a add(b c))) (other 0)]";
+        let (pa, pr) = read_file(psrc).unwrap();
+        let pinfo = wit::collect(&pa, &pr).unwrap();
+        let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
+            .expect("list provider componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
+
+        let msrc = "Package \"demo:listmain@0.1.0\"\n\
+                    Target \"wasi:cli/command\"\n\
+                    Import {pkg: \"demo:lists/api\" as: lst}\n\
+                    Export run\n\
+                    Def run Fn {}\n\
+                      Do [\n\
+                        println(lst/first-up{words: [\"hello\"]})\n\
+                        println(head(lst/echo{words: args()}))\n\
+                        println(to-string(lst/sum3{ns: [10 20 12]}))]";
+        let (ma, mr) = read_file(msrc).unwrap();
+        let minfo = wit::collect(&ma, &mr).unwrap();
+        let mut deps = std::collections::HashMap::new();
+        deps.insert(
+            "demo:lists".to_string(),
+            emit::Dep {
+                package: pinfo.package.clone(),
+                funcs: pinfo.exports.clone(),
+                package_wit: emit::dep_package_wit(&pa, &pinfo).unwrap(),
+            },
+        );
+        let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
+            .expect("list consumer componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
+    }
+
+    #[test]
     fn aot_expansion_feeds_the_wasm_backend() {
         let src = r#"
             Package "demo:twice@0.1.0"
