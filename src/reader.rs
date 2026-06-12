@@ -46,20 +46,34 @@ impl MacroTable {
 }
 
 pub fn read_file(src: &str) -> Result<(Arena, Vec<NodeId>), ReadError> {
+    let mut macros = MacroTable::core();
+    read_with(src, &mut macros)
+}
+
+/// Like [`read_file`] but with a caller-owned arity table, so `DefMacro`
+/// registrations persist across inputs (used by the REPL).
+pub fn read_with(
+    src: &str,
+    macros: &mut MacroTable,
+) -> Result<(Arena, Vec<NodeId>), ReadError> {
     let toks = lex(src)?;
     let mut p = Parser {
         toks,
         pos: 0,
         arena: Arena::new(),
-        macros: MacroTable::core(),
+        macros: std::mem::replace(macros, MacroTable::core()),
     };
     let mut roots = Vec::new();
-    while !p.at_end() {
-        let id = p.parse_form()?;
-        p.register_if_def_macro(id);
-        roots.push(id);
-    }
-    Ok((p.arena, roots))
+    let result = (|| {
+        while !p.at_end() {
+            let id = p.parse_form()?;
+            p.register_if_def_macro(id);
+            roots.push(id);
+        }
+        Ok(())
+    })();
+    *macros = p.macros;
+    result.map(|()| (p.arena, roots))
 }
 
 struct Parser {

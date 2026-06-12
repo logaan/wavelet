@@ -105,7 +105,9 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
 
 ## Phase 6 — beyond
 - [ ] Closures across boundaries → resource lifting (§6.4)
-- [ ] REPL (§9), registry fetch `wavelet add`, exhaustiveness lint, hygiene (§10)
+- [x] REPL (§9): `wavelet repl` — interpreter-backed, multi-line input,
+      DefMacro arities persist across lines (`reader::read_with`)
+- [ ] Registry fetch `wavelet add`, exhaustiveness lint, hygiene (§10)
 
 ## Notes / decisions log
 - 2026-06-12: Rust from the start (user choice). Reader has zero deps to keep

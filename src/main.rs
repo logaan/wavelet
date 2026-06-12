@@ -5,6 +5,13 @@ fn main() -> ExitCode {
     match args.as_slice() {
         [cmd, path] if cmd == "read" => read_cmd(path),
         [cmd, path] if cmd == "expand" => expand_cmd(path),
+        [cmd] if cmd == "repl" => match wavelet::repl::repl() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        },
         [cmd, path] if cmd == "wit" => wit_cmd(path),
         [cmd, rest @ ..] if cmd == "run" && !rest.is_empty() => run_cmd(rest),
         [cmd, rest @ ..] if cmd == "build" && !rest.is_empty() => build_cmd(rest),
@@ -12,6 +19,7 @@ fn main() -> ExitCode {
         _ => {
             eprintln!("usage: wavelet read <file.wvl>");
             eprintln!("       wavelet expand <file.wvl>");
+            eprintln!("       wavelet repl");
             eprintln!("       wavelet wit <file.wvl>");
             eprintln!("       wavelet run <file.wvl>... [-- <args>...]");
             eprintln!("       wavelet build <file.wvl>... [-o <dir>]");

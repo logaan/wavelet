@@ -7,6 +7,7 @@ pub mod interp;
 pub mod lexer;
 pub mod printer;
 pub mod reader;
+pub mod repl;
 pub mod runner;
 pub mod value;
 pub mod wit;
