@@ -328,6 +328,22 @@ world shout {
     }
 
     #[test]
+    fn wit_inference_follows_calls_to_other_defs() {
+        let src = "Package \"demo:i@0.1.0\"\n\
+                   Export double\n\
+                   Def double Fn {n: s64} helper(n)\n\
+                   Def helper Fn {x: s64} mul[x x]\n\
+                   Export greet\n\
+                   Def greet Fn {name: string} shout(name)\n\
+                   Def shout Fn {s: string} upper(s)\n\
+                   Def loop-y Fn {n: s64} loop-y(n)";
+        let (arena, roots) = read_file(src).unwrap();
+        let got = wit::synthesize(&arena, &roots).unwrap();
+        assert!(got.contains("double: func(n: s64) -> s64;"), "{got}");
+        assert!(got.contains("greet: func(name: string) -> string;"), "{got}");
+    }
+
+    #[test]
     fn round_trip_is_stable() {
         for src in [
             "f((x, y))",

@@ -74,8 +74,11 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       `Export` record form, `DefType` records/variants/flags/aliases,
       best-effort result-type inference; shout.wvl reproduces §6.1 exactly
 - [x] Type ascription `The` (primitive checks at eval time)
-- [ ] Richer inference (across Defs, lists/options/results) — currently errors
-      and asks for annotations when it cannot infer
+- [x] Cross-def inference: an export whose body calls another module-level
+      `Def` follows the call (recursion-guarded; recursive fns still need the
+      Export record form)
+- [ ] Richer inference for lists/options/results — currently errors and asks
+      for annotations when it cannot infer
 - [ ] Boundary coercions + `safely` wrapper semantics (§3)
 - [ ] Grouped exports `Export {iface: "render" ...}` (only default `api` now)
 

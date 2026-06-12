@@ -155,7 +155,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                 let (params_id, body) = defs
                     .get(&name)
                     .ok_or(format!("Export `{name}` has no definition"))?;
-                infer_sig(arena, &name, *params_id, *body)?
+                infer_sig(arena, &name, *params_id, *body, &defs)?
             }
         };
         exports.push(sig);
@@ -203,6 +203,7 @@ fn infer_sig(
     name: &str,
     params_id: NodeId,
     body: NodeId,
+    defs: &HashMap<String, (NodeId, NodeId)>,
 ) -> Result<FuncSig, String> {
     let mut params = Vec::new();
     let mut param_types = HashMap::new();
@@ -223,7 +224,8 @@ fn infer_sig(
         }
         _ => return Err(format!("`{name}`: malformed Fn parameters")),
     }
-    let result = match infer(arena, body, &param_types) {
+    let mut visiting = vec![name.to_string()];
+    let result = match infer(arena, body, &param_types, defs, &mut visiting) {
         Inferred::Known(t) => Some(t),
         Inferred::Unit => None,
         Inferred::Unknown => {
@@ -334,8 +336,15 @@ fn unify(a: Inferred, b: Inferred) -> Inferred {
 
 /// Best-effort result-type inference over a function body (§6.1: signatures
 /// come "from typed Fn parameters, from inference against use, or from an
-/// explicit record form"). Anything it cannot see is Unknown.
-fn infer(arena: &Arena, id: NodeId, params: &HashMap<String, String>) -> Inferred {
+/// explicit record form"). Calls to other module-level defs are followed
+/// (with a recursion guard). Anything it cannot see is Unknown.
+fn infer(
+    arena: &Arena,
+    id: NodeId,
+    params: &HashMap<String, String>,
+    defs: &HashMap<String, (NodeId, NodeId)>,
+    visiting: &mut Vec<String>,
+) -> Inferred {
     match arena.node(id) {
         Node::Bool(_) => Inferred::Known("bool".into()),
         Node::Int(_) => Inferred::Known("s64".into()),
@@ -362,7 +371,8 @@ fn infer(arena: &Arena, id: NodeId, params: &HashMap<String, String>) -> Inferre
                     match arena.node(*payload) {
                         Node::Lst(items) | Node::Tup(items) => {
                             let any_dec = items.iter().any(|&i| {
-                                matches!(infer(arena, i, params), Inferred::Known(t) if t == "f64")
+                                matches!(infer(arena, i, params, defs, visiting),
+                                         Inferred::Known(t) if t == "f64")
                             });
                             Inferred::Known(if any_dec { "f64" } else { "s64" }.into())
                         }
@@ -372,14 +382,14 @@ fn infer(arena: &Arena, id: NodeId, params: &HashMap<String, String>) -> Inferre
                 "print" | "println" => Inferred::Unit,
                 "if-MACRO" => match arena.node(*payload) {
                     Node::Tup(items) if items.len() == 3 => unify(
-                        infer(arena, items[1], params),
-                        infer(arena, items[2], params),
+                        infer(arena, items[1], params, defs, visiting),
+                        infer(arena, items[2], params, defs, visiting),
                     ),
                     _ => Inferred::Unknown,
                 },
                 "do-MACRO" => match arena.node(*payload) {
                     Node::Lst(items) => match items.last() {
-                        Some(&last) => infer(arena, last, params),
+                        Some(&last) => infer(arena, last, params, defs, visiting),
                         None => Inferred::Unit,
                     },
                     _ => Inferred::Unknown,
@@ -389,12 +399,13 @@ fn infer(arena: &Arena, id: NodeId, params: &HashMap<String, String>) -> Inferre
                         let mut scope = params.clone();
                         if let Node::Rec(fields) = arena.node(items[0]) {
                             for (k, v) in fields {
-                                if let Inferred::Known(t) = infer(arena, *v, &scope) {
+                                if let Inferred::Known(t) = infer(arena, *v, &scope, defs, visiting)
+                                {
                                     scope.insert(k.clone(), t);
                                 }
                             }
                         }
-                        infer(arena, items[1], &scope)
+                        infer(arena, items[1], &scope, defs, visiting)
                     }
                     _ => Inferred::Unknown,
                 },
@@ -405,7 +416,24 @@ fn infer(arena: &Arena, id: NodeId, params: &HashMap<String, String>) -> Inferre
                     },
                     _ => Inferred::Unknown,
                 },
-                _ => Inferred::Unknown,
+                _ => match defs.get(name) {
+                    // follow a call to another module-level def
+                    Some((params_id, body)) if !visiting.contains(name) => {
+                        visiting.push(name.clone());
+                        let mut callee_params = HashMap::new();
+                        if let Node::Rec(fields) = arena.node(*params_id) {
+                            for (k, v) in fields {
+                                if let Ok(t) = type_text(arena, *v) {
+                                    callee_params.insert(k.clone(), t);
+                                }
+                            }
+                        }
+                        let r = infer(arena, *body, &callee_params, defs, visiting);
+                        visiting.pop();
+                        r
+                    }
+                    _ => Inferred::Unknown,
+                },
             }
         }
         _ => Inferred::Unknown,
