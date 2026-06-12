@@ -101,10 +101,12 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       auto-plug (§6.5)
 - [x] End-to-end §1 demo on wasmtime v45: `wavelet build && wavelet compose`,
       `wasmtime run out/app.wasm wasm` → `WASM!`; no args → usage line
-- [ ] v0 backend gaps: closures/first-class fns, Match, user macros (needs
+- [x] Match in the wasm backend: literal/name/list patterns compiled to
+      block-per-clause tests; no clause → trap (verified on wasmtime)
+- [ ] v0 backend gaps: closures/first-class fns, user macros (needs
       AOT expand pass), lists/records/variants across boundaries, module-level
-      value defs, GC (currently leaks by design), `compose.wave` manifest,
-      `--fuse`
+      value defs, record/variant/tuple patterns in Match, GC (currently leaks
+      by design), `compose.wave` manifest, `--fuse`
 
 ## Phase 6 — beyond
 - [ ] Closures across boundaries → resource lifting (§6.4)

@@ -378,7 +378,8 @@ impl<'a> Emitter<'a> {
                     let expr = items[1];
                     self.expr(fx, expr, tail)
                 }
-                "match-MACRO" | "fn-MACRO" | "quote-MACRO" | "quasi-MACRO" | "def-MACRO"
+                "match-MACRO" => self.match_form(fx, payload, tail),
+                "fn-MACRO" | "quote-MACRO" | "quasi-MACRO" | "def-MACRO"
                 | "def-macro-MACRO" => {
                     Err(format!("`{name}` not supported by the wasm backend yet"))
                 }
@@ -440,6 +441,86 @@ impl<'a> Emitter<'a> {
         let r = self.expr(fx, items[1], tail);
         fx.scopes.pop();
         r
+    }
+
+    /// Each clause is a block: a failed test branches past the clause; a
+    /// matched clause leaves its result and branches to the end. No clause
+    /// matching traps (the interpreter raises "no Match clause" instead).
+    fn match_form(&mut self, fx: &mut FnCtx, payload: NodeId, tail: bool) -> Result<(), String> {
+        let Node::Tup(items) = self.arena.node(payload).clone() else {
+            return Err("malformed Match".into());
+        };
+        let Node::Lst(clauses) = self.arena.node(items[1]).clone() else {
+            return Err("Match expects a list of (pattern result) clauses".into());
+        };
+        self.expr(fx, items[0], false)?;
+        let scrut = fx.local(ValType::I32);
+        fx.op(I::LocalSet(scrut));
+        fx.op(I::Block(BlockType::Result(ValType::I32)));
+        for &clause in &clauses {
+            let pair = match self.arena.node(clause).clone() {
+                Node::Tup(pair) if pair.len() == 2 => pair,
+                _ => return Err("each Match clause must be a (pattern result) tuple".into()),
+            };
+            fx.op(I::Block(BlockType::Empty));
+            fx.scopes.push(HashMap::new());
+            let r = self
+                .pattern(fx, pair[0], scrut, 0)
+                .and_then(|()| self.expr(fx, pair[1], tail));
+            fx.scopes.pop();
+            r?;
+            fx.op(I::Br(1));
+            fx.op(I::End);
+        }
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        Ok(())
+    }
+
+    /// Compile a pattern test against the box in local `v`; on mismatch branch
+    /// `fail` levels out (the enclosing clause block). Names bind into the
+    /// current scope. Nested patterns keep `fail` because no blocks are opened.
+    fn pattern(&mut self, fx: &mut FnCtx, pat: NodeId, v: u32, fail: u32) -> Result<(), String> {
+        match self.arena.node(pat).clone() {
+            Node::Sym(name) => {
+                let l = fx.local(ValType::I32);
+                fx.op(I::LocalGet(v));
+                fx.op(I::LocalSet(l));
+                fx.scopes.last_mut().unwrap().insert(name, l);
+                Ok(())
+            }
+            Node::Int(_) | Node::Dec(_) | Node::Bool(_) | Node::Str(_) => {
+                fx.op(I::LocalGet(v));
+                self.expr(fx, pat, false)?;
+                fx.op(I::Call(self.h.eq_raw));
+                fx.op(I::I32Eqz);
+                fx.op(I::BrIf(fail));
+                Ok(())
+            }
+            Node::Lst(pats) => {
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::BrIf(fail));
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::I32Const(pats.len() as i32));
+                fx.op(I::I32Ne);
+                fx.op(I::BrIf(fail));
+                for (i, &p) in pats.iter().enumerate() {
+                    let elem = fx.local(ValType::I32);
+                    fx.op(I::LocalGet(v));
+                    fx.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
+                    fx.op(I::LocalSet(elem));
+                    self.pattern(fx, p, elem, fail)?;
+                }
+                Ok(())
+            }
+            _ => Err("pattern not supported by the wasm backend yet \
+                      (literals, names, and list patterns only)"
+                .into()),
+        }
     }
 
     /// Mirror of the interpreter's §4.2 payload-binding rule, at compile time.

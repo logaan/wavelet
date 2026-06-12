@@ -328,6 +328,24 @@ world shout {
     }
 
     #[test]
+    fn emit_match_componentizes() {
+        let src = "Package \"demo:matchy@0.1.0\"\n\
+                   Target \"wasi:cli/command\"\n\
+                   Export run\n\
+                   Def run Fn {}\n\
+                     println(Match args() [\n\
+                       ([\"wasm\"] \"WASM!\")\n\
+                       ([w] str-cat[\"got \" w])\n\
+                       (other \"usage\")])";
+        let (arena, roots) = read_file(src).unwrap();
+        let info = wit::collect(&arena, &roots).unwrap();
+        let bytes =
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
+                .unwrap();
+        assert!(bytes.starts_with(b"\0asm"));
+    }
+
+    #[test]
     fn wit_inference_follows_calls_to_other_defs() {
         let src = "Package \"demo:i@0.1.0\"\n\
                    Export double\n\
