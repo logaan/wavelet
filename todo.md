@@ -111,8 +111,13 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       block-per-clause tests; no clause → trap (verified on wasmtime)
 - [x] List literals (heap list boxes) and module-level value defs (lazily
       initialized globals, cycle-guarded) in the wasm backend
-- [ ] v0 backend gaps: closures/first-class fns, user macros (needs
-      AOT expand pass), lists/records/variants across boundaries,
+- [x] First-class closures in the wasm backend: `TAG_FN` boxes (funcref
+      table slot + captures), uniform `(env payload) -> box` convention,
+      `call_indirect`/`return_call_indirect`, capture of all visible
+      locals, named defs as values via cached wrappers + static boxes;
+      `to-string` helper (int/bool/str); verified on wasmtime against
+      interpreter output (make-adder / twice / value-def closures)
+- [ ] v0 backend gaps: lists/records/variants across boundaries,
       record/variant/tuple patterns in Match, GC (currently leaks
       by design), `compose.wave` manifest, `--fuse`
 

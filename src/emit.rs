@@ -16,9 +16,10 @@
 use std::collections::HashMap;
 
 use wasm_encoder::{
-    BlockType, CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection,
-    Function, FunctionSection, GlobalSection, GlobalType, ImportSection, Instruction as I,
-    MemArg, MemorySection, MemoryType, Module, TypeSection, ValType,
+    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType,
+    ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType,
+    ImportSection, Instruction as I, MemArg, MemorySection, MemoryType, Module, RefType,
+    TableSection, TableType, TypeSection, ValType,
 };
 
 use crate::form::{Arena, Node, NodeId};
@@ -40,6 +41,7 @@ const TAG_INT: i32 = 1;
 const TAG_STR: i32 = 2;
 const TAG_LIST: i32 = 3;
 const TAG_DEC: i32 = 4;
+const TAG_FN: i32 = 5; // table-slot i32 @4, n-captures @8, capture boxes @12…
 
 fn ma(offset: u64, align: u32) -> MemArg {
     MemArg { offset, align, memory_index: 0 }
@@ -191,6 +193,7 @@ struct Helpers {
     head_h: u32,
     strcat2: u32,
     case_h: u32,
+    to_str: u32,
     print_str: Option<u32>,
     println_h: Option<u32>,
     get_args: Option<u32>,
@@ -272,6 +275,11 @@ struct Emitter<'a> {
     value_globals: HashMap<String, u32>,        // module-level value defs → global idx
     compiling_values: Vec<String>,              // cycle guard for value-def inits
     bodies: Vec<(u32, Function)>,               // (type idx, body) for defined funcs
+    /// uniform `(env, payload) -> box` functions reachable through the
+    /// funcref table; slot k = function index `imports + bodies + k`
+    closure_bodies: Vec<(u32, Function)>,
+    fn_wrappers: HashMap<String, u32>, // def name → table slot of its wrapper
+    fn_box_cache: HashMap<String, u32>, // def name → static closure box addr
     false_addr: u32,
     true_addr: u32,
     nl_addr: u32,
@@ -345,25 +353,7 @@ impl<'a> Emitter<'a> {
                 None => return self.value_def_ref(fx, &name),
             },
             Node::Call(head, payload) => return self.call(fx, head, payload, tail),
-            Node::Lst(items) => {
-                let n = items.len();
-                let p = fx.local(ValType::I32);
-                fx.op(I::I32Const(8 + 4 * n as i32));
-                fx.op(I::Call(self.h.alloc));
-                fx.op(I::LocalSet(p));
-                fx.op(I::LocalGet(p));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(p));
-                fx.op(I::I32Const(n as i32));
-                fx.op(I::I32Store(ma(4, 2)));
-                for (i, &item) in items.iter().enumerate() {
-                    fx.op(I::LocalGet(p));
-                    self.expr(fx, item, false)?;
-                    fx.op(I::I32Store(ma(8 + 4 * i as u64, 2)));
-                }
-                fx.op(I::LocalGet(p));
-            }
+            Node::Lst(items) => return self.list_box(fx, &items),
             Node::Tup(_) | Node::Rec(_) | Node::Flg(_) => {
                 return Err("tuple/record/flag literals not supported by the wasm backend yet".into());
             }
@@ -374,13 +364,19 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// A name that is no local binding: a module-level value `Def`, compiled
-    /// as a lazily initialized global (0 = uncomputed; no box lives at 0).
+    /// A name that is no local binding: a module-level value `Def` (lazily
+    /// initialized global; 0 = uncomputed, no box lives at 0) or a named
+    /// function used as a value (static closure box over a uniform wrapper).
     fn value_def_ref(&mut self, fx: &mut FnCtx, name: &str) -> Result<(), String> {
+        if self.funcs.contains_key(name) {
+            let addr = self.fn_value_box(name)?;
+            fx.op(I::I32Const(addr as i32));
+            return Ok(());
+        }
         let Some(&g) = self.value_globals.get(name) else {
             return Err(format!(
-                "`{name}` is not a local binding (first-class functions are \
-                 not supported by the wasm backend yet)"
+                "`{name}` is not a local binding or module-level definition \
+                 (wasm backend)"
             ));
         };
         if self.compiling_values.iter().any(|v| v == name) {
@@ -403,6 +399,187 @@ impl<'a> Emitter<'a> {
         fx.op(I::GlobalSet(g));
         fx.op(I::End);
         fx.op(I::GlobalGet(g));
+        Ok(())
+    }
+
+    /// Build a list box `[tag, len, elem ptrs…]` from element forms.
+    fn list_box(&mut self, fx: &mut FnCtx, items: &[NodeId]) -> Result<(), String> {
+        let n = items.len();
+        let p = fx.local(ValType::I32);
+        fx.op(I::I32Const(8 + 4 * n as i32));
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(p));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(n as i32));
+        fx.op(I::I32Store(ma(4, 2)));
+        for (i, &item) in items.iter().enumerate() {
+            fx.op(I::LocalGet(p));
+            self.expr(fx, item, false)?;
+            fx.op(I::I32Store(ma(8 + 4 * i as u64, 2)));
+        }
+        fx.op(I::LocalGet(p));
+        Ok(())
+    }
+
+    /// Static closure box for a named def used as a value: `[TAG_FN, slot, 0]`
+    /// over a uniform wrapper that forwards to the direct function.
+    fn fn_value_box(&mut self, name: &str) -> Result<u32, String> {
+        if let Some(&a) = self.fn_box_cache.get(name) {
+            return Ok(a);
+        }
+        let slot = self.def_wrapper_slot(name)?;
+        self.align8();
+        let addr = DATA_BASE + self.data.len() as u32;
+        self.put_i32(TAG_FN);
+        self.put_i32(slot as i32);
+        self.put_i32(0);
+        self.fn_box_cache.insert(name.to_string(), addr);
+        Ok(addr)
+    }
+
+    /// Table slot of the uniform `(env, payload) -> box` wrapper for a named
+    /// def: unpacks the payload per §4.2 by arity and tail-calls the function.
+    fn def_wrapper_slot(&mut self, name: &str) -> Result<u32, String> {
+        if let Some(&s) = self.fn_wrappers.get(name) {
+            return Ok(s);
+        }
+        let (fidx, params) = self.funcs[name].clone();
+        let mut fx = FnCtx::new(2);
+        match params.len() {
+            0 => {}
+            1 => fx.op(I::LocalGet(1)),
+            n => {
+                for i in 0..n {
+                    fx.op(I::LocalGet(1));
+                    fx.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
+                }
+            }
+        }
+        fx.op(I::ReturnCall(fidx));
+        let t = self.ty_idx(vec![ValType::I32; 2], vec![ValType::I32]);
+        self.closure_bodies.push((t, fx.finish()));
+        let slot = (self.closure_bodies.len() - 1) as u32;
+        self.fn_wrappers.insert(name.to_string(), slot);
+        Ok(slot)
+    }
+
+    /// `Fn {params} body` as an expression: compile the body to a uniform
+    /// `(env, payload) -> box` table function capturing every visible local,
+    /// and allocate a closure box `[TAG_FN, slot, k, captures…]` at the site.
+    fn fn_form(&mut self, fx: &mut FnCtx, payload: NodeId) -> Result<(), String> {
+        let Node::Tup(items) = self.arena.node(payload).clone() else {
+            return Err("malformed Fn".into());
+        };
+        let params = param_names(self.arena, items[0])?;
+        let body = items[1];
+
+        // captures: every visible local by name (later scopes shadow earlier),
+        // sorted so the layout is deterministic
+        let mut cap_map: HashMap<String, u32> = HashMap::new();
+        for scope in &fx.scopes {
+            for (k, &v) in scope {
+                cap_map.insert(k.clone(), v);
+            }
+        }
+        let mut caps: Vec<(String, u32)> = cap_map.into_iter().collect();
+        caps.sort();
+
+        let mut cf = FnCtx::new(2);
+        let mut scope = HashMap::new();
+        for (j, (cname, _)) in caps.iter().enumerate() {
+            let l = cf.local(ValType::I32);
+            cf.op(I::LocalGet(0));
+            cf.op(I::I32Load(ma(12 + 4 * j as u64, 2)));
+            cf.op(I::LocalSet(l));
+            scope.insert(cname.clone(), l);
+        }
+        match params.len() {
+            0 => {}
+            1 => {
+                scope.insert(params[0].clone(), 1);
+            }
+            n => {
+                // payload must be a list box of exactly n elements
+                cf.op(I::LocalGet(1));
+                cf.op(I::I32Load(ma(0, 2)));
+                cf.op(I::I32Const(TAG_LIST));
+                cf.op(I::I32Ne);
+                cf.op(I::If(BlockType::Empty));
+                cf.op(I::Unreachable);
+                cf.op(I::End);
+                cf.op(I::LocalGet(1));
+                cf.op(I::I32Load(ma(4, 2)));
+                cf.op(I::I32Const(n as i32));
+                cf.op(I::I32Ne);
+                cf.op(I::If(BlockType::Empty));
+                cf.op(I::Unreachable);
+                cf.op(I::End);
+                for (i, p) in params.iter().enumerate() {
+                    let l = cf.local(ValType::I32);
+                    cf.op(I::LocalGet(1));
+                    cf.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
+                    cf.op(I::LocalSet(l));
+                    scope.insert(p.clone(), l);
+                }
+            }
+        }
+        cf.scopes.push(scope);
+        self.expr(&mut cf, body, true)?;
+        let t = self.ty_idx(vec![ValType::I32; 2], vec![ValType::I32]);
+        self.closure_bodies.push((t, cf.finish()));
+        let slot = (self.closure_bodies.len() - 1) as u32;
+
+        let k = caps.len();
+        let p = fx.local(ValType::I32);
+        fx.op(I::I32Const(12 + 4 * k as i32));
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(p));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(TAG_FN));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(slot as i32));
+        fx.op(I::I32Store(ma(4, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(k as i32));
+        fx.op(I::I32Store(ma(8, 2)));
+        for (j, (_, lidx)) in caps.iter().enumerate() {
+            fx.op(I::LocalGet(p));
+            fx.op(I::LocalGet(*lidx));
+            fx.op(I::I32Store(ma(12 + 4 * j as u64, 2)));
+        }
+        fx.op(I::LocalGet(p));
+        Ok(())
+    }
+
+    /// Indirect call through a closure box: `(box, payload-box)` via the
+    /// funcref table slot stored in the box at offset 4.
+    fn closure_call(
+        &mut self,
+        fx: &mut FnCtx,
+        head: NodeId,
+        payload: NodeId,
+        tail: bool,
+    ) -> Result<(), String> {
+        self.expr(fx, head, false)?;
+        let c = fx.local(ValType::I32);
+        fx.op(I::LocalSet(c));
+        fx.op(I::LocalGet(c)); // env argument = the closure box itself
+        match self.arena.node(payload).clone() {
+            Node::Lst(items) | Node::Tup(items) => self.list_box(fx, &items)?,
+            _ => self.expr(fx, payload, false)?,
+        }
+        fx.op(I::LocalGet(c));
+        fx.op(I::I32Load(ma(4, 2))); // table slot
+        let t = self.ty_idx(vec![ValType::I32; 2], vec![ValType::I32]);
+        fx.op(if tail {
+            I::ReturnCallIndirect { type_index: t, table_index: 0 }
+        } else {
+            I::CallIndirect { type_index: t, table_index: 0 }
+        });
         Ok(())
     }
 
@@ -435,20 +612,24 @@ impl<'a> Emitter<'a> {
                     self.expr(fx, expr, tail)
                 }
                 "match-MACRO" => self.match_form(fx, payload, tail),
-                "fn-MACRO" | "quote-MACRO" | "quasi-MACRO" | "def-MACRO"
-                | "def-macro-MACRO" => {
+                "fn-MACRO" => self.fn_form(fx, payload),
+                "quote-MACRO" | "quasi-MACRO" | "def-MACRO" | "def-macro-MACRO" => {
                     Err(format!("`{name}` not supported by the wasm backend yet"))
                 }
+                _ if fx.lookup(&name).is_some() => self.closure_call(fx, head, payload, tail),
                 _ if BUILTINS.contains(&name.as_str()) => self.builtin(fx, &name, payload),
                 _ => {
                     if self.funcs.contains_key(&name) {
                         self.internal_call(fx, &name, payload, tail)
+                    } else if self.value_globals.contains_key(&name) {
+                        self.closure_call(fx, head, payload, tail)
                     } else {
                         Err(format!("unknown function `{name}` (wasm backend)"))
                     }
                 }
             },
-            _ => Err("call head must be a name (wasm backend)".into()),
+            // any other head evaluates to a closure box
+            _ => self.closure_call(fx, head, payload, tail),
         }
     }
 
@@ -804,6 +985,11 @@ impl<'a> Emitter<'a> {
                     fx.op(I::Call(self.h.strcat2));
                 }
             }
+            "to-string" => {
+                nargs(1)?;
+                self.expr(fx, items[0], false)?;
+                fx.op(I::Call(self.h.to_str));
+            }
             "upper" | "lower" => {
                 nargs(1)?;
                 self.expr(fx, items[0], false)?;
@@ -829,7 +1015,7 @@ impl<'a> Emitter<'a> {
 
 const BUILTINS: &[&str] = &[
     "eq", "not", "lt", "le", "gt", "ge", "add", "sub", "mul", "div", "rem", "neg", "len",
-    "head", "str-cat", "upper", "lower", "print", "println", "args",
+    "head", "str-cat", "upper", "lower", "to-string", "print", "println", "args",
 ];
 
 // --------------------------------------------------------- helper bodies
@@ -867,6 +1053,7 @@ fn emit_core_module(
             head_h: 0,
             strcat2: 0,
             case_h: 0,
+            to_str: 0,
             print_str: None,
             println_h: None,
             get_args: None,
@@ -875,6 +1062,9 @@ fn emit_core_module(
         value_globals: HashMap::new(),
         compiling_values: Vec::new(),
         bodies: Vec::new(),
+        closure_bodies: Vec::new(),
+        fn_wrappers: HashMap::new(),
+        fn_box_cache: HashMap::new(),
         false_addr: 0,
         true_addr: 0,
         nl_addr: 0,
@@ -966,6 +1156,7 @@ fn emit_core_module(
     em.h.head_h = take();
     em.h.strcat2 = take();
     em.h.case_h = take();
+    em.h.to_str = take();
     if feats.needs_stdout {
         em.h.print_str = Some(take());
         em.h.println_h = Some(take());
@@ -1113,11 +1304,30 @@ fn emit_core_module(
     }
     module.section(&is);
 
+    // closure/wrapper functions live after every directly-indexed function;
+    // table slot k = function index closure_base + k
+    let closure_base = n_imports + em.bodies.len() as u32;
+
     let mut fs = FunctionSection::new();
     for (t, _) in &em.bodies {
         fs.function(*t);
     }
+    for (t, _) in &em.closure_bodies {
+        fs.function(*t);
+    }
     module.section(&fs);
+
+    if !em.closure_bodies.is_empty() {
+        let mut tbl = TableSection::new();
+        tbl.table(TableType {
+            element_type: RefType::FUNCREF,
+            minimum: em.closure_bodies.len() as u64,
+            maximum: Some(em.closure_bodies.len() as u64),
+            table64: false,
+            shared: false,
+        });
+        module.section(&tbl);
+    }
 
     let mut ms = MemorySection::new();
     ms.memory(MemoryType {
@@ -1150,8 +1360,23 @@ fn emit_core_module(
     }
     module.section(&es);
 
+    if !em.closure_bodies.is_empty() {
+        let idxs: Vec<u32> =
+            (0..em.closure_bodies.len() as u32).map(|k| closure_base + k).collect();
+        let mut els = ElementSection::new();
+        els.active(
+            Some(0),
+            &ConstExpr::i32_const(0),
+            Elements::Functions(idxs.into()),
+        );
+        module.section(&els);
+    }
+
     let mut cs = CodeSection::new();
     for (_, f) in &em.bodies {
+        cs.function(f);
+    }
+    for (_, f) in &em.closure_bodies {
         cs.function(f);
     }
     module.section(&cs);
@@ -1652,6 +1877,115 @@ fn emit_helpers(em: &mut Emitter, feats: &Features) -> Result<(), String> {
         fx.op(I::End);
         fx.op(I::LocalGet(p));
         let t = em.ty_idx(vec![I32, I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // to_str(box) -> str box   [locals tag, n(i64), neg, buf, i]
+    {
+        let true_s = em.intern_str("true");
+        let false_s = em.intern_str("false");
+        let mut fx = FnCtx::new(1);
+        let tag = fx.local(I32);
+        let n = fx.local(I64);
+        let neg = fx.local(I32);
+        let buf = fx.local(I32);
+        let i = fx.local(I32);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::LocalSet(tag));
+        // string: identity
+        fx.op(I::LocalGet(tag));
+        fx.op(I::I32Const(TAG_STR));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // bool: static "true"/"false"
+        fx.op(I::LocalGet(tag));
+        fx.op(I::I32Const(TAG_BOOL));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(true_s as i32));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(false_s as i32));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // anything but int from here traps
+        fx.op(I::LocalGet(tag));
+        fx.op(I::I32Const(TAG_INT));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalSet(n));
+        fx.op(I::I32Const(32));
+        fx.op(I::Call(em.h.alloc));
+        fx.op(I::LocalSet(buf));
+        fx.op(I::I32Const(32));
+        fx.op(I::LocalSet(i));
+        fx.op(I::LocalGet(n));
+        fx.op(I::I64Const(0));
+        fx.op(I::I64LtS);
+        fx.op(I::LocalSet(neg));
+        fx.op(I::LocalGet(neg));
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I64Const(0));
+        fx.op(I::LocalGet(n));
+        fx.op(I::I64Sub);
+        fx.op(I::LocalSet(n));
+        fx.op(I::End);
+        // digits, least significant first (unsigned ops so |i64::MIN| works)
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Sub);
+        fx.op(I::LocalSet(i));
+        fx.op(I::LocalGet(buf));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(n));
+        fx.op(I::I64Const(10));
+        fx.op(I::I64RemU);
+        fx.op(I::I32WrapI64);
+        fx.op(I::I32Const(b'0' as i32));
+        fx.op(I::I32Add);
+        fx.op(I::I32Store8(ma(0, 0)));
+        fx.op(I::LocalGet(n));
+        fx.op(I::I64Const(10));
+        fx.op(I::I64DivU);
+        fx.op(I::LocalSet(n));
+        fx.op(I::LocalGet(n));
+        fx.op(I::I64Const(0));
+        fx.op(I::I64Ne);
+        fx.op(I::BrIf(0));
+        fx.op(I::End);
+        fx.op(I::LocalGet(neg));
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Sub);
+        fx.op(I::LocalSet(i));
+        fx.op(I::LocalGet(buf));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Const(b'-' as i32));
+        fx.op(I::I32Store8(ma(0, 0)));
+        fx.op(I::End);
+        fx.op(I::LocalGet(buf));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Const(32));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Sub);
+        fx.op(I::Call(em.h.box_str));
+        let t = em.ty_idx(vec![I32], vec![I32]);
         em.bodies.push((t, fx.finish()));
     }
 

@@ -366,6 +366,31 @@ world shout {
     }
 
     #[test]
+    fn emit_closures_componentize() {
+        // anonymous Fn with capture, higher-order param, named def as value,
+        // module-level value def holding a closure, to-string of ints
+        let src = "Package \"demo:clo@0.1.0\"\n\
+                   Target \"wasi:cli/command\"\n\
+                   Export run\n\
+                   Def make-adder Fn {n: s64}\n\
+                     Fn {m: s64} add(n m)\n\
+                   Def twice Fn {f x} f(f(x))\n\
+                   Def inc Fn {n: s64} add(n 1)\n\
+                   Def add5 make-adder(5)\n\
+                   Def run Fn {}\n\
+                     Do [\n\
+                       println(to-string(add5(3)))\n\
+                       println(to-string(twice(add5 10)))\n\
+                       println(to-string(twice(inc neg(1))))]";
+        let (arena, roots) = read_file(src).unwrap();
+        let info = wit::collect(&arena, &roots).unwrap();
+        let bytes =
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
+                .unwrap();
+        assert!(bytes.starts_with(b"\0asm"));
+    }
+
+    #[test]
     fn emit_value_defs_and_list_literals() {
         let src = "Package \"demo:vals@0.1.0\"\n\
                    Target \"wasi:cli/command\"\n\
