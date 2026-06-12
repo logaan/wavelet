@@ -441,6 +441,45 @@ world shout {
     }
 
     #[test]
+    fn emit_variants_and_tuples_componentize() {
+        // variant constructors (some/ok/err/none), variant patterns, tuple
+        // literals + tuple patterns, all in the wasm backend
+        let src = "Package \"demo:var@0.1.0\"\n\
+                   Target \"wasi:cli/command\"\n\
+                   Def describe Fn {r}\n\
+                     Match r [\n\
+                       (ok(n) to-string(n))\n\
+                       (err(e) e)\n\
+                       (none \"nothing\")\n\
+                       (some(x) to-string(x))]\n\
+                   Def pair-sum Fn {p}\n\
+                     Match p [((a b) add(a b)) (other 0)]\n\
+                   Export run\n\
+                   Def run Fn {}\n\
+                     Do [\n\
+                       println(describe(ok(42)))\n\
+                       println(describe(none))\n\
+                       println(to-string(pair-sum((10 20))))]";
+        let (arena, roots) = read_file(src).unwrap();
+        let info = wit::collect(&arena, &roots).unwrap();
+        let bytes =
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
+                .unwrap();
+        assert!(bytes.starts_with(b"\0asm"));
+    }
+
+    #[test]
+    fn eval_variant_and_tuple_match() {
+        // interpreter reference for the wasm-backend behavior above
+        assert_eq!(
+            eval_str("Match ok(42) [(ok(n) n) (err(e) 0)]"),
+            "42"
+        );
+        assert_eq!(eval_str("Match none [(none \"y\") (some(x) \"n\")]"), "\"y\"");
+        assert_eq!(eval_str("Match (10 20) [((a b) add(a b)) (other 0)]"), "30");
+    }
+
+    #[test]
     fn doc_comments_attach_and_reach_wit() {
         let src = "Package \"demo:doc@0.1.0\"\n\
                    /// A pair.\n\

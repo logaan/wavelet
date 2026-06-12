@@ -43,6 +43,8 @@ const TAG_LIST: i32 = 3;
 const TAG_DEC: i32 = 4;
 const TAG_FN: i32 = 5; // table-slot i32 @4, n-captures @8, capture boxes @12…
 const TAG_REC: i32 = 6; // n-fields i32 @4, then (key str box, value box) pairs @8+8i
+const TAG_VAR: i32 = 7; // case-name str box @4, payload box (0 if none) @8
+const TAG_TUP: i32 = 8; // n i32 @4, then element boxes @8+4i (list layout, distinct tag)
 
 fn ma(offset: u64, align: u32) -> MemArg {
     MemArg { offset, align, memory_index: 0 }
@@ -295,6 +297,7 @@ struct Emitter<'a> {
     closure_bodies: Vec<(u32, Function)>,
     fn_wrappers: HashMap<String, u32>, // def name → table slot of its wrapper
     fn_box_cache: HashMap<String, u32>, // def name → static closure box addr
+    var_box_cache: HashMap<String, u32>, // payload-less variant case → static box addr
     false_addr: u32,
     true_addr: u32,
     nl_addr: u32,
@@ -370,8 +373,9 @@ impl<'a> Emitter<'a> {
             Node::Call(head, payload) => return self.call(fx, head, payload, tail),
             Node::Lst(items) => return self.list_box(fx, &items),
             Node::Rec(fields) => return self.rec_box(fx, &fields),
-            Node::Tup(_) | Node::Flg(_) => {
-                return Err("tuple/flag literals not supported by the wasm backend yet".into());
+            Node::Tup(items) => return self.seq_box(fx, &items, TAG_TUP),
+            Node::Flg(_) => {
+                return Err("flag literals not supported by the wasm backend yet".into());
             }
             Node::Qsym(a, n) => {
                 return Err(format!("`{a}/{n}` used as a value (only calls are supported)"));
@@ -384,6 +388,11 @@ impl<'a> Emitter<'a> {
     /// initialized global; 0 = uncomputed, no box lives at 0) or a named
     /// function used as a value (static closure box over a uniform wrapper).
     fn value_def_ref(&mut self, fx: &mut FnCtx, name: &str) -> Result<(), String> {
+        if name == "none" {
+            let addr = self.none_like_box("none");
+            fx.op(I::I32Const(addr as i32));
+            return Ok(());
+        }
         if self.funcs.contains_key(name) {
             let addr = self.fn_value_box(name)?;
             fx.op(I::I32Const(addr as i32));
@@ -418,15 +427,21 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Build a list box `[tag, len, elem ptrs…]` from element forms.
+    /// Build a list box `[TAG_LIST, len, elem ptrs…]` from element forms.
     fn list_box(&mut self, fx: &mut FnCtx, items: &[NodeId]) -> Result<(), String> {
+        self.seq_box(fx, items, TAG_LIST)
+    }
+
+    /// Build a sequence box `[tag, len, elem ptrs…]`; `tag` is TAG_LIST or
+    /// TAG_TUP (identical layout, distinct identity at the value level).
+    fn seq_box(&mut self, fx: &mut FnCtx, items: &[NodeId], tag: i32) -> Result<(), String> {
         let n = items.len();
         let p = fx.local(ValType::I32);
         fx.op(I::I32Const(8 + 4 * n as i32));
         fx.op(I::Call(self.h.alloc));
         fx.op(I::LocalSet(p));
         fx.op(I::LocalGet(p));
-        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Const(tag));
         fx.op(I::I32Store(ma(0, 2)));
         fx.op(I::LocalGet(p));
         fx.op(I::I32Const(n as i32));
@@ -465,6 +480,44 @@ impl<'a> Emitter<'a> {
         }
         fx.op(I::LocalGet(p));
         Ok(())
+    }
+
+    /// Build a variant box `[TAG_VAR, case str box, payload box]` for a case
+    /// carrying a payload (`some`/`ok`/`err` and user cases). Leaves the box
+    /// pointer on the stack; `payload` is the form for the carried value.
+    fn var_box(&mut self, fx: &mut FnCtx, case: &str, payload: NodeId) -> Result<(), String> {
+        let caddr = self.intern_str(case);
+        let p = fx.local(ValType::I32);
+        fx.op(I::I32Const(12));
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(p));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(TAG_VAR));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(caddr as i32));
+        fx.op(I::I32Store(ma(4, 2)));
+        fx.op(I::LocalGet(p));
+        self.expr(fx, payload, false)?;
+        fx.op(I::I32Store(ma(8, 2)));
+        fx.op(I::LocalGet(p));
+        Ok(())
+    }
+
+    /// Address of a static payload-less variant box `[TAG_VAR, case, 0]`
+    /// (e.g. `none`); interned once per case name.
+    fn none_like_box(&mut self, case: &str) -> u32 {
+        if let Some(&a) = self.var_box_cache.get(case) {
+            return a;
+        }
+        let caddr = self.intern_str(case);
+        self.align8();
+        let addr = DATA_BASE + self.data.len() as u32;
+        self.put_i32(TAG_VAR);
+        self.put_i32(caddr as i32);
+        self.put_i32(0);
+        self.var_box_cache.insert(case.to_string(), addr);
+        addr
     }
 
     /// Static closure box for a named def used as a value: `[TAG_FN, slot, 0]`
@@ -762,12 +815,58 @@ impl<'a> Emitter<'a> {
     /// current scope. Nested patterns keep `fail` because no blocks are opened.
     fn pattern(&mut self, fx: &mut FnCtx, pat: NodeId, v: u32, fail: u32) -> Result<(), String> {
         match self.arena.node(pat).clone() {
+            // `none` (the only builtin payload-less variant in v0) matches by
+            // equality; every other bare name binds. Mirrors the interpreter,
+            // which keys this off names bound to a payload-less variant.
+            Node::Sym(name) if name == "none" => {
+                let naddr = self.intern_str("none");
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_VAR));
+                fx.op(I::I32Ne);
+                fx.op(I::BrIf(fail));
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load(ma(8, 2))); // payload must be absent
+                fx.op(I::BrIf(fail));
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::I32Const(naddr as i32));
+                fx.op(I::Call(self.h.eq_raw));
+                fx.op(I::I32Eqz);
+                fx.op(I::BrIf(fail));
+                Ok(())
+            }
             Node::Sym(name) => {
                 let l = fx.local(ValType::I32);
                 fx.op(I::LocalGet(v));
                 fx.op(I::LocalSet(l));
                 fx.scopes.last_mut().unwrap().insert(name, l);
                 Ok(())
+            }
+            // variant case with payload: `ok(x)`, `some(x)`, `err(e)`, …
+            Node::Call(head, vpayload) => {
+                let Node::Sym(case) = self.arena.node(head).clone() else {
+                    return Err("pattern call head must be a name".into());
+                };
+                let caddr = self.intern_str(&case);
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_VAR));
+                fx.op(I::I32Ne);
+                fx.op(I::BrIf(fail));
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::I32Const(caddr as i32));
+                fx.op(I::Call(self.h.eq_raw));
+                fx.op(I::I32Eqz);
+                fx.op(I::BrIf(fail));
+                let inner = fx.local(ValType::I32);
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load(ma(8, 2)));
+                fx.op(I::LocalTee(inner));
+                fx.op(I::I32Eqz);
+                fx.op(I::BrIf(fail));
+                self.pattern(fx, vpayload, inner, fail)
             }
             Node::Int(_) | Node::Dec(_) | Node::Bool(_) | Node::Str(_) => {
                 fx.op(I::LocalGet(v));
@@ -777,26 +876,8 @@ impl<'a> Emitter<'a> {
                 fx.op(I::BrIf(fail));
                 Ok(())
             }
-            Node::Lst(pats) => {
-                fx.op(I::LocalGet(v));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Ne);
-                fx.op(I::BrIf(fail));
-                fx.op(I::LocalGet(v));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::I32Const(pats.len() as i32));
-                fx.op(I::I32Ne);
-                fx.op(I::BrIf(fail));
-                for (i, &p) in pats.iter().enumerate() {
-                    let elem = fx.local(ValType::I32);
-                    fx.op(I::LocalGet(v));
-                    fx.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
-                    fx.op(I::LocalSet(elem));
-                    self.pattern(fx, p, elem, fail)?;
-                }
-                Ok(())
-            }
+            Node::Lst(pats) => self.seq_pattern(fx, &pats, v, fail, TAG_LIST),
+            Node::Tup(pats) => self.seq_pattern(fx, &pats, v, fail, TAG_TUP),
             Node::Rec(fields) => {
                 fx.op(I::LocalGet(v));
                 fx.op(I::I32Load(ma(0, 2)));
@@ -820,9 +901,38 @@ impl<'a> Emitter<'a> {
                 Ok(())
             }
             _ => Err("pattern not supported by the wasm backend yet \
-                      (literals, names, list, and record patterns)"
+                      (literals, names, list/tuple, record, and variant patterns)"
                 .into()),
         }
+    }
+
+    /// List/tuple pattern: tag + length check, then element sub-patterns.
+    fn seq_pattern(
+        &mut self,
+        fx: &mut FnCtx,
+        pats: &[NodeId],
+        v: u32,
+        fail: u32,
+        tag: i32,
+    ) -> Result<(), String> {
+        fx.op(I::LocalGet(v));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(tag));
+        fx.op(I::I32Ne);
+        fx.op(I::BrIf(fail));
+        fx.op(I::LocalGet(v));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::I32Const(pats.len() as i32));
+        fx.op(I::I32Ne);
+        fx.op(I::BrIf(fail));
+        for (i, &p) in pats.iter().enumerate() {
+            let elem = fx.local(ValType::I32);
+            fx.op(I::LocalGet(v));
+            fx.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
+            fx.op(I::LocalSet(elem));
+            self.pattern(fx, p, elem, fail)?;
+        }
+        Ok(())
     }
 
     /// Mirror of the interpreter's §4.2 payload-binding rule, at compile time.
@@ -1263,6 +1373,10 @@ impl<'a> Emitter<'a> {
                 nargs(0)?;
                 fx.op(I::Call(self.h.get_args.expect("args helper emitted when used")));
             }
+            "some" | "ok" | "err" => {
+                nargs(1)?;
+                return self.var_box(fx, name, items[0]);
+            }
             other => return Err(format!("builtin `{other}` not supported by the wasm backend yet")),
         }
         Ok(())
@@ -1272,6 +1386,7 @@ impl<'a> Emitter<'a> {
 const BUILTINS: &[&str] = &[
     "eq", "not", "lt", "le", "gt", "ge", "add", "sub", "mul", "div", "rem", "neg", "len",
     "head", "str-cat", "upper", "lower", "to-string", "print", "println", "args",
+    "some", "ok", "err",
 ];
 
 // --------------------------------------------------------- helper bodies
@@ -1322,6 +1437,7 @@ fn emit_core_module(
         closure_bodies: Vec::new(),
         fn_wrappers: HashMap::new(),
         fn_box_cache: HashMap::new(),
+        var_box_cache: HashMap::new(),
         false_addr: 0,
         true_addr: 0,
         nl_addr: 0,
