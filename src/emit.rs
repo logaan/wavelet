@@ -1276,7 +1276,7 @@ impl<'a> Emitter<'a> {
         for (a, (_, t)) in args.iter().zip(&sig.params) {
             self.expr(fx, *a, false)?;
             let pty = wit_ty(t, &self.type_env)?;
-            self.lower(fx, &pty);
+            self.lower(fx, &pty)?;
         }
         match flat_result(&sig, &self.type_env)? {
             FlatRes::None => {
@@ -1311,7 +1311,7 @@ impl<'a> Emitter<'a> {
                     fx.op(I::I32Load(ma(4, 2)));
                     fx.op(I::LocalSet(l));
                     match rty {
-                        WitTy::List(elem) => self.lift_list(fx, p, l, &elem),
+                        WitTy::List(elem) => self.lift_list(fx, p, l, &elem)?,
                         _ => {
                             fx.op(I::LocalGet(p));
                             fx.op(I::LocalGet(l));
@@ -1325,7 +1325,7 @@ impl<'a> Emitter<'a> {
     }
 
     /// box on stack → flat value(s) on stack
-    fn lower(&mut self, fx: &mut FnCtx, ty: &WitTy) {
+    fn lower(&mut self, fx: &mut FnCtx, ty: &WitTy) -> Result<(), String> {
         match ty {
             WitTy::Bool => fx.op(I::Call(self.h.truthy)),
             WitTy::IntS | WitTy::IntU => {
@@ -1342,7 +1342,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(t));
                 fx.op(I::I32Load(ma(4, 2)));
             }
-            WitTy::List(elem) => self.lower_list(fx, elem),
+            WitTy::List(elem) => self.lower_list(fx, elem)?,
             WitTy::Record(fields) => {
                 // record box on stack → field flats pushed in declaration order
                 let b = fx.local(ValType::I32);
@@ -1352,7 +1352,7 @@ impl<'a> Emitter<'a> {
                     fx.op(I::LocalGet(b));
                     fx.op(I::I32Const(kaddr as i32));
                     fx.op(I::Call(self.h.rec_get));
-                    self.lower(fx, ft);
+                    self.lower(fx, ft)?;
                 }
             }
             WitTy::Option(_) | WitTy::Result(..) => {
@@ -1370,12 +1370,13 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Const(n0 as i32));
                 fx.op(I::Call(self.h.eq_raw));
                 fx.op(I::If(BlockType::FunctionType(resty)));
-                self.lower_variant_case(fx, b, 0, cases[0].1, &joined);
+                self.lower_variant_case(fx, b, 0, cases[0].1, &joined)?;
                 fx.op(I::Else);
-                self.lower_variant_case(fx, b, 1, cases[1].1, &joined);
+                self.lower_variant_case(fx, b, 1, cases[1].1, &joined)?;
                 fx.op(I::End);
             }
         }
+        Ok(())
     }
 
     /// One arm of a lowered option/result: push the discriminant, the payload's
@@ -1387,13 +1388,13 @@ impl<'a> Emitter<'a> {
         disc: i32,
         pay: Option<&WitTy>,
         joined: &[ValType],
-    ) {
+    ) -> Result<(), String> {
         fx.op(I::I32Const(disc));
         let consumed = match pay {
             Some(pt) => {
                 fx.op(I::LocalGet(b));
                 fx.op(I::I32Load(ma(8, 2)));
-                self.lower(fx, pt);
+                self.lower(fx, pt)?;
                 flat(pt).len()
             }
             None => 0,
@@ -1401,11 +1402,12 @@ impl<'a> Emitter<'a> {
         for &vt in &joined[consumed..] {
             push_zero(fx, vt);
         }
+        Ok(())
     }
 
     /// list box on stack → canonical (ptr, len) on stack: a fresh buffer of
-    /// `len` elements, each lowered at its canonical size/stride.
-    fn lower_list(&mut self, fx: &mut FnCtx, elem: &WitTy) {
+    /// `len` elements, each stored at its canonical size/stride.
+    fn lower_list(&mut self, fx: &mut FnCtx, elem: &WitTy) -> Result<(), String> {
         use ValType::I32;
         let size = elem_size(elem);
         let b = fx.local(I32);
@@ -1429,7 +1431,7 @@ impl<'a> Emitter<'a> {
         fx.op(I::LocalGet(n));
         fx.op(I::I32GeU);
         fx.op(I::BrIf(1));
-        // element box → flats captured in locals, then stored at buf + i*size
+        // dst = buf + i*size ; store the i-th element there in canonical layout
         let dst = fx.local(I32);
         fx.op(I::LocalGet(buf));
         fx.op(I::LocalGet(i));
@@ -1437,60 +1439,15 @@ impl<'a> Emitter<'a> {
         fx.op(I::I32Mul);
         fx.op(I::I32Add);
         fx.op(I::LocalSet(dst));
+        let elembox = fx.local(I32);
         fx.op(I::LocalGet(b));
         fx.op(I::LocalGet(i));
         fx.op(I::I32Const(4));
         fx.op(I::I32Mul);
         fx.op(I::I32Add);
         fx.op(I::I32Load(ma(8, 2)));
-        self.lower(fx, elem);
-        match elem {
-            WitTy::Bool => {
-                let v = fx.local(I32);
-                fx.op(I::LocalSet(v));
-                fx.op(I::LocalGet(dst));
-                fx.op(I::LocalGet(v));
-                fx.op(I::I32Store8(ma(0, 0)));
-            }
-            WitTy::IntS | WitTy::IntU => {
-                let v = fx.local(I32);
-                fx.op(I::LocalSet(v));
-                fx.op(I::LocalGet(dst));
-                fx.op(I::LocalGet(v));
-                fx.op(I::I32Store(ma(0, 2)));
-            }
-            WitTy::S64 => {
-                let v = fx.local(ValType::I64);
-                fx.op(I::LocalSet(v));
-                fx.op(I::LocalGet(dst));
-                fx.op(I::LocalGet(v));
-                fx.op(I::I64Store(ma(0, 3)));
-            }
-            WitTy::F64 => {
-                let v = fx.local(ValType::F64);
-                fx.op(I::LocalSet(v));
-                fx.op(I::LocalGet(dst));
-                fx.op(I::LocalGet(v));
-                fx.op(I::F64Store(ma(0, 3)));
-            }
-            WitTy::Str | WitTy::List(_) => {
-                let lp = fx.local(I32);
-                let ll = fx.local(I32);
-                fx.op(I::LocalSet(ll));
-                fx.op(I::LocalSet(lp));
-                fx.op(I::LocalGet(dst));
-                fx.op(I::LocalGet(lp));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(dst));
-                fx.op(I::LocalGet(ll));
-                fx.op(I::I32Store(ma(4, 2)));
-            }
-            // list<record> is rejected before emission (wit_ty never yields it
-            // through a supported boundary path in v0)
-            WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..) => {
-                unreachable!("list<aggregate> across boundaries unsupported")
-            }
-        }
+        fx.op(I::LocalSet(elembox));
+        self.store_to_mem(fx, elem, elembox, dst, 0)?;
         fx.op(I::LocalGet(i));
         fx.op(I::I32Const(1));
         fx.op(I::I32Add);
@@ -1500,10 +1457,11 @@ impl<'a> Emitter<'a> {
         fx.op(I::End);
         fx.op(I::LocalGet(buf));
         fx.op(I::LocalGet(n));
+        Ok(())
     }
 
     /// canonical (ptr, len) in the given locals → list box on stack
-    fn lift_list(&mut self, fx: &mut FnCtx, ptr: u32, len: u32, elem: &WitTy) {
+    fn lift_list(&mut self, fx: &mut FnCtx, ptr: u32, len: u32, elem: &WitTy) -> Result<(), String> {
         use ValType::I32;
         let size = elem_size(elem);
         let lst = fx.local(I32);
@@ -1542,43 +1500,7 @@ impl<'a> Emitter<'a> {
         fx.op(I::I32Const(4));
         fx.op(I::I32Mul);
         fx.op(I::I32Add);
-        match elem {
-            WitTy::Bool => {
-                fx.op(I::LocalGet(src));
-                fx.op(I::I32Load8U(ma(0, 0)));
-                fx.op(I::Call(self.h.box_bool));
-            }
-            WitTy::IntS | WitTy::IntU | WitTy::S64 | WitTy::F64 => {
-                fx.op(I::LocalGet(src));
-                match elem {
-                    WitTy::S64 => fx.op(I::I64Load(ma(0, 3))),
-                    WitTy::F64 => fx.op(I::F64Load(ma(0, 3))),
-                    _ => fx.op(I::I32Load(ma(0, 2))),
-                }
-                self.lift(fx, elem);
-            }
-            WitTy::Str => {
-                fx.op(I::LocalGet(src));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::LocalGet(src));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::Call(self.h.box_str));
-            }
-            WitTy::List(inner) => {
-                let p = fx.local(I32);
-                let l = fx.local(I32);
-                fx.op(I::LocalGet(src));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::LocalSet(p));
-                fx.op(I::LocalGet(src));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::LocalSet(l));
-                self.lift_list(fx, p, l, inner);
-            }
-            WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..) => {
-                unreachable!("list<aggregate> across boundaries unsupported")
-            }
-        }
+        self.load_from_mem(fx, elem, src, 0)?;
         fx.op(I::I32Store(ma(8, 2)));
         fx.op(I::LocalGet(i));
         fx.op(I::I32Const(1));
@@ -1588,6 +1510,7 @@ impl<'a> Emitter<'a> {
         fx.op(I::End);
         fx.op(I::End);
         fx.op(I::LocalGet(lst));
+        Ok(())
     }
 
     /// flat value on stack → box on stack (single-flat types only)
@@ -1621,7 +1544,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(base + 1));
                 fx.op(I::Call(self.h.box_str));
             }
-            WitTy::List(elem) => self.lift_list(fx, base, base + 1, elem),
+            WitTy::List(elem) => self.lift_list(fx, base, base + 1, elem)?,
             WitTy::Record(fields) => {
                 let n = fields.len();
                 let p = fx.local(ValType::I32);
@@ -1767,7 +1690,7 @@ impl<'a> Emitter<'a> {
             WitTy::List(elem) => {
                 // lower to a canonical (ptr, len) buffer, then store both words
                 fx.op(I::LocalGet(src));
-                self.lower_list(fx, elem);
+                self.lower_list(fx, elem)?;
                 let len = fx.local(ValType::I32);
                 let ptr = fx.local(ValType::I32);
                 fx.op(I::LocalSet(len));
@@ -1897,7 +1820,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(src));
                 fx.op(I::I32Load(ma(off + 4, 2)));
                 fx.op(I::LocalSet(len));
-                self.lift_list(fx, ptr, len, elem);
+                self.lift_list(fx, ptr, len, elem)?;
             }
         }
         Ok(())
@@ -2304,7 +2227,7 @@ fn emit_core_module(
                 vec![]
             }
             FlatRes::One(t) => {
-                em.lower(&mut fx, &t);
+                em.lower(&mut fx, &t)?;
                 flat(&t)
             }
             FlatRes::Retptr => {
@@ -2321,7 +2244,7 @@ fn emit_core_module(
                     fx.op(I::LocalGet(area));
                 } else {
                     // string/list: lower to (ptr, len) parked in an 8-byte area
-                    em.lower(&mut fx, &ty);
+                    em.lower(&mut fx, &ty)?;
                     let lp = fx.local(I32);
                     let ll = fx.local(I32);
                     fx.op(I::LocalSet(ll));

@@ -693,6 +693,21 @@ world shout {
     }
 
     #[test]
+    fn emit_list_of_records_across_boundaries() {
+        // list<record>: element marshalling delegates to store_to_mem/
+        // load_from_mem, so list elements may themselves be aggregates
+        let psrc = "Package \"demo:lr2@0.1.0\"\n\
+                    DefType pt {x: s64 y: s64}\n\
+                    Export {name: pts params: {n: s64} result: list(pt)}\n\
+                    Def pts Fn {n} [{x: n y: mul[n 2]} {x: add(n 1) y: 0}]";
+        let (pa, pr) = read_file(psrc).unwrap();
+        let pinfo = wit::collect(&pa, &pr).unwrap();
+        let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
+            .expect("list<record> provider componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
+    }
+
+    #[test]
     fn emit_list_fields_in_aggregates_across_boundaries() {
         // a record with a list field, and option<list<s64>>, both crossing the
         // boundary (list in memory is (ptr, len) with a canonical element buffer)

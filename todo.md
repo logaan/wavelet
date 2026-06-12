@@ -157,9 +157,13 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       items: list(s64)}` record and `option<list<s64>>` round-trip.
       (Also fixed `some`/`ok`/`err` in the wasm backend to take the whole
       payload as one argument, matching the interpreter, so `some([a b])` works.)
-- [ ] v0 backend gaps still open: `list<record/option/result>` (list elements
-      that are themselves aggregates); option/result *params* with mismatched
-      arm flat shapes (needs numeric-widening join); >16-flat param
+- [x] `list<record/option/result>` (list elements that are themselves
+      aggregates): `lower_list`/`lift_list` now delegate per-element
+      marshalling to `store_to_mem`/`load_from_mem`, which removed the
+      duplicated per-type store/load and made list elements compose with every
+      supported type. Verified composed on wasmtime: `list<point>` round-trips.
+- [ ] v0 backend gaps still open: option/result *params* with mismatched arm
+      flat shapes (needs the numeric-widening variant join); >16-flat param
       spill-to-memory; named 3+-case `variant`/`enum` DefTypes across boundaries
       (blocked anyway — the dynamic core has no constructor for user variant
       cases, only the `ok`/`some`/`err`/`none` builtins); GC (leaks by design),
