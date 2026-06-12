@@ -231,7 +231,7 @@ impl Interp {
                 ));
             }
             "quote-MACRO" => Step::Done(form_to_value(arena, payload)),
-            "quasi-MACRO" => Step::Done(self.quasi(arena, payload, env)?),
+            "quasi-MACRO" => Step::Done(self.quasi(arena, payload, env, 1)?),
             "unquote-MACRO" | "splice-MACRO" => {
                 return err("Unquote/Splice are only valid inside Quasi");
             }
@@ -316,7 +316,10 @@ impl Interp {
 
     /// `Quasi`: build a form, evaluating `Unquote` holes and splicing
     /// `Splice` holes into the enclosing sequence.
-    fn quasi(&self, arena: &Rc<Arena>, id: NodeId, env: &Env) -> R<Value> {
+    /// `depth` counts enclosing Quasis: Unquote/Splice fire at depth 1 and are
+    /// rebuilt as data (one level shallower) at greater depths; a nested Quasi
+    /// is rebuilt with its contents processed one level deeper.
+    fn quasi(&self, arena: &Rc<Arena>, id: NodeId, env: &Env, depth: u32) -> R<Value> {
         match arena.node(id) {
             Node::Call(head, payload) => {
                 let name = match arena.node(*head) {
@@ -325,24 +328,35 @@ impl Interp {
                     _ => return err("call head must be a name"),
                 };
                 match name.as_str() {
-                    "unquote-MACRO" => self.eval(arena, *payload, env),
-                    "splice-MACRO" => err("Splice must appear inside a sequence"),
+                    "unquote-MACRO" if depth == 1 => self.eval(arena, *payload, env),
+                    "splice-MACRO" if depth == 1 => {
+                        err("Splice must appear inside a sequence")
+                    }
                     _ => {
+                        let depth = match name.as_str() {
+                            "quasi-MACRO" => depth + 1,
+                            "unquote-MACRO" | "splice-MACRO" => depth - 1,
+                            _ => depth,
+                        };
                         let pv = match arena.node(*payload) {
-                            Node::Tup(items) => Value::Tup(self.quasi_seq(arena, items, env)?),
-                            Node::Lst(items) => Value::Lst(self.quasi_seq(arena, items, env)?),
-                            _ => self.quasi(arena, *payload, env)?,
+                            Node::Tup(items) => {
+                                Value::Tup(self.quasi_seq(arena, items, env, depth)?)
+                            }
+                            Node::Lst(items) => {
+                                Value::Lst(self.quasi_seq(arena, items, env, depth)?)
+                            }
+                            _ => self.quasi(arena, *payload, env, depth)?,
                         };
                         Ok(Value::Variant(name, Some(Rc::new(pv))))
                     }
                 }
             }
-            Node::Tup(items) => Ok(Value::Tup(self.quasi_seq(arena, items, env)?)),
-            Node::Lst(items) => Ok(Value::Lst(self.quasi_seq(arena, items, env)?)),
+            Node::Tup(items) => Ok(Value::Tup(self.quasi_seq(arena, items, env, depth)?)),
+            Node::Lst(items) => Ok(Value::Lst(self.quasi_seq(arena, items, env, depth)?)),
             Node::Rec(fields) => {
                 let mut out = Vec::with_capacity(fields.len());
                 for (k, v) in fields {
-                    out.push((k.clone(), self.quasi(arena, *v, env)?));
+                    out.push((k.clone(), self.quasi(arena, *v, env, depth)?));
                 }
                 Ok(Value::Rec(out))
             }
@@ -350,26 +364,34 @@ impl Interp {
         }
     }
 
-    fn quasi_seq(&self, arena: &Rc<Arena>, items: &[NodeId], env: &Env) -> R<Vec<Value>> {
+    fn quasi_seq(
+        &self,
+        arena: &Rc<Arena>,
+        items: &[NodeId],
+        env: &Env,
+        depth: u32,
+    ) -> R<Vec<Value>> {
         let mut out = Vec::with_capacity(items.len());
         for &item in items {
-            if let Node::Call(head, payload) = arena.node(item) {
-                if let Node::Sym(s) = arena.node(*head) {
-                    if s == "splice-MACRO" {
-                        match self.eval(arena, *payload, env)? {
-                            Value::Lst(vs) => out.extend(vs),
-                            v => {
-                                return err(format!(
-                                    "Splice expects a list, got {}",
-                                    crate::value::print_value(&v)
-                                ))
+            if depth == 1 {
+                if let Node::Call(head, payload) = arena.node(item) {
+                    if let Node::Sym(s) = arena.node(*head) {
+                        if s == "splice-MACRO" {
+                            match self.eval(arena, *payload, env)? {
+                                Value::Lst(vs) => out.extend(vs),
+                                v => {
+                                    return err(format!(
+                                        "Splice expects a list, got {}",
+                                        crate::value::print_value(&v)
+                                    ))
+                                }
                             }
+                            continue;
                         }
-                        continue;
                     }
                 }
             }
-            out.push(self.quasi(arena, item, env)?);
+            out.push(self.quasi(arena, item, env, depth)?);
         }
         Ok(out)
     }

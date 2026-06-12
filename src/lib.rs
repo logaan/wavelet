@@ -153,6 +153,16 @@ mod tests {
     }
 
     #[test]
+    fn eval_nested_quasi_depth() {
+        // a nested Quasi protects its Unquotes; Unquote(Unquote(x)) fires the
+        // innermost one level down
+        assert_eq!(
+            eval_str("Quasi [Unquote(add[1 2]) Quasi Unquote(add[1 2]) Quasi Unquote(Unquote(add[1 2]))]"),
+            "[3, quasi-MACRO(unquote-MACRO(add([1, 2]))), quasi-MACRO(unquote-MACRO(3))]"
+        );
+    }
+
+    #[test]
     fn eval_atoms_and_calls() {
         assert_eq!(eval_str("add[1 2]"), "3");
         assert_eq!(eval_str("str-cat[upper(\"wasm\") \"!\"]"), "\"WASM!\"");

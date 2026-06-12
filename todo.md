@@ -38,7 +38,8 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
 - [x] `gensym`
 - [x] Expansion (lazy, at eval time: a call whose head is bound to a Macro
       value expands and jumps into the result — fixpoint by re-evaluation)
-- [ ] Nested `Quasi` depth handling (currently single-level, Clojure-style)
+- [x] Nested `Quasi` depth handling (Scheme-style: Unquote/Splice fire at
+      depth 1, rebuilt one level shallower otherwise)
 - [x] Ahead-of-time expand pass (`src/expand.rs`): DefMacro forms evaluated
       and dropped, call sites rewritten to fixpoint; wired into `wavelet
       build`; `wavelet expand <file>` prints the expanded tree. Macro bodies
