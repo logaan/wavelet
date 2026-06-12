@@ -386,6 +386,23 @@ world shout {
     }
 
     #[test]
+    fn doc_comments_attach_and_reach_wit() {
+        let src = "Package \"demo:doc@0.1.0\"\n\
+                   /// A pair.\n\
+                   DefType point {x: s32 y: s32}\n\
+                   /// Shouts.\n\
+                   /// Loudly.\n\
+                   Export shout\n\
+                   Def shout Fn {phrase: string} upper(phrase)";
+        let (arena, roots) = read_file(src).unwrap();
+        assert_eq!(arena.doc(roots[1]), Some("A pair."));
+        assert_eq!(arena.doc(roots[2]), Some("Shouts.\nLoudly."));
+        let got = wit::synthesize(&arena, &roots).unwrap();
+        assert!(got.contains("  /// A pair.\n  record point"), "{got}");
+        assert!(got.contains("  /// Shouts.\n  /// Loudly.\n  shout: func"), "{got}");
+    }
+
+    #[test]
     fn wit_grouped_exports() {
         let src = "Package \"demo:gfx@0.1.0\"\n\
                    Export {iface: \"render\" name: frame}\n\

@@ -20,6 +20,8 @@ pub enum Tok {
     Title(String),
     /// `alias/name`; bool = name part was TitleCase (already suffixed)
     QIdent(String, String, bool),
+    /// `///` doc comment text, attaching to the following form (§2.1)
+    Doc(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -55,8 +57,14 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
         match c {
             ' ' | '\t' | '\r' | '\n' | ',' => i += 1,
             '/' if b.get(i + 1) == Some(&b'/') => {
+                let is_doc = b.get(i + 2) == Some(&b'/') && b.get(i + 3) != Some(&b'/');
+                let start = i;
                 while i < b.len() && b[i] != b'\n' {
                     i += 1;
+                }
+                if is_doc {
+                    let text = src[start + 3..i].trim().to_string();
+                    out.push((Tok::Doc(text), span(start, i)));
                 }
             }
             '(' | ')' | '[' | ']' | '{' | '}' | ':' => {

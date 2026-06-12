@@ -27,7 +27,9 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
 - [x] Canonical WAVE printer (`src/printer.rs`) — round trip stable (tested)
 - [x] Reader unit tests covering every row of the §2.3 desugar table (11 tests)
 - [x] `wavelet read <file>` CLI; parses §1 examples (`examples/*.wvl`) correctly
-- [ ] `///` doc comments as metadata (currently skipped as plain comments)
+- [x] `///` doc comments: lexed as tokens, attached to the following form
+      (arena `docs` map), surfaced as `///` lines in `wavelet wit` output
+      (docs on Export/Def/DefType key by defined name)
 - [ ] Qualified TitleCase macros `Dsl/Element` arity reading (parses, but arity
       lookup ignores the alias; revisit with macro imports in Phase 2)
 

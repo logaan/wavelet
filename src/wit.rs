@@ -18,6 +18,8 @@ pub struct FileInfo {
     pub defs: HashMap<String, (NodeId, NodeId)>,
     /// non-function module-level defs, in file order: (name, expr)
     pub value_defs: Vec<(String, NodeId)>,
+    /// `///` doc comments by defined name (Defs and DefTypes)
+    pub docs: HashMap<String, String>,
 }
 
 pub struct ImportInfo {
@@ -55,10 +57,16 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     let mut types = Vec::new();
     let mut defs = HashMap::new();
     let mut value_defs = Vec::new();
+    let mut docs = HashMap::new();
 
     for &root in roots {
         let Node::Call(head, payload) = arena.node(root) else { continue };
         let Node::Sym(head_name) = arena.node(*head) else { continue };
+        if let Some(d) = arena.doc(root) {
+            if let Some(name) = defined_name(arena, *payload) {
+                docs.insert(name, d.to_string());
+            }
+        }
         match head_name.as_str() {
             "package-MACRO" => {
                 if let Node::Str(s) = arena.node(*payload) {
@@ -180,7 +188,26 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
         types,
         defs,
         value_defs,
+        docs,
     })
+}
+
+/// The name a `Def`/`DefType` payload defines or an `Export` payload names.
+fn defined_name(arena: &Arena, payload: NodeId) -> Option<String> {
+    match arena.node(payload) {
+        Node::Sym(name) => Some(name.clone()),
+        Node::Tup(items) => match items.first().map(|&i| arena.node(i)) {
+            Some(Node::Sym(name)) => Some(name.clone()),
+            _ => None,
+        },
+        Node::Rec(fields) => fields.iter().find(|(k, _)| k == "name").and_then(|(_, v)| {
+            match arena.node(*v) {
+                Node::Sym(s) => Some(s.clone()),
+                _ => None,
+            }
+        }),
+        _ => None,
+    }
 }
 
 /// Distinct export interfaces in first-appearance order; `api` is forced
@@ -274,15 +301,24 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
     let mut out = String::new();
     out.push_str(&format!("package {};\n", info.package));
 
+    let doc_lines = |out: &mut String, name: &str| {
+        if let Some(d) = info.docs.get(name) {
+            for line in d.lines() {
+                out.push_str(&format!("  /// {line}\n"));
+            }
+        }
+    };
     let ifaces = iface_order(&info.exports, !info.types.is_empty());
     for iface in &ifaces {
         out.push_str(&format!("\ninterface {iface} {{\n"));
         if iface == "api" {
             for (name, ty) in &info.types {
+                doc_lines(&mut out, name);
                 out.push_str(&format!("  {};\n", type_decl(arena, name, *ty)?));
             }
         }
         for sig in info.exports.iter().filter(|s| &s.iface == iface) {
+            doc_lines(&mut out, &sig.name);
             out.push_str(&format!("  {}\n", sig.to_wit()));
         }
         out.push_str("}\n");

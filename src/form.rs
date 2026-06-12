@@ -20,6 +20,8 @@ pub enum Node {
 pub struct Arena {
     pub nodes: Vec<Node>,
     pub spans: Vec<(u32, u32)>,
+    /// `///` doc comments attached to forms (§2.1), sparse
+    pub docs: std::collections::HashMap<NodeId, String>,
 }
 
 impl Arena {
@@ -40,5 +42,13 @@ impl Arena {
 
     pub fn span(&self, id: NodeId) -> (u32, u32) {
         self.spans[id as usize]
+    }
+
+    pub fn set_doc(&mut self, id: NodeId, text: String) {
+        self.docs.insert(id, text);
+    }
+
+    pub fn doc(&self, id: NodeId) -> Option<&str> {
+        self.docs.get(&id).map(|s| s.as_str())
     }
 }
