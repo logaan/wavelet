@@ -103,7 +103,7 @@ fn compare(name: &str, a: &Value, b: &Value) -> R<std::cmp::Ordering> {
     }
 }
 
-pub fn call(interp: &Interp, name: &str, arg: Value) -> R<Value> {
+pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Value> {
     use std::cmp::Ordering::*;
     match name {
         "eq" => {
@@ -378,7 +378,28 @@ pub fn call(interp: &Interp, name: &str, arg: Value) -> R<Value> {
             interp.gensym.set(n + 1);
             Ok(Value::Variant(format!("g{n}-gen"), None))
         }
-        "expand" => err("`expand` is not implemented yet"),
+        "expand" => {
+            let Some(env) = env else {
+                return err("`expand` needs an evaluation context (call it directly)");
+            };
+            match &arg {
+                Value::Variant(head, payload) => match env.lookup(head) {
+                    Some(Value::Macro(mac)) => {
+                        let mut arena = crate::form::Arena::new();
+                        let pid = match payload {
+                            Some(p) => crate::value::value_to_form(p, &mut arena)
+                                .map_err(|msg| EvalError { msg })?,
+                            None => arena.add(crate::form::Node::Lst(vec![]), (0, 0)),
+                        };
+                        let arena = Rc::new(arena);
+                        let (out, root) = interp.expand_once(&mac, &arena, pid)?;
+                        Ok(form_to_value(&out, root))
+                    }
+                    _ => Ok(arg.clone()),
+                },
+                _ => Ok(arg.clone()),
+            }
+        }
         "form-kind" => {
             let kind = match &arg {
                 Value::Bool(_) => "bool",

@@ -58,7 +58,7 @@ impl Interp {
     }
 
     pub fn apply(&self, f: &Value, arg: Value) -> R<Value> {
-        match self.apply_step(f, arg)? {
+        match self.apply_step(f, arg, None)? {
             Step::Done(v) => Ok(v),
             Step::Jump(a, i, e) => self.eval(&a, i, &e),
         }
@@ -123,16 +123,18 @@ impl Interp {
             return self.expand_macro(c, arena, payload, env);
         }
         let arg = self.eval(arena, payload, env)?;
-        self.apply_step(&f, arg)
+        self.apply_step(&f, arg, Some(env))
     }
 
-    fn apply_step(&self, f: &Value, arg: Value) -> R<Step> {
+    /// `env` is the caller's environment, used only by builtins that need to
+    /// see macro bindings (`expand`).
+    fn apply_step(&self, f: &Value, arg: Value, env: Option<&Env>) -> R<Step> {
         match f {
             Value::Closure(c) => {
                 let env = bind_params(c, arg)?;
                 Ok(Step::Jump(c.arena.clone(), c.body, env))
             }
-            Value::Builtin(name) => Ok(Step::Done(builtins::call(self, name, arg)?)),
+            Value::Builtin(name) => Ok(Step::Done(builtins::call(self, name, arg, env)?)),
             other => err(format!(
                 "not callable: {}",
                 crate::value::print_value(other)

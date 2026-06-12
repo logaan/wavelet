@@ -153,6 +153,16 @@ mod tests {
     }
 
     #[test]
+    fn eval_expand_builtin() {
+        let src = "DefMacro unless {c e} Quasi If Unquote(c) {} Unquote(e)\n\
+                   expand(Quote Unless(false \"ran\"))";
+        assert_eq!(eval_str(src), "if-MACRO((false, {}, \"ran\"))");
+        // non-macro forms pass through one step of expand unchanged
+        assert_eq!(eval_str("expand(Quote add[1 2])"), "add([1, 2])");
+        assert_eq!(eval_str("expand(42)"), "42");
+    }
+
+    #[test]
     fn eval_nested_quasi_depth() {
         // a nested Quasi protects its Unquotes; Unquote(Unquote(x)) fires the
         // innermost one level down

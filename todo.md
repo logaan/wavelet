@@ -65,7 +65,8 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       id across files, honors `Export`/`as:`/`open:`, calls exported `run`
 - [x] §1 example runs: `wavelet run examples/main.wvl examples/shout.wvl -- wasm`
       prints `WASM!`
-- [ ] `expand` builtin (stub errors for now)
+- [x] `expand` builtin: one expansion step on a macro-call form value
+      (macros looked up in the caller's env); pass-through otherwise
 - [ ] Resource handles beyond `cell`; owned-handle drop semantics (§6.1)
 
 ## Phase 4 — module/component model surface (§6.1)
