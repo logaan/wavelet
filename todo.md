@@ -39,7 +39,10 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
 - [x] Expansion (lazy, at eval time: a call whose head is bound to a Macro
       value expands and jumps into the result — fixpoint by re-evaluation)
 - [ ] Nested `Quasi` depth handling (currently single-level, Clojure-style)
-- [ ] Separate ahead-of-time expand pass (needed for the wasm backend)
+- [x] Ahead-of-time expand pass (`src/expand.rs`): DefMacro forms evaluated
+      and dropped, call sites rewritten to fixpoint; wired into `wavelet
+      build`; `wavelet expand <file>` prints the expanded tree. Macro bodies
+      see builtins + earlier macros only (not file-local fns yet)
 - [ ] Macro components: instantiate wasm at compile time, `manifest`/`expand`
       interface, `Import {… macros: true}`
 

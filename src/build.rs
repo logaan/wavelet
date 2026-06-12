@@ -21,6 +21,8 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
         let (arena, roots) =
             crate::read_file(&src).map_err(|e| format!("{path}: {e}"))?;
+        let (arena, roots) =
+            crate::expand::expand_file(arena, &roots).map_err(|e| format!("{path}: {e}"))?;
         let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
         units.push(Unit { path: path.clone(), arena, roots, info });
     }

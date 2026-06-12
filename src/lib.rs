@@ -1,6 +1,7 @@
 pub mod build;
 pub mod builtins;
 pub mod emit;
+pub mod expand;
 pub mod form;
 pub mod interp;
 pub mod lexer;
@@ -360,6 +361,27 @@ world shout {
         );
         let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
             .expect("main componentizes");
+        assert_eq!(&bytes[0..4], b"\0asm");
+    }
+
+    #[test]
+    fn aot_expansion_feeds_the_wasm_backend() {
+        let src = r#"
+            Package "demo:twice@0.1.0"
+            DefMacro twice {x} Quasi mul[2 Unquote(x)]
+            Export double
+            Def double Fn {n: s64} Twice(n)
+        "#;
+        let (arena, roots) = read_file(src).unwrap();
+        let (arena, roots) = expand::expand_file(arena, &roots).unwrap();
+        // the DefMacro form is gone and the call site is rewritten
+        let printed: Vec<String> = roots.iter().map(|&r| print(&arena, r)).collect();
+        assert!(printed.iter().all(|s| !s.contains("def-macro")));
+        assert!(printed.iter().any(|s| s.contains("mul([2, n])")), "{printed:?}");
+        // and the expanded tree compiles to a component
+        let info = wit::collect(&arena, &roots).unwrap();
+        let bytes = emit::emit_component(&arena, &roots, &info, &Default::default())
+            .expect("expanded file componentizes");
         assert_eq!(&bytes[0..4], b"\0asm");
     }
 }

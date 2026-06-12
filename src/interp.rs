@@ -284,6 +284,19 @@ impl Interp {
         payload: NodeId,
         use_env: &Env,
     ) -> R<Step> {
+        let (out, root) = self.expand_once(mac, arena, payload)?;
+        Ok(Step::Jump(out, root, use_env.clone()))
+    }
+
+    /// One macro expansion step: bind argument forms, evaluate the body, and
+    /// return the resulting form in a fresh arena. Also used by the
+    /// ahead-of-time expander (`crate::expand`).
+    pub fn expand_once(
+        &self,
+        mac: &Rc<Closure>,
+        arena: &Rc<Arena>,
+        payload: NodeId,
+    ) -> R<(Rc<Arena>, NodeId)> {
         let n = mac.params.len();
         let args: Vec<NodeId> = match (n, arena.node(payload)) {
             (0, _) => vec![],
@@ -298,7 +311,7 @@ impl Interp {
         let result = self.eval(&mac.arena, mac.body, &env)?;
         let mut out = Arena::new();
         let root = value_to_form(&result, &mut out).map_err(|msg| EvalError { msg })?;
-        Ok(Step::Jump(Rc::new(out), root, use_env.clone()))
+        Ok((Rc::new(out), root))
     }
 
     /// `Quasi`: build a form, evaluating `Unquote` holes and splicing
