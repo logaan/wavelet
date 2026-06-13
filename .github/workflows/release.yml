@@ -9,6 +9,9 @@ name: Release
 # unversioned names so the install instructions in README.md can always point at
 # .../releases/latest/download/<asset>.
 #
+# The release body is the curated CHANGELOG.md section for the tag, extracted by
+# scripts/changelog-section.sh; keep CHANGELOG.md up to date before tagging.
+#
 # The build/packaging steps live in scripts/build-lsp.sh and
 # scripts/package-tooling.sh so they can be run identically from a local
 # checkout.
@@ -72,6 +75,13 @@ jobs:
         env:
           LSP_BIN_DIR: lsp-artifacts
 
+      # Use the curated CHANGELOG.md section for this tag as the release body.
+      # Fails the release if the tag has no section, so we never publish empty
+      # or stale notes. generate_release_notes appends the auto "Full Changelog"
+      # compare link beneath the curated notes.
+      - name: Extract changelog section for ${{ github.ref_name }}
+        run: scripts/changelog-section.sh "${{ github.ref_name }}" > release-notes.md
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -79,4 +89,5 @@ jobs:
             dist/wavelet-vscode.zip
             dist/wavelet-lsp-*
           fail_on_unmatched_files: true
+          body_path: release-notes.md
           generate_release_notes: true
