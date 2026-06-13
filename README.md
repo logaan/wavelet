@@ -60,6 +60,27 @@ Each file declares its own package, becomes its own component, and the composer
 wires `main`'s import of `demo:shout/api` to `shout`'s export. Swapping in a Rust
 implementation of `demo:shout/api` would require changing nothing in `main.wvl`.
 
+## Installing
+
+### Homebrew
+
+The `wavelet` CLI and the `wavelet-lsp` language server are available from a
+personal [tap](https://github.com/logaan/homebrew-tap):
+
+```console
+$ brew install logaan/tap/wavelet
+```
+
+This installs both `wavelet` and `wavelet-lsp` onto your `PATH`. (The formula
+builds from source, so a Rust toolchain is fetched at install time.) Track the
+bleeding edge from `main` with `brew install --HEAD logaan/tap/wavelet`.
+
+### From source
+
+Clone the repo and run `scripts/install.sh`, which builds both binaries and
+symlinks them into `~/bin` (override with `BIN_DIR`). See [Building](#building)
+to compile by hand.
+
 ## Building
 
 Wavelet is written in Rust (2024 edition).

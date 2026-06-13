@@ -12,11 +12,21 @@ You don't need to install anything to experiment — the playgrounds throughout 
 
 <Playground id="gs-hello" autoRun />
 
-To run Wavelet on real components — to build `.wasm`, compose, and execute on a host like [wasmtime](https://wasmtime.dev/) — build the compiler.
+To run Wavelet on real components — to build `.wasm`, compose, and execute on a host like [wasmtime](https://wasmtime.dev/) — install the compiler.
+
+## Installing with Homebrew
+
+On macOS and Linux the quickest way to get the `wavelet` CLI and the `wavelet-lsp` language server is the personal [tap](https://github.com/logaan/homebrew-tap):
+
+```console
+$ brew install logaan/tap/wavelet
+```
+
+This puts both `wavelet` and `wavelet-lsp` on your `PATH`. The formula builds from source, so a Rust toolchain is fetched at install time. To track `main` instead of the latest release, use `brew install --HEAD logaan/tap/wavelet`.
 
 ## Building the compiler
 
-Wavelet is written in Rust (2024 edition).
+Prefer to build it yourself? Wavelet is written in Rust (2024 edition).
 
 ```console
 $ git clone https://github.com/logaan/wavelet
@@ -48,7 +58,7 @@ return {
 }
 ```
 
-Open any `.wvl` file and it is highlighted. For language features, put the `wavelet-lsp` server on your `PATH` (`cargo install --path tooling/wavelet-lsp`, or download a prebuilt binary from the releases page) — the plugin starts it automatically. Point at a specific binary with `vim.g.wavelet_lsp_path`.
+Open any `.wvl` file and it is highlighted. For language features, put the `wavelet-lsp` server on your `PATH` (`brew install logaan/tap/wavelet`, `cargo install --path tooling/wavelet-lsp`, or download a prebuilt binary from the releases page) — the plugin starts it automatically. Point at a specific binary with `vim.g.wavelet_lsp_path`.
 
 ### VS Code
 
