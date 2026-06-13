@@ -220,6 +220,12 @@
       macros it probably wouldn't expanded them.
 1. `wavelet run` and `wavelet build` feel quite rust inspired.
 
+### Standard library
+
+1. [ ] Does this cover every function that wasm components an wwasm provide to us?
+1. [ ] I'm not sure that the input/output stuff should be part of the standard library.
+    1. [ ] By default wavelet should be working with absolutely no wasi.
+
 ## Files
 
 ### Cargo.toml
