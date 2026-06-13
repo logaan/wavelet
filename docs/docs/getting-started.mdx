@@ -30,7 +30,7 @@ Add `./target/release` to your `PATH`, or invoke the binary directly.
 
 ## Editor support
 
-Syntax highlighting for `.wvl` files ships as a download per editor on the [releases page](https://github.com/logaan/wavelet/releases/latest). The grammars are derived from the compiler's lexer, so highlighting matches the language exactly.
+Syntax highlighting for `.wvl` files ships as a download per editor on the [releases page](https://github.com/logaan/wavelet/releases/latest). The grammars are derived from the compiler's lexer, so highlighting matches the language exactly. The VS Code and Neovim packages also bundle the `wavelet-lsp` language server, adding diagnostics, completion, hover, and document symbols (a standalone `wavelet-lsp-<platform>` binary is published too, for other editors).
 
 ### Vim / Neovim
 
@@ -43,7 +43,7 @@ $ mkdir -p ~/.vim/pack/wavelet/start            # Neovim: ~/.config/nvim/pack/wa
 $ unzip wavelet-vim.zip -d ~/.vim/pack/wavelet/start/
 ```
 
-Open any `.wvl` file and it is highlighted.
+Open any `.wvl` file and it is highlighted. On Neovim, the zip also bundles the `wavelet-lsp` server and starts it automatically for `.wvl` buffers.
 
 ### VS Code
 
@@ -55,7 +55,7 @@ $ curl -L -o wavelet-vscode.zip \
 $ unzip wavelet-vscode.zip -d ~/.vscode/extensions/
 ```
 
-Build-from-source and plugin-manager alternatives are documented in [`tooling/`](https://github.com/logaan/wavelet/tree/main/tooling).
+The extension is self-contained — it bundles the matching `wavelet-lsp` server, so language features work with no extra download. Build-from-source and plugin-manager alternatives are documented in [`tooling/`](https://github.com/logaan/wavelet/tree/main/tooling).
 
 ## Hello, world
 

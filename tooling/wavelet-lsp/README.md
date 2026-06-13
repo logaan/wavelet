@@ -21,6 +21,10 @@ syntax error; completion still offers special forms and builtins.
 
 ## Installing
 
+If you use the [VS Code](../vscode/) or [Neovim](../vim/) packages, the server is
+already bundled — you don't need this section. It's for any other LSP-capable
+editor.
+
 Prebuilt binaries are published per platform on the
 [releases page](https://github.com/logaan/wavelet/releases/latest) as
 `wavelet-lsp-<target>` (e.g. `wavelet-lsp-aarch64-apple-darwin`,

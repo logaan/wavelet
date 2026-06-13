@@ -116,7 +116,8 @@ $ mkdir -p ~/.vim/pack/wavelet/start            # Neovim: ~/.config/nvim/pack/wa
 $ unzip wavelet-vim.zip -d ~/.vim/pack/wavelet/start/
 ```
 
-Open any `.wvl` file and it is highlighted.
+Open any `.wvl` file and it is highlighted. On Neovim, the zip also bundles the
+`wavelet-lsp` server and starts it automatically for `.wvl` buffers.
 
 ### VS Code
 
@@ -129,19 +130,11 @@ $ curl -L -o wavelet-vscode.zip \
 $ unzip wavelet-vscode.zip -d ~/.vscode/extensions/
 ```
 
-That gives you highlighting. For diagnostics, completion, hover, and symbols,
-also install the language server and put it on your `PATH` (pick the asset
-matching your platform):
-
-```console
-$ curl -L -o wavelet-lsp \
-    https://github.com/logaan/wavelet/releases/latest/download/wavelet-lsp-aarch64-apple-darwin
-$ chmod +x wavelet-lsp && sudo mv wavelet-lsp /usr/local/bin/
-```
-
-The extension starts `wavelet-lsp` automatically (override its location with the
-`wavelet.lsp.serverPath` setting). See [`tooling/vscode/`](tooling/vscode/) for
-the full asset list and build-from-source instructions.
+The extension is self-contained: it bundles the `wavelet-lsp` language server, so
+you also get diagnostics, completion, hover, and document symbols with no extra
+download. (Override the server with the `wavelet.lsp.serverPath` setting, or
+disable it with `wavelet.lsp.enable`.) See [`tooling/vscode/`](tooling/vscode/)
+for details.
 
 ## Pipeline
 

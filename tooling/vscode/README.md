@@ -18,37 +18,11 @@ Editor support for [Wavelet](../../README.md) source files (`.wvl`):
 
 ## Install
 
-The extension and the language server are **two separate downloads**. Install
-both for the full experience; the extension alone still highlights.
+### From a release (recommended)
 
-### 1. Install the language server
-
-Download the `wavelet-lsp` binary for your platform from the
-[releases page](https://github.com/logaan/wavelet/releases/latest) and put it on
-your `PATH` (or anywhere, then point `wavelet.lsp.serverPath` at it):
-
-```console
-# macOS (Apple Silicon) — pick the asset matching your platform:
-#   wavelet-lsp-aarch64-apple-darwin     macOS (Apple Silicon)
-#   wavelet-lsp-x86_64-apple-darwin      macOS (Intel)
-#   wavelet-lsp-x86_64-unknown-linux-gnu Linux (x86_64)
-#   wavelet-lsp-x86_64-pc-windows-msvc.exe  Windows (x86_64)
-$ curl -L -o wavelet-lsp \
-    https://github.com/logaan/wavelet/releases/latest/download/wavelet-lsp-aarch64-apple-darwin
-$ chmod +x wavelet-lsp
-$ sudo mv wavelet-lsp /usr/local/bin/        # somewhere on your PATH
-```
-
-> On macOS, Gatekeeper may quarantine a downloaded binary. If you see "cannot be
-> opened", clear the flag: `xattr -d com.apple.quarantine /usr/local/bin/wavelet-lsp`.
-
-### 2. Install the extension
-
-#### From a release (recommended)
-
-Download `wavelet-vscode.zip` from the
-[releases page](https://github.com/logaan/wavelet/releases/latest), unzip it into
-your extensions folder, and reload the window:
+The release `wavelet-vscode.zip` is **self-contained** — it bundles the language
+client *and* the `wavelet-lsp` server binaries for every platform, so there is
+nothing else to download. Unzip it into your extensions folder and reload:
 
 ```console
 $ curl -L -o wavelet-vscode.zip \
@@ -56,13 +30,19 @@ $ curl -L -o wavelet-vscode.zip \
 $ unzip wavelet-vscode.zip -d ~/.vscode/extensions/
 ```
 
-The zip unpacks to a `wavelet/` directory (with its bundled language-client
-dependency), leaving you with `~/.vscode/extensions/wavelet/`. (Use
-`~/.vscode-insiders/extensions` for Insiders, or `~/.vscode-server/extensions`
-for remote/SSH.) Open any `.wvl` file: it is detected as Wavelet, highlighted,
-and — if `wavelet-lsp` is on your PATH — the language server starts.
+The zip unpacks to a `wavelet/` directory, leaving you with
+`~/.vscode/extensions/wavelet/`. (Use `~/.vscode-insiders/extensions` for
+Insiders, or `~/.vscode-server/extensions` for remote/SSH.) Open any `.wvl` file:
+it is detected as Wavelet, highlighted, and the language server starts
+automatically — the extension picks the bundled binary matching your platform
+(from `server/`).
 
-#### From source (development)
+> Prefer your own build? Set `wavelet.lsp.serverPath` to a `wavelet-lsp` binary,
+> or put one on your `PATH`; it takes precedence over the bundled copy. Standalone
+> `wavelet-lsp-<platform>` binaries are also published on the releases page for
+> use outside VS Code.
+
+### From source (development)
 
 1. Install the runtime dependency, then copy or symlink this directory into your
    VS Code extensions folder:
@@ -85,7 +65,7 @@ and — if `wavelet-lsp` is on your PATH — the language server starts.
 
 3. Reload VS Code. Open any `.wvl` file.
 
-#### As a packaged `.vsix`
+### As a packaged `.vsix`
 
 With [`vsce`](https://github.com/microsoft/vscode-vsce) installed (run
 `npm install` first so the client dependency is bundled):
@@ -102,7 +82,7 @@ $ code --install-extension wavelet-0.2.0.vsix
 | Setting | Default | Meaning |
 |---|---|---|
 | `wavelet.lsp.enable` | `true` | Start the language server. Set `false` for highlighting-only. |
-| `wavelet.lsp.serverPath` | `""` | Path to the `wavelet-lsp` executable. Empty means look it up as `wavelet-lsp` on the PATH. |
+| `wavelet.lsp.serverPath` | `""` | Path to the `wavelet-lsp` executable. Empty means use the bundled binary if present, else `wavelet-lsp` on the PATH. |
 
 If the server can't be started, the extension shows one warning and falls back to
 highlighting only — set `wavelet.lsp.serverPath`, or install the binary, to fix it.
