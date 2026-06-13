@@ -1,7 +1,9 @@
 # Wavelet for Vim / Neovim
 
 Syntax highlighting and filetype detection for [Wavelet](../../README.md) source
-files (`.wvl`).
+files (`.wvl`), plus — on **Neovim** — automatic language-server support
+(diagnostics, completion, hover, document symbols) via the bundled
+[`wavelet-lsp`](../wavelet-lsp/) binary.
 
 The grammar mirrors the language's lexer (`src/lexer.rs`) and the shared Prism
 grammar used by the docs (`docs/src/prism/wavelet.js`). It highlights:
@@ -18,12 +20,33 @@ grammar used by the docs (`docs/src/prism/wavelet.js`). It highlights:
 
 ```
 vim/
-  ftdetect/wavelet.vim   maps *.wvl to the `wavelet` filetype
-  syntax/wavelet.vim     the highlighting rules
+  ftdetect/wavelet.vim       maps *.wvl to the `wavelet` filetype
+  syntax/wavelet.vim         the highlighting rules
+  plugin/wavelet_lsp.lua     Neovim: start wavelet-lsp for *.wvl buffers
+  bin/                       (release only) bundled wavelet-lsp binaries
 ```
 
 This is a standard Vim runtime-path package, so any plugin manager that adds a
 directory to `runtimepath` will pick it up.
+
+## Language server (Neovim)
+
+The release `wavelet-vim.zip` bundles the `wavelet-lsp` server binaries under
+`bin/`, and `plugin/wavelet_lsp.lua` starts the one matching your platform for
+every `.wvl` buffer — no extra setup. Classic Vim has no built-in LSP client, so
+there it is a no-op and you still get highlighting.
+
+The server is located in this order: `g:wavelet_lsp_path` (if set) → the bundled
+`bin/wavelet-lsp-<platform>` → `wavelet-lsp` on your `PATH`. When installing from
+source (no `bin/`), build the server and either put it on your `PATH` or set:
+
+```vim
+let g:wavelet_lsp_path = '/path/to/wavelet-lsp'
+```
+
+```console
+$ cargo build --release --manifest-path tooling/wavelet-lsp/Cargo.toml
+```
 
 ## Install
 
@@ -46,12 +69,14 @@ is highlighted.
 
 ### From source — manual
 
-Copy the two files into your runtime directory, preserving the subpaths:
+Copy the files into your runtime directory, preserving the subpaths (the
+`plugin/` file is Neovim-only and optional):
 
 ```console
-$ mkdir -p ~/.vim/ftdetect ~/.vim/syntax            # Neovim: ~/.config/nvim/...
-$ cp tooling/vim/ftdetect/wavelet.vim ~/.vim/ftdetect/
-$ cp tooling/vim/syntax/wavelet.vim  ~/.vim/syntax/
+$ mkdir -p ~/.config/nvim/ftdetect ~/.config/nvim/syntax ~/.config/nvim/plugin
+$ cp tooling/vim/ftdetect/wavelet.vim    ~/.config/nvim/ftdetect/
+$ cp tooling/vim/syntax/wavelet.vim      ~/.config/nvim/syntax/
+$ cp tooling/vim/plugin/wavelet_lsp.lua  ~/.config/nvim/plugin/   # Neovim LSP
 ```
 
 ### As a package (Vim 8+ / Neovim)

@@ -15,12 +15,13 @@ Most users should grab the prebuilt package for their editor from the
 [releases page](https://github.com/logaan/wavelet/releases/latest) rather than
 this directory:
 
-- **Vim / Neovim** — `wavelet-vim.zip`
-- **VS Code** — `wavelet-vscode.zip` (the extension) plus a `wavelet-lsp-<platform>`
-  binary for the language-server features
+- **Vim / Neovim** — `wavelet-vim.zip` (highlighting; on Neovim it also bundles
+  the `wavelet-lsp` server and starts it automatically)
+- **VS Code** — `wavelet-vscode.zip` (self-contained: highlighting + the bundled
+  `wavelet-lsp` server, no extra download)
 - **Language server** — `wavelet-lsp-<platform>` (e.g.
-  `wavelet-lsp-aarch64-apple-darwin`), a standalone binary any LSP-capable editor
-  can launch
+  `wavelet-lsp-aarch64-apple-darwin`), a standalone binary for any other
+  LSP-capable editor
 
 The editor zips each unpack to a single `wavelet/` directory; the per-editor
 READMEs (and inside each zip) give the exact unzip-and-go commands. These are the
@@ -28,7 +29,8 @@ same files you see here — `tooling/` is the source the release artifacts are
 built from (see [`.github/workflows/release.yml`](../.github/workflows/release.yml)),
 so build-from-source and the release download are interchangeable. The
 `wavelet-lsp` binary is compiled from [`wavelet-lsp/`](wavelet-lsp/) by the same
-workflow, one asset per platform.
+workflow, one asset per platform, and is bundled into the VS Code and Vim zips as
+well as published standalone.
 
 All three grammars (these two plus the docs' Prism grammar in
 `docs/src/prism/wavelet.js`) are derived from the same source of truth — the
