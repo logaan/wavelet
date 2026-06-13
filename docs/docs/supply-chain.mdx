@@ -8,7 +8,7 @@ description: How the Component Model and Wavelet's design narrow the dependency 
 
 Modern software is mostly other people's code. A typical application pulls in hundreds of transitive dependencies, and every one of them is a place an attacker can hide. The dominant language ecosystems make this worse in two specific ways, and Wavelet's commitment to the Component Model addresses both.
 
-:::info A note on status
+:::info[A note on status]
 This page describes the security *model* Wavelet is built around. The capability-based runtime isolation comes from the WebAssembly Component Model and WASI Preview 2, which are real and shipping. **Sandboxed macro components** — the compile-time half of the story — are designed but **not yet implemented** in Wavelet; that gap is called out explicitly below and on the [roadmap](./roadmap).
 :::
 
@@ -60,7 +60,7 @@ The consequence: **an untrusted macro runs inside a wasm component with no capab
 
 You can still write a `Re` macro that compiles a regex to a DFA at build time, or an HTML DSL — but it can't phone home, because it was never given a socket.
 
-:::caution Not yet implemented
+:::caution[Not yet implemented]
 Macro **components** — compile-time instantiation, the `macros: true` flag, and routing expansion through a sandboxed foreign component — are **designed but not yet built**. The flag currently parses and is ignored; today macros are defined in-file with [`DefMacro`](./language/macros#defmacro) and run in the trusted compiler. The sandboxing guarantee above describes the intended model, not current behaviour. Track it on the [roadmap](./roadmap).
 :::
 

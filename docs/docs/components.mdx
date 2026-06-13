@@ -87,7 +87,7 @@ Export {name: render iface: "html"}
 
 Resources come along for free in the design, because WIT canonicalizes methods as functions whose first parameter is the handle: `kv/open{name: "default"}` returns a handle, and `kv/get[bucket "greeting"]` calls a method on it. Owned handles are dropped when their binding scope ends; `drop(h)` forces it.
 
-:::info Resources are partially implemented
+:::info[Resources are partially implemented]
 The standard library ships one concrete resource — the mutable [`cell`](./stdlib#cells) (`cell-new`/`cell-get`/`cell-set`). **General resource handles** from imported interfaces — constructors, methods, and owned-handle drop semantics — are **not yet implemented**, and `drop` currently accepts any value and returns unit. See the [roadmap](./roadmap).
 :::
 
@@ -102,7 +102,7 @@ resource fn-string-to-string {
 each: func(f: borrow<fn-string-to-string>, items: list<string>) -> list<string>;
 ```
 
-:::info Status
+:::info[Status]
 First-class closures **inside** a component work today (and in the playground). Automatic lifting of an **escaping** closure into a resource across a component boundary, and the inbound duck-typing of any lone-`call` resource, are part of the interop design and are **not yet fully implemented**. See the [roadmap](./roadmap).
 :::
 
@@ -122,7 +122,7 @@ WASM!
 
 Boundary calls copy data (the canonical ABI). For graphs that are entirely Wavelet, a planned `wavelet compose --fuse` would merge the core modules into one, eliding copies and restoring cross-component tail calls — with identical observable semantics.
 
-:::info Status
+:::info[Status]
 `build`, `compose` (auto-plug), and `wit` synthesis are implemented. A WAVE-document compose **manifest** for settling ambiguities/substitutions, and the **`--fuse`** optimisation, are **not yet implemented**. See the [roadmap](./roadmap).
 :::
 

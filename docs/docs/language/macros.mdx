@@ -40,7 +40,7 @@ Each call returns a distinct name, so a macro can introduce identifiers that are
 
 <Playground id="macro-gensym" />
 
-:::caution Binding keys must be literal names
+:::caution[Binding keys must be literal names]
 The reader requires record keys — and therefore [`Let`](./special-forms#let) binding names and [`Fn`](./special-forms#fn) parameter names — to be **literal identifiers** in source. You cannot `Unquote` a `gensym`'d name into a binding *position* (e.g. `Let {Unquote(g): …}`); `gensym` is for fresh names used in *reference* and *case* positions. A reader that accepts computed binding keys, and a full hygiene layer, are **not yet implemented** — see the [roadmap](../roadmap). For now `gensym` is the discipline against accidental capture.
 :::
 
@@ -66,7 +66,7 @@ You can build it live with [`rec-key`/`rec-val`](../stdlib#meta--reflection):
 
 <Playground id="macro-trylet" />
 
-:::caution Convenience macros aren't built in
+:::caution[Convenience macros aren't built in]
 `And`, `Or`, and `TryLet` are **illustrations, not standard-library functions** — Wavelet's standard library ships [builtins](../stdlib) but no pre-defined macros beyond the seventeen core forms. Define the ones you want with `DefMacro` (as above), or import them once macro components land.
 :::
 
@@ -78,6 +78,6 @@ The design intends macros to be deliverable as **components**: a component expor
 Import {pkg: "acme:html/dsl" macros: true}   // load the macro manifest too
 ```
 
-:::info Status
+:::info[Status]
 Macro **components** — compile-time instantiation, the `macros: true` import flag, and routing expansion through a foreign component — are **not yet implemented**. The `macros: true` flag currently parses but is ignored. Macros today are defined in-file with `DefMacro`. See the [roadmap](../roadmap).
 :::

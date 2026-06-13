@@ -10,7 +10,7 @@ description: Every built-in function available today, grouped, with live example
 
 Every function below is **implemented and runnable today**. Most take their arguments as a list or tuple payload, so `add[2 3]` and `add(2, 3)` are equivalent; a few take a single value. Edit any example and press Run.
 
-:::note What "function" means here
+:::note[What "function" means here]
 These are the core *builtins*. Convenience **macros** (`And`, `Or`, `TryLet`) are **not** shipped — define them yourself with [`DefMacro`](./language/macros). Two pre-bound *values* also live in core: `none` (the empty option) and `pi`.
 :::
 
@@ -82,7 +82,7 @@ A float operand promotes the result to a float:
 
 <Playground id="std-zip" />
 
-:::note `get` is for sequences
+:::note[`get` is for sequences]
 `get` indexes lists and tuples; it does not look up record fields (use [pattern matching](./language/pattern-matching) or `rec-key`/`rec-val` for records).
 :::
 
@@ -139,7 +139,7 @@ Numeric conversions range-check:
 
 <Playground id="std-args" autoRun />
 
-:::note In the playground
+:::note[In the playground]
 `read-line` and `args`/`env` are wired to the host process when you run a real program. In this in-browser sandbox there is no stdin and no argument vector, so `args[]` is empty and `read-line` returns an empty string. They behave normally under [`wavelet run`](./cli#run) and in a compiled component.
 :::
 
@@ -188,6 +188,6 @@ A `cell` is the standard library's mutable reference — the one place mutation 
 
 <Playground id="std-cells" />
 
-:::info Resources beyond cells
+:::info[Resources beyond cells]
 `cell` is the only resource type that ships today. General resource handles — opening, methods, owned-handle drop semantics — are part of the component-interop story and are **not yet implemented**; `drop` currently accepts any value and returns unit. See [Components & composition](./components#resources) and the [roadmap](./roadmap).
 :::

@@ -28,7 +28,7 @@ This is the **entire core language**. Everything else is the [standard library](
 | [`DefMacro`](#defmacro) | 3 | name, parameter braces, body | compile-time function from forms to a form |
 | [`The`](#the) | 2 | type form, expression | type ascription |
 
-:::note Component-level forms run across files
+:::note[Component-level forms run across files]
 `Package`, `Target`, `Import`, `Export`, and `DefType` describe a *file's* relationship to the component world, and are only valid at the top level of a file. The in-browser playground evaluates a single component's code, so those five are shown as static snippets; the other twelve are live.
 :::
 
