@@ -38,10 +38,38 @@ After any change to language behaviour or the example set, regenerate the JSON
 and re-lock the tests:
 
 ```console
-$ ./scripts/regen-examples.sh
+./scripts/regen-examples.sh
 ```
 
 This runs `wasm-pack build --target web --out-dir docs/src/wasm --out-name wavelet`,
 then `node docs/scripts/gen-examples.mjs`, then `cargo test`. The wasm artifact
 under `docs/src/wasm` is committed (CI builds the docs with Node only, no Rust
 toolchain), so it must be regenerated locally when the language changes.
+
+## A language change is not done until the downstream surfaces are checked
+
+Several artifacts outside `src/` track the language and can silently drift from
+it. **Any change to Wavelet's syntax or semantics must consider whether each of
+these needs updating too** — the change is not finished until they have each been
+checked and updated where affected:
+
+- **The docs site** (`docs/`) — a Docusaurus site documenting the language. Prose
+  lives in `docs/docs/`; runnable examples are generated from
+  `docs/scripts/gen-examples.mjs` into `docs/examples.json` (see the section
+  above). Update the prose and regenerate the examples when behaviour changes.
+
+- **Syntax highlighting** — three grammars highlight Wavelet, all derived from a
+  single source of truth, the lexer in `src/lexer.rs`:
+  - `docs/src/prism/wavelet.js` — Prism grammar for the docs (static
+      ```` ```wavelet ```` code blocks and the live `<Playground>` editor).
+  - `tooling/vim/` — Vim/Neovim syntax + `.wvl` filetype detection.
+  - `tooling/vscode/` — VS Code TextMate grammar + language configuration.
+
+  A change to the lexer's token classes (new literal forms, comment syntax, macro
+  heads, the attachment rule, qualified references, ...) must be mirrored into all
+  three, or highlighting drifts from the language. See `tooling/README.md`.
+
+- **The LSP server** — the editor language server (lives under
+  `tooling/`). Its diagnostics, completion, and hover surface the
+  interpreter's reference semantics, so semantic changes must be reflected there
+  too.
