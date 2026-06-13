@@ -1,9 +1,12 @@
 name: Release
 
-# On a version tag (e.g. v0.1.0), package the editor tooling under tooling/ into
-# one zip per editor and publish them as assets on a GitHub release. The assets
-# use stable, unversioned names so the install instructions in README.md can
-# always point at .../releases/latest/download/wavelet-<editor>.zip.
+# On a version tag (e.g. v0.1.0):
+#   * cross-compile the language server (tooling/wavelet-lsp) for the common
+#     desktop platforms, and
+#   * package the editor tooling under tooling/ into one zip per editor,
+# then publish all of them as assets on a GitHub release. Assets use stable,
+# unversioned names so the install instructions in README.md can always point at
+# .../releases/latest/download/<asset>.
 
 on:
   push:
@@ -13,10 +16,63 @@ permissions:
   contents: write
 
 jobs:
+  # Build the language-server binary natively on each platform's own runner, so
+  # we never need a cross toolchain. Each build is uploaded as a workflow
+  # artifact for the `release` job to collect.
+  build-lsp:
+    name: Build wavelet-lsp (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: >
+          cargo build --release
+          --manifest-path tooling/wavelet-lsp/Cargo.toml
+          --target ${{ matrix.target }}
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          bin="tooling/wavelet-lsp/target/${{ matrix.target }}/release/wavelet-lsp"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "${bin}.exe" "dist/wavelet-lsp-${{ matrix.target }}.exe"
+          else
+            cp "$bin" "dist/wavelet-lsp-${{ matrix.target }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wavelet-lsp-${{ matrix.target }}
+          path: dist/*
+
   release:
+    needs: build-lsp
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
 
       - name: Package editor tooling
         run: |
@@ -30,10 +86,22 @@ jobs:
           (cd stage && zip -r ../dist/wavelet-vim.zip wavelet)
 
           # VS Code extension -> unzips to a `wavelet/` dir you drop into the
-          # extensions folder.
+          # extensions folder. Install the runtime dependency (the language
+          # client) so the unpacked extension can launch the server.
+          npm --prefix tooling/vscode install --omit=dev --no-audit --no-fund
           rm -rf stage && mkdir -p stage/wavelet
           cp -R tooling/vscode/. stage/wavelet/
           (cd stage && zip -r ../dist/wavelet-vscode.zip wavelet)
+
+      - name: Download LSP binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wavelet-lsp-*
+          path: lsp-artifacts
+          merge-multiple: true
+
+      - name: Collect LSP binaries
+        run: cp lsp-artifacts/* dist/
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -41,4 +109,6 @@ jobs:
           files: |
             dist/wavelet-vim.zip
             dist/wavelet-vscode.zip
+            dist/wavelet-lsp-*
+          fail_on_unmatched_files: true
           generate_release_notes: true

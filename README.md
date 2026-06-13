@@ -99,8 +99,11 @@ them with `wac`-style auto-plugging.
 
 Syntax highlighting for `.wvl` files ships as a download per editor on the
 [releases page](https://github.com/logaan/wavelet/releases/latest). The grammars
-are derived from the lexer, so highlighting matches the compiler. (The source
-lives in [`tooling/`](tooling/) if you'd rather build the packages yourself.)
+are derived from the lexer, so highlighting matches the compiler. A language
+server, `wavelet-lsp`, adds diagnostics, completion, hover, and document symbols;
+it ships as a standalone binary per platform on the same releases page and is
+used automatically by the VS Code extension. (The source for all of this lives in
+[`tooling/`](tooling/) if you'd rather build it yourself.)
 
 ### Vim / Neovim
 
@@ -126,8 +129,19 @@ $ curl -L -o wavelet-vscode.zip \
 $ unzip wavelet-vscode.zip -d ~/.vscode/extensions/
 ```
 
-See [`tooling/`](tooling/) for build-from-source and plugin-manager
-alternatives.
+That gives you highlighting. For diagnostics, completion, hover, and symbols,
+also install the language server and put it on your `PATH` (pick the asset
+matching your platform):
+
+```console
+$ curl -L -o wavelet-lsp \
+    https://github.com/logaan/wavelet/releases/latest/download/wavelet-lsp-aarch64-apple-darwin
+$ chmod +x wavelet-lsp && sudo mv wavelet-lsp /usr/local/bin/
+```
+
+The extension starts `wavelet-lsp` automatically (override its location with the
+`wavelet.lsp.serverPath` setting). See [`tooling/vscode/`](tooling/vscode/) for
+the full asset list and build-from-source instructions.
 
 ## Pipeline
 
@@ -168,7 +182,7 @@ instantiation), resource handles beyond `cell`, boundary coercions / the
 ```
 src/        compiler and CLI
 examples/   shout.wvl + main.wvl (the §1 demo)
-tooling/    editor support (Vim/Neovim, VS Code)
+tooling/    editor support (Vim/Neovim, VS Code, wavelet-lsp language server)
 out/        build artifacts (.wasm / .wat / .wit)
 design.md   the language design, draft 0.1
 todo.md     implementation tracking

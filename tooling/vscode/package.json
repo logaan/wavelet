@@ -1,15 +1,17 @@
 {
   "name": "wavelet",
   "displayName": "Wavelet",
-  "description": "Syntax highlighting for the Wavelet language (.wvl).",
-  "version": "0.1.0",
+  "description": "Syntax highlighting and language server support for the Wavelet language (.wvl).",
+  "version": "0.2.0",
   "publisher": "wavelet",
   "license": "MIT",
+  "main": "./extension.js",
   "engines": {
-    "vscode": "^1.60.0"
+    "vscode": "^1.82.0"
   },
   "categories": ["Programming Languages"],
   "keywords": ["wavelet", "wave", "webassembly", "component-model", "wasm"],
+  "activationEvents": ["onLanguage:wavelet"],
   "contributes": {
     "languages": [
       {
@@ -25,6 +27,24 @@
         "scopeName": "source.wavelet",
         "path": "./syntaxes/wavelet.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Wavelet",
+      "properties": {
+        "wavelet.lsp.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the Wavelet language server (wavelet-lsp) for diagnostics, completion, hover, and symbols."
+        },
+        "wavelet.lsp.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the wavelet-lsp executable. When empty, 'wavelet-lsp' is looked up on your PATH."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }
