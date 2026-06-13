@@ -44,6 +44,8 @@
   cursor: progress;
 }
 
+/* Shared box model for the two stacked layers (highlighted <pre> + <textarea>).
+   Keeping every typography property identical is what makes them line up. */
 .editor {
   display: block;
   width: 100%;
@@ -51,15 +53,51 @@
   padding: 0.75rem 0.9rem;
   border: none;
   outline: none;
-  resize: vertical;
   font-family: var(--ifm-font-family-monospace);
   font-size: 0.9rem;
   line-height: 1.5;
   tab-size: 2;
-  color: var(--ifm-font-color-base);
   background: transparent;
   white-space: pre;
   overflow-wrap: normal;
+}
+
+.editorWrap {
+  position: relative;
+}
+
+/* The textarea drives the height (via its rows) and sits on top. Its text is
+   invisible so the highlighted layer beneath shows through, but the caret and
+   selection remain. */
+.input {
+  position: relative;
+  z-index: 1;
+  resize: vertical;
+  overflow: auto;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--ifm-font-color-base);
+}
+
+.input::selection {
+  /* Selection on transparent text — give it a visible tint. */
+  background: var(--ifm-color-primary-lightest);
+}
+
+/* The highlighted mirror fills the textarea's box and scrolls in lock-step
+   with it (see syncScroll). It must never intercept pointer or keyboard input. */
+.highlight {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  resize: none;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--ifm-font-color-base);
+}
+
+/* The SSR fallback renders a plain <pre class="editor"> with no overlay. */
+.playground > .editor {
   overflow-x: auto;
 }
 
