@@ -74,25 +74,6 @@ jobs:
         with:
           node-version: 20
 
-      - name: Package editor tooling
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-
-          # Vim/Neovim runtime package -> unzips to a `wavelet/` dir you drop
-          # into pack/*/start.
-          rm -rf stage && mkdir -p stage/wavelet
-          cp -R tooling/vim/. stage/wavelet/
-          (cd stage && zip -r ../dist/wavelet-vim.zip wavelet)
-
-          # VS Code extension -> unzips to a `wavelet/` dir you drop into the
-          # extensions folder. Install the runtime dependency (the language
-          # client) so the unpacked extension can launch the server.
-          npm --prefix tooling/vscode install --omit=dev --no-audit --no-fund
-          rm -rf stage && mkdir -p stage/wavelet
-          cp -R tooling/vscode/. stage/wavelet/
-          (cd stage && zip -r ../dist/wavelet-vscode.zip wavelet)
-
       - name: Download LSP binaries
         uses: actions/download-artifact@v4
         with:
@@ -100,8 +81,37 @@ jobs:
           path: lsp-artifacts
           merge-multiple: true
 
-      - name: Collect LSP binaries
-        run: cp lsp-artifacts/* dist/
+      - name: Package editor tooling
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          # Artifact upload/download can drop the exec bit; restore it so the
+          # binaries we bundle into the zips stay runnable after unzip.
+          chmod +x lsp-artifacts/wavelet-lsp-* 2>/dev/null || true
+
+          # Vim/Neovim runtime package -> unzips to a `wavelet/` dir you drop
+          # into pack/*/start. Bundle the per-platform servers under bin/ so the
+          # included Neovim plugin can launch the matching one.
+          rm -rf stage && mkdir -p stage/wavelet
+          cp -R tooling/vim/. stage/wavelet/
+          mkdir -p stage/wavelet/bin
+          cp lsp-artifacts/wavelet-lsp-* stage/wavelet/bin/
+          (cd stage && zip -r ../dist/wavelet-vim.zip wavelet)
+
+          # VS Code extension -> unzips to a `wavelet/` dir you drop into the
+          # extensions folder. Install the runtime dependency (the language
+          # client) and bundle the per-platform servers under server/ so the
+          # extension launches the matching one with no extra download.
+          npm --prefix tooling/vscode install --omit=dev --no-audit --no-fund
+          rm -rf stage && mkdir -p stage/wavelet
+          cp -R tooling/vscode/. stage/wavelet/
+          mkdir -p stage/wavelet/server
+          cp lsp-artifacts/wavelet-lsp-* stage/wavelet/server/
+          (cd stage && zip -r ../dist/wavelet-vscode.zip wavelet)
+
+      - name: Collect standalone LSP binaries
+        run: cp lsp-artifacts/wavelet-lsp-* dist/
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

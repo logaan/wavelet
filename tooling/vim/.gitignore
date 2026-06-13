@@ -1,5 +1,2 @@
-node_modules/
-package-lock.json
-*.vsix
 # Language-server binaries are bundled into the release zip by CI, not committed.
-server/
+bin/
