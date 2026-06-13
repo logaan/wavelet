@@ -1,0 +1,48 @@
+---
+sidebar_position: 3
+title: Evaluation
+description: The four evaluation rules and the single-namespace (Lisp-1) model.
+---
+
+# Evaluation
+
+There are four evaluation rules. That's the whole model.
+
+1. **Atoms** — booleans, numbers, chars, strings, flags — evaluate to themselves.
+2. **A bare name** evaluates to its binding in the current lexical environment. Wavelet is a **Lisp-1**: one namespace for everything. Unbound names are errors. Enum cases, imported functions, and constructors are all just bindings.
+3. **A call form** `head(payload)` evaluates the payload, then applies the value bound to `head`. Heads are names or qualified names; to call a *computed* function value, use [`apply`](../stdlib#meta--reflection).
+4. **Special forms and macros** are recognised before evaluation and follow their own rules — see [Special forms](./special-forms) and [Macros](./macros).
+
+## Functions take exactly one value
+
+This is the rule that makes everything else fit together. A function receives a single value — which may be a record, list, tuple, or scalar — and that's what gives calls their n-ary feel. The `Fn`'s parameter braces describe how to receive it:
+
+- A **record** payload binds parameters by **name**.
+- A **list** or **tuple** payload binds them by **order**.
+- A **scalar** payload binds a sole parameter directly.
+
+So both of these reach the same two-parameter function:
+
+<Playground id="eval-fn-by-name" />
+
+<Playground id="eval-fn-by-order" />
+
+A sole parameter receives a scalar directly:
+
+<Playground id="eval-fn-scalar" />
+
+## One namespace
+
+Because Wavelet is a Lisp-1, a function and a value live in the same namespace. You can pass functions around as ordinary bindings and apply them by name or with [`apply`](../stdlib#meta--reflection):
+
+<Playground id="eval-twice" />
+
+## Calling a computed function
+
+A call head must be a *name*. To call a function you computed (e.g. one pulled out of a list), use `apply`, which takes the function and a payload value:
+
+<Playground id="eval-apply-list" />
+
+## No loops, no mutation, no early return
+
+The core deliberately omits these. Iteration is [tail recursion](./tail-calls); mutable state lives in resources (the standard library's [cell](../stdlib#cells)); error propagation is a macro over [`Match`](./pattern-matching) (see the `TryLet` pattern under [Macros](./macros#error-propagation-without-early-return)).

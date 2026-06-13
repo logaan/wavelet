@@ -1,0 +1,109 @@
+---
+sidebar_position: 3
+title: Getting started
+description: Build the Wavelet compiler and run your first program.
+---
+
+# Getting started
+
+## The fastest way to try it
+
+You don't need to install anything to experiment — the playgrounds throughout these docs run a real Wavelet interpreter in your browser. Start with the [standard library](./stdlib) or the [special forms](./language/special-forms) and edit the examples.
+
+<Playground id="gs-hello" autoRun />
+
+To run Wavelet on real components — to build `.wasm`, compose, and execute on a host like [wasmtime](https://wasmtime.dev/) — build the compiler.
+
+## Building the compiler
+
+Wavelet is written in Rust (2024 edition).
+
+```console
+$ git clone https://github.com/logaan/wavelet
+$ cd wavelet
+$ cargo build            # debug binary at ./target/debug/wavelet
+$ cargo build --release  # optimized binary at ./target/release/wavelet
+$ cargo test             # run the test suite
+```
+
+Add `./target/release` to your `PATH`, or invoke the binary directly.
+
+## Hello, world
+
+Create `hello.wvl`:
+
+```wavelet
+Package "demo:hello@0.1.0"
+Target "wasi:cli/command"
+
+Export run
+Def run Fn {}
+  println("Hello, world!")
+```
+
+The quickest path is the interpreter, which skips code generation entirely:
+
+```console
+$ wavelet run hello.wvl
+Hello, world!
+```
+
+`run` reads the files, resolves `Import`s by package id, and calls the exported `run`. It is the fastest way to try a program.
+
+## Run vs. build
+
+Wavelet has two execution paths, and understanding the split is the key to the workflow:
+
+| | `wavelet run` | `wavelet build` + `wavelet compose` |
+|---|---|---|
+| What it does | Interprets the files directly | Emits real `.wasm` components, then links them |
+| Speed | Instant — no codegen | Slower; produces deployable artifacts |
+| Output | Program output | `.wasm` files you can ship and run on any host |
+| Role | The semantics oracle; fastest iteration | Production artifacts |
+
+The interpreter exists so the language's semantics can be validated independently of code generation — the wasm backend is checked against it. Day to day you iterate with `run`, then `build`/`compose` when you want a real component.
+
+## A two-component program
+
+`shout.wvl`:
+
+```wavelet
+Package "demo:shout@0.1.0"
+
+Export shout
+Def shout Fn {phrase: string}
+  str-cat[upper(phrase) "!"]
+```
+
+`main.wvl`:
+
+```wavelet
+Package "demo:main@0.1.0"
+Target "wasi:cli/command"
+
+Import {pkg: "demo:shout/api" as: sh}
+
+Export run
+Def run Fn {}
+  If eq[len(args[]) 0]
+     println("usage: main <word>")
+     println(sh/shout{phrase: head(args[])})
+```
+
+Interpret both together (the entry file's `run` is called):
+
+```console
+$ wavelet run main.wvl shout.wvl -- wasm
+WASM!
+```
+
+Or build real components and compose them:
+
+```console
+$ wavelet build shout.wvl main.wvl
+$ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
+$ wasmtime app.wasm wasm
+WASM!
+```
+
+See the [CLI reference](./cli) for every command and flag, and [Components & composition](./components) for how files become components and link together.

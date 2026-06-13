@@ -1,0 +1,30 @@
+/**
+ * Any CSS included here will be global. The classic template
+ * bundles Infima by default. Infima is a CSS framework designed to
+ * work well for content-centric websites.
+ */
+
+/* Wavelet palette — an indigo that nods at the WebAssembly purple. */
+:root {
+  --ifm-color-primary: #5046e5;
+  --ifm-color-primary-dark: #362ce0;
+  --ifm-color-primary-darker: #2f29d4;
+  --ifm-color-primary-darkest: #2722af;
+  --ifm-color-primary-light: #6a62e9;
+  --ifm-color-primary-lighter: #7770eb;
+  --ifm-color-primary-lightest: #9b96f0;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+/* For readability concerns, a lighter palette in dark mode. */
+[data-theme='dark'] {
+  --ifm-color-primary: #a5a0f5;
+  --ifm-color-primary-dark: #8780f1;
+  --ifm-color-primary-darker: #7870ef;
+  --ifm-color-primary-darkest: #4c41e8;
+  --ifm-color-primary-light: #c3c0f9;
+  --ifm-color-primary-lighter: #d2cffb;
+  --ifm-color-primary-lightest: #ffffff;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.1);
+}

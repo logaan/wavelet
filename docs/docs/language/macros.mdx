@@ -1,0 +1,83 @@
+---
+sidebar_position: 6
+title: Macros
+description: Compile-time functions from forms to forms — with quasiquote and gensym.
+---
+
+# Macros
+
+A macro is a **compile-time function from argument forms to a result form**. Because Wavelet is homoiconic, "a form" is an ordinary value, so a macro is just a function over values that happens to run during reading/expansion.
+
+## `DefMacro`
+
+`DefMacro name {params} body` binds the macro's parameters to the **unevaluated** argument forms, runs the body, and replaces the call with the form the body returns.
+
+<Playground id="macro-swap" />
+
+Once defined, the macro's **arity** is known to the reader, so its TitleCase form reads without parentheses (here `Swap` consumes two forms). Macros must be [defined before use](./syntax#the-macro-sugar).
+
+## Quasiquote, unquote, splice
+
+The template trio builds result forms ergonomically:
+
+- [`Quasi`](./special-forms#quasi) reproduces a form as data.
+- [`Unquote`](./special-forms#unquote) evaluates a hole and inserts the result.
+- [`Splice`](./special-forms#splice) evaluates a hole to a list and splices its elements into the surrounding sequence.
+
+<Playground id="macro-and" />
+
+You can inspect what a macro produces with [`expand`](../stdlib#meta--reflection), which runs one expansion step and returns the resulting form as data:
+
+<Playground id="macro-expand" />
+
+## Hygiene and `gensym`
+
+Expansion is **unhygienic**, in the Common Lisp / Clojure tradition: names a macro introduces can capture or be captured. The discipline is [`gensym`](../stdlib#meta--reflection), which mints a fresh, collision-free name each call.
+
+<Playground id="macro-gensym-three" />
+
+Each call returns a distinct name, so a macro can introduce identifiers that are guaranteed not to clash with the user's:
+
+<Playground id="macro-gensym" />
+
+:::caution Binding keys must be literal names
+The reader requires record keys — and therefore [`Let`](./special-forms#let) binding names and [`Fn`](./special-forms#fn) parameter names — to be **literal identifiers** in source. You cannot `Unquote` a `gensym`'d name into a binding *position* (e.g. `Let {Unquote(g): …}`); `gensym` is for fresh names used in *reference* and *case* positions. A reader that accepts computed binding keys, and a full hygiene layer, are **not yet implemented** — see the [roadmap](../roadmap). For now `gensym` is the discipline against accidental capture.
+:::
+
+## Error propagation without early return
+
+The core has no early return, so error propagation is a *binding* macro: it wraps the rest of the computation rather than escaping it. This is the `TryLet` pattern — Rust's `?`, reconstructed in user space from `Match` and quasiquote:
+
+```wavelet
+DefMacro try-let {binding body}        // binding is a one-field record form
+  Let {name: rec-key(binding) expr: rec-val(binding)}
+    Quasi Match Unquote(expr) [
+      (ok(Unquote(name))  Unquote(body))
+      (err(e)             err(e))
+    ]
+
+Def load-config Fn {path: string}
+  TryLet {text: read-file{path: path}}
+  TryLet {form: read(text)}
+  ok(form)
+```
+
+You can build it live with [`rec-key`/`rec-val`](../stdlib#meta--reflection):
+
+<Playground id="macro-trylet" />
+
+:::caution Convenience macros aren't built in
+`And`, `Or`, and `TryLet` are **illustrations, not standard-library functions** — Wavelet's standard library ships [builtins](../stdlib) but no pre-defined macros beyond the seventeen core forms. Define the ones you want with `DefMacro` (as above), or import them once macro components land.
+:::
+
+## Macros as components — not yet implemented
+
+The design intends macros to be deliverable as **components**: a component exporting `wavelet:meta/macros` is a macro library, instantiated *at compile time* and sandboxed by construction (an untrusted macro runs inside a wasm component with no capabilities the build doesn't grant). This is the basis of Wavelet's [supply-chain story](../supply-chain).
+
+```wavelet
+Import {pkg: "acme:html/dsl" macros: true}   // load the macro manifest too
+```
+
+:::info Status
+Macro **components** — compile-time instantiation, the `macros: true` import flag, and routing expansion through a foreign component — are **not yet implemented**. The `macros: true` flag currently parses but is ignored. Macros today are defined in-file with `DefMacro`. See the [roadmap](../roadmap).
+:::

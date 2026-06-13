@@ -1,0 +1,57 @@
+---
+sidebar_position: 5
+title: Pattern matching
+description: Match destructures the same data shapes the language is built from.
+---
+
+# Pattern matching
+
+`Match scrutinee [clauses]` evaluates the scrutinee, then tries each `(pattern result)` clause in order. The first pattern that matches wins, and its result is evaluated in [tail position](./tail-calls) with any bindings the pattern introduced. If nothing matches, it's an error.
+
+Patterns are just **forms**, interpreted structurally:
+
+| Pattern | Matches |
+|---|---|
+| a literal (`42`, `"hi"`, `true`, `'x'`, `{read}`) | a value equal to it |
+| a bare name (`x`) | anything — and **binds** the name |
+| a payload-less variant case in scope (`none`, an enum case) | that exact case, by equality |
+| a call shape (`ok(n)`, `point{x: a}`) | a variant case with that label, recursing into the payload |
+| a tuple `(a b)` | a tuple of the same length, element-wise |
+| a list `[a b c]` | a list of the same length, element-wise |
+| a record `{k: p}` | a record containing key `k` whose value matches `p` |
+
+## Literals and the catch-all
+
+A bare name matches anything and binds it — the idiomatic catch-all.
+
+<Playground id="pm-catch-all" />
+
+## Destructuring variants
+
+Call-shaped patterns destructure variant cases — the bread and butter of `result` and `option` handling.
+
+<Playground id="pm-describe" />
+
+A payload-less case in scope (like `none`) matches by equality, not by binding:
+
+<Playground id="pm-none" />
+
+## Destructuring sequences and records
+
+Lists and tuples match by length and position; records match by the keys you name (extra keys in the value are ignored).
+
+<Playground id="pm-record" />
+
+Nested patterns compose:
+
+<Playground id="pm-nested" />
+
+## No match is an error
+
+There is no implicit fall-through. Provide a catch-all clause if the scrutinee might not be covered.
+
+<Playground id="pm-no-clause" />
+
+:::info Exhaustiveness checking
+Compile-time exhaustiveness checking (warning when a `Match` can't cover its scrutinee's boundary type) is **not yet implemented** — see the [roadmap](../roadmap). Today an unmatched value is a runtime error.
+:::

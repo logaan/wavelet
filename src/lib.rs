@@ -1,21 +1,141 @@
-pub mod build;
 pub mod builtins;
-pub mod emit;
 pub mod expand;
 pub mod form;
 pub mod interp;
 pub mod lexer;
 pub mod printer;
 pub mod reader;
-pub mod repl;
-pub mod runner;
 pub mod value;
+
+// The compiler back end (emit/componentize/compose) and the fs/stdin-backed
+// runner & REPL depend on native-only crates (wasm-encoder, wit-*, wac-graph)
+// and so are excluded from the wasm build, which only needs the interpreter.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod build;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod emit;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod repl;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod runner;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod wit;
+
+// Browser playground bindings (compiled only for wasm).
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
 
 pub use form::{Arena, Node, NodeId};
 pub use lexer::ReadError;
 pub use printer::print;
 pub use reader::read_file;
+
+use std::cell::RefCell;
+
+thread_local! {
+    /// When `Some`, `print`/`println` builtins append here instead of writing
+    /// to real stdout. The wasm playground turns this on to capture output;
+    /// the native CLI never does, so its behaviour is unchanged.
+    static OUTPUT_SINK: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Begin capturing `print`/`println` output into an in-memory buffer.
+pub fn output_capture_start() {
+    OUTPUT_SINK.with(|s| *s.borrow_mut() = Some(String::new()));
+}
+
+/// Stop capturing and return everything written since `output_capture_start`.
+pub fn output_capture_take() -> String {
+    OUTPUT_SINK.with(|s| s.borrow_mut().take().unwrap_or_default())
+}
+
+/// Emit program output: into the capture buffer if active, else real stdout.
+pub fn emit_output(text: &str, newline: bool) {
+    OUTPUT_SINK.with(|s| {
+        let mut slot = s.borrow_mut();
+        if let Some(buf) = slot.as_mut() {
+            buf.push_str(text);
+            if newline {
+                buf.push('\n');
+            }
+        } else if newline {
+            println!("{text}");
+        } else {
+            print!("{text}");
+        }
+    });
+}
+
+/// The result of evaluating a documentation snippet.
+#[derive(Debug, Clone)]
+pub struct EvalOutcome {
+    /// Whether evaluation completed without error.
+    pub ok: bool,
+    /// Printed value of the final form (empty when it is unit, e.g. a `Def`).
+    pub value: String,
+    /// Everything `print`/`println` wrote during evaluation.
+    pub output: String,
+    /// Error message when `ok` is false.
+    pub error: String,
+}
+
+/// Evaluate a snippet of Wavelet source the way the docs playground and the
+/// `wavelet run` interpreter do: install the standard library, read every
+/// top-level form, evaluate them in order, and report the final value plus any
+/// captured output. This is the single evaluation path shared by the wasm
+/// bindings ([`wasm`]) and the documentation-example test suite, so a language
+/// change that breaks a documented example breaks `cargo test`.
+pub fn eval_snippet(src: &str) -> EvalOutcome {
+    use std::rc::Rc;
+    use value::{print_value, unit, Env, Value};
+
+    let (arena, roots) = match read_file(src) {
+        Ok(pair) => pair,
+        Err(e) => {
+            return EvalOutcome {
+                ok: false,
+                value: String::new(),
+                output: String::new(),
+                error: e.to_string(),
+            };
+        }
+    };
+    let arena = Rc::new(arena);
+
+    let interp = interp::Interp::new(vec![]);
+    let env = Env::root();
+    builtins::install(&env);
+
+    output_capture_start();
+    let mut last = unit();
+    for root in roots {
+        match interp.eval(&arena, root, &env) {
+            Ok(v) => last = v,
+            Err(e) => {
+                return EvalOutcome {
+                    ok: false,
+                    value: String::new(),
+                    output: output_capture_take(),
+                    error: e.to_string(),
+                };
+            }
+        }
+    }
+    let output = output_capture_take();
+
+    // Suppress a trailing unit so the playground doesn't show a noisy `{}`.
+    let value = if matches!(&last, Value::Rec(f) if f.is_empty()) {
+        String::new()
+    } else {
+        print_value(&last)
+    };
+    EvalOutcome {
+        ok: true,
+        value,
+        output,
+        error: String::new(),
+    }
+}
 
 #[cfg(test)]
 mod tests {

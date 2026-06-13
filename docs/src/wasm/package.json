@@ -1,0 +1,15 @@
+{
+  "name": "wavelet",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "wavelet_bg.wasm",
+    "wavelet.js",
+    "wavelet.d.ts"
+  ],
+  "main": "wavelet.js",
+  "types": "wavelet.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

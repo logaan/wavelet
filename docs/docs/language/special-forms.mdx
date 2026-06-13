@@ -1,0 +1,187 @@
+---
+sidebar_position: 4
+title: The seventeen special forms
+description: The entire core language, form by form, with live examples.
+---
+
+# The seventeen special forms
+
+This is the **entire core language**. Everything else is the [standard library](../stdlib) or [macros](./macros).
+
+| Form | Arity | Arguments | Meaning |
+|---|---|---|---|
+| [`Package`](#package) | 1 | string | declare this component's package id and version |
+| [`Target`](#target) | 1 | string | adopt a named WIT world |
+| [`Import`](#import) | 1 | string or record | import an interface |
+| [`Export`](#export) | 1 | name or record | export a definition or type |
+| [`DefType`](#deftype) | 2 | name, type form | declare a WIT type for this component |
+| [`Def`](#def) | 2 | name, expression | immutable module-level binding |
+| [`Fn`](#fn) | 2 | parameter braces, body | closure |
+| [`If`](#if) | 3 | condition, then, else | conditional |
+| [`Let`](#let) | 2 | binding record, body | sequential local bindings |
+| [`Do`](#do) | 1 | list of expressions | sequencing; value of the last |
+| [`Match`](#match) | 2 | scrutinee, clause list | pattern matching |
+| [`Quote`](#quote) | 1 | form | the form itself, as data |
+| [`Quasi`](#quasi) | 1 | form | template with holes |
+| [`Unquote`](#unquote) | 1 | form | hole: evaluate and insert |
+| [`Splice`](#splice) | 1 | form | hole: evaluate to a list and splice in |
+| [`DefMacro`](#defmacro) | 3 | name, parameter braces, body | compile-time function from forms to a form |
+| [`The`](#the) | 2 | type form, expression | type ascription |
+
+:::note Component-level forms run across files
+`Package`, `Target`, `Import`, `Export`, and `DefType` describe a *file's* relationship to the component world, and are only valid at the top level of a file. The in-browser playground evaluates a single component's code, so those five are shown as static snippets; the other twelve are live.
+:::
+
+---
+
+## Definitions & functions
+
+### `Def`
+
+`Def name expr` — an immutable module-level binding. Its value is unit.
+
+<Playground id="sf-def" />
+
+### `Fn`
+
+`Fn {params} body` — a closure. Closures capture lexically and are first-class within a component. The parameter braces describe how the single argument value is received ([see Evaluation](./evaluation#functions-take-exactly-one-value)):
+
+```wavelet
+Fn {path force}                // two parameters, dynamically typed
+Fn {path: string force: bool}  // two parameters, typed
+Fn {phrase}                    // one parameter
+Fn {}                          // zero parameters
+```
+
+<Playground id="sf-fn-adder" />
+
+Typed parameters are checked when the function is called:
+
+<Playground id="sf-fn-shout" />
+
+---
+
+## Control flow
+
+### `If`
+
+`If cond then else` — the condition must evaluate to a `bool`. Both branches are in [tail position](./tail-calls).
+
+<Playground id="sf-if" />
+
+A non-boolean condition is an error (there is no truthiness):
+
+<Playground id="sf-if-nonbool" />
+
+### `Let`
+
+`Let {bindings} body` — sequential local bindings, like `let*`: each binding sees the previous ones. The bindings are a *record form* — homoiconicity doing the work of syntax. The body is in tail position.
+
+<Playground id="sf-let" />
+
+### `Do`
+
+`Do [exprs]` — evaluate each expression in order; the value is the last one. Useful for side effects. Takes a single **list**.
+
+<Playground id="sf-do" />
+
+### `Match`
+
+`Match scrutinee [clauses]` — pattern matching. Each clause is a `(pattern result)` tuple. See [Pattern matching](./pattern-matching) for the full pattern language.
+
+<Playground id="sf-match" />
+
+---
+
+## Quotation & macros
+
+### `Quote`
+
+`Quote form` — the form itself, as data. Nothing is evaluated.
+
+<Playground id="sf-quote" />
+
+### `Quasi`
+
+`Quasi form` — a template. The form is reproduced as data, except that [`Unquote`](#unquote) and [`Splice`](#splice) holes are evaluated.
+
+<Playground id="sf-quasi" />
+
+### `Unquote`
+
+`Unquote form` — only meaningful inside `Quasi`. Evaluates `form` and inserts the result.
+
+<Playground id="sf-unquote" />
+
+### `Splice`
+
+`Splice form` — only meaningful inside `Quasi`, and only inside a sequence. Evaluates `form` to a **list** and splices its elements into the surrounding sequence.
+
+<Playground id="sf-splice" />
+
+### `DefMacro`
+
+`DefMacro name {params} body` — a compile-time function from argument *forms* to a result form. The parameters are bound to the **unevaluated** argument forms; the body runs and must produce a form, which replaces the macro call. See [Macros](./macros) for the full story.
+
+<Playground id="sf-defmacro" />
+
+---
+
+## Type ascription
+
+### `The`
+
+`The type expr` — evaluate `expr` and assert it conforms to the named WIT type, trapping otherwise. Currently checks the scalar types (`string`, `bool`, `char`, the integer widths, the floats).
+
+<Playground id="sf-the-ok" />
+
+<Playground id="sf-the-bad" />
+
+---
+
+## Component-level forms
+
+These five describe how a file relates to the component world. They appear at the top level of a `.wvl` file and are covered in depth under [Components & composition](../components).
+
+### `Package`
+
+Declares the component's package id and version.
+
+```wavelet
+Package "demo:shout@0.1.0"
+```
+
+### `Target`
+
+Adopts a named WIT world, e.g. a CLI command.
+
+```wavelet
+Target "wasi:cli/command"
+```
+
+### `Import`
+
+Imports an interface. Takes a package string, or a record for control over the alias, opening names unqualified, and (planned) loading a macro manifest.
+
+```wavelet
+Import "wasi:cli/environment"                    // alias defaults to last segment
+Import {pkg: "wasi:keyvalue/store@0.2.0" as: kv}  // explicit alias
+Import {pkg: "demo:text/api" open: true}          // splat names in unqualified
+```
+
+### `Export`
+
+Exports a definition (or a type). A bare name exports that definition into the default interface `api`; a record form gives finer control.
+
+```wavelet
+Export shout
+Export {name: shout params: {phrase: string} result: string}
+```
+
+### `DefType`
+
+Declares a WIT type for this component's interface.
+
+```wavelet
+DefType point {x: f64 y: f64}
+```

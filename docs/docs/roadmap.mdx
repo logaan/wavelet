@@ -1,0 +1,96 @@
+---
+sidebar_position: 9
+title: Roadmap & status
+description: What works today, and what is designed but not yet implemented.
+---
+
+# Roadmap & status
+
+Wavelet is at **draft 0.1**. The language design is complete on paper; the implementation is partial. This page is the single, honest inventory of where the line falls. Anything marked **Not yet implemented** is described elsewhere in these docs for completeness, always with a callout pointing here.
+
+## What works today
+
+These are implemented and exercised — most of them power the [live playgrounds](./intro.mdx#try-it), and every runnable example is verified against the interpreter by the test suite.
+
+| Area | Status |
+|---|---|
+| **Reader** — WAVE tokens, the [attachment rule](./language/syntax#the-attachment-rule), the full [desugaring table](./language/syntax#desugaring), qualified calls, `///` doc comments | ✅ |
+| **TitleCase macro sugar** — arity-driven reading, `DefMacro` arity registration top-to-bottom, explicit-payload override | ✅ |
+| **The seventeen [special forms](./language/special-forms)** | ✅ |
+| **[Macros](./language/macros)** — `DefMacro`, `Quote`/`Quasi`/`Unquote`/`Splice`, `gensym`, `expand` | ✅ |
+| **Tree-walking interpreter** with [tail-call elimination](./language/tail-calls), [pattern matching](./language/pattern-matching), closures | ✅ |
+| **[Standard library](./stdlib)** builtins + `none`/`pi` | ✅ |
+| **`The` ascription** for scalar types | ✅ |
+| **Mutable [`cell`](./stdlib#cells)** | ✅ |
+| **WIT world synthesis** ([`wavelet wit`](./cli#wit)) | ✅ |
+| **wasm backend** — scalars, lists, records, variants, tuples, closures, option/result, including across component boundaries via the canonical ABI | ✅ |
+| **[`build`](./cli#build) + [`compose`](./cli#compose)** producing components that run on wasmtime | ✅ |
+| **[`run`](./cli#run)** interpreting multiple files, resolving imports by package id | ✅ |
+
+## Not yet implemented
+
+Everything below is part of the [design](./philosophy) but **does not work yet**. Where it's mentioned in the docs, you'll find a callout linking back here.
+
+### Macro components — compile-time wasm instantiation
+
+The headline of the [supply-chain story](./supply-chain#how-it-helps-at-build-time--macros-as-sandboxed-components). Macros are designed to be deliverable as components exporting `wavelet:meta/macros`, instantiated *at compile time* in a wasm sandbox.
+
+- The **`macros: true`** import flag currently parses but is **ignored**.
+- There is no compile-time component instantiation, no manifest registration across components, and no routing of expansion through a foreign `expand`.
+- Today, macros are defined in-file with [`DefMacro`](./language/macros#defmacro) and run in the trusted compiler.
+
+### Resources beyond `cell`
+
+- The only concrete resource is the standard-library [`cell`](./stdlib#cells).
+- General resource handles from imported interfaces — constructors, methods, owned-handle drop semantics — are **not implemented**. [`drop`](./stdlib#cells) currently accepts any value and returns unit.
+
+### Boundary coercions & the `safely` wrapper
+
+- Automatic checked coercion of dynamic values to boundary WIT types (beyond the scalar checks in typed `Fn` params and [`The`](./language/special-forms#the)) is **partial**.
+- The `safely` wrapper — turning a boundary type-mismatch trap into an `err` instead — is **not implemented**.
+
+### Closures across component boundaries
+
+- First-class closures **within** a component work.
+- Automatic lifting of an **escaping** closure into a single-method resource (and the inbound duck-typing of any lone-`call` resource) is **not yet implemented**. See [Components & composition](./components#closures-across-boundaries).
+
+### `compose --fuse`
+
+- Merging all-Wavelet subgraphs into one core module — eliding boundary copies and restoring cross-component [tail calls](./language/tail-calls#the-honest-caveat) — is **not implemented**.
+
+### A compose manifest
+
+- [`compose`](./cli#compose) auto-plugs by package id. The WAVE-document manifest for settling ambiguities, substitutions, and host wiring is **not implemented**.
+
+### `wavelet add`
+
+- A command to fetch WIT from a registry, pin a version, and feed editor completion is **not implemented**.
+
+### Macro hygiene
+
+- Expansion is **unhygienic**; [`gensym`](./stdlib#meta--reflection) is the only discipline. A syntax-object / scope-set hygiene layer is sketched but **not implemented**.
+- Relatedly, the reader requires **literal names** for binding keys, so a `gensym`'d name can't be `Unquote`d into a `Let`/`Fn` binding *position* yet. See the [Macros caution](./language/macros#hygiene-and-gensym).
+
+### Pattern exhaustiveness checking
+
+- [`Match`](./language/pattern-matching) does no compile-time exhaustiveness checking. An unmatched value is a **runtime error**; the design envisions this as a lint where the scrutinee's boundary type is known.
+
+### Richer type inference
+
+- Inference of export signatures from use is **limited**; lean on typed `Fn` parameters and explicit `Export` records.
+
+### Qualified TitleCase macros
+
+- A qualified macro form like `Dsl/Element` parses, but arity lookup currently **ignores the alias**. This is tied to macro imports above.
+
+### Async
+
+- Mapping `Fn` bodies that await onto the Component Model's `stream`/`future` types (with an `Await` macro) as WASI 0.3 lands is **undesigned and unimplemented**.
+
+## A note on the convenience macros
+
+`And`, `Or`, and `TryLet` appear throughout the design as examples. They are **not shipped** — the standard library provides [builtins](./stdlib) but no pre-defined macros beyond the seventeen core forms. Define them yourself with [`DefMacro`](./language/macros), as shown in the docs, or import them once macro components land.
+
+## Self-hosting
+
+The longer-term goal is to bootstrap in stages: rewrite the reader and expander in Wavelet early (they are the best stress test of the meta interface), with the backend last.

@@ -1,0 +1,193 @@
+---
+sidebar_position: 5
+title: Standard library
+description: Every built-in function available today, grouped, with live examples.
+---
+
+# Standard library
+
+`wavelet:std/core` is implicitly imported and open in every file. Because identifiers are WIT labels, there is no `+` or `<` — the names are short and boring, a deliberate cost of "the syntax is WAVE, no exceptions".
+
+Every function below is **implemented and runnable today**. Most take their arguments as a list or tuple payload, so `add[2 3]` and `add(2, 3)` are equivalent; a few take a single value. Edit any example and press Run.
+
+:::note What "function" means here
+These are the core *builtins*. Convenience **macros** (`And`, `Or`, `TryLet`) are **not** shipped — define them yourself with [`DefMacro`](./language/macros). Two pre-bound *values* also live in core: `none` (the empty option) and `pi`.
+:::
+
+<Playground id="std-pi" autoRun />
+
+## Predicates
+
+| Function | Shape | Result |
+|---|---|---|
+| `eq` | `eq[a b]` | structural equality |
+| `lt` `le` `gt` `ge` | `lt[a b]` | ordered comparison (numbers, strings, chars) |
+| `not` | `not(bool)` | boolean negation |
+
+`eq` is structural across all data types. The ordered comparisons work on numbers, strings, and chars.
+
+<Playground id="std-predicates" />
+
+## Arithmetic
+
+| Function | Shape | Notes |
+|---|---|---|
+| `add` `sub` `mul` `div` `rem` | `add[a b]` | int+int stays int (overflow & ÷0 trap); a float operand promotes to float |
+| `neg` | `neg(x)` | negation |
+| `abs` | `abs(x)` | absolute value |
+| `min` `max` | `min[a b]` | smaller / larger of two |
+
+<Playground id="std-arith" />
+
+Integer division by zero (and overflow) is an error, not a silent `NaN`:
+
+<Playground id="std-div-zero" />
+
+A float operand promotes the result to a float:
+
+<Playground id="std-div-float" />
+
+## Sequences
+
+| Function | Shape | Result |
+|---|---|---|
+| `len` | `len(seq)` | length of a list, tuple, or string |
+| `empty` | `empty(seq)` | is it empty? |
+| `get` | `get[seq i]` | element at index `i` (list/tuple) |
+| `put` | `put[list i v]` | list with index `i` replaced by `v` |
+| `push` | `push[list v]` | list with `v` appended |
+| `concat` | `concat[a b]` | two lists joined |
+| `head` | `head(list)` | first element |
+| `tail` | `tail(list)` | all but the first |
+| `reverse` | `reverse(list)` | reversed list |
+| `range` | `range[lo hi]` | `[lo … hi-1]` |
+| `map` | `map[f list]` | apply `f` to each element |
+| `filter` | `filter[pred list]` | keep elements where `pred` is `true` |
+| `fold` | `fold[f init list]` | left fold; `f` receives `[acc elem]` |
+| `zip` | `zip[a b]` | list of `(a-elem, b-elem)` tuples |
+
+<Playground id="std-seq-basics" />
+
+`get`, `put`, `push`, `concat`:
+
+<Playground id="std-seq-mutate" />
+
+`map`, `filter`, `fold`, `zip` take functions:
+
+<Playground id="std-map" />
+
+<Playground id="std-filter" />
+
+<Playground id="std-fold" />
+
+<Playground id="std-zip" />
+
+:::note `get` is for sequences
+`get` indexes lists and tuples; it does not look up record fields (use [pattern matching](./language/pattern-matching) or `rec-key`/`rec-val` for records).
+:::
+
+## Strings
+
+| Function | Shape | Result |
+|---|---|---|
+| `str-cat` | `str-cat[a b …]` | concatenate strings/chars (takes a list) |
+| `upper` `lower` | `upper(s)` | case conversion |
+| `split` | `split[s sep]` | split on a separator → list of strings |
+| `join` | `join[parts sep]` | join a list of strings with a separator |
+| `contains` | `contains[s sub]` | does `s` contain `sub`? |
+
+<Playground id="std-strcat" />
+
+<Playground id="std-strings" />
+
+`str-cat` takes strings and chars only — convert other values first with [`to-string`](#conversion):
+
+<Playground id="std-strcat-tostring" />
+
+## Conversion
+
+| Function | Shape | Result |
+|---|---|---|
+| `to-string` | `to-string(v)` | canonical WAVE text for any value |
+| `read` | `read(s)` | parse a string to a form → `ok(form)` / `err(msg)` |
+| `to-u8` … `to-u64`, `to-s8` … `to-s64` | `to-u8(n)` | range-checked integer narrowing |
+| `to-f32` `to-f64` | `to-f64(n)` | to floating point |
+
+<Playground id="std-tostring" />
+
+`read` is the inverse of `to-string` for code — it parses WAVE/Wavelet text into a form value:
+
+<Playground id="std-read" />
+
+Numeric conversions range-check:
+
+<Playground id="std-conv" />
+
+<Playground id="std-conv-bad" />
+
+## Input / output
+
+| Function | Shape | Effect |
+|---|---|---|
+| `print` | `print(v)` | write without a trailing newline |
+| `println` | `println(v)` | write with a trailing newline |
+| `read-line` | `read-line[]` | read one line from stdin |
+| `args` | `args[]` | program arguments (list of strings) |
+| `env` | `env[]` | environment as a list of `(key, value)` tuples |
+
+<Playground id="std-io-print" autoRun />
+
+<Playground id="std-args" autoRun />
+
+:::note In the playground
+`read-line` and `args`/`env` are wired to the host process when you run a real program. In this in-browser sandbox there is no stdin and no argument vector, so `args[]` is empty and `read-line` returns an empty string. They behave normally under [`wavelet run`](./cli#run) and in a compiled component.
+:::
+
+## Meta & reflection
+
+| Function | Shape | Result |
+|---|---|---|
+| `apply` | `apply[f payload]` | call a function value with a payload |
+| `gensym` | `gensym[]` | a fresh, unique name |
+| `expand` | `expand(form)` | run one macro-expansion step on a form |
+| `form-kind` | `form-kind(v)` | the kind tag of a value-as-form |
+| `rec-key` | `rec-key(record)` | the first field's key, as a name |
+| `rec-val` | `rec-val(record)` | the first field's value |
+
+<Playground id="std-apply" />
+
+`form-kind` classifies a value the way the reader classifies a form (`"int"`, `"str"`, `"sym"`, `"call"`, `"lst"`, `"rec"`, …):
+
+<Playground id="std-form-kind" />
+
+`rec-key` / `rec-val` pull apart a single-field record — the workhorses of binding macros like `TryLet` ([see Macros](./language/macros#error-propagation-without-early-return)):
+
+<Playground id="std-rec-key-val" />
+
+## Constructors
+
+| Name | Shape | Builds |
+|---|---|---|
+| `some` | `some(v)` | `option` — present |
+| `none` | `none` | `option` — absent (a bound value, not a call) |
+| `ok` | `ok(v)` | `result` — success |
+| `err` | `err(v)` | `result` — failure |
+
+<Playground id="std-constructors" />
+
+## Cells
+
+A `cell` is the standard library's mutable reference — the one place mutation lives, since [the core has none](./language/evaluation#no-loops-no-mutation-no-early-return).
+
+| Function | Shape | Effect |
+|---|---|---|
+| `cell-new` | `cell-new(v)` | a new cell holding `v` |
+| `cell-get` | `cell-get(c)` | read the current value |
+| `cell-set` | `cell-set[c v]` | overwrite the value (returns unit) |
+| `drop` | `drop(h)` | release a resource handle |
+
+<Playground id="std-cells" />
+
+:::info Resources beyond cells
+`cell` is the only resource type that ships today. General resource handles — opening, methods, owned-handle drop semantics — are part of the component-interop story and are **not yet implemented**; `drop` currently accepts any value and returns unit. See [Components & composition](./components#resources) and the [roadmap](./roadmap).
+:::

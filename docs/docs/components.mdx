@@ -1,0 +1,161 @@
+---
+sidebar_position: 6
+title: Components & composition
+description: Files become components; imports and exports wire them together.
+---
+
+# Components & composition
+
+In Wavelet, **one file is one component**. This page covers how a `.wvl` file declares its place in the component world, and how `build` and `compose` turn files into linked, runnable WebAssembly.
+
+## Anatomy of a file
+
+A file is a flat sequence of forms: an optional [`Package`](./language/special-forms#package), an optional [`Target`](./language/special-forms#target), any number of [`Import`](./language/special-forms#import)s, then [`DefType`](./language/special-forms#deftype)s, [`Def`](./language/special-forms#def)s, and [`Export`](./language/special-forms#export)s in any order.
+
+```wavelet
+// shout.wvl
+Package "demo:shout@0.1.0"
+
+Export shout
+Def shout Fn {phrase: string}
+  str-cat[upper(phrase) "!"]
+```
+
+The compiler synthesizes a WIT world from these forms. You can see it with [`wavelet wit`](./cli#wit):
+
+```wit
+package demo:shout@0.1.0;
+
+interface api {
+  shout: func(phrase: string) -> string;
+}
+
+world shout {
+  export api;
+}
+```
+
+Exported functions get their WIT signatures from typed `Fn` parameters, from inference against use, or from an explicit record form. A file's exports land in a default interface named `api`; an `Export` record with an `iface` field groups them otherwise.
+
+## Packages
+
+[`Package`](./language/special-forms#package) declares the component's id and version:
+
+```wavelet
+Package "demo:shout@0.1.0"
+```
+
+Every file implicitly imports the standard library (`wavelet:std/core`, open).
+
+## Imports
+
+[`Import`](./language/special-forms#import) takes a package path string, or a record for control:
+
+```wavelet
+Import "wasi:cli/environment"                       // alias defaults to last segment
+Import {pkg: "wasi:keyvalue/store@0.2.0" as: kv}     // explicit alias
+Import {pkg: "demo:text/api" open: true}             // splat names in unqualified
+```
+
+Imported names are used qualified, Clojure-style: `kv/open`, `kv/get`. With `open: true`, the names are also bound unqualified.
+
+When you run a set of files together with [`wavelet run`](./cli#run), imports are resolved **by package id** against the other files on the command line — an interpreter stand-in for the composer:
+
+```console
+$ wavelet run main.wvl shout.wvl -- wasm
+WASM!
+```
+
+`main.wvl` imports `demo:shout/api`; because `shout.wvl` declares `Package "demo:shout@…"`, the runner wires them together and calls `main`'s exported `run`.
+
+## Exports
+
+[`Export`](./language/special-forms#export) publishes a definition. A bare name exports into the default `api` interface:
+
+```wavelet
+Export shout
+```
+
+A record form gives finer control over the signature and interface grouping:
+
+```wavelet
+Export {name: shout params: {phrase: string} result: string}
+Export {name: render iface: "html"}
+```
+
+## Resources
+
+Resources come along for free in the design, because WIT canonicalizes methods as functions whose first parameter is the handle: `kv/open{name: "default"}` returns a handle, and `kv/get[bucket "greeting"]` calls a method on it. Owned handles are dropped when their binding scope ends; `drop(h)` forces it.
+
+:::info Resources are partially implemented
+The standard library ships one concrete resource — the mutable [`cell`](./stdlib#cells) (`cell-new`/`cell-get`/`cell-set`). **General resource handles** from imported interfaces — constructors, methods, and owned-handle drop semantics — are **not yet implemented**, and `drop` currently accepts any value and returns unit. See the [roadmap](./roadmap).
+:::
+
+## Closures across boundaries
+
+Within a component, closures are first-class. WIT has no first-class functions, so a closure that *escapes* its component is designed to be lifted automatically into a single-method resource, with the signature appearing in the synthesized WIT:
+
+```wit
+resource fn-string-to-string {
+  call: func(arg: string) -> string;
+}
+each: func(f: borrow<fn-string-to-string>, items: list<string>) -> list<string>;
+```
+
+:::info Status
+First-class closures **inside** a component work today (and in the playground). Automatic lifting of an **escaping** closure into a resource across a component boundary, and the inbound duck-typing of any lone-`call` resource, are part of the interop design and are **not yet fully implemented**. See the [roadmap](./roadmap).
+:::
+
+## Composition
+
+[`wavelet build`](./cli#build) turns files into components; [`wavelet compose`](./cli#compose) links them. By default the composer **auto-plugs**: every unresolved import is matched by package id (and version compatibility) against the exports of the components on the command line, in the spirit of `wac plug`.
+
+```console
+$ wavelet build shout.wvl main.wvl
+out/demo-shout.wasm
+out/demo-main.wasm
+$ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
+app.wasm
+$ wasmtime app.wasm wasm
+WASM!
+```
+
+Boundary calls copy data (the canonical ABI). For graphs that are entirely Wavelet, a planned `wavelet compose --fuse` would merge the core modules into one, eliding copies and restoring cross-component tail calls — with identical observable semantics.
+
+:::info Status
+`build`, `compose` (auto-plug), and `wit` synthesis are implemented. A WAVE-document compose **manifest** for settling ambiguities/substitutions, and the **`--fuse`** optimisation, are **not yet implemented**. See the [roadmap](./roadmap).
+:::
+
+## A three-language program
+
+The point of the model: `main` can't tell which of its imports is foreign.
+
+```wit
+// the Rust side exports this WIT
+package acme:words@1.0.0;
+interface picker { pick: func(seed: u64) -> result<string, string>; }
+```
+
+```wavelet
+// main.wvl
+Package "demo:main@0.1.0"
+Target "wasi:cli/command"
+
+Import {pkg: "acme:words/picker@1.0.0" as: words}
+Import {pkg: "demo:caps/api"           as: caps}
+
+Export run
+Def run Fn {}
+  Match words/pick{seed: 42} [
+    (ok(w)  println(caps/shout{phrase: w}))
+    (err(e) println(str-cat["no word today: " e]))
+  ]
+```
+
+```console
+$ cargo component build --release          # acme_words.wasm
+$ wavelet build caps.wvl main.wvl
+$ wavelet compose out/*.wasm target/release/acme_words.wasm -o app.wasm
+$ wasmtime app.wasm
+BANANA!
+```

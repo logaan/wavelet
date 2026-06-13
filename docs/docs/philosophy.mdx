@@ -1,0 +1,63 @@
+---
+sidebar_position: 2
+title: Philosophy
+description: The three commitments, no FFI, and the costs the design accepts.
+---
+
+# Philosophy
+
+Wavelet is an argument that a language for the Component Model can be *smaller* than the languages that target it, because the Component Model already supplies the hard parts: a type system at the boundary, a value encoding, and a composition model. Wavelet's job is to be a thin, homoiconic skin over those primitives.
+
+## The three commitments
+
+### One file is one component
+
+The unit you edit is the unit you compile, link, version, and deploy. A Wavelet program is a *composition of components*, and a Wavelet component is indistinguishable from one written in any other language — because the only thing that crosses the boundary is WIT.
+
+This collapses a distinction most languages maintain: "module" (an organisational unit inside the language) versus "package" (a distribution unit outside it). In Wavelet they are the same thing.
+
+### The syntax is WAVE
+
+[WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) is the Component Model's human-readable encoding for values. Wavelet source is WAVE text plus a thin reader sugar, and every sugared form desugars to a plain WAVE value.
+
+The language is homoiconic the way Lisp is homoiconic over s-expressions — **except Wavelet's "s-expressions" are exactly the values that cross component boundaries.** Code is data, and the data is the Component Model's data. A macro is a function from values to values; those values are WIT values; so a macro can be written in any language that speaks WIT.
+
+### The core is minimal
+
+The whole core language is [seventeen special forms](./language/special-forms), closures, guaranteed [tail-call elimination](./language/tail-calls), and a [macro system](./language/macros). Everything else — the standard library, and the convenience macros — is *delivered as components*.
+
+## There is no FFI
+
+This is the keystone. Most languages that target WebAssembly maintain a representation gap: the language has its own strings, its own lists, its own records, and a marshalling layer converts them to and from canonical-ABI values at the boundary. That layer is where bugs, overhead, and cognitive load live.
+
+Wavelet has **no value types beyond WIT's.** Its booleans, strings, lists, records, variants, options, results, and flags *are* WIT types. So:
+
+- Calling an imported function is syntactically identical to calling a local one.
+- What you pass is what arrives — there is no marshalling step to reason about.
+- A "library" is anything componentized, from any language.
+
+<Playground id="noffi-shout" />
+
+## Dynamically typed in the core, statically typed at the edges
+
+Inside a component, values carry their shape at runtime: lists may be heterogeneous, records are structural, and there is no type to declare. At every component boundary, though, there is a WIT signature. The compiler checks what it can statically and inserts checked coercions for the rest.
+
+Annotations claw back compile-time checking where it matters: typed `Fn` parameters and the [`The`](./language/special-forms#the) ascription form push checking earlier.
+
+<Playground id="typed-byte-add-ok" />
+
+<Playground id="typed-byte-add-bad" />
+
+## The design ledger
+
+Every commitment has a cost. The design accepts them openly:
+
+| Decision | Cost accepted |
+|---|---|
+| WIT identifiers only | No operator names — arithmetic is `add`, not `+`; comparison is `lt`, not `<`. |
+| Fixed macro arity | Paren-free macro syntax, but macros must be defined before use, and variadic macros take a single list. |
+| Code as an arena type | The wire encoding of "a form" is a flat node table, uglier than a recursive type — but it is what WIT can express today, and Wavelet hides it everywhere except the wire. |
+| Dynamic core | Some errors surface at the boundary rather than at the keystroke; annotations recover this where it matters. |
+| Per-file components | Boundary calls copy data; a planned `--fuse` step recovers this for all-Wavelet subgraphs (see the [roadmap](./roadmap)). |
+
+These trade-offs are deliberate. Wavelet would rather be a small, honest layer over the Component Model than a large language that hides it.

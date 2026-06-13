@@ -1,0 +1,108 @@
+.playground {
+  margin: 1rem 0 1.5rem;
+  border: 1px solid var(--ifm-color-emphasis-300);
+  border-radius: var(--ifm-code-border-radius);
+  overflow: hidden;
+  background: var(--ifm-background-surface-color);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.6rem;
+  background: var(--ifm-color-emphasis-100);
+  border-bottom: 1px solid var(--ifm-color-emphasis-200);
+}
+
+.label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ifm-color-emphasis-600);
+}
+
+.runButton {
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.2rem 0.7rem;
+  border: none;
+  border-radius: var(--ifm-button-border-radius);
+  background: var(--ifm-color-primary);
+  color: #fff;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.runButton:hover:not(:disabled) {
+  background: var(--ifm-color-primary-dark);
+}
+
+.runButton:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.editor {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border: none;
+  outline: none;
+  resize: vertical;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  tab-size: 2;
+  color: var(--ifm-font-color-base);
+  background: transparent;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.output {
+  border-top: 1px solid var(--ifm-color-emphasis-200);
+  padding: 0.6rem 0.9rem;
+  background: var(--ifm-color-emphasis-100);
+}
+
+.output pre {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.stdout {
+  color: var(--ifm-font-color-base);
+}
+
+.stdout + .value {
+  margin-top: 0.35rem;
+}
+
+.value {
+  color: var(--ifm-color-emphasis-800);
+  font-weight: 600;
+}
+
+.arrow {
+  color: var(--ifm-color-primary);
+  font-weight: 700;
+}
+
+.error {
+  color: var(--ifm-color-danger);
+  font-weight: 500;
+}
+
+.muted {
+  color: var(--ifm-color-emphasis-500);
+  font-style: italic;
+}

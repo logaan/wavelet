@@ -1,0 +1,35 @@
+---
+sidebar_position: 7
+title: Tail calls
+description: Guaranteed tail-call elimination — iteration is recursion.
+---
+
+# Tail calls
+
+Wavelet **guarantees** tail-call elimination. There is no loop construct: iteration *is* tail recursion, and the guarantee is what makes that practical.
+
+## Tail positions
+
+A call in tail position reuses the current stack frame instead of growing the stack. The tail positions are:
+
+- the body of a [`Fn`](./special-forms#fn);
+- both branches of an [`If`](./special-forms#if);
+- every clause result of a [`Match`](./special-forms#match);
+- the last expression of a [`Do`](./special-forms#do);
+- the body of a [`Let`](./special-forms#let).
+
+So a self-recursive function whose recursive call sits in tail position runs in constant stack, for any input:
+
+<Playground id="tail-count-down" />
+
+An accumulator-passing sum, the canonical "loop":
+
+<Playground id="tail-sum-to" />
+
+In the compiled backend these become the wasm `return_call` / `return_call_indirect` instructions from the (now widely shipped) tail-call proposal; the in-browser interpreter achieves the same by looping rather than recursing in its evaluator, so the example above doesn't overflow.
+
+## The honest caveat
+
+The guarantee holds **within a component**. A call to an *imported* function passes through canonical-ABI adapters that the composer generates, and those frames are outside Wavelet's control — so a recursion cycle routed through a component boundary consumes stack.
+
+The compiler warns when it can see an unbounded recursion routed through an import, and the planned [`compose --fuse`](../roadmap) optimisation dissolves the boundary for all-Wavelet subgraphs, restoring cross-component tail calls.

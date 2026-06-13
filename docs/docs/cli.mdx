@@ -1,0 +1,115 @@
+---
+sidebar_position: 7
+title: CLI reference
+description: Every wavelet subcommand — read, expand, repl, wit, run, build, compose.
+---
+
+# CLI reference
+
+The `wavelet` binary is built with `cargo build` (see [Getting started](./getting-started#building-the-compiler)). It exposes seven subcommands, organised around the compiler pipeline **read → expand → analyze → emit → componentize**.
+
+```text
+wavelet read <file.wvl>                                      # parse → canonical WAVE tree
+wavelet expand <file.wvl>                                    # run macros to fixpoint
+wavelet wit <file.wvl>                                       # synthesized WIT world
+wavelet repl                                                 # interactive read-eval-print loop
+wavelet run <file.wvl>... [-- <args>...]                     # interpret directly (no codegen)
+wavelet build <file.wvl>... [-o <dir>]                       # compile each file to a .wasm component
+wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
+```
+
+---
+
+## `read`
+
+Parse a file and print the **canonical WAVE form tree** — every piece of [reader sugar](./language/syntax#desugaring) resolved.
+
+```console
+$ wavelet read shout.wvl
+```
+
+Use this to see exactly how the attachment rule, qualified calls, and TitleCase macro sugar desugar. It is the ground truth for "what does this syntax mean as data".
+
+## `expand`
+
+Run macros to fixpoint and print the resulting forms. `DefMacro` definitions are evaluated (registering the macro) and dropped; every macro use is rewritten to its expansion.
+
+```console
+$ wavelet expand program.wvl
+```
+
+This is `read` plus the [macro expander](./language/macros) — what the analyzer and emitter actually see.
+
+## `wit`
+
+Print the **WIT world** synthesized from a file's typed `Fn` params, `Export` records, and `DefType`s. Doc comments (`///`) are surfaced as WIT docs.
+
+```console
+$ wavelet wit shout.wvl
+package demo:shout@0.1.0;
+
+interface api {
+  shout: func(phrase: string) -> string;
+}
+
+world shout {
+  export api;
+}
+```
+
+## `repl`
+
+An interactive read-eval-print loop. Enter forms; multi-line input continues until a form is complete; `Ctrl-D` exits. Because values print as WAVE and code *is* WAVE, the REPL's output is always valid input.
+
+```console
+$ wavelet repl
+wavelet repl — enter forms, Ctrl-D to exit
+> add[2 3]
+5
+> map(Fn {x} mul[x x] [1 2 3])
+[1, 4, 9]
+```
+
+:::tip This is what the playground runs
+The [in-browser playgrounds](./intro.mdx#try-it) throughout these docs are this same evaluator, compiled to WebAssembly. Anything that works in a playground works in `repl` and `run`.
+:::
+
+## `run`
+
+Interpret a set of files together — **no code generation**. Resolves `Import`s by package id, honours `Export`/`as:`/`open:`, and calls the entry file's exported `run`. The fastest way to try a program.
+
+```console
+$ wavelet run main.wvl shout.wvl -- wasm
+WASM!
+```
+
+Everything after `--` is passed to the program as its arguments (available via [`args`](./stdlib#input--output)). The first file listed is the entry component.
+
+## `build`
+
+Compile **each** file to a real `.wasm` component: core wasm (linear-memory value boxes, `return_call` tail calls) wrapped with canonical-ABI lift/lower and componentized via `wasm-tools`. Output goes to `out/` by default, or `-o <dir>`.
+
+```console
+$ wavelet build shout.wvl main.wvl
+out/demo-shout.wasm
+out/demo-main.wasm
+
+$ wavelet build *.wvl -o dist
+```
+
+## `compose`
+
+Link components by **auto-plugging**: each unresolved import is matched by package id (and version compatibility) against the exports of the other components on the command line, in the spirit of `wac plug`. The first argument is the entry component. Output is `app.wasm` by default, or `-o <file>`.
+
+```console
+$ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
+app.wasm
+$ wasmtime app.wasm wasm
+WASM!
+```
+
+Because this drives standard `wasm-tools` / WAC machinery, the result participates in any component ecosystem workflow.
+
+:::info Not yet implemented
+A few CLI features described in the language design are still on the [roadmap](./roadmap): a `wavelet add <pkg>` command (fetch WIT from a registry and pin a version), a WAVE compose **manifest** for resolving ambiguities and host substitutions, and `compose --fuse` for merging all-Wavelet subgraphs.
+:::

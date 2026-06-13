@@ -345,11 +345,7 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
                 Value::Str(s) => s.clone(),
                 other => print_value(other),
             };
-            if name == "println" {
-                println!("{text}");
-            } else {
-                print!("{text}");
-            }
+            crate::emit_output(&text, name == "println");
             Ok(unit())
         }
         "read-line" => {

@@ -1,0 +1,74 @@
+---
+sidebar_position: 2
+title: Values & types
+description: The Component Model is the data model — Wavelet has no value types beyond WIT's.
+---
+
+# Values & types
+
+Wavelet has **no value types beyond WIT's**. The full inventory, with WAVE literals:
+
+| WIT type | Wavelet/WAVE literal | Notes |
+|---|---|---|
+| `bool` | `true`, `false` | |
+| `u8…u64`, `s8…s64` | `123`, `-9` | integer literals are `s64` by default; coerced with a range check where a narrower type is expected |
+| `f32`, `f64` | `3.14`, `6.022e+23`, `nan`, `-inf` | float literals are `f64` by default |
+| `char` | `'x'`, `'☃'`, `'\u{0}'` | Unicode scalar values |
+| `string` | `"abc\t123"` | |
+| `tuple<…>` | `("abc", 123)` | parens, two or more elements |
+| `list<t>` | `[1 2 3]` | |
+| `record` | `{field-a: 1 field-b: "two"}` | |
+| `variant` | `days(30)`, `forever` | case label, parenthesized payload if any |
+| `enum` | `south`, `west` | cases are bound as ordinary names on import |
+| `option<t>` | `some(1)`, `none`, or flat `1` | WAVE's flat shorthand applies at typed boundaries |
+| `result<t,e>` | `ok(1)`, `err("oops")`, or flat `1` | likewise |
+| `flags` | `{read write}`, `{}` | |
+| `resource` | handles | created/consumed via imported constructors and methods |
+
+## Atoms
+
+Booleans, numbers, chars, strings, and flags evaluate to themselves.
+
+<Playground id="values-atoms" />
+
+Integer literals are `s64` by default and float literals are `f64`. Conversions to narrower types are explicit and range-checked — see [`to-u8` … `to-f64`](../stdlib#conversion).
+
+<Playground id="values-to-u8-ok" />
+
+<Playground id="values-to-u8-bad" />
+
+## Compound values
+
+Tuples use parens with two or more elements; lists use brackets; records use braces with `key: value` pairs.
+
+<Playground id="values-record" />
+
+Lists may be **heterogeneous** inside a component — the dynamic core does not constrain them. Boundary types are where uniformity is enforced.
+
+<Playground id="values-heterogeneous" />
+
+## Variants, options, results
+
+Constructors `some`, `ok`, and `err` are ordinary bindings in the standard library; `none` is a bound name. The flat shorthands (`1` for `some(1)`, etc.) engage wherever a WIT `option`/`result` type is expected, exactly as WAVE specifies.
+
+<Playground id="values-options-results" />
+
+A call form with an unbound head is, as *data*, just a variant case. Under `Quote` you can see this directly:
+
+<Playground id="values-quote-days" />
+
+## Equality
+
+`eq` is **structural** for all data types (and identity-based for resource handles).
+
+<Playground id="values-eq" />
+
+## The unit value
+
+A form that produces "nothing useful" — a `Def`, a `print`, an empty `Do` — evaluates to the empty record `{}`, Wavelet's unit value.
+
+<Playground id="values-unit-def" />
+
+:::info Dynamic in the core, static at the edges
+Inside a component, values carry their shape at runtime. At every component boundary there is a WIT signature, and the compiler checks what it can statically and inserts checked coercions for the rest. See [Philosophy](../philosophy#dynamically-typed-in-the-core-statically-typed-at-the-edges).
+:::

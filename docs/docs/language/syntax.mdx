@@ -1,0 +1,109 @@
+---
+sidebar_position: 1
+title: Syntax & reading
+description: WAVE tokens, the attachment rule, desugaring, and the macro sugar.
+---
+
+# Syntax & reading
+
+Wavelet's tokens *are* WAVE's tokens. The reader is where all sugar dies: every surface form desugars to a canonical WAVE value before evaluation.
+
+## Lexical ground rules
+
+- **Identifiers** are kebab-case labels following WIT identifier syntax: hyphen-separated words, each word either all-lowercase or all-UPPERCASE (`delete-file`, `parse-JSON`).
+- The WAVE keywords `true false inf nan some none ok err` are **reserved**; an identifier that collides with one is written with WIT's `%` escape (`%ok`).
+- **Comments** are `//` to end of line. Doc comments `///` attach to the following form as metadata (surfaced in `wavelet wit` output).
+- **Commas are whitespace.** As in Clojure, `[1, 2, 3]` and `[1 2 3]` read identically. Newlines are whitespace too.
+
+Because commas are optional, Wavelet source is a *superset* of WAVE text: any valid WAVE value is a valid Wavelet form. The canonical printer always emits strict WAVE (with commas), so printed code can be consumed by any WAVE tooling.
+
+<Playground id="syntax-commas" />
+
+## The attachment rule
+
+Wavelet has exactly **one** whitespace-sensitive rule. A `(`, `[`, or `{` that *immediately* follows an identifier — with no intervening whitespace — supplies that identifier's payload. This is a call form. With whitespace in between, the bracketed expression is a separate, free-standing value.
+
+```wavelet
+delete-file{path: "foo.md" force: true}   // a call: payload is a record
+delete-file {path: "foo.md" force: true}  // two forms: a variable, then a record
+```
+
+## Desugaring
+
+Every surface form desugars to a canonical WAVE value:
+
+| You write | Canonical WAVE form | Meaning |
+|---|---|---|
+| `true` `42` `-1.5` `'x'` `"hi"` | (unchanged) | atom, self-evaluating |
+| `foo` | `foo` | variable reference — a bare, payload-less case |
+| `f(x)` | `f(x)` | call with a single payload value |
+| `f(x y)` | `f((x, y))` | call with a tuple payload — positional arguments |
+| `f[x y]` | `f([x, y])` | call with a list payload — positional arguments |
+| `f{a: 1 b: 2}` | `f({a: 1, b: 2})` | call with a record payload — named arguments |
+| `f[]` or `f()` | `f([])` | call with zero arguments |
+| `kv/get{...}` | qualified call | name `get` from the import aliased `kv` |
+| `(a b)` | `(a, b)` | tuple (two or more elements) |
+| `(a)` | `a` | grouping — parentheses around one form are transparent |
+| `[a b]` | `[a, b]` | list |
+| `{k: v}` | `{k: v}` | record |
+| `{read write}` | `{read, write}` | flags |
+| `If c t e` | `if-MACRO((c, t, e))` | macro use (see below) |
+
+Function calls are **variant cases**. `print("hi")` is, as data, the WAVE variant case `print` carrying a string; `delete-file{...}` is the case `delete-file` carrying a record. A bare identifier is a payload-less case, which Wavelet reads as a variable reference.
+
+You can see the desugaring directly with `wavelet read`, which prints the canonical WAVE tree:
+
+```console
+$ echo 'f(x y)' | wavelet read /dev/stdin
+f((x, y))
+```
+
+Inside the playground, `Quote` shows you the same data shape:
+
+<Playground id="syntax-quote-call" />
+
+## The macro sugar
+
+A **TitleCase** identifier — mixed-case words, each starting with a capital (`If`, `DefMacro`, `TryLet`) — is reader sugar for a macro call. This can't collide with ordinary identifiers: WIT words are all-lower or all-UPPER, so TitleCase tokens are syntactically free. The token kebab-izes and gains a `-MACRO` suffix: `If` ↦ `if-MACRO`, `DefMacro` ↦ `def-macro-MACRO`.
+
+A TitleCase head does **not** require parentheses. The reader looks up the macro's declared **arity** and consumes exactly that many following forms:
+
+```wavelet
+If eq[foo bar] print("match") print("nope")
+```
+
+desugars to
+
+```wavelet
+if-MACRO((eq([foo, bar]), print("match"), print("nope")))
+```
+
+Three consequences:
+
+1. **Define before use.** A macro must be in scope before it's read — a core form, defined earlier in the file, or imported. The reader processes a file top to bottom and always knows every visible macro's arity.
+2. **Explicit payload overrides arity reading.** `Unquote(x)` and `If(c t e)` attach their payload directly. The fully explicit `if-MACRO((c, t, e))` is always available too, and is what macros emit.
+3. **Nesting needs no delimiters** when the last argument is itself a macro: `Def run Fn {} If c a b` reads exactly as intended, since each TitleCase head consumes its own arity recursively.
+
+Variadic macros take a single list argument — arity stays fixed, the list flexes (`Do [a b c]`).
+
+<Playground id="syntax-if-arity" />
+
+## Grammar
+
+```text
+file      := form*
+form      := atom | name | qname | call | tuple | group
+           | list | record | flags | macroform
+atom      := bool | int | float | char | string
+name      := kebab-label                      // WIT identifier, % escape allowed
+qname     := name "/" name
+call      := (name | qname | title) payload   // payload ATTACHED: no whitespace
+payload   := "(" form* ")" | "[" form* "]" | "{" recbody | flagbody "}"
+tuple     := "(" form form+ ")"
+group     := "(" form ")"                     // transparent
+list      := "[" form* "]"
+record    := "{" (name ":" form)* "}"
+flags     := "{" name* "}"
+macroform := title form{arity(title)}         // title := TitleCase token
+ws        := space | tab | newline | ","      // comments: "//" to eol
+```
