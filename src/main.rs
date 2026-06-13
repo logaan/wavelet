@@ -3,6 +3,10 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.as_slice() {
+        [cmd] if cmd == "--version" || cmd == "-V" || cmd == "version" => {
+            println!("wavelet {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
         [cmd, path] if cmd == "read" => read_cmd(path),
         [cmd, path] if cmd == "expand" => expand_cmd(path),
         [cmd] if cmd == "repl" => match wavelet::repl::repl() {
@@ -24,6 +28,7 @@ fn main() -> ExitCode {
             eprintln!("       wavelet run <file.wvl>... [-- <args>...]");
             eprintln!("       wavelet build <file.wvl>... [-o <dir>]");
             eprintln!("       wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]");
+            eprintln!("       wavelet --version");
             ExitCode::from(2)
         }
     }

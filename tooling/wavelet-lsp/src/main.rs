@@ -44,6 +44,16 @@ impl Documents {
 }
 
 fn main() -> LspResult<()> {
+    // Answer `--version` without opening the LSP stdio connection, so it works
+    // from a plain shell (and lets package managers smoke-test the binary).
+    if std::env::args()
+        .nth(1)
+        .is_some_and(|a| a == "--version" || a == "-V" || a == "version")
+    {
+        println!("wavelet-lsp {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let (connection, io_threads) = Connection::stdio();
 
     let capabilities = serde_json::to_value(ServerCapabilities {

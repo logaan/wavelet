@@ -92,6 +92,7 @@ wavelet repl                                         # interactive read-eval-pri
 wavelet run <file.wvl>... [-- <args>...]             # interpret directly (no codegen)
 wavelet build <file.wvl>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
 wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
+wavelet --version                                    # print the wavelet version
 ```
 
 `run` interprets a set of files together — resolving `Import`s by package id,
