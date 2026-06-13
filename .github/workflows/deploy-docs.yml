@@ -4,7 +4,10 @@ name: Deploy docs
 # (https://logaan.github.io/wavelet/). The wasm-compiled interpreter that powers
 # the live playground is committed under docs/src/wasm, so this job needs only
 # Node — no Rust toolchain. Regenerate that artifact and docs/examples.json
-# locally (see docs/scripts/gen-examples.mjs) when the language changes.
+# locally (see scripts/regen-examples.sh) when the language changes.
+#
+# The build itself lives in scripts/build-docs.sh so it can be run identically
+# from a local checkout.
 
 on:
   push:
@@ -24,9 +27,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -34,8 +34,7 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: docs/package-lock.json
-      - run: npm ci
-      - run: npm run build
+      - run: scripts/build-docs.sh
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/build

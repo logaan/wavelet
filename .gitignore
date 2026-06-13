@@ -1,3 +1,7 @@
 /target
 /out
 /.claude
+
+# Release build outputs (scripts/build-lsp.sh, scripts/package-tooling.sh)
+/dist
+/stage
