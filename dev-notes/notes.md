@@ -1,5 +1,17 @@
 # Notes
 
+1. [ ] Add a readme to the scripts directory
+1. [ ] Edit down the readme
+1. [ ] Prune comments through the code and config files
+1. [ ] Test the vscode tooling
+1. [ ] Prune back the implementation
+1. [ ] Add support for deploying to:
+    1. [ ] A stand alone CLI tool. By bundling a runtime.
+    1. [ ] JS in the browser
+    1. [ ] JS with node / bun
+    1. [ ] The JVM?
+    1. [ ] Docker?
+    1. [ ] Kubernetes?
 1. [ ] Have a wasm version of the compiler and/or interpreter published as a package to some kind of wasm package repository?
 1. [x] Vim tooling re-written for neovim/lazyvim
     1. [x] Only give instructions for neovim installed using lazyvim
@@ -9,7 +21,7 @@
        submodule.
     1. [x] Dropped `wavelet-vim.zip` from the release workflow; the plugin runs
        `wavelet-lsp` from PATH (`cargo install`, or a standalone release binary).
-1. [ ] Should be installable via homebrew.
+1. [x] Should be installable via homebrew.
 1. [x] Where can I run the command line tools?
 1. [x] I should MIT license this.
 1. [x] I need a `readme.md`.
