@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: scripts/build-lsp.sh ${{ matrix.target }}
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: wavelet-lsp-${{ matrix.target }}
           path: dist/*
@@ -61,7 +61,7 @@ jobs:
           node-version: 22
 
       - name: Download LSP binaries
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: wavelet-lsp-*
           path: lsp-artifacts
