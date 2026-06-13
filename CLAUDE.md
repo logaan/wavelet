@@ -46,6 +46,27 @@ then `node docs/scripts/gen-examples.mjs`, then `cargo test`. The wasm artifact
 under `docs/src/wasm` is committed (CI builds the docs with Node only, no Rust
 toolchain), so it must be regenerated locally when the language changes.
 
+## CHANGELOG.md drives the GitHub release notes — keep it current
+
+`CHANGELOG.md` (Keep a Changelog format) is the source of truth for release
+notes. The `Release` workflow (`.github/workflows/release.yml`) runs
+`scripts/changelog-section.sh <tag>` on a `v*` tag and uses the matching
+version's section as the GitHub release body; if the tag has no section the
+release **fails** rather than publishing empty notes.
+
+This means:
+
+- **Record every user-visible change under `## [Unreleased]` as you make it** —
+  new syntax/semantics, CLI flags, build/install changes, editor-tooling
+  changes. Group entries under `Added` / `Changed` / `Fixed` / `Removed`. If a
+  change isn't user-visible (internal refactor, test-only), it doesn't need an
+  entry.
+- **Cutting a release** = rename `## [Unreleased]` to `## [X.Y.Z] - <date>`, add
+  a fresh empty `## [Unreleased]`, bump the version in `Cargo.toml` *and*
+  `tooling/wavelet-lsp/Cargo.toml` to match, update the compare-link footnotes
+  at the bottom of the file, then tag `vX.Y.Z`. Confirm
+  `scripts/changelog-section.sh vX.Y.Z` prints the right section before tagging.
+
 ## A language change is not done until the downstream surfaces are checked
 
 Several artifacts outside `src/` track the language and can silently drift from
