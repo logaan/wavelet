@@ -49,7 +49,7 @@ Def run Fn {}
      println(sh/shout{phrase: head(args[])})
 ```
 
-```console
+```sh
 $ wavelet build examples/shout.wvl examples/main.wvl
 $ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
 $ wasmtime app.wasm wasm
@@ -67,7 +67,7 @@ implementation of `demo:shout/api` would require changing nothing in `main.wvl`.
 The `wavelet` CLI and the `wavelet-lsp` language server are available from a
 personal [tap](https://github.com/logaan/homebrew-tap):
 
-```console
+```sh
 brew install logaan/tap/wavelet
 ```
 
@@ -85,7 +85,7 @@ to compile by hand.
 
 Wavelet is written in Rust (2024 edition).
 
-```console
+```sh
 cargo build           # debug binary at ./target/debug/wavelet
 cargo build --release # optimized binary at ./target/release/wavelet
 cargo test            # run the test suite
@@ -97,7 +97,7 @@ cargo test            # run the test suite
 [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) (LLVM
 source-based coverage). It bootstraps the tool on first run.
 
-```console
+```sh
 scripts/coverage.sh          # per-file summary table in the terminal
 scripts/coverage.sh --html   # write + open an HTML report (target/coverage/html)
 scripts/coverage.sh --lcov   # write target/coverage/lcov.info (CI / editor gutters)
@@ -120,7 +120,7 @@ wavelet --version                                    # print the wavelet version
 honoring `Export`/`as:`/`open:`, and calling the exported `run`. It is the
 fastest way to try a program:
 
-```console
+```sh
 $ wavelet run examples/main.wvl examples/shout.wvl -- wasm
 WASM!
 ```
@@ -160,7 +160,7 @@ return {
 Open any `.wvl` file and it is highlighted. For language features, put the
 `wavelet-lsp` server on your `PATH` — the plugin starts it automatically:
 
-```console
+```sh
 cargo install --path tooling/wavelet-lsp     # installs into ~/.cargo/bin
 ```
 
@@ -173,7 +173,7 @@ To point at a specific binary instead, set `vim.g.wavelet_lsp_path`. See
 Download `wavelet-vscode.zip`, unzip it into your extensions folder, and reload
 the window:
 
-```console
+```sh
 $ curl -L -o wavelet-vscode.zip \
     https://github.com/logaan/wavelet/releases/latest/download/wavelet-vscode.zip
 $ unzip wavelet-vscode.zip -d ~/.vscode/extensions/
