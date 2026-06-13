@@ -19,6 +19,8 @@ wasm.
 1. [ ] It owuld be nice to be able to kcompile to wat directory with fully
 maintained $ style names.
 1. [ ] Run doesn't really say home to ship a featuer.
+1. [ ] I'd like the file extension to be .wlt rather than wvl
+   - Assuming that doesn't conflict with anything else.
 
 ## `wavelet` app
 
