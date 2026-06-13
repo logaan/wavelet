@@ -106,14 +106,15 @@ automatically by the VS Code extension and the Neovim plugin.
 
 ### Neovim (LazyVim / lazy.nvim)
 
-The repo doubles as a Neovim plugin: its top-level `ftdetect/`, `syntax/`, and
-`plugin/` directories are a standard runtime-path package. Add it to LazyVim by
-dropping a spec in `~/.config/nvim/lua/plugins/wavelet.lua`:
+The Neovim plugin lives in its own repo,
+[`logaan/wavelet.nvim`](https://github.com/logaan/wavelet.nvim) (vendored here as
+the [`tooling/neovim`](tooling/neovim) submodule). Add it to LazyVim by dropping a
+spec in `~/.config/nvim/lua/plugins/wavelet.lua`:
 
 ```lua
 return {
   {
-    "logaan/wavelet",
+    "logaan/wavelet.nvim",
     ft = "wavelet",
     init = function()
       vim.filetype.add({ extension = { wvl = "wavelet" } })
@@ -189,10 +190,7 @@ instantiation), resource handles beyond `cell`, boundary coercions / the
 ```
 src/        compiler and CLI
 examples/   shout.wvl + main.wvl (the §1 demo)
-ftdetect/   } Neovim plugin: .wvl filetype, highlighting, and LSP autostart
-syntax/     }   (the repo root is itself a runtime-path package)
-plugin/     }
-tooling/    editor support (VS Code, wavelet-lsp language server)
+tooling/    editor support: VS Code, wavelet-lsp, and the neovim/ submodule
 out/        build artifacts (.wasm / .wat / .wit)
 design.md   the language design, draft 0.1
 todo.md     implementation tracking

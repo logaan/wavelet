@@ -62,14 +62,31 @@ checked and updated where affected:
   single source of truth, the lexer in `src/lexer.rs`:
   - `docs/src/prism/wavelet.js` — Prism grammar for the docs (static
       ```` ```wavelet ```` code blocks and the live `<Playground>` editor).
-  - `syntax/wavelet.vim` (+ `ftdetect/wavelet.vim`) at the repo root — Neovim
-      syntax + `.wvl` filetype detection (the repo root is itself a Neovim
-      runtime-path package; `plugin/wavelet.lua` starts `wavelet-lsp`).
+  - `tooling/neovim/syntax/wavelet.vim` — Neovim syntax (the `tooling/neovim`
+      submodule is the `logaan/wavelet.nvim` plugin repo; it also has
+      `ftdetect/wavelet.vim` for `.wvl` detection and `plugin/wavelet.lua` to
+      start `wavelet-lsp`). Because it's a submodule, changing this grammar means
+      committing/pushing in `wavelet.nvim` and then bumping the submodule pointer
+      here.
   - `tooling/vscode/` — VS Code TextMate grammar + language configuration.
 
   A change to the lexer's token classes (new literal forms, comment syntax, macro
   heads, the attachment rule, qualified references, ...) must be mirrored into all
   three, or highlighting drifts from the language. See `tooling/README.md`.
+
+  **Keeping `wavelet.nvim` current is part of finishing a language change**, not a
+  follow-up. The `tooling/neovim` submodule is a *separate* git repo
+  (`logaan/wavelet.nvim`), so it does not move with an ordinary commit here. When
+  a change touches anything the plugin surfaces — the syntax grammar, `.wvl`
+  detection, the LSP wiring, or the token-class list in its README — you must:
+  1. ensure the submodule is checked out (`./scripts/init-submodules.sh`; a fresh
+     clone leaves it empty);
+  2. make the edit inside `tooling/neovim/`, then commit **and push** it in the
+     `wavelet.nvim` repo (its `origin` is `github.com/logaan/wavelet.nvim`);
+  3. stage the moved submodule pointer here (`git add tooling/neovim`) so this
+     repo records the new `wavelet.nvim` commit.
+  Skipping the push or the pointer bump leaves the published plugin stale even
+  though `cargo test` here still passes.
 
 - **The LSP server** — the editor language server (lives under
   `tooling/`). Its diagnostics, completion, and hover surface the

@@ -34,12 +34,12 @@ Add `./target/release` to your `PATH`, or invoke the binary directly.
 
 ### Neovim (LazyVim / lazy.nvim)
 
-The Wavelet repo doubles as a Neovim runtime-path package (top-level `ftdetect/`, `syntax/`, `plugin/`). Add it to LazyVim with a spec in `~/.config/nvim/lua/plugins/wavelet.lua`:
+The Neovim plugin lives in its own repo, [`logaan/wavelet.nvim`](https://github.com/logaan/wavelet.nvim). Add it to LazyVim with a spec in `~/.config/nvim/lua/plugins/wavelet.lua`:
 
 ```lua
 return {
   {
-    "logaan/wavelet",
+    "logaan/wavelet.nvim",
     ft = "wavelet",
     init = function()
       vim.filetype.add({ extension = { wvl = "wavelet" } })
