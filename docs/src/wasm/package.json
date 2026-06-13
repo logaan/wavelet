@@ -2,6 +2,7 @@
   "name": "wavelet",
   "type": "module",
   "version": "0.1.0",
+  "license": "MIT",
   "files": [
     "wavelet_bg.wasm",
     "wavelet.js",

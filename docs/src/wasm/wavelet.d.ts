@@ -7,10 +7,6 @@
  * ```json
  * {"ok": true, "value": "...", "output": "...", "error": ""}
  * ```
- *
- * `value` is the printed value of the final form (empty when it is unit, e.g.
- * after a `Def`); `output` is everything `print`/`println` wrote; on failure
- * `ok` is false and `error` carries the message.
  */
 export function _eval(src: string): string;
 

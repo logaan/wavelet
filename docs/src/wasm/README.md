@@ -95,6 +95,47 @@ WASM!
 canonical-ABI lift/lower and componentized via `wasm-tools`); `compose` links
 them with `wac`-style auto-plugging.
 
+## Editor support
+
+Syntax highlighting for `.wvl` files ships as a download per editor on the
+[releases page](https://github.com/logaan/wavelet/releases/latest). The grammars
+are derived from the lexer, so highlighting matches the compiler. A language
+server, `wavelet-lsp`, adds diagnostics, completion, hover, and document symbols;
+it ships as a standalone binary per platform on the same releases page and is
+used automatically by the VS Code extension. (The source for all of this lives in
+[`tooling/`](tooling/) if you'd rather build it yourself.)
+
+### Vim / Neovim
+
+Download `wavelet-vim.zip` and unzip it as a package on your `runtimepath`:
+
+```console
+$ curl -L -o wavelet-vim.zip \
+    https://github.com/logaan/wavelet/releases/latest/download/wavelet-vim.zip
+$ mkdir -p ~/.vim/pack/wavelet/start            # Neovim: ~/.config/nvim/pack/wavelet/start
+$ unzip wavelet-vim.zip -d ~/.vim/pack/wavelet/start/
+```
+
+Open any `.wvl` file and it is highlighted. On Neovim, the zip also bundles the
+`wavelet-lsp` server and starts it automatically for `.wvl` buffers.
+
+### VS Code
+
+Download `wavelet-vscode.zip`, unzip it into your extensions folder, and reload
+the window:
+
+```console
+$ curl -L -o wavelet-vscode.zip \
+    https://github.com/logaan/wavelet/releases/latest/download/wavelet-vscode.zip
+$ unzip wavelet-vscode.zip -d ~/.vscode/extensions/
+```
+
+The extension is self-contained: it bundles the `wavelet-lsp` language server, so
+you also get diagnostics, completion, hover, and document symbols with no extra
+download. (Override the server with the `wavelet.lsp.serverPath` setting, or
+disable it with `wavelet.lsp.enable`.) See [`tooling/vscode/`](tooling/vscode/)
+for details.
+
 ## Pipeline
 
 The compiler is **read → expand → analyze → emit → componentize**:
@@ -134,6 +175,7 @@ instantiation), resource handles beyond `cell`, boundary coercions / the
 ```
 src/        compiler and CLI
 examples/   shout.wvl + main.wvl (the §1 demo)
+tooling/    editor support (Vim/Neovim, VS Code, wavelet-lsp language server)
 out/        build artifacts (.wasm / .wat / .wit)
 design.md   the language design, draft 0.1
 todo.md     implementation tracking
