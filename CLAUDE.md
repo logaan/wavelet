@@ -62,7 +62,9 @@ checked and updated where affected:
   single source of truth, the lexer in `src/lexer.rs`:
   - `docs/src/prism/wavelet.js` — Prism grammar for the docs (static
       ```` ```wavelet ```` code blocks and the live `<Playground>` editor).
-  - `tooling/vim/` — Vim/Neovim syntax + `.wvl` filetype detection.
+  - `syntax/wavelet.vim` (+ `ftdetect/wavelet.vim`) at the repo root — Neovim
+      syntax + `.wvl` filetype detection (the repo root is itself a Neovim
+      runtime-path package; `plugin/wavelet.lua` starts `wavelet-lsp`).
   - `tooling/vscode/` — VS Code TextMate grammar + language configuration.
 
   A change to the lexer's token classes (new literal forms, comment syntax, macro

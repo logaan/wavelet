@@ -21,9 +21,11 @@ syntax error; completion still offers special forms and builtins.
 
 ## Installing
 
-If you use the [VS Code](../vscode/) or [Neovim](../vim/) packages, the server is
-already bundled — you don't need this section. It's for any other LSP-capable
-editor.
+If you use the [VS Code](../vscode/) extension, the server is already bundled —
+you don't need this section. The [Neovim plugin](../../README.md#neovim-lazyvim--lazynvim)
+(the repo root) starts this server automatically once it's on your `PATH`. This
+section is for installing the standalone binary, for Neovim or any other
+LSP-capable editor.
 
 Prebuilt binaries are published per platform on the
 [releases page](https://github.com/logaan/wavelet/releases/latest) as
@@ -53,6 +55,11 @@ The server speaks LSP over **stdio**.
 ## Editor setup
 
 ### Neovim (built-in LSP)
+
+Most users should install the [Neovim plugin](../../README.md#neovim-lazyvim--lazynvim)
+(the repo root), which wires up filetype, highlighting, and this server for you.
+The snippet below is the equivalent manual setup if you'd rather not use the
+plugin:
 
 ```lua
 vim.filetype.add({ extension = { wvl = "wavelet" } })

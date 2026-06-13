@@ -30,20 +30,25 @@ Add `./target/release` to your `PATH`, or invoke the binary directly.
 
 ## Editor support
 
-Syntax highlighting for `.wvl` files ships as a download per editor on the [releases page](https://github.com/logaan/wavelet/releases/latest). The grammars are derived from the compiler's lexer, so highlighting matches the language exactly. The VS Code and Neovim packages also bundle the `wavelet-lsp` language server, adding diagnostics, completion, hover, and document symbols (a standalone `wavelet-lsp-<platform>` binary is published too, for other editors).
+`.wvl` files get syntax highlighting plus the `wavelet-lsp` language server (diagnostics, completion, hover, document symbols). The highlighting grammars are derived from the compiler's lexer, so they match the language exactly. `wavelet-lsp` ships as a standalone `wavelet-lsp-<platform>` binary on the [releases page](https://github.com/logaan/wavelet/releases/latest) and is used automatically by the VS Code extension and the Neovim plugin.
 
-### Vim / Neovim
+### Neovim (LazyVim / lazy.nvim)
 
-Download `wavelet-vim.zip` and unzip it as a package on your `runtimepath`:
+The Wavelet repo doubles as a Neovim runtime-path package (top-level `ftdetect/`, `syntax/`, `plugin/`). Add it to LazyVim with a spec in `~/.config/nvim/lua/plugins/wavelet.lua`:
 
-```console
-$ curl -L -o wavelet-vim.zip \
-    https://github.com/logaan/wavelet/releases/latest/download/wavelet-vim.zip
-$ mkdir -p ~/.vim/pack/wavelet/start            # Neovim: ~/.config/nvim/pack/wavelet/start
-$ unzip wavelet-vim.zip -d ~/.vim/pack/wavelet/start/
+```lua
+return {
+  {
+    "logaan/wavelet",
+    ft = "wavelet",
+    init = function()
+      vim.filetype.add({ extension = { wvl = "wavelet" } })
+    end,
+  },
+}
 ```
 
-Open any `.wvl` file and it is highlighted. On Neovim, the zip also bundles the `wavelet-lsp` server and starts it automatically for `.wvl` buffers.
+Open any `.wvl` file and it is highlighted. For language features, put the `wavelet-lsp` server on your `PATH` (`cargo install --path tooling/wavelet-lsp`, or download a prebuilt binary from the releases page) — the plugin starts it automatically. Point at a specific binary with `vim.g.wavelet_lsp_path`.
 
 ### VS Code
 

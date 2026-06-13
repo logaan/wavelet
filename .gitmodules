@@ -1,0 +1,3 @@
+[submodule "tooling/neovim"]
+	path = tooling/neovim
+	url = https://github.com/logaan/wavelet.nvim.git

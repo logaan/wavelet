@@ -2,8 +2,9 @@ name: Release
 
 # On a version tag (e.g. v0.1.0):
 #   * cross-compile the language server (tooling/wavelet-lsp) for the common
-#     desktop platforms, and
-#   * package the editor tooling under tooling/ into one zip per editor,
+#     desktop platforms (published standalone, and used by the Neovim plugin
+#     from PATH), and
+#   * package the VS Code extension (tooling/vscode) into a zip,
 # then publish all of them as assets on a GitHub release. Assets use stable,
 # unversioned names so the install instructions in README.md can always point at
 # .../releases/latest/download/<asset>.
@@ -75,7 +76,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/wavelet-vim.zip
             dist/wavelet-vscode.zip
             dist/wavelet-lsp-*
           fail_on_unmatched_files: true

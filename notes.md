@@ -1,10 +1,12 @@
 # Notes
 
-1. [ ] Vim tooling readme in the zip needs to be re-written
-    1. Only give instructions for neovim installed using lazyvim
-    1. Only give instructions for installing from a release
-    1. Change the way it's released to match what lazyvim wants
-    1. Maybe lazyvim is actually quite happy installing directly from git and we don't need to worry about the release.
+1. [x] Vim tooling re-written for neovim/lazyvim
+    1. [x] Only give instructions for neovim installed using lazyvim
+    1. [x] lazyvim installs directly from git, so no release zip is needed — the
+       repo root is now a runtime-path package (`ftdetect/`, `syntax/`,
+       `plugin/`) and `{ "logaan/wavelet" }` works as a lazy.nvim spec.
+    1. [x] Dropped `wavelet-vim.zip` from the release workflow; the plugin runs
+       `wavelet-lsp` from PATH (`cargo install`, or a standalone release binary).
 1. [ ] Should be installable via homebrew.
 1. [x] Where can I run the command line tools?
 1. [ ] I should MIT license this.

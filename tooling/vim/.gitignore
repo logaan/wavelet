@@ -1,2 +1,0 @@
-# Language-server binaries are bundled into the release zip by CI, not committed.
-bin/

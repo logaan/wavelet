@@ -1,40 +1,35 @@
 # Wavelet editor tooling
 
-Editor integrations for the [Wavelet](../README.md) language. Each subdirectory
-is self-contained and has its own install instructions.
+Editor integrations for the [Wavelet](../README.md) language.
 
-| Editor          | Directory                      | Provides                                  |
+| Editor          | Where                          | Provides                                  |
 | --------------- | ------------------------------ | ----------------------------------------- |
-| Vim / Neovim    | [`vim/`](vim/)                 | syntax highlighting + `.wvl` filetype      |
-| VS Code         | [`vscode/`](vscode/)           | a language extension: syntax highlighting + language server |
+| Neovim          | repo root (`ftdetect/`, `syntax/`, `plugin/`) | a runtime-path package: syntax highlighting + `.wvl` filetype + `wavelet-lsp` autostart |
+| VS Code         | [`vscode/`](vscode/)           | a language extension: syntax highlighting + bundled language server |
 | Any LSP client  | [`wavelet-lsp/`](wavelet-lsp/) | the `wavelet-lsp` language server (diagnostics, completion, hover, symbols) |
 
 ## Installing
 
-Most users should grab the prebuilt package for their editor from the
-[releases page](https://github.com/logaan/wavelet/releases/latest) rather than
-this directory:
-
-- **Vim / Neovim** — `wavelet-vim.zip` (highlighting; on Neovim it also bundles
-  the `wavelet-lsp` server and starts it automatically)
-- **VS Code** — `wavelet-vscode.zip` (self-contained: highlighting + the bundled
-  `wavelet-lsp` server, no extra download)
+- **Neovim** — the repo root is itself a lazy.nvim / Vim runtime-path package.
+  Install with LazyVim by pointing a plugin spec at `logaan/wavelet`; see
+  [the README](../README.md#neovim-lazyvim--lazynvim). It expects the
+  `wavelet-lsp` binary on your `PATH` (`cargo install --path wavelet-lsp`, or a
+  prebuilt binary from the releases page).
+- **VS Code** — `wavelet-vscode.zip` from the
+  [releases page](https://github.com/logaan/wavelet/releases/latest)
+  (self-contained: highlighting + the bundled `wavelet-lsp` server, no extra
+  download), or build from [`vscode/`](vscode/).
 - **Language server** — `wavelet-lsp-<platform>` (e.g.
-  `wavelet-lsp-aarch64-apple-darwin`), a standalone binary for any other
-  LSP-capable editor
+  `wavelet-lsp-aarch64-apple-darwin`), a standalone binary published per platform
+  on the releases page, for Neovim or any other LSP-capable editor. It is
+  compiled from [`wavelet-lsp/`](wavelet-lsp/) by
+  [`.github/workflows/release.yml`](../.github/workflows/release.yml) and bundled
+  into the VS Code zip.
 
-The editor zips each unpack to a single `wavelet/` directory; the per-editor
-READMEs (and inside each zip) give the exact unzip-and-go commands. These are the
-same files you see here — `tooling/` is the source the release artifacts are
-built from (see [`.github/workflows/release.yml`](../.github/workflows/release.yml)),
-so build-from-source and the release download are interchangeable. The
-`wavelet-lsp` binary is compiled from [`wavelet-lsp/`](wavelet-lsp/) by the same
-workflow, one asset per platform, and is bundled into the VS Code and Vim zips as
-well as published standalone.
-
-All three grammars (these two plus the docs' Prism grammar in
-`docs/src/prism/wavelet.js`) are derived from the same source of truth — the
-lexer in `src/lexer.rs` — and recognise the same token classes:
+All three grammars (the Neovim `syntax/wavelet.vim`, the VS Code TextMate
+grammar, and the docs' Prism grammar in `docs/src/prism/wavelet.js`) are derived
+from the same source of truth — the lexer in `src/lexer.rs` — and recognise the
+same token classes:
 
 - `//` line comments and `///` doc comments
 - `"..."` strings and `'.'` chars, with `\n` / `\u{...}` escapes

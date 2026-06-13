@@ -97,27 +97,41 @@ them with `wac`-style auto-plugging.
 
 ## Editor support
 
-Syntax highlighting for `.wvl` files ships as a download per editor on the
-[releases page](https://github.com/logaan/wavelet/releases/latest). The grammars
-are derived from the lexer, so highlighting matches the compiler. A language
-server, `wavelet-lsp`, adds diagnostics, completion, hover, and document symbols;
-it ships as a standalone binary per platform on the same releases page and is
-used automatically by the VS Code extension. (The source for all of this lives in
-[`tooling/`](tooling/) if you'd rather build it yourself.)
+`.wvl` files get syntax highlighting plus a language server, `wavelet-lsp`,
+adding diagnostics, completion, hover, and document symbols. The highlighting
+grammars are derived from the lexer, so they match the compiler. `wavelet-lsp`
+ships as a standalone binary per platform on the
+[releases page](https://github.com/logaan/wavelet/releases/latest) and is used
+automatically by the VS Code extension and the Neovim plugin.
 
-### Vim / Neovim
+### Neovim (LazyVim / lazy.nvim)
 
-Download `wavelet-vim.zip` and unzip it as a package on your `runtimepath`:
+The repo doubles as a Neovim plugin: its top-level `ftdetect/`, `syntax/`, and
+`plugin/` directories are a standard runtime-path package. Add it to LazyVim by
+dropping a spec in `~/.config/nvim/lua/plugins/wavelet.lua`:
 
-```console
-$ curl -L -o wavelet-vim.zip \
-    https://github.com/logaan/wavelet/releases/latest/download/wavelet-vim.zip
-$ mkdir -p ~/.vim/pack/wavelet/start            # Neovim: ~/.config/nvim/pack/wavelet/start
-$ unzip wavelet-vim.zip -d ~/.vim/pack/wavelet/start/
+```lua
+return {
+  {
+    "logaan/wavelet",
+    ft = "wavelet",
+    init = function()
+      vim.filetype.add({ extension = { wvl = "wavelet" } })
+    end,
+  },
+}
 ```
 
-Open any `.wvl` file and it is highlighted. On Neovim, the zip also bundles the
-`wavelet-lsp` server and starts it automatically for `.wvl` buffers.
+Open any `.wvl` file and it is highlighted. For language features, put the
+`wavelet-lsp` server on your `PATH` — the plugin starts it automatically:
+
+```console
+$ cargo install --path tooling/wavelet-lsp     # installs into ~/.cargo/bin
+```
+
+or download a prebuilt `wavelet-lsp-<platform>` binary from the releases page.
+To point at a specific binary instead, set `vim.g.wavelet_lsp_path`. See
+[`tooling/wavelet-lsp/`](tooling/wavelet-lsp/) for other editors.
 
 ### VS Code
 
@@ -175,7 +189,10 @@ instantiation), resource handles beyond `cell`, boundary coercions / the
 ```
 src/        compiler and CLI
 examples/   shout.wvl + main.wvl (the §1 demo)
-tooling/    editor support (Vim/Neovim, VS Code, wavelet-lsp language server)
+ftdetect/   } Neovim plugin: .wvl filetype, highlighting, and LSP autostart
+syntax/     }   (the repo root is itself a runtime-path package)
+plugin/     }
+tooling/    editor support (VS Code, wavelet-lsp language server)
 out/        build artifacts (.wasm / .wat / .wit)
 design.md   the language design, draft 0.1
 todo.md     implementation tracking
