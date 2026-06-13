@@ -26,7 +26,7 @@ See [`design.md`](design.md) for the full language design (draft 0.1).
 
 ## A taste
 
-```
+```rust
 // shout.wvl — compiles to demo:shout.wasm
 Package "demo:shout@0.1.0"
 
@@ -35,7 +35,7 @@ Def shout Fn {phrase: string}
   str-cat[upper(phrase) "!"]
 ```
 
-```
+```rust
 // main.wvl — compiles to demo:main.wasm
 Package "demo:main@0.1.0"
 Target "wasi:cli/command"
@@ -68,7 +68,7 @@ The `wavelet` CLI and the `wavelet-lsp` language server are available from a
 personal [tap](https://github.com/logaan/homebrew-tap):
 
 ```console
-$ brew install logaan/tap/wavelet
+brew install logaan/tap/wavelet
 ```
 
 This installs both `wavelet` and `wavelet-lsp` onto your `PATH`. (The formula
@@ -86,9 +86,9 @@ to compile by hand.
 Wavelet is written in Rust (2024 edition).
 
 ```console
-$ cargo build           # debug binary at ./target/debug/wavelet
-$ cargo build --release # optimized binary at ./target/release/wavelet
-$ cargo test            # run the test suite
+cargo build           # debug binary at ./target/debug/wavelet
+cargo build --release # optimized binary at ./target/release/wavelet
+cargo test            # run the test suite
 ```
 
 ### Test coverage
@@ -98,9 +98,9 @@ $ cargo test            # run the test suite
 source-based coverage). It bootstraps the tool on first run.
 
 ```console
-$ scripts/coverage.sh          # per-file summary table in the terminal
-$ scripts/coverage.sh --html   # write + open an HTML report (target/coverage/html)
-$ scripts/coverage.sh --lcov   # write target/coverage/lcov.info (CI / editor gutters)
+scripts/coverage.sh          # per-file summary table in the terminal
+scripts/coverage.sh --html   # write + open an HTML report (target/coverage/html)
+scripts/coverage.sh --lcov   # write target/coverage/lcov.info (CI / editor gutters)
 ```
 
 ## The `wavelet` CLI
@@ -161,7 +161,7 @@ Open any `.wvl` file and it is highlighted. For language features, put the
 `wavelet-lsp` server on your `PATH` — the plugin starts it automatically:
 
 ```console
-$ cargo install --path tooling/wavelet-lsp     # installs into ~/.cargo/bin
+cargo install --path tooling/wavelet-lsp     # installs into ~/.cargo/bin
 ```
 
 or download a prebuilt `wavelet-lsp-<platform>` binary from the releases page.
