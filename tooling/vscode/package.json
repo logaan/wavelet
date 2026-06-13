@@ -1,0 +1,30 @@
+{
+  "name": "wavelet",
+  "displayName": "Wavelet",
+  "description": "Syntax highlighting for the Wavelet language (.wvl).",
+  "version": "0.1.0",
+  "publisher": "wavelet",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": ["Programming Languages"],
+  "keywords": ["wavelet", "wave", "webassembly", "component-model", "wasm"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "wavelet",
+        "aliases": ["Wavelet", "wavelet"],
+        "extensions": [".wvl"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "wavelet",
+        "scopeName": "source.wavelet",
+        "path": "./syntaxes/wavelet.tmLanguage.json"
+      }
+    ]
+  }
+}

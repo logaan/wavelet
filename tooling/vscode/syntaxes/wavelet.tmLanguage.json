@@ -1,0 +1,83 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Wavelet",
+  "scopeName": "source.wavelet",
+  "fileTypes": ["wvl"],
+  "comment": "Token classes mirror the Wavelet lexer (src/lexer.rs) and the shared Prism grammar (docs/src/prism/wavelet.js). Keep the two in sync.",
+  "patterns": [
+    { "include": "#doc-comment" },
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#char" },
+    { "include": "#number" },
+    { "include": "#boolean" },
+    { "include": "#constant" },
+    { "include": "#macro" },
+    { "include": "#call-head" },
+    { "include": "#namespace" },
+    { "include": "#property" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "doc-comment": {
+      "comment": "/// doc comments attach to the following form; //// is not a doc comment",
+      "name": "comment.line.documentation.wavelet",
+      "match": "///(?!/).*$"
+    },
+    "comment": {
+      "name": "comment.line.double-slash.wavelet",
+      "match": "//.*$"
+    },
+    "string": {
+      "name": "string.quoted.double.wavelet",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [{ "include": "#escape" }]
+    },
+    "char": {
+      "name": "string.quoted.single.wavelet",
+      "match": "'(?:\\\\(?:u\\{[0-9a-fA-F]+\\}|[\\s\\S])|[^\\\\'])'"
+    },
+    "escape": {
+      "name": "constant.character.escape.wavelet",
+      "match": "\\\\(?:u\\{[0-9a-fA-F]+\\}|[nrt\\\\\"'])"
+    },
+    "number": {
+      "name": "constant.numeric.wavelet",
+      "match": "-?\\b(?:inf|nan|\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\b"
+    },
+    "boolean": {
+      "name": "constant.language.boolean.wavelet",
+      "match": "\\b(?:true|false)\\b"
+    },
+    "constant": {
+      "comment": "WAVE option/result constructors",
+      "name": "constant.language.wavelet",
+      "match": "\\b(?:some|none|ok|err)\\b"
+    },
+    "macro": {
+      "comment": "TitleCase macro head: leading capital, at least one lowercase, no hyphen (the lexer's is_title). Reader sugar for a macro call.",
+      "name": "keyword.control.macro.wavelet",
+      "match": "\\b[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*\\b"
+    },
+    "call-head": {
+      "comment": "Attachment rule: a (possibly %-escaped, possibly qualified) name immediately followed by ( [ or { is a call head.",
+      "name": "entity.name.function.wavelet",
+      "match": "%?[A-Za-z][\\w-]*(?:/%?[\\w-]+)?(?=[(\\[{])"
+    },
+    "namespace": {
+      "comment": "The alias side of a free-standing qualified reference (kv/get as a value).",
+      "name": "entity.name.namespace.wavelet",
+      "match": "%?[A-Za-z][\\w-]*(?=/)"
+    },
+    "property": {
+      "comment": "Record keys: name:",
+      "name": "variable.other.property.wavelet",
+      "match": "%?[A-Za-z][\\w-]*(?=\\s*:)"
+    },
+    "punctuation": {
+      "name": "punctuation.wavelet",
+      "match": "[(){}\\[\\],:/]"
+    }
+  }
+}
