@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Wavelet is a homoiconic language for the WebAssembly Component Model, written in
 Rust (edition 2024). See `README.md` for the project overview and CLI, and
-`design.md` for the full language design (draft 0.1).
+`dev-notes/design.md` for the full language design (draft 0.1).
 
 ## Compiler pipeline
 
