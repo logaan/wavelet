@@ -2,7 +2,7 @@
 
 1. [ ] Where can I run the command line tools?
 1. [ ] I should MIT license this.
-1. [ ] I need a `readme.md`.
+1. [x] I need a `readme.md`.
 1. [ ] I need a `scripts` directory.
    1. `cargo test`
    1. `cargo run`
@@ -11,16 +11,202 @@
 1. 5,700 lines of Rust.
    1. 34 tests.
    1. What's my code coverage level?
-1. [ ] How big is my file?
-   1. 4.0kb seems ok, given that it's packing wit data too.
+1. [x] How big is my file?
+   1. 4.4k  demo-main.wasm
+   1. 1.8k  demo-shout.wasm
 1. [ ] Have a read of the wat representation of the compiled wasm.
 1. [ ] It might be nice to be able to write some functions as pure `wait` style
-wasm.
-1. [ ] It owuld be nice to be able to kcompile to wat directory with fully
-maintained $ style names.
+   wasm.
+1. [ ] It would be nice to be able to compile to wat directory with fully
+   maintained $ style names.
 1. [ ] Run doesn't really say home to ship a featuer.
 1. [ ] I'd like the file extension to be .wlt rather than wvl
    - Assuming that doesn't conflict with anything else.
+
+## Docs
+
+1. [ ] Needs syntax highlighting.
+1. [ ] Github actions to build and produce releases.
+1. [ ] Should be installable via homebrew.
+1. [ ] Should be written for someone unfamiliar with wasm.
+1. [ ] Maybe we should drop the interpreter?
+   1. If the compiler compiles to a wasm component then the compiler itself can called from the examples in the docs.
+   1. It could be part of the standard library.
+      1. The composer just leaves it out if no one's using it?
+1. [ ] Is the standard library composed in? Or is it part of the compile for each component?
+1. [ ] The `:::note` and `:::info` blocks don't work.
+1. [ ] The "argument" language is too strong.
+1. [ ] The "NO-FFI!!" example is too strong.
+1. [ ] How slow is the compilation?
+1. [ ] How will `--fuse` work? Is there much overhead if we don't use it?
+1. [ ] Would be good to show examples of building all of the wasi app types
+   1. cli
+   1. http
+   1. deploy to <https://www.fermyon.dev/>
+   1. deploy to <https://wasmcloud.com/docs/>
+   1. embedding it in a python program
+1. [ ] Using each of [the wasi things](https://github.com/WebAssembly/WASI/blob/main/docs/Proposals.md#phase-3---implementation-phase-cg--wg)
+   1. clocks
+   1. random
+   1. filesystem
+   1. sockets
+1. [ ] Using [wkg](https://component-model.bytecodealliance.org/composing-and-distributing/distributing.html) as a package manager
+   1. How to publish a wavelet library to wkg
+1. [ ] Need some kind of path and component locating thing?
+   1. Having to specify all the individual file names in the examples doesn't look great.
+1. [ ] Examples shouldn't be using `foo(1)` syntax for method calls
+   1. I think I saw it somewhere. Perhaps it was actually creating a variant.
+1. [ ] I don't love the font.
+1. [ ] Need some kind of canonical formatting. Ideally with a way for user defined macros to specify it also.
+   1. Eg: `If` breaks onto 3 lines
+
+      ```wavelet
+      If eq[foo 42]
+        ok("Match")
+        err("No good")
+      ```
+
+   1. Whereas package is probably all on one line.
+1. [ ] I think that we maybe don't need to support `f(x y) -> f((x, y))`
+    1. `f[x y]` already gives us a way to make positional calls
+    1. `f((x))` when you want to make a call with a single positional value, but `f(x y)` when you want to do it with 2 feels like a weird inconsistency.
+1. [ ] Why do we need grouping? `(a) -> a` isn't what I'd expect. I would think it should be `(a)`
+1. [ ] The wavelet docs shouldn't assume people are familiar with wave.
+    1. Having a summary of the types is good.
+    1. But we also need a full page with all of the rules for each type.
+    1. Eg: What values can be keys in records?
+    1. Eg: Wtf are flags?
+1. [ ] Macros should use `if-MACRO([c t e])` not tuples.
+1. [ ] asdf
+1. [ ] `wavelet read` shouldn't need to take `/dev/stdin` as an argument
+1. [ ] `Quote` isn't just an "Inside the playground" feature.
+1. [ ] Formal grammar specification should be an appendix, not early in the learning flow.
+1. [ ] The sugar cases should have their own page and be numbered.
+1. [ ] Macros should have their own page with examples of how to write them and why they're so valuable.
+1. [ ] Macros shouldn't have special `DefMacro -> def-macro-MACRO` expansion.
+    1. It should just be `Def-macro -> def-macro-MACRO`
+    1. The only deviation we're making is if your symbol has the first letter capitalised and the rest of the first word lowercase then it's a macro identifier.
+1. [ ] "when the last argument is itself a macro" shouldn't it matter regardless of whether it's the last argument or not?
+1. Grammar
+    1. [x] What's an `atom`?
+        1. bool, int, float, char, string
+        1. Is `atom` the right term?
+           1. For everything except string we could use `scalar`
+    1. [ ] What's a `qname`?
+        1. Qualified name (with `/`)
+    1. [ ] Can we skip the `:` in records?
+       1. I don't think so because otherwise they'd look like flags.
+    1. This grammar definition doesn't feel like it's totally correct.
+        1. Like shouldn't comments be defined?
+
+### Values & Types
+
+1. [ ] Is tuples only working for 2+ types a wave thing?
+1. [ ] Can wavelet define resources?
+1. [ ] Can wavelet define everything that can be defined in wit?
+1. [ ] We communicate the mapping between wavelet and wave, we should do the same for wavelet -> wit
+1. [ ] Omg the reason we needed tuples for calling is that it lets us have hetrogenous values.
+1. [ ] It seems like a bad idea to allow hetrogenous types inside lists.
+1. [ ] Maybe drop support for the flat shorthand?
+   1. I guess it seems convenient, but is it a little error prone?
+   1. Like there's potential for refactoring to lead to surprises?
+1. [ ] Can we drop the unit value?
+   1. I like Erlang's convention of just saying "ok"
+   1. It's like "nothing went wrong"
+
+### Evaluation
+
+1. [ ] It'd be good to have an "Trivia" callout that beginners can ignore.
+   1. Use it for the "Lisp-1" mention.
+1. [x] I haven't seen any word on functions being first class yet.
+    1. They're there `Fn {f x} (f(f(x))`
+1. [ ] Can you call a returned function like `foo[x, y][z]`
+1. [ ] Could we implement lambdas as their own component?
+    - Or is that nuts?
+    - It's probably nuts.
+    - It would mean you could send it over the wire though.
+    - Like bundle up the captured environment in the component, and have an `apply` method.
+1. [ ] Would it be actually a lot easier to understand if we just used tuples for fn calls?
+   1. `foo(x y z) -> (foo x y z) -> call(foo, x, y, z)`
+
+### The seventeen special forms
+
+1. [ ] Can we flatten the package level forms into `Package`?
+   1. `Target`
+   1. `Import`
+   1. `Export`
+   1. `DefType` maybe?
+   1. Maybe just have them as a record argument to `Package`?
+   1. Maybe it's a bad idea because things like imports and exports can get kinda complex.
+2. [ ] Do we need both `If` and `Match`?
+   1. Can't one of them be defined in the standard library using the other
+3. [ ] These should probably be presented in groups. At least 3, one for macros, one for package, and the rest.
+4. [ ] What is `The`?
+5. [ ] We need a logo.
+
+#### Fn
+
+1. [ ] Can functions defined with `Def` at the top level be referenced as values? Even in compiled code?
+1. [ ] Can you have a mix of typed and untyped parameters?
+1. [ ] Is there any amount of static type checking?
+
+#### If
+
+1. No truthiness is kinda nice.
+
+#### Let
+
+1. [ ] Records are unordered in wave (and wasm?)
+   1. [ ] I think we should probably be using an ordered collection
+   1. [ ] Then again if we think about lists as potentially changing to being homogeneous that'd only leave tuples.
+          Which runs there risk of being a list with too many parenthesis.
+
+#### Do
+
+1. [ ] Can't this be in the standard library?
+
+#### Match
+
+1. [ ] Should this live in the standard library?
+1. [ ] Is this doing any clever re-writing for optimisation?
+1. [ ] Is there a way to head and tail a list?
+
+#### Quote
+
+1. [ ] If we have `Quasi` then do we need `Quote`?
+    1. Couldn't `Quote` just be aware of `Splice` and `Unquote`?
+    1. Does that then make it impossible to represent them or something?
+
+#### Defmacro
+
+1. [ ] Could this just be `Macro`?
+
+#### `The`
+
+1. [ ] Could this just be a function?
+
+#### `Deftype`
+
+1. [ ] Could this just be `Type`?
+
+#### `Packge`
+
+1. [ ] Should fully qualified names be first class types?
+    1. [ ] Are they not expressible in wave?
+1. [ ] Is Package the right name?
+    1. Could it be `Module`, `Component`, or `World`?
+
+#### `Target`
+
+1. [ ] Are `Target`s a concept that's expressed in wit?
+1. [ ] Can you target multiple things?
+1. [ ] What is targetable? `Socket`? `Clocks`?
+
+#### Import
+
+1. [ ] Maybe you shouldn't be able to `open: true`.
+    1. It can be annoying not to know where a definition came from.
+    1. It might be a good idea to just have an explicit set of splatted names.
 
 ## `wavelet` app
 
