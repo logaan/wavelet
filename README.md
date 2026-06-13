@@ -70,6 +70,18 @@ $ cargo build --release # optimized binary at ./target/release/wavelet
 $ cargo test            # run the test suite
 ```
 
+### Test coverage
+
+`scripts/coverage.sh` measures native test coverage with
+[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) (LLVM
+source-based coverage). It bootstraps the tool on first run.
+
+```console
+$ scripts/coverage.sh          # per-file summary table in the terminal
+$ scripts/coverage.sh --html   # write + open an HTML report (target/coverage/html)
+$ scripts/coverage.sh --lcov   # write target/coverage/lcov.info (CI / editor gutters)
+```
+
 ## The `wavelet` CLI
 
 ```
