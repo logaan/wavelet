@@ -1,5 +1,6 @@
 # Notes
 
+1. [ ] Have a wasm version of the compiler and/or interpreter published as a package to some kind of wasm package repository?
 1. [x] Vim tooling re-written for neovim/lazyvim
     1. [x] Only give instructions for neovim installed using lazyvim
     1. [x] The plugin is its own repo, `logaan/wavelet.nvim`, installed directly
@@ -10,18 +11,20 @@
        `wavelet-lsp` from PATH (`cargo install`, or a standalone release binary).
 1. [ ] Should be installable via homebrew.
 1. [x] Where can I run the command line tools?
-1. [ ] I should MIT license this.
+1. [x] I should MIT license this.
 1. [x] I need a `readme.md`.
-1. [ ] I need a `scripts` directory.
-   1. [ ] A script that builds and tests everything
-   1. [ ] A script that does a release
-   1. [ ] Scripts that capture all of the Github workflow stuff
+1. [x] I need a `scripts` directory.
+   1. [x] A script that builds and tests everything
+   1. [x] A script that does a release
+      1. It's just tagging and pushing, that might be fine not to script.
+   1. [x] Scripts that capture all of the Github workflow stuff
       1. Or do workflows look better when they're all in the yaml?
-1. [ ] Add code coverage tools
+1. [x] Add code coverage tools
 1. [ ] Add static analysis tools
-1. [ ] Refactor the compiler so that it's a series of steps performed by wasm components
+1. [x] Refactor the compiler so that it's a series of steps performed by wasm components
    1. Initially have rust compiling down to each of those components
    1. Then re-implement them one by one in wavelet
+   1. Bad idea. The wasm folks keep all the rust libraries up to date. If I self hosted I'd lose access to all of that. Unless they start publishing those tools as components (which would be sweet).
 1. [x] How big is my file?
    1. 4.4k  demo-main.wasm
    1. 1.8k  demo-shout.wasm
