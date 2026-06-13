@@ -1,40 +1,49 @@
 # Notes
 
-1. [ ] Where can I run the command line tools?
+1. [ ] Vim tooling readme in the zip needs to be re-written
+    1. Only give instructions for neovim installed using lazyvim
+    1. Only give instructions for installing from a release
+    1. Change the way it's released to match what lazyvim wants
+    1. Maybe lazyvim is actually quite happy installing directly from git and we don't need to worry about the release.
+1. [ ] Should be installable via homebrew.
+1. [x] Where can I run the command line tools?
 1. [ ] I should MIT license this.
 1. [x] I need a `readme.md`.
 1. [ ] I need a `scripts` directory.
-   1. `cargo test`
-   1. `cargo run`
-   1. `cargo build`
-      1. `./target/debug/wavelet`
-1. 5,700 lines of Rust.
-   1. 34 tests.
-   1. What's my code coverage level?
+   1. [ ] A script that builds and tests everything
+   1. [ ] A script that does a release
+   1. [ ] Scripts that capture all of the Github workflow stuff
+      1. Or do workflows look better when they're all in the yaml?
+1. [ ] Add code coverage tools
+1. [ ] Add static analysis tools
+1. [ ] Refactor the compiler so that it's a series of steps performed by wasm components
+   1. Initially have rust compiling down to each of those components
+   1. Then re-implement them one by one in wavelet
 1. [x] How big is my file?
    1. 4.4k  demo-main.wasm
    1. 1.8k  demo-shout.wasm
 1. [ ] Have a read of the wat representation of the compiled wasm.
-1. [ ] It might be nice to be able to write some functions as pure `wait` style
+1. [x] It might be nice to be able to write some functions as pure `wat` style
    wasm.
-1. [ ] It would be nice to be able to compile to wat directory with fully
+    1. Nope. Folks in other languages can deal with wasm and expose it through components.
+    1. Wavelet will just deal with wave and the component model.
+1. [x] It would be nice to be able to compile to wat directly with fully
    maintained $ style names.
-1. [ ] Run doesn't really say home to ship a featuer.
+    1. Meh.
 1. [ ] I'd like the file extension to be .wlt rather than wvl
    - Assuming that doesn't conflict with anything else.
 
 ## Docs
 
-1. [ ] Needs syntax highlighting.
-1. [ ] Github actions to build and produce releases.
-1. [ ] Should be installable via homebrew.
+1. [x] Needs syntax highlighting.
+1. [x] Github actions to build and produce releases.
 1. [ ] Should be written for someone unfamiliar with wasm.
 1. [ ] Maybe we should drop the interpreter?
    1. If the compiler compiles to a wasm component then the compiler itself can called from the examples in the docs.
    1. It could be part of the standard library.
       1. The composer just leaves it out if no one's using it?
 1. [ ] Is the standard library composed in? Or is it part of the compile for each component?
-1. [ ] The `:::note` and `:::info` blocks don't work.
+1. [x] The `:::note` and `:::info` blocks don't work.
 1. [ ] The "argument" language is too strong.
 1. [ ] The "NO-FFI!!" example is too strong.
 1. [ ] How slow is the compilation?
@@ -207,6 +216,7 @@
 1. [ ] Maybe you shouldn't be able to `open: true`.
     1. It can be annoying not to know where a definition came from.
     1. It might be a good idea to just have an explicit set of splatted names.
+    1. If we're going to make people explicitly import the standard library then they're going to want `open: true`
 
 ## `wavelet` app
 
