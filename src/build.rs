@@ -61,6 +61,7 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                         funcs: d.info.exports.clone(),
                         package_wit: emit::dep_package_wit(&d.arena, &d.info)?,
                         types: emit::dep_record_types(&d.arena, &d.info),
+                        type_defs: Vec::new(),
                     },
                 );
                 continue;

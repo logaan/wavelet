@@ -18,7 +18,7 @@ use wit_parser::{
     Function, Handle, Resolve, Type, TypeDefKind, TypeOwner,
 };
 
-use crate::emit::Dep;
+use crate::emit::{Dep, TypeDef};
 use crate::wit::FuncSig;
 
 /// Try to resolve `package` (a versionless `ns:name`) against `<deps_dir>`.
@@ -81,21 +81,48 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
 
     let mut funcs = Vec::new();
     let mut types: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mut type_defs: Vec<(String, TypeDef)> = Vec::new();
 
     for (iface_name, &iface_id) in &pkg.interfaces {
         let iface = &resolve.interfaces[iface_id];
 
-        // Record types this interface defines, so the emitter can lay out
-        // records we pass to / receive from it.
+        // Named types this interface defines, so the emitter can lay out values
+        // we pass to / receive from it. Records land in `types`; enum/variant/
+        // flags in `type_defs` (the generic-bridge kinds).
         for (type_name, &type_id) in &iface.types {
             let tdef = &resolve.types[type_id];
-            if let TypeDefKind::Record(rec) = &tdef.kind {
-                let fields = rec
-                    .fields
-                    .iter()
-                    .map(|f| Ok((f.name.clone(), type_string(&resolve, &f.ty)?)))
-                    .collect::<Result<Vec<_>, String>>()?;
-                types.push((type_name.clone(), fields));
+            match &tdef.kind {
+                TypeDefKind::Record(rec) => {
+                    let fields = rec
+                        .fields
+                        .iter()
+                        .map(|f| Ok((f.name.clone(), type_string(&resolve, &f.ty)?)))
+                        .collect::<Result<Vec<_>, String>>()?;
+                    types.push((type_name.clone(), fields));
+                }
+                TypeDefKind::Enum(en) => {
+                    let cases = en.cases.iter().map(|c| c.name.clone()).collect();
+                    type_defs.push((type_name.clone(), TypeDef::Enum(cases)));
+                }
+                TypeDefKind::Flags(fl) => {
+                    let names = fl.flags.iter().map(|f| f.name.clone()).collect();
+                    type_defs.push((type_name.clone(), TypeDef::Flags(names)));
+                }
+                TypeDefKind::Variant(var) => {
+                    let cases = var
+                        .cases
+                        .iter()
+                        .map(|c| {
+                            let pay = match &c.ty {
+                                Some(t) => Some(type_string(&resolve, t)?),
+                                None => None,
+                            };
+                            Ok((c.name.clone(), pay))
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    type_defs.push((type_name.clone(), TypeDef::Variant(cases)));
+                }
+                _ => {}
             }
         }
 
@@ -106,7 +133,7 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
 
     let package_wit = package_wit_text(&resolve, &full_package, pkg)?;
 
-    Ok(Some(Dep { package: full_package, funcs, package_wit, types }))
+    Ok(Some(Dep { package: full_package, funcs, package_wit, types, type_defs }))
 }
 
 /// Project one parsed WIT [`Function`] into the [`FuncSig`] the emitter expects.
@@ -253,9 +280,28 @@ fn type_decl(resolve: &Resolve, name: &str, id: wit_parser::TypeId) -> Result<St
         TypeDefKind::Type(inner) => {
             Ok(format!("type {name} = {};", type_string(resolve, inner)?))
         }
+        TypeDefKind::Enum(en) => {
+            let cases = en.cases.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+            Ok(format!("enum {name} {{ {} }}", cases.join(", ")))
+        }
+        TypeDefKind::Flags(fl) => {
+            let names = fl.flags.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
+            Ok(format!("flags {name} {{ {} }}", names.join(", ")))
+        }
+        TypeDefKind::Variant(var) => {
+            let cases = var
+                .cases
+                .iter()
+                .map(|c| match &c.ty {
+                    Some(t) => Ok(format!("{}({})", c.name, type_string(resolve, t)?)),
+                    None => Ok(c.name.clone()),
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(format!("variant {name} {{ {} }}", cases.join(", ")))
+        }
         other => {
-            // Variants/enums/flags/etc. need their own rendering; not required
-            // by Step 1's fixtures, so reject loudly rather than emit wrong WIT.
+            // Anything still unhandled (futures/streams/…): reject loudly rather
+            // than emit wrong WIT.
             Err(format!("unsupported WIT type decl `{name}`: {}", other.as_str()))
         }
     }

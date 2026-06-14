@@ -685,6 +685,7 @@ world shout {
                 funcs: sinfo.exports.clone(),
                 package_wit: emit::dep_package_wit(&sa, &sinfo).unwrap(),
                 types: emit::dep_record_types(&sa, &sinfo),
+                type_defs: Vec::new(),
             },
         );
         let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
@@ -729,6 +730,7 @@ world shout {
                 funcs: pinfo.exports.clone(),
                 package_wit: emit::dep_package_wit(&pa, &pinfo).unwrap(),
                 types: emit::dep_record_types(&pa, &pinfo),
+                type_defs: Vec::new(),
             },
         );
         let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
@@ -771,6 +773,7 @@ world shout {
                 funcs: pinfo.exports.clone(),
                 package_wit: emit::dep_package_wit(&pa, &pinfo).unwrap(),
                 types: emit::dep_record_types(&pa, &pinfo),
+                type_defs: Vec::new(),
             },
         );
         let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
@@ -811,6 +814,7 @@ world shout {
                 funcs: pinfo.exports.clone(),
                 package_wit: emit::dep_package_wit(&pa, &pinfo).unwrap(),
                 types: emit::dep_record_types(&pa, &pinfo),
+                type_defs: Vec::new(),
             },
         );
         let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
