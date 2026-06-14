@@ -382,3 +382,52 @@ fn generic_bridge_exports_run_style_unit_result() {
         "run-style interface not exported through the generic path"
     );
 }
+
+/// Step 8 — two bridge completions that routing http over the generic path
+/// needs, locked in hermetically (no live `wkg`):
+///
+/// 1. **Variant flat-join with numeric widening.** `put` takes a
+///    `result<own<thing>, error>` whose `error` variant mixes `i32`- and
+///    `i64`-flattened arms (`small(u32)` vs `big(u64)`), so the canonical-ABI
+///    `join` must widen the shared payload slot to `i64`. Previously the backend
+///    rejected this ("arms with differing flat shapes"); now it widens (the same
+///    shape the real `wasi:http` `error-code` argument to `response-outparam.set`
+///    needs).
+/// 2. **A Wavelet string lowers as `list<u8>`.** `blast` takes a `list<u8>` and
+///    is called with a string literal — exactly how an http body is written via
+///    `output-stream.blocking-write-and-flush(list<u8>)`.
+///
+/// Both flow through the generic bridge and the component re-encodes/validates.
+#[test]
+fn generic_bridge_widens_variant_arms_and_strings_as_byte_lists() {
+    let wit = "package acme:wire2@0.1.0;\n\
+        interface api {\n  \
+          resource thing;\n  \
+          variant error {\n    \
+            small(u32),\n    \
+            big(u64),\n    \
+            none,\n  \
+          }\n  \
+          open: func() -> result<own<thing>, error>;\n  \
+          put: func(r: result<own<thing>, error>) -> s32;\n  \
+          blast: func(bytes: list<u8>) -> s32;\n\
+        }\n";
+
+    // `put-trip` round-trips the widened `result<own<thing>, error>` (built as
+    // `ok(open())`) straight back into `put` — exercising lower+lift of the
+    // i32/i64-mixed variant. `blast-trip` passes a string where `list<u8>` is
+    // expected. Inference can't see through dep calls, so each uses the explicit
+    // Export record form with a primitive result.
+    let app = "Package \"demo:app@0.1.0\"\n\n\
+        Import {pkg: \"acme:wire2/api\" as: w}\n\n\
+        Export {name: put-trip params: {n: s32} result: s32}\n\
+        Def put-trip Fn {n: s32}\n  \
+          w/put(ok(w/open[]))\n\n\
+        Export {name: blast-trip params: {n: s32} result: s32}\n\
+        Def blast-trip Fn {n: s32}\n  \
+          w/blast(\"hello\")\n";
+
+    let bytes = build_against_wit("wire2", "acme-wire2.wit", wit, app);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("acme:wire2/api"), "import not wired into the component");
+}

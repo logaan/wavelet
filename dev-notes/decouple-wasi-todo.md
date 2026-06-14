@@ -750,7 +750,7 @@ interface through the generic export path in a test; the `run`-specific
 
 ## Step 8 — Cut http over to the generic path
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Route the `wasi:http/proxy` template/components through the generic
 import bridge + generic export end-to-end, with WIT coming from `wit/deps`
@@ -760,7 +760,118 @@ import bridge + generic export end-to-end, with WIT coming from `wit/deps`
 through the generic path (this is the no-regression gate); the http magic is now
 dead code reachable only by removal in Step 11.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **The http template no longer touches the magic at all.** It dropped
+  `Target "wasi:http/proxy"` (so `is_http` is false everywhere for it), imports
+  `wasi:http/types` **and** `wasi:io/streams` as ordinary `Import {pkg: …}` deps,
+  exports `wasi:http/incoming-handler` via the explicit `Export {iface: …}` form
+  (Step 7), and drives the whole response pipeline with plain dep calls lowered
+  by `Emitter::dep_call`. Verified for real: scaffolded `--type=http`, `wavelet
+  build` + `wavelet compose`, `wasmtime serve out/app.wasm`, then
+  `GET /` and `GET /hello/path` → `200` with the rendered page echoing the path
+  (greeting wording arriving across the component boundary). No `worker error`.
+  **`is_http`, `http_call`, `http_imports`, `is_resource_name`, and the
+  `WASI_HTTP_WIT` blob are now dead for http** — Step 11 deletes them.
+
+- **Routing now keys off "is there a resolved `Dep`?", not `starts_with("wasi:")`.**
+  Three call sites changed from `if is_external_package(pkg)` to "magic only when
+  the import has *no* `Dep`":
+  - `build.rs` no longer skips a `Dep` for `wasi:*` imports — it resolves them
+    from `wit/deps` via `witdep::resolve_dep` like any other external WIT. Only a
+    `wasi:*` import *absent* from `wit/deps` falls through to the magic (kept as a
+    `continue` so cli's builtins still work). **The `is_external_package` skip the
+    Step 7 note flagged is retired for the http import side.**
+  - `emit.rs` body routing (`Qsym` arm) and the import-signature loop
+    (`feats.dep_calls`) both route to the generic path when `deps` contains the
+    import's package; `http_call`/`http_imports` fire only when it doesn't.
+  - `synthesize_world_wit`'s import line prefers the `Dep`'s versioned iface when
+    present, falling back to `external_versioned` for the magic.
+  cli is unaffected because the cli template has **no** `wasi:*` `Import` form —
+  its stdout/args come from builtins (`feats.needs_stdout`/`needs_env`), which
+  still drive the magic. So Step 9 (cut cli) is the one that retires those.
+
+- **`witdep` now handles real, interdependent host WIT.** Three fixes were
+  needed before `wasi:http`'s WIT round-tripped:
+  1. **Parse the whole `wit/deps` as one group.** `wkg`'s deps cross-reference
+     (`wasi:http` uses `wasi:io`, `wasi:clocks`), so pushing each dir on its own
+     failed ("package `wasi:io` not found"). Now every entry is parsed into an
+     `UnresolvedPackageGroup` and resolved together via `Resolve::push_groups`,
+     which topologically sorts them.
+  2. **Render WIT text with `wit-component::WitPrinter`, not by hand.** The
+     hand-rolled flattener emitted invalid WIT for `use`-imported / aliased types
+     (e.g. a self-referential `type error-code = error-code`). `package_wit_text`
+     now prints every package in the dep's `Resolve` as a nested `package … { … }`
+     block via `WitPrinter::print_package(_, _, is_main=false)`. The old
+     `type_decl`/`resource_func_decl` hand-renderers were deleted. (Happily, the
+     printer output is byte-identical to `emit::dep_package_wit` for the simple
+     `acme:greet` case, so `tests/wit_deps.rs`'s byte-equality assertion still
+     passes unchanged.)
+  3. **Dedupe packages in the world.** Because a `wit/deps` `Dep` now carries its
+     whole transitive closure, and the http app has *two* such deps (`wasi:http`,
+     `wasi:io/streams`) that both render `wasi:io`/`wasi:clocks`,
+     `synthesize_world_wit` would define a package twice. It now splits each
+     `Dep.package_wit` into top-level `package … { … }` blocks
+     (`split_package_blocks`) and emits each package name once
+     (`package_block_name` + a `seen` set).
+
+- **Two genuine bridge completions were required (NOT just wiring) — guard them.**
+  The Step 7 handoff only flagged single-arm `result` (already closed). Driving
+  real http surfaced two more lowering gaps; both are now implemented and locked
+  by the hermetic `generic_bridge_widens_variant_arms_and_strings_as_byte_lists`:
+  1. **Canonical-ABI variant flat-join with numeric widening.**
+     `response-outparam.set` takes `result<own<outgoing-response>, error-code>`,
+     and `error-code` mixes `i32`- and `i64`-flattened arms
+     (`HTTP-response-body-size(option<u64>)` vs `…(option<u32>)`). The old
+     `join_flat` *rejected* any widening ("arms with differing flat shapes");
+     it now implements the spec's `join` (`{i32,f32}→i32`, else `→i64`) and the
+     lower/lift paths coerce each arm payload into/out of the widened union slot
+     (`coerce_flat_to`/`coerce_flat_from` + the spill-to-locals dance in
+     `lower_variant_case`/`lift_variant_case`). The common equal-shape case
+     (`option`/2-arm `result`) is byte-for-byte unchanged.
+  2. **A Wavelet string lowers as `list<u8>`.** `output-stream.blocking-write-and-flush`
+     takes `list<u8>`; the page body is a `string`. `lower` for `WitTy::List`
+     over an integer element now branches at runtime on the box tag: a `TAG_STR`
+     box is lowered as its inline bytes `(box+8, len)` with no copy; a real list
+     box still builds element-by-element (`is_byte_elem`).
+
+- **Resource-op disambiguation: the resource-qualified source name.** Bare op
+  names collide in `wasi:http/types` (`outgoing-request.body` vs
+  `outgoing-response.body`; `incoming-request.path-with-query` vs the outgoing
+  one; `fields.set` vs `response-outparam.set`). Since a Wavelet qualified name
+  is kebab-only (no `.`), `resolve_dep_func` now also accepts a `res-op` spelling
+  (`dep_func_qualified`: `[method]outgoing-response.body` → `outgoing-response-body`)
+  and resolves it *exactly* (tier 1) before the bare-op fallback (tier 2, which
+  still errors on a genuine collision, now suggesting the qualified form). The
+  http template uses `http/outgoing-response-body`,
+  `http/incoming-request-path-with-query`, `http/response-outparam-set`,
+  `http/outgoing-body-finish`, and the bare `http/fields`, `http/outgoing-response`,
+  `http/outgoing-body-write`, `streams/blocking-write-and-flush`,
+  `streams/drop-output-stream` where unique. **No new lexer syntax** — `res-op`
+  is plain kebab.
+
+- **For Step 9 (cut cli over similarly):** the cli template still uses the magic
+  via builtins (`print`/`println`/`args` → `needs_stdout`/`needs_env`) and
+  `Target "wasi:cli/command"` → the `run`/`wasi:cli/run` export translation, none
+  of which go through an `Import` form. To route cli generically you'll want it to
+  `Import {pkg: "wasi:cli/stdout"}` / `wasi:cli/environment` / `wasi:io/streams`
+  and call them by op name through the generic bridge (the routing already prefers
+  a `Dep` when present, so once those imports resolve from `wit/deps` they take the
+  generic path with no further routing change). The builtins themselves are
+  removed in Step 10; `Target` and the remaining magic (`is_command`,
+  `WASI_PACKAGES`, the forced `wasi:io/streams` import, `is_external_package`,
+  `is_resource_name`, `http_call`/`http_imports`, `WASI_HTTP_WIT`) are deleted in
+  Step 11 — **all now dead for http**; after Step 9 they'll be dead for cli too.
+  Note the cli `run` export still rides the `is_command && sig.name == "run"`
+  special-case in `emit_core_module` (Step 7 left it); the generic export path can
+  carry it (`Export {iface: "wasi:cli/run" result: result}`) when cli moves over.
+
+- **No language/example/interpreter change** (the bridge is a backend-only path;
+  `run` can't exercise host http anyway), so `regen-examples.sh` was not needed.
+  Full `cargo test` green: 49 lib + 8 generic_bridge (1 new) + http (now a gated
+  wkg-live build) + wit_deps + wkg_populate + examples. The http template builds
+  **and serves** through the generic path; the cli template still builds and runs
+  through the (untouched) magic.
 
 ---
 
