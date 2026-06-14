@@ -181,7 +181,7 @@ is parseable and resolvable; existing magic still primary and unchanged.
 
 ## Step 2 — `wkg` populates `wit/` + `wkg.lock`
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Use the Step 0 wrapper so `wavelet build` (and `wavelet new`) can
 synthesize the project's own WIT into `wit/` and run `wkg wit fetch` (with
@@ -201,7 +201,91 @@ the scenes — the magic path remains the one actually used for codegen.
 **Done when.** `cargo test` passes; a built sample project has `wit/deps` +
 `wkg.lock`; no codegen behaviour change.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **Behind-the-scenes, codegen untouched.** `build_files` runs exactly as before
+  through `emit_component` (the magic path); the new `wkg` work happens *after*
+  all components are written, and any failure is a `warning:` on stderr, never a
+  build failure. So an offline / toolless environment (incl. CI) still builds.
+  This is what keeps the hermetic suite green without `wkg`.
+
+- **New WIT synthesis surface (`src/wit.rs`).** `synthesize` was refactored to
+  delegate to a private `synthesize_info(arena, &FileInfo, host_only)`. Two new
+  public fns:
+  - `synthesize_fetch_world(arena, roots)` → the same WIT `synthesize` emits but
+    with `host_only = true`: **only `wasi:*` imports/exports are kept.** Sibling
+    (build-set) imports are *dropped* from the fetch world, because `wkg wit
+    fetch` insists on a registry for *every* referenced package's namespace — a
+    locally-present `demo:greeting` still makes it error `no registry configured
+    for namespace "demo"`. Sibling packages are kind-(2) deps (wired by the build
+    set / `wac`), not kind-(1) WIT fetched by `wkg`, so excluding them is correct,
+    not a hack. The host-import WIT text is byte-identical to what `synthesize`
+    emits, so the world `wkg` parses matches what the emitter componentizes
+    against.
+  - `has_host_deps(&FileInfo)` → whether a component references any host package
+    (a `Target`, a `wasi:*` import, or an external-iface export). Only such
+    components are fetched; a pure domain model (greeting) contributes nothing.
+
+- **The `Target "wasi:cli/command"` translation (Step-2 glue, retires with
+  `Target` in Step 11).** In the *fetch* world only, `include wasi:cli/command;`
+  is replaced by `export wasi:cli/run@0.2.0;`. Reason: `wkg wit fetch` can't merge
+  a world that `include`s a world whose package it hasn't fetched yet
+  (chicken-and-egg → `package not found … include wasi:cli/command`). Referencing
+  one concrete interface (`wasi:cli/run`) instead makes `wkg` pull the whole
+  `wasi:cli` package + transitive deps into `wit/deps`. The http path needs no
+  such translation — it already exports `wasi:http/incoming-handler` concretely.
+  When `Target` goes away (Step 11), drop this special-case in `synthesize_info`.
+
+- **Step 0 wrapper bugfix (`src/tools.rs::wkg_wit_fetch`).** As written in Step 0
+  it ran `wkg` with the wit dir as cwd and the *default* `--wit-dir wit`, so it
+  looked for `<wit>/wit` — wrong. Now it runs from the wit dir's **parent** and
+  passes `--wit-dir <name>`, so `wit/deps` and `wkg.lock` land correctly (lock
+  beside `wit/`, at the project root). Also: a bare relative `wit` has an empty
+  `Path::parent()`, and an **empty `current_dir` makes the OS fail program lookup
+  with a spurious "not found on PATH"** — normalized to `.` via the new
+  `run_dir_for` (unit-tested). This bit hard: relative-path `wavelet build`
+  silently warned "wkg not found" while absolute-path builds worked. If you add
+  `wac` invocations (Step 12) that set `current_dir`, watch for the same trap.
+
+- **Project layout / where files land.** `build.rs::project_root(paths)` =
+  `<src-parent>` (the parent of `src/`), normalized to `.` when bare; `wit/` is
+  its child. `wit_deps_dir` (Step 1) now derives from `project_root` too. For a
+  multi-component project, each host-dep component's fetch world is written as the
+  *single* root `wit/<world>.wit` (others first cleared via `clear_root_wit`,
+  which only removes top-level `*.wit`, never `wit/deps`), then fetched; deps and
+  the lock **accumulate** in the shared `wit/` across components. The templates
+  have exactly one host-dep component each, so in practice one world file remains
+  (`wit/main.wit` or `wit/app.wit`). If a future project has *two* host-dep
+  components, only the last world file persists on disk — fine for fetching, but
+  revisit if `wit/` must hold every component's world simultaneously.
+
+- **`wavelet new` wiring lives in `main.rs::new_cmd`**, not `scaffold.rs`: after
+  `scaffold::create`, it filters the written `.wvl` files and calls the new
+  `build::populate_project_wit(root, &src_paths)` (a units-only variant of the
+  build-time path that skips emit). Kept out of `scaffold` so the scaffold stays a
+  pure file-writer and `cargo test`'s scaffold tests need no tools.
+
+- **`.gitignore` unchanged** (still only `/out`), so a scaffolded project's
+  `wit/` and `wkg.lock` are tracked — i.e. "ships with deps pinned." If a later
+  step (docs, Step 13) decides `wit/deps` should be re-fetched rather than
+  vendored-in-vcs, adjust the template `.gitignore` there.
+
+- **Tests.** `tests/wkg_populate.rs`: hermetic assertions on the fetch worlds
+  (`http_fetch_world_is_host_only`, `cli_fetch_world_references_wasi_cli_run`,
+  `has_host_deps_only_flags_components_with_wasi`) + one **gated** live-fetch test
+  (`build_populates_wit_deps_and_lock`) that skips unless `wkg` is present *and* a
+  registry probe succeeds, then asserts a built cli project has `wit/deps/wasi-cli*`
+  and `wkg.lock`. `src/tools.rs` gained `run_dir_for_normalizes_empty_parent`
+  (pure, hermetic). Full `cargo test` green (49 lib + examples + http + wit_deps +
+  4 new). No language/example change → `regen-examples.sh` not needed.
+
+- **No-regression check done for real:** scaffolded an `--type=http` project,
+  `wavelet build` + `wavelet compose`, then `wasmtime serve` — the page renders
+  and echoes the request path. The http template still builds *and serves*. The
+  served project also ended up with `wit/deps/wasi-http-0.2.0` + `wkg.lock`.
+
+- **Verified locally with `wkg 0.15.1` at `~/.cargo/bin`.** The live test needs
+  network to reach the default registry; it self-skips otherwise.
 
 ---
 
