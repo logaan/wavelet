@@ -454,7 +454,7 @@ compile via the generic bridge and validate; magic untouched and green.
 
 ## Step 5 — Generic bridge: resource handles (own/borrow)
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Add resource *handles* to the generic bridge: produce a `WitTy::Handle`
 for any WIT `resource`/`own`/`borrow` from parsed WIT (passing/returning i32
@@ -471,7 +471,65 @@ magic.
 **Done when.** `cargo test` passes; own/borrow handles flow through the generic
 bridge from parsed WIT; magic untouched and green.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **A handle is `WitTy::Handle` — a single i32 flat, carried in an int box.**
+  `own<T>` and `borrow<T>` lower/lift *identically* (one i32; the canonical ABI
+  doesn't distinguish them at the flat level), so there is one arm, not two. The
+  full layout/codegen for `Handle` was already wired in by Step 3 (the enum arm
+  existed): `flat_checked`/`flat_len` (1×i32), `align_of`/`size_of`/`elem_size`
+  (4 bytes), and the four cores — `lower` boxes→i32 via `unbox_int`+`I32WrapI64`
+  (`src/emit.rs` ~1727), `lift` i32→box via `I64ExtendI32U`+`box_int` (~2025),
+  and `store_to_mem`/`load_from_mem` treat it as a 4-byte int. The import
+  core-signature loop (`feats.dep_calls`) and the export-wrapper loop both run
+  off `flat_checked`/`wit_ty` with no per-type branch, so handle params/results
+  flowed the moment `wit_ty` produced `Handle`. **So Step 5 was mostly *typing*,
+  not codegen.**
+
+- **What Step 5 actually changed — retiring `is_resource_name` for the generic
+  path.** `wit_ty` already mapped `own<...>`/`borrow<...>` → `Handle` (those win
+  before the allowlist), so *those two already worked* from parsed WIT. The gap
+  was a **bare resource-name** reference (a param typed just `widget`, not
+  `own<widget>`), which previously only typed as a handle if the name was baked
+  into the hardcoded `is_resource_name` allowlist (`src/emit.rs:174`, the wasi
+  http names). Now:
+  - **New `TypeDef::Resource` arm** (`src/emit.rs`, the `TypeDef` enum) — carried
+    on `Dep.type_defs` like enum/variant/flags, lands in `TypeEnv.defs`.
+  - **`witdep::resolve_dep`** projects `TypeDefKind::Resource` → `TypeDef::Resource`
+    into `type_defs` (the nested-package WIT text already emitted `resource name;`
+    via `type_decl`, unchanged).
+  - **`wit_ty`** now resolves a bare name to `Handle` when `env.defs` says it's a
+    `TypeDef::Resource`, *before* falling back to `is_resource_name`. The allowlist
+    is kept only as the magic-http fallback (that path has no `type_defs` for the
+    vendored wasi resources), and is otherwise untouched — Step 11 deletes it.
+
+- **Proof test:** `generic_bridge_passes_resource_handles_own_borrow` in
+  `tests/generic_bridge.rs`. A synthetic `acme:res` dep declares `resource widget`
+  and three fns: `open -> own<widget>`, `tag(borrow<widget>) -> s32`,
+  `peek(widget) -> s32` (bare-name param — the case that *requires* the new
+  `TypeDef::Resource` typing; `widget` is **not** in `is_resource_name`). Two
+  exports round-trip a handle entirely inside a body (`r/tag(r/open(n))`,
+  `r/peek(r/open(n))`) so `widget` never lands on the app's own exported WIT —
+  same Step-4 trick (inference can't see through dep calls → explicit
+  `Export {name … params {…} result …}` record form with a primitive result). The
+  built component fully re-encodes/validates with `wit-component`.
+
+- **Step 6 (resource methods + drop) hooks here.** Handles are represented as
+  `WitTy::Handle` (i32 in an int box). Method lowering should hook into
+  `Emitter::dep_call` (the same generic call path `dep_calls` drives), the way the
+  hand-coded `http_call` (`src/emit.rs` ~1600–1720) special-cases the wasi-http
+  resource ops today: a `[method]res.op` / `[static]res.op` / `[constructor]res` /
+  `[resource-drop]res` WIT function is *already* a `FuncSig` with handle params
+  (the `self`/`this` arg is an `own`/`borrow` handle), so the existing lower/lift
+  threading carries the handle args — what Step 6 adds is (a) recognising those
+  method-name shapes in the parsed WIT and (b) emitting the `[resource-drop]`
+  import + call. The synthetic-WIT + in-body-round-trip test pattern extends
+  directly: declare a `resource` with methods in the dep WIT and call them.
+
+- **No language/example/behaviour change** (the bridge is a parallel path; no
+  `Node`/interpreter change), so `regen-examples.sh` was **not** run. Full
+  `cargo test` green (49 lib + 4 generic_bridge + examples + http + wit_deps +
+  wkg_populate); the http template still builds via the untouched magic path.
 
 ---
 
