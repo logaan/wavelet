@@ -291,7 +291,7 @@ the scenes — the magic path remains the one actually used for codegen.
 
 ## Step 3 — Generic bridge: primitives, flattening, retptr, records, tuples
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Begin the generic canonical-ABI lowering that, given a WIT function
 signature from parsed WIT, emits the core call — starting with: parameter
@@ -310,7 +310,85 @@ parameterised by the signature instead of by a `match fname`.
 **Done when.** `cargo test` passes; functions over primitives/records/tuples
 compile via the generic bridge and validate; http/cli magic untouched and green.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **The generic bridge already existed and works — Step 3 mostly *proved* and
+  *completed* it.** The canonical-ABI lowering parameterised by a parsed
+  `FuncSig` is `Emitter::dep_call` (`src/emit.rs`), backed by the type machinery
+  `wit_ty` → `WitTy` and the per-shape functions `flat`/`flat_checked`/`flat_len`,
+  `align_of`/`size_of`/`elem_size`/`record_field_offsets`, and the four codegen
+  cores: `lower` (box → flats), `lift`/`lift_flat` (flats → box),
+  `store_to_mem`/`load_from_mem` (box ↔ canonical memory). The matching **export**
+  side is the wrapper loop in `emit_core_module` (search "`---- export
+  wrappers`"). The import core-signature is built in the `feats.dep_calls` loop
+  (params flattened via `flat_checked`, retptr `i32` appended when
+  `flat_result == Retptr`). **This is the scaffold Steps 4–6 extend** — add a new
+  `WitTy` arm and thread it through those same functions; there is no separate
+  "bridge module."
+
+- **What Step 3 added:** two value kinds the bridge couldn't carry — `WitTy::Char`
+  (single i32 flat = u32 codepoint, boxed in the int box like a `u32`; parsed
+  from `char`) and `WitTy::Tuple(Vec<WitTy>)` (anonymous positional aggregate;
+  parsed from `tuple<...>` via `split_type_args`). A tuple's **memory layout is
+  identical to a record** — `record_field_offsets` now handles both — so
+  `size_of`/`align_of`/`store`/`load` share one path; only the *value-level* box
+  differs (a `TAG_TUP` box, element ptrs at `@8+4i`, vs `TAG_REC`'s
+  key/value pairs at `@8+8i`). Tuples were also added to the two **retptr
+  aggregate** branches (in `dep_call` *and* the export wrapper) — a tuple result
+  goes through the callee-owned memory-area path like a record, not the
+  string/list `(ptr,len)` path.
+
+- **The Step 1 handoff note's "calling a dep fails at component encoding (type
+  mismatch: expected i32 but nothing on stack)" was a false alarm — NOT a real
+  bridge bug.** It was a malformed test source: the explicit Export form wants
+  `params:` as a **record** (`params: {n: s32}`), but that note's snippet used a
+  *list* (`params: [{n: s32}]`), which `parse_explicit_sig` silently dropped
+  (`Node::Rec` arm only), so the export was emitted with **zero** params while
+  the core wrapper took one — hence the stack mismatch. With the record form,
+  s32/string/record/tuple dep calls all build and validate cleanly on the
+  generic path. So the Step 1 e2e note ("only asserts it gets past import
+  resolution") can now be tightened: `tests/generic_bridge.rs` does a **full
+  validated build** through `dep_call`.
+
+- **Source-syntax gotchas for the next agent's tests** (all hit during Step 3):
+  - Result-type inference (`wit::infer`) does **not** see through a dep call, so
+    a function whose body is just `alias/fn(...)` needs the **explicit Export
+    record form** with `result:` — `Export {name: f params: {…} result: T}` — or
+    `collect` errors `cannot infer result type`.
+  - `params:`/record types use the record form `{k: T …}`; `tuple[a b]` for tuple
+    types; `DefType point {x: s32 y: s32}` (no `Rec` keyword in source).
+  - Multi-arg dep calls use the list-payload call form `alias/fn[a b]`;
+    single-arg uses `alias/fn(x)`.
+
+- **`char` is a boundary type only; there is no `char` *value* in the language
+  yet.** `Node::Char` still errors in `emit::expr` ("char values not supported")
+  and the interpreter has no char literal. Step 3 makes a WIT signature that
+  *mentions* `char` lower/lift correctly (a u32 carried in an int box), so a dep
+  taking/returning `char` compiles — but you can't yet write a `char` literal to
+  pass one. If a later step needs first-class chars, that's a language change
+  (interpreter + examples + `regen-examples.sh`), out of this bridge's scope.
+
+- **Floats (`f64`):** already handled by the pre-existing `WitTy::F64` (dec box);
+  Step 3 didn't need to touch it. `s64`/`u64` use `WitTy::S64` (i64 flat). Step 3
+  added no new `f32`/`s8`/`s16` widths — `wit_ty` maps `s8/s16/s32` → `IntS`,
+  `u8/u16/u32` → `IntU` as before (so sub-i32 widths are boxed as i32; the
+  component encoder accepts this for the flat ABI). If Step 4+ needs `f32`, add a
+  `WitTy::F32` arm.
+
+- **Test:** `tests/generic_bridge.rs` (2 tests) builds one-component projects that
+  import a synthetic `acme:shapes` / `acme:pairs` interface from `wit/deps` (no
+  compiler knowledge of them) and **fully build + `wit-component`-validate** them
+  via the generic path — covering s32/bool/char primitives, a record, tuples
+  (incl. a `tuple<s32, string>` with a heterogeneous string element, a `tuple<
+  point, point>` of records, and a retptr `tuple<s32, s32>` result). It is the
+  template to *extend* in Steps 4–6: add functions over the new kinds to a
+  synthetic interface and assert the build validates.
+
+- **Magic untouched.** No change to `http_call`/`http_imports`/`is_resource_name`
+  or the cli helpers. Full `cargo test` green (49 lib + examples + http +
+  wit_deps + wkg_populate + 2 new generic_bridge). No language/example behaviour
+  change, so `regen-examples.sh` was not needed; the http template still builds
+  and serves via the magic path (http suite green).
 
 ---
 
