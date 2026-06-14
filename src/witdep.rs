@@ -100,6 +100,13 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
                         .collect::<Result<Vec<_>, String>>()?;
                     types.push((type_name.clone(), fields));
                 }
+                TypeDefKind::Resource => {
+                    // An opaque host resource: carried as a handle. Recording it
+                    // in `type_defs` lets the boundary `TypeEnv` resolve a bare
+                    // reference (a param typed just `name`, not `own<name>`) to a
+                    // handle through the generic path — no `is_resource_name`.
+                    type_defs.push((type_name.clone(), TypeDef::Resource));
+                }
                 TypeDefKind::Enum(en) => {
                     let cases = en.cases.iter().map(|c| c.name.clone()).collect();
                     type_defs.push((type_name.clone(), TypeDef::Enum(cases)));

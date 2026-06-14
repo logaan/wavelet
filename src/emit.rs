@@ -145,11 +145,14 @@ fn split_type_args(inner: &str) -> Vec<String> {
     out
 }
 
-/// A named non-record WIT type definition (enum/variant/flags), carried as the
-/// type *strings* parsed from WIT so `wit_ty` can resolve a reference to it.
-/// Records keep their own (legacy) map; everything else lands here.
+/// A named non-record WIT type definition (resource/enum/variant/flags), carried
+/// as the type *strings* parsed from WIT so `wit_ty` can resolve a reference to
+/// it. Records keep their own (legacy) map; everything else lands here.
 #[derive(Clone)]
 pub enum TypeDef {
+    /// `resource` — an opaque host-owned type. Wavelet never inspects it; a
+    /// reference to the bare name (or `own<name>`/`borrow<name>`) is a handle.
+    Resource,
     /// `enum` — ordered, payload-less case names.
     Enum(Vec<String>),
     /// `variant` — ordered cases, each with an optional payload type-string.
@@ -195,8 +198,16 @@ fn is_resource_name(s: &str) -> bool {
 }
 
 fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
-    // A resource handle: `own<T>` / `borrow<T>`, or a bare wasi resource name.
-    if s.starts_with("own<") || s.starts_with("borrow<") || is_resource_name(s) {
+    // A resource handle. `own<T>` / `borrow<T>` are always handles; a bare name
+    // is a handle when the boundary `TypeEnv` declares it a `resource` (the
+    // generic path, fed from parsed WIT). `is_resource_name` is the legacy
+    // allowlist the magic http path still leans on — it has no `type_defs` for
+    // the vendored wasi resources — kept here only as that fallback.
+    if s.starts_with("own<")
+        || s.starts_with("borrow<")
+        || matches!(env.defs.get(s), Some(TypeDef::Resource))
+        || is_resource_name(s)
+    {
         return Ok(WitTy::Handle);
     }
     if let Some(inner) = s.strip_prefix("list<").and_then(|r| r.strip_suffix('>')) {
@@ -241,6 +252,9 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
                 WitTy::Record(resolved)
             } else if let Some(def) = env.defs.get(other) {
                 match def.clone() {
+                    // Unreachable: a bare resource name is caught by the handle
+                    // check at the top of `wit_ty`. Mapped for exhaustiveness.
+                    TypeDef::Resource => WitTy::Handle,
                     TypeDef::Enum(cases) => WitTy::Enum(cases),
                     TypeDef::Flags(names) => WitTy::Flags(names),
                     TypeDef::Variant(cases) => {
