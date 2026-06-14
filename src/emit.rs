@@ -552,6 +552,86 @@ fn import_iface(path: &str) -> String {
     }
 }
 
+/// The version at which we vendor the WASI proxy surface (`src/wasi-http.wit`).
+const WASI_VERSION: &str = "0.2.0";
+
+/// Vendored released WASI 0.2.0 WIT (io + clocks + http), nested-package form.
+const WASI_HTTP_WIT: &str = include_str!("wasi-http.wit");
+
+/// A package namespace satisfied by the host (and described by vendored WIT),
+/// rather than by another file in the build set.
+pub fn is_external_package(pkg: &str) -> bool {
+    pkg.starts_with("wasi:")
+}
+
+/// An export/import that names an external WIT interface directly — e.g.
+/// `wasi:http/incoming-handler` — rather than a local interface like `api`.
+fn is_external_iface(iface: &str) -> bool {
+    iface.contains(':')
+}
+
+/// Version an external interface path to the version we vendor:
+/// `wasi:http/incoming-handler` → `wasi:http/incoming-handler@0.2.0`.
+fn external_versioned(path: &str) -> String {
+    format!("{path}@{WASI_VERSION}")
+}
+
+/// One host function a `http/<fname>` intrinsic lowers to: the (module, field,
+/// core param types, core result types) of the canonical-ABI lowering of a WIT
+/// function. The signatures are the *flattened* core signatures wasmtime
+/// expects; `wit_component::ComponentEncoder` re-checks them against the
+/// vendored WIT at encode time, so a mistake fails the build rather than
+/// miscompiling.
+type HttpImport = (&'static str, &'static str, Vec<ValType>, Vec<ValType>);
+
+/// The host imports a `http/<fname>` intrinsic needs. Most map to a single WIT
+/// function; `write` is a composite (get the body's stream, write+flush it,
+/// then drop the stream — a child resource that must be dropped before
+/// `outgoing-body.finish` or finish traps), so it pulls in three.
+///
+/// The fallible operations hide their plumbing: `body`/`write` unwrap `ok`,
+/// and `set`/`finish`/the flush drop their `result` — so the source reads like
+/// ordinary calls.
+fn http_imports(fname: &str) -> Option<Vec<HttpImport>> {
+    use ValType::{I32, I64};
+    let t = "wasi:http/types@0.2.0";
+    let s = "wasi:io/streams@0.2.0";
+    Some(match fname {
+        // [constructor]fields() -> own<fields>
+        "fields" => vec![(t, "[constructor]fields", vec![], vec![I32])],
+        // [constructor]outgoing-response(headers: own<fields>) -> own<outgoing-response>
+        "outgoing-response" => vec![(t, "[constructor]outgoing-response", vec![I32], vec![I32])],
+        // [method]outgoing-response.body(self) -> result<own<outgoing-body>>  (retptr)
+        "body" => vec![(t, "[method]outgoing-response.body", vec![I32, I32], vec![])],
+        // [method]incoming-request.path-with-query(self) -> option<string>  (retptr)
+        "path-with-query" => {
+            vec![(t, "[method]incoming-request.path-with-query", vec![I32, I32], vec![])]
+        }
+        // [static]response-outparam.set(param: own<response-outparam>,
+        //   response: result<own<outgoing-response>, error-code>)
+        // error-code flattens (with numeric widening) to disc + [i32,i64,i32,i32,i32,i32];
+        // joined with the ok arm's single i32 and the result discriminant this is
+        // the 9-value signature below. We only ever pass ok(response).
+        "set" => vec![(
+            t,
+            "[static]response-outparam.set",
+            vec![I32, I32, I32, I32, I64, I32, I32, I32, I32],
+            vec![],
+        )],
+        // composite: outgoing-body.write -> output-stream, then write+flush, then
+        // drop the stream before the body is finished.
+        "write" => vec![
+            (t, "[method]outgoing-body.write", vec![I32, I32], vec![]),
+            (s, "[method]output-stream.blocking-write-and-flush", vec![I32, I32, I32, I32], vec![]),
+            (s, "[resource-drop]output-stream", vec![I32], vec![]),
+        ],
+        // [static]outgoing-body.finish(this: own<outgoing-body>,
+        //   trailers: option<own<trailers>>) -> result<_, error-code>  (retptr)
+        "finish" => vec![(t, "[static]outgoing-body.finish", vec![I32, I32, I32, I32], vec![])],
+        _ => return None,
+    })
+}
+
 /// `("demo:shout@0.1.0", "api")` → `"demo:shout/api@0.1.0"`
 fn versioned_iface(pkg: &str, iface: &str) -> String {
     match pkg.split_once('@') {
@@ -999,7 +1079,18 @@ impl<'a> Emitter<'a> {
     ) -> Result<(), String> {
         let head_node = self.arena.node(head).clone();
         match head_node {
-            Node::Qsym(alias, fname) => self.dep_call(fx, &alias, &fname, payload),
+            Node::Qsym(alias, fname) => {
+                let external = self
+                    .info
+                    .imports
+                    .iter()
+                    .any(|i| i.alias == alias && is_external_package(&i.package));
+                if external {
+                    self.http_call(fx, &fname, payload)
+                } else {
+                    self.dep_call(fx, &alias, &fname, payload)
+                }
+            }
             Node::Sym(name) => match name.as_str() {
                 "if-MACRO" => self.if_form(fx, payload, tail),
                 "do-MACRO" => self.do_form(fx, payload, tail),
@@ -1355,6 +1446,129 @@ impl<'a> Emitter<'a> {
                         }
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Emit a `http/<fname>` intrinsic: a call into the host wasi:http /
+    /// wasi:io surface. Resource handles are lowered/lifted as i32; the
+    /// `result`/`option` plumbing each operation returns is unwrapped or
+    /// dropped here so the source reads like ordinary calls (see [`http_imports`]).
+    fn http_call(&mut self, fx: &mut FnCtx, fname: &str, payload: NodeId) -> Result<(), String> {
+        use ValType::I32;
+        let types_mod = "wasi:http/types@0.2.0";
+        let streams_mod = "wasi:io/streams@0.2.0";
+        let args = self.payload_items(payload);
+        // A retptr area big enough for any result we read or discard here.
+        let scratch = 32;
+        match fname {
+            "fields" => {
+                fx.op(I::Call(self.import_idx(types_mod, "[constructor]fields")));
+                self.lift(fx, &WitTy::Handle);
+            }
+            "outgoing-response" => {
+                self.expr(fx, args[0], false)?;
+                self.lower(fx, &WitTy::Handle)?;
+                fx.op(I::Call(self.import_idx(types_mod, "[constructor]outgoing-response")));
+                self.lift(fx, &WitTy::Handle);
+            }
+            // result<own<T>> method: read the handle the host wrote to our retptr
+            // (the `ok` arm at the payload offset) and box it.
+            "body" => {
+                let f = self.import_idx(types_mod, "[method]outgoing-response.body");
+                self.expr(fx, args[0], false)?;
+                self.lower(fx, &WitTy::Handle)?;
+                let area = fx.local(I32);
+                fx.op(I::I32Const(scratch));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalTee(area));
+                fx.op(I::Call(f));
+                fx.op(I::LocalGet(area));
+                fx.op(I::I32Load(ma(4, 2))); // own<outgoing-body> handle
+                self.lift(fx, &WitTy::Handle);
+            }
+            // composite: get the body's output-stream, write+flush the bytes,
+            // then drop the stream (a child resource) before the body is finished.
+            "write" => {
+                let write_f = self.import_idx(types_mod, "[method]outgoing-body.write");
+                let flush_f =
+                    self.import_idx(streams_mod, "[method]output-stream.blocking-write-and-flush");
+                let drop_f = self.import_idx(streams_mod, "[resource-drop]output-stream");
+                // stream = outgoing-body.write(body).ok
+                self.expr(fx, args[0], false)?;
+                self.lower(fx, &WitTy::Handle)?;
+                let area = fx.local(I32);
+                fx.op(I::I32Const(scratch));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalTee(area));
+                fx.op(I::Call(write_f));
+                let stream = fx.local(I32);
+                fx.op(I::LocalGet(area));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(stream));
+                // stream.blocking-write-and-flush(bytes); result dropped
+                fx.op(I::LocalGet(stream));
+                self.expr(fx, args[1], false)?;
+                self.lower(fx, &WitTy::Str)?; // string bytes == list<u8> (ptr, len)
+                fx.op(I::I32Const(scratch));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::Call(flush_f));
+                // drop the stream before the body is finished
+                fx.op(I::LocalGet(stream));
+                fx.op(I::Call(drop_f));
+                fx.op(I::I32Const(self.unit_addr() as i32));
+            }
+            "path-with-query" => {
+                let f = self.import_idx(types_mod, "[method]incoming-request.path-with-query");
+                let opt = WitTy::Option(Box::new(WitTy::Str));
+                self.expr(fx, args[0], false)?;
+                self.lower(fx, &WitTy::Handle)?;
+                let area = fx.local(I32);
+                fx.op(I::I32Const(size_of(&opt) as i32));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalTee(area));
+                fx.op(I::Call(f));
+                self.load_from_mem(fx, &opt, area, 0)?;
+            }
+            "set" => {
+                let f = self.import_idx(types_mod, "[static]response-outparam.set");
+                // set(param, ok(response)): evaluate both handles, then push the
+                // canonical lowering of `ok(response)` — disc 0, the response
+                // handle, and typed zeros for the (unused) error-code slots.
+                self.expr(fx, args[0], false)?;
+                self.lower(fx, &WitTy::Handle)?;
+                let param = fx.local(I32);
+                fx.op(I::LocalSet(param));
+                self.expr(fx, args[1], false)?;
+                self.lower(fx, &WitTy::Handle)?;
+                let resp = fx.local(I32);
+                fx.op(I::LocalSet(resp));
+                fx.op(I::LocalGet(param));
+                fx.op(I::I32Const(0)); // result disc = ok
+                fx.op(I::LocalGet(resp)); // ok payload (own<outgoing-response>)
+                fx.op(I::I32Const(0)); // error-code joined slot (i32)
+                fx.op(I::I64Const(0)); // error-code joined slot (i64)
+                fx.op(I::I32Const(0));
+                fx.op(I::I32Const(0));
+                fx.op(I::I32Const(0));
+                fx.op(I::I32Const(0));
+                fx.op(I::Call(f));
+                fx.op(I::I32Const(self.unit_addr() as i32));
+            }
+            "finish" => {
+                let f = self.import_idx(types_mod, "[static]outgoing-body.finish");
+                self.expr(fx, args[0], false)?;
+                self.lower(fx, &WitTy::Handle)?; // outgoing-body
+                fx.op(I::I32Const(0)); // trailers: none (option disc)
+                fx.op(I::I32Const(0)); // trailers handle (unused)
+                fx.op(I::I32Const(scratch));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::Call(f));
+                fx.op(I::I32Const(self.unit_addr() as i32));
+            }
+            other => {
+                return Err(format!("`http/{other}` is not a supported wasi:http operation"));
             }
         }
         Ok(())
@@ -2119,6 +2333,22 @@ fn emit_core_module(
             .iter()
             .find(|i| &i.alias == alias)
             .ok_or(format!("unknown import alias `{alias}`"))?;
+        // A call through a host (wasi:*) import is an http intrinsic: its core
+        // import signature comes from the canonical-ABI table, not a build-set
+        // dependency. The component encoder re-validates these against the
+        // vendored WIT, so a wrong signature fails the build loudly.
+        if is_external_package(&imp.package) {
+            let ops = http_imports(fname)
+                .ok_or(format!("`{}/{fname}` is not a supported wasi:http operation", imp.alias))?;
+            for (module, field, p, r) in ops {
+                // Several intrinsics can share a host import (e.g. a stream
+                // drop); register each only once.
+                if !em.import_fn.contains_key(&(module.to_string(), field.to_string())) {
+                    add_import(&mut em, module, field, p, r);
+                }
+            }
+            continue;
+        }
         let dep = deps
             .get(&imp.package)
             .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
@@ -2300,7 +2530,13 @@ fn emit_core_module(
         };
         let t = em.ty_idx(fparams, fresults);
         em.bodies.push((t, fx.finish()));
-        let own_iface = versioned_iface(&info.package, &sig.iface);
+        // An external interface (wasi:http/incoming-handler) is exported under
+        // its own versioned name; a local one lands in this package.
+        let own_iface = if is_external_iface(&sig.iface) {
+            external_versioned(&sig.iface)
+        } else {
+            versioned_iface(&info.package, &sig.iface)
+        };
         exports.push((format!("{own_iface}#{}", sig.name), take()));
     }
 
@@ -3240,6 +3476,7 @@ fn synthesize_world_wit(
     feats: &Features,
 ) -> Result<String, String> {
     let is_command = info.target.as_deref() == Some("wasi:cli/command");
+    let is_http = info.target.as_deref() == Some("wasi:http/proxy");
     let mut out = format!("package {};\n\n", info.package);
 
     let api_exports: Vec<&FuncSig> = info
@@ -3251,7 +3488,9 @@ fn synthesize_world_wit(
         &api_exports.iter().map(|s| (*s).clone()).collect::<Vec<_>>(),
         !info.types.is_empty(),
     );
-    for iface in &ifaces {
+    // External interfaces (e.g. wasi:http/incoming-handler) are defined by the
+    // vendored WIT; we only export them by name, never re-declare them here.
+    for iface in ifaces.iter().filter(|i| !is_external_iface(i)) {
         out.push_str(&format!("interface {iface} {{\n"));
         if iface == "api" {
             for (name, ty) in &info.types {
@@ -3272,21 +3511,37 @@ fn synthesize_world_wit(
         out.push_str("  import wasi:cli/environment@0.2.0;\n");
     }
     for imp in &info.imports {
-        let dep = deps
-            .get(&imp.package)
-            .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
         let iface = import_iface(&imp.path);
-        out.push_str(&format!("  import {};\n", versioned_iface(&dep.package, &iface)));
+        if is_external_package(&imp.package) {
+            // host-provided: the path already is the external interface
+            out.push_str(&format!("  import {};\n", external_versioned(&imp.path)));
+        } else {
+            let dep = deps
+                .get(&imp.package)
+                .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
+            out.push_str(&format!("  import {};\n", versioned_iface(&dep.package, &iface)));
+        }
+    }
+    if is_http {
+        // The response pipeline writes the body through wasi:io/streams, so the
+        // world imports it even though the source only names wasi:http/types.
+        out.push_str("  import wasi:io/streams@0.2.0;\n");
     }
     for iface in &ifaces {
-        out.push_str(&format!("  export {iface};\n"));
+        if is_external_iface(iface) {
+            out.push_str(&format!("  export {};\n", external_versioned(iface)));
+        } else {
+            out.push_str(&format!("  export {iface};\n"));
+        }
     }
     if is_command {
         out.push_str("  export wasi:cli/run@0.2.0;\n");
     }
     out.push_str("}\n");
 
-    if feats.needs_stdout || feats.needs_env || is_command {
+    if is_http {
+        out.push_str(WASI_HTTP_WIT);
+    } else if feats.needs_stdout || feats.needs_env || is_command {
         out.push_str(WASI_PACKAGES);
     }
     for dep in deps.values() {

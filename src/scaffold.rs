@@ -69,7 +69,7 @@ pub fn create(name: &str, kind: ProjectKind) -> Result<(PathBuf, Vec<PathBuf>), 
         }
         ProjectKind::Http => {
             write("README.md", http_readme(name), false)?;
-            write("src/counter.wvl", counter_wvl(&slug), false)?;
+            write("src/greeting.wvl", greeting_wvl(&slug), false)?;
             write("src/app.wvl", app_wvl(&slug), false)?;
             write("scripts/build.sh", http_build_sh(&slug), true)?;
             write("scripts/serve.sh", SERVE_SH.to_string(), true)?;
@@ -263,7 +263,7 @@ here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
 cd \"$here\"
 
 wavelet build src/*.wvl -o out
-wavelet compose out/{slug}-app.wasm out/{slug}-counter.wasm -o out/app.wasm
+wavelet compose out/{slug}-app.wasm out/{slug}-greeting.wasm -o out/app.wasm
 echo \"built out/app.wasm\"
 "
     )
@@ -275,7 +275,7 @@ fn http_readme(name: &str) -> String {
 # {name}
 
 A [Wavelet](https://logaan.github.io/wavelet/) HTTP component: a web page that
-shows a number, with a button that increments it.
+greets you and echoes the path you requested.
 
 ## Run it
 
@@ -283,9 +283,9 @@ shows a number, with a button that increments it.
 scripts/serve.sh
 ```
 
-Then open <http://localhost:8080> and click **+1**. Each click reloads the page
-with the next count, computed by the `increment` function in
-`src/counter.wvl`.
+Then open <http://localhost:8080> (try a path like `/hello`). Each request lands
+in `handle`, which builds the page — the greeting wording comes from the
+`greet` function in `src/greeting.wvl`, across the component boundary.
 
 `scripts/build.sh` compiles `src/*.wvl` into the git-ignored `out/` directory
 and links them into `out/app.wasm`; `scripts/serve.sh` does that and then runs
@@ -295,31 +295,13 @@ the component with [`wasmtime serve`](https://docs.wasmtime.dev/).
 
 - `src/app.wvl` — the web front end. Implements the `wasi:http/incoming-handler`
   interface: every request lands in `handle`, which renders the page.
-- `src/counter.wvl` — the domain model. Pure counter logic, with no knowledge of
-  HTTP, imported by `app.wvl` across the component boundary.
+- `src/greeting.wvl` — the domain model. The pure `greet` function, with no
+  knowledge of HTTP, imported by `app.wvl` across the component boundary.
 
 ## Learn more
 
 Wavelet is a homoiconic language for the WebAssembly Component Model. See the
 documentation at <https://logaan.github.io/wavelet/>.
-"
-    )
-}
-
-fn counter_wvl(slug: &str) -> String {
-    format!(
-        "\
-// counter.wvl — the domain model.
-//
-// Pure counter logic with no knowledge of HTTP. Keeping the rules in their own
-// component means the web front end (app.wvl) is just plumbing, and the same
-// logic could back a CLI, a test, or a different front end unchanged.
-Package \"{slug}:counter@0.1.0\"
-
-/// One more than `n`.
-Export increment
-Def increment Fn {{n: s64}}
-  add[n 1]
 "
     )
 }
@@ -330,24 +312,18 @@ fn app_wvl(slug: &str) -> String {
 // app.wvl — the HTTP front end.
 //
 // This component implements the `wasi:http/incoming-handler` interface: an HTTP
-// host (here, `wasmtime serve`) calls `handle` for every request. Wavelet needs
-// no special \"http\" support — adopting the `wasi:http/proxy` world and exporting
-// the interface is the whole story, exactly like implementing any other WIT
-// interface.
+// host (here, `wasmtime serve`) calls `handle` for every request. Adopting the
+// `wasi:http/proxy` world and exporting the interface is the whole story; the
+// `http/*` intrinsics wrap the wasi:http response pipeline so the source reads
+// like ordinary calls.
 //
-// State lives in the URL: the \"+1\" link carries the next count, which the
-// domain model's `increment` computes. So the server itself stays stateless.
+// The page is stateless: it greets the world (wording from the greeting
+// component, across the boundary) and echoes the path you requested.
 Package \"{slug}:app@0.1.0\"
 Target \"wasi:http/proxy\"
 
 Import {{pkg: \"wasi:http/types@0.2.0\" as: http}}
-Import {{pkg: \"{slug}:counter/api\" as: counter}}
-
-// The trailing number of a \"...=N\" query string, defaulting to 0.
-Def count-in Fn {{query: string}}
-  Match read(head(reverse(split[query \"=\"])))
-    [(ok(n)   to-s64(n))
-     (err(e)  0)]
+Import {{pkg: \"{slug}:greeting/api\" as: greeting}}
 
 // The path-and-query of a request, defaulting to \"/\".
 Def path-of Fn {{request: incoming-request}}
@@ -355,28 +331,27 @@ Def path-of Fn {{request: incoming-request}}
     [(some(p)  p)
      (none     \"/\")]
 
-// The HTML page for a given count. The button links back with the next count.
-Def page Fn {{count: s64}}
+// The HTML page: a greeting from the domain component, plus the request path.
+Def page Fn {{path: string}}
   str-cat[
     \"<!doctype html>\\n\"
     \"<title>{slug}</title>\\n\"
-    \"<h1>\" to-string(count) \"</h1>\\n\"
-    \"<a href=\\\"/?count=\" to-string(counter/increment(count)) \"\\\">+1</a>\\n\"
+    \"<h1>\" greeting/greet(\"world\") \"</h1>\\n\"
+    \"<p>You requested: \" path \"</p>\\n\"
   ]
 
-// wasi:http/incoming-handler: render the page and write it back as the response.
+// wasi:http/incoming-handler: build the response, then write the page to it.
 Export {{iface: \"wasi:http/incoming-handler\" name: handle
          params: {{request: incoming-request response-out: response-outparam}}}}
 Def handle Fn {{request: incoming-request, response-out: response-outparam}}
-  Let {{count:    count-in(path-of(request))
-        response: http/outgoing-response(http/fields())
+  Let {{response: http/outgoing-response(http/fields())
         body:     http/body(response)}}
     // The standard wasi:http 0.2 response sequence: hand the response to the
-    // outparam, stream the HTML body, then finish it.
+    // outparam, write the body, then finish it.
     Do [
-      http/set[response-out ok(response)]
-      http/blocking-write-and-flush[http/write(body) page(count)]
-      http/finish[body none]
+      http/set[response-out response]
+      http/write[body page(path-of(request))]
+      http/finish[body]
     ]
 "
     )
@@ -473,7 +448,7 @@ mod tests {
             ".gitignore",
             "README.md",
             "src/app.wvl",
-            "src/counter.wvl",
+            "src/greeting.wvl",
             "scripts/build.sh",
             "scripts/serve.sh",
         ] {
@@ -483,9 +458,10 @@ mod tests {
 
         let app = fs::read_to_string(root.join("src/app.wvl")).unwrap();
         assert!(app.contains("Package \"widgets:app@0.1.0\""), "{app}");
-        assert!(app.contains("widgets:counter/api"), "{app}");
-        let counter = fs::read_to_string(root.join("src/counter.wvl")).unwrap();
-        assert!(counter.contains("Package \"widgets:counter@0.1.0\""), "{counter}");
+        assert!(app.contains("Target \"wasi:http/proxy\""), "{app}");
+        assert!(app.contains("widgets:greeting/api"), "{app}");
+        let greeting = fs::read_to_string(root.join("src/greeting.wvl")).unwrap();
+        assert!(greeting.contains("Package \"widgets:greeting@0.1.0\""), "{greeting}");
 
         let _ = fs::remove_dir_all(&dir);
     }

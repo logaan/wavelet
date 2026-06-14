@@ -39,6 +39,12 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
     for u in &units {
         let mut deps = HashMap::new();
         for imp in &u.info.imports {
+            // External host imports (wasi:*) are satisfied by the host at
+            // runtime, not by a sibling file; their WIT is vendored, so they
+            // need no Dep entry.
+            if emit::is_external_package(&imp.package) {
+                continue;
+            }
             let &di = index.get(&imp.package).ok_or(format!(
                 "{}: import `{}` is not satisfied by any file in the build set",
                 u.path, imp.path
