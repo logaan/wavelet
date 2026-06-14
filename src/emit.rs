@@ -2603,7 +2603,10 @@ fn emit_core_module(
             FlatRes::Retptr => {
                 let ty = wit_ty(sig.result.as_deref().unwrap(), &em.type_env)?;
                 let area = fx.local(I32);
-                if matches!(ty, WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..)) {
+                if matches!(
+                    ty,
+                    WitTy::Record(_) | WitTy::Tuple(_) | WitTy::Option(_) | WitTy::Result(..)
+                ) {
                     // store the value's canonical layout into a callee-owned area
                     let rbox = fx.local(I32);
                     fx.op(I::LocalSet(rbox));
