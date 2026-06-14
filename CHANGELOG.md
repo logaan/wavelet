@@ -13,20 +13,26 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
-## [0.2.4] - 2026-06-14
+## [0.2.5] - 2026-06-14
 
 ### Added
-- Homebrew install path: `brew install logaan/tap/wavelet` installs prebuilt
-  `wavelet` and `wavelet-lsp` binaries (no Rust toolchain required), documented
-  in the README.
 - Release builds now publish the `wavelet` CLI as well (previously only
   `wavelet-lsp`), for macOS (arm64 and x86_64) and Linux (x86_64 and arm64),
   plus a per-platform `wavelet-<target>.tar.gz` bundle consumed by the Homebrew
   formula.
 
 ### Changed
+- The Homebrew formula now installs prebuilt binaries instead of building from
+  source, so `brew install logaan/tap/wavelet` no longer fetches a Rust
+  toolchain (`--HEAD` still builds from source).
 - The release workflow no longer fails the whole release when one target's
   build leg fails; it publishes whatever binaries succeeded.
+
+## [0.2.4] - 2026-06-14
+
+### Added
+- Homebrew install path: `brew install logaan/tap/wavelet`, documented in the
+  README.
 
 ## [0.2.3] - 2026-06-14
 
@@ -87,7 +93,8 @@ Initial release.
   artifacts.
 - Docusaurus documentation site with a live, wasm-compiled `<Playground>`.
 
-[Unreleased]: https://github.com/logaan/wavelet/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/logaan/wavelet/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/logaan/wavelet/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/logaan/wavelet/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/logaan/wavelet/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/logaan/wavelet/compare/v0.2.1...v0.2.2
