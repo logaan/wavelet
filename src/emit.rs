@@ -805,25 +805,28 @@ fn versioned_iface(pkg: &str, iface: &str) -> String {
 ///                                     `http/outgoing-response` — the resource name)
 /// - `[method]res.op`        → `op`
 /// - `[static]res.op`        → `op`
-/// - `[resource-drop]res`    → `res`  (synthetic, see [`crate::witdep`])
+/// - `[resource-drop]res`    → `drop-res`  (synthetic, see [`crate::witdep`])
 ///
 /// So `r/body` resolves to `[method]outgoing-response.body`, `r/fields` to
-/// `[constructor]fields`, etc. — the generic counterpart to the `match fname`
-/// in `http_call`.
-fn dep_func_op(name: &str) -> &str {
+/// `[constructor]fields`, and `r/drop-output-stream` to
+/// `[resource-drop]output-stream` — the generic counterpart to the `match fname`
+/// in `http_call`. Drop is spelled `drop-<res>` (not the bare `<res>`) so it
+/// never collides with the resource's own constructor.
+fn dep_func_op(name: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
     if let Some(rest) = name.strip_prefix("[constructor]") {
-        return rest;
+        return Cow::Borrowed(rest);
     }
     if let Some(rest) = name.strip_prefix("[resource-drop]") {
-        return rest;
+        return Cow::Owned(format!("drop-{rest}"));
     }
     for prefix in ["[method]", "[static]"] {
         if let Some(rest) = name.strip_prefix(prefix) {
             // `res.op` → `op`
-            return rest.rsplit_once('.').map(|(_, op)| op).unwrap_or(rest);
+            return Cow::Borrowed(rest.rsplit_once('.').map(|(_, op)| op).unwrap_or(rest));
         }
     }
-    name
+    Cow::Borrowed(name)
 }
 
 /// Resolve a source-visible op name to the dep's [`FuncSig`] in `iface`,
@@ -839,7 +842,7 @@ fn resolve_dep_func<'a>(
     let mut matches = dep
         .funcs
         .iter()
-        .filter(|f| f.iface == iface && (f.name == fname || dep_func_op(&f.name) == fname));
+        .filter(|f| f.iface == iface && (f.name == fname || dep_func_op(&f.name) == *fname));
     let first = matches.next().ok_or(format!(
         "`{}` does not export `{fname}` in `{iface}`",
         dep.package
