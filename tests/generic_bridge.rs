@@ -185,3 +185,47 @@ fn generic_bridge_lowers_enum_variant_flags_lists_options() {
     assert!(text.contains("acme:kinds/api"), "import not wired into the component");
     assert!(text.contains("demo:app/api"), "forwarding api not exported");
 }
+
+/// Step 5 kinds — resource *handles* (`own`/`borrow`, and a bare resource-name
+/// reference) — flow through the *generic* bridge from parsed WIT, with no
+/// `is_resource_name` allowlist entry for the dep's resource. A handle is a
+/// single i32 flat (own and borrow lower/lift identically), carried in an int
+/// box so ordinary code can pass it around without inspecting it.
+///
+/// As with the Step 4 kinds, each handle is round-tripped entirely *inside* a
+/// body — a dep fn that returns a handle feeds a dep fn that takes one — so the
+/// dep-defined `widget` resource never appears in this package's own WIT. That
+/// keeps the app interface over primitives (which inference can produce) while
+/// still exercising both the lift (handle out of the host) and lower (handle
+/// back in) paths. The whole component re-encodes/validates with `wit-component`.
+#[test]
+fn generic_bridge_passes_resource_handles_own_borrow() {
+    // `open` mints an `own<widget>`; `tag` reads a `borrow<widget>`; `peek`
+    // takes the resource *by bare name* (no `own`/`borrow` wrapper), which only
+    // types as a handle if the boundary resolves `widget` as a resource through
+    // the generic path — i.e. with `is_resource_name` retired here.
+    let wit = "package acme:res@0.1.0;\n\
+        interface api {\n  \
+          resource widget;\n  \
+          open: func(seed: s32) -> own<widget>;\n  \
+          tag: func(w: borrow<widget>) -> s32;\n  \
+          peek: func(w: widget) -> s32;\n\
+        }\n";
+
+    // `tag-trip` lifts an `own<widget>` then lowers it as a `borrow<widget>`;
+    // `peek-trip` lowers it against a bare-name parameter. Both keep `widget`
+    // off this package's own exported WIT.
+    let app = "Package \"demo:app@0.1.0\"\n\n\
+        Import {pkg: \"acme:res/api\" as: r}\n\n\
+        Export {name: tag-trip params: {n: s32} result: s32}\n\
+        Def tag-trip Fn {n: s32}\n  \
+          r/tag(r/open(n))\n\n\
+        Export {name: peek-trip params: {n: s32} result: s32}\n\
+        Def peek-trip Fn {n: s32}\n  \
+          r/peek(r/open(n))\n";
+
+    let bytes = build_against_wit("res", "acme-res.wit", wit, app);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("acme:res/api"), "import not wired into the component");
+    assert!(text.contains("demo:app/api"), "forwarding api not exported");
+}
