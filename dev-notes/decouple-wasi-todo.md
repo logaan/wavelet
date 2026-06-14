@@ -43,9 +43,6 @@ subagent (and tell it to relay them onward if it spawns further agents):
 - `cargo test` — always.
 - `./scripts/regen-examples.sh` — after any language/example change (regenerates
   `docs/examples.json`, rebuilds the docs wasm, re-locks `tests/examples.rs`).
-- http no-regression check — `wavelet new --template http <tmp>`, `wavelet build`
-  it, and confirm the produced component serves (mirror the existing http build
-  test added in commit `b86badb`).
 
 ---
 
@@ -57,6 +54,7 @@ subagent (and tell it to relay them onward if it spawns further agents):
 internal wrapper for invoking them. No language/codegen change yet.
 
 **Scope.**
+
 - A small module (e.g. `src/tools.rs`) that locates `wkg` and `wac` on `PATH`,
   reports a clear actionable error if missing, and wraps the invocations the
   later steps need (`wkg wit fetch`, `wkg wit build`, `wac compose`, `wac plug`,
@@ -68,7 +66,7 @@ internal wrapper for invoking them. No language/codegen change yet.
 `wac --version` and surfaces a helpful error when a tool is absent. Nothing else
 calls the wrapper yet.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -83,6 +81,7 @@ The vendored `WASI_PACKAGES` / `wasi-http.wit` blobs stay as-is; this step only
 adds a new source, it doesn't remove the old one.
 
 **Scope.**
+
 - `src/build.rs` (`build_files`, `src/build.rs:42`–`56`): add the `wit/deps`
   lookup path. Parse with `wit-parser` (already a dependency).
 - Whatever `Dep` construction the emitter expects, populated from parsed WIT.
@@ -92,7 +91,7 @@ adds a new source, it doesn't remove the old one.
 **Done when.** `cargo test` passes; an external WIT package placed in `wit/deps`
 is parseable and resolvable; existing magic still primary and unchanged.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -106,6 +105,7 @@ synthesize the project's own WIT into `wit/` and run `wkg wit fetch` (with
 the scenes — the magic path remains the one actually used for codegen.
 
 **Scope.**
+
 - `wavelet build`: write the synthesized world into `wit/` (reuse the
   `wavelet wit` synthesizer so emitted and synthesized WIT stay identical), then
   invoke `wkg wit fetch`.
@@ -117,7 +117,7 @@ the scenes — the magic path remains the one actually used for codegen.
 **Done when.** `cargo test` passes; a built sample project has `wit/deps` +
 `wkg.lock`; no codegen behaviour change.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -132,6 +132,7 @@ and tuples. Built **alongside** the existing magic (not replacing it yet) and
 parameterised by the signature instead of by a `match fname`.
 
 **Scope.**
+
 - New lowering scaffold in `src/emit.rs` driven by a parsed WIT signature,
   covering the value kinds listed above.
 - Prove it: a synthetic test interface whose functions take/return these kinds
@@ -141,7 +142,7 @@ parameterised by the signature instead of by a `match fname`.
 **Done when.** `cargo test` passes; functions over primitives/records/tuples
 compile via the generic bridge and validate; http/cli magic untouched and green.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -154,6 +155,7 @@ strings (memory allocation/copy via `cabi_realloc`), `option`, `result`, `enum`,
 `variant`, and `flags`. Still alongside the magic.
 
 **Scope.**
+
 - Add these kinds to the generic lowering.
 - Prove it: extend the synthetic test interface to exercise each kind through the
   generic path; re-encode cleanly.
@@ -161,7 +163,7 @@ strings (memory allocation/copy via `cabi_realloc`), `option`, `result`, `enum`,
 **Done when.** `cargo test` passes; functions over the full non-resource type set
 compile via the generic bridge and validate; magic untouched and green.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -176,6 +178,7 @@ generic path*. Resource *methods* and *drop* come in Step 6. Still alongside the
 magic.
 
 **Scope.**
+
 - Handle typing + lowering/lifting in the generic bridge from parsed WIT.
 - Prove it: a synthetic interface that passes own/borrow handles compiles through
   the generic path and validates.
@@ -183,7 +186,7 @@ magic.
 **Done when.** `cargo test` passes; own/borrow handles flow through the generic
 bridge from parsed WIT; magic untouched and green.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -195,6 +198,7 @@ bridge from parsed WIT; magic untouched and green.
 `[static]`, `[constructor]`) and resource `drop`. Still alongside the magic.
 
 **Scope.**
+
 - Method/constructor/static/drop lowering in the generic bridge.
 - Prove it: the WASI-http operations currently hand-coded in `http_call`
   (`fields`, `outgoing-response`, `body`, `path-with-query`, `set`, `write`,
@@ -205,7 +209,7 @@ bridge from parsed WIT; magic untouched and green.
 generic bridge in a test; the existing http template still builds+serves via the
 magic path (no regression).
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -223,7 +227,7 @@ interface through the generic export path in a test; the `run`-specific
 `() -> result` wrapper is reproducible as "export this function into
 `wasi:cli/run` with its WIT signature." Magic untouched.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -239,7 +243,7 @@ import bridge + generic export end-to-end, with WIT coming from `wit/deps`
 through the generic path (this is the no-regression gate); the http magic is now
 dead code reachable only by removal in Step 11.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -257,7 +261,7 @@ the generic path where it already covers them, or via the magic until Step 10.
 generic path; the cli magic is now dead code reachable only by removal in
 Step 11.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -271,6 +275,7 @@ explicitly-imported WASI interfaces (or an ecosystem wrapper) via the generic
 bridge.
 
 **Scope.**
+
 - Remove the builtins from `builtins.rs` and `interp.rs`.
 - Migrate the `cli` template and every doc/example that used them; regenerate
   examples (`./scripts/regen-examples.sh`) and re-lock `tests/examples.rs`.
@@ -278,7 +283,7 @@ bridge.
 **Done when.** `cargo test` and `./scripts/regen-examples.sh` both green; no
 references to the removed builtins remain.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -297,7 +302,7 @@ synthesized WIT and emitted WIT share one path.
 remaining references to the deleted symbols or to `Target`; `wit.rs` no longer
 duplicates target logic.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -312,6 +317,7 @@ single-plug case) via the Step 0 wrapper. Host imports (`wasi:*`) are left
 unsatisfied for the runtime to provide. Optionally verify with `wac targets`.
 
 **Scope.**
+
 - `.wac` generation + `wac` invocation in `wavelet build`.
 - Add the integration tests that actually **build and serve** both the `cli` and
   `http` templates end-to-end (today's template tests only assert text).
@@ -321,7 +327,7 @@ unsatisfied for the runtime to provide. Optionally verify with `wac targets`.
 **Done when.** `cargo test` green including the new build-and-serve integration
 tests; a multi-component project composes to a single component.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -337,7 +343,7 @@ the removal of the builtins and `Target`.
 matches the new behaviour; no stale references to the removed builtins/`Target`
 remain in `docs/`.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -349,6 +355,7 @@ remain in `docs/`.
 grammars' token/keyword lists where present, keeping them in sync with the lexer.
 
 **Scope.**
+
 - `docs/src/prism/wavelet.js`, `tooling/neovim/syntax/wavelet.vim`,
   `tooling/vscode/`.
 - The `tooling/neovim` submodule is a separate repo (`logaan/wavelet.nvim`):
@@ -359,7 +366,7 @@ grammars' token/keyword lists where present, keeping them in sync with the lexer
 **Done when.** All three grammars match the current lexer; the submodule pointer
 is bumped; `cargo test` green.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -374,7 +381,7 @@ removed builtins.
 **Done when.** The LSP no longer surfaces the removed builtins and resolves
 `wit/deps` imports; `cargo test` green.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -389,7 +396,7 @@ and fold the decoupled design into `dev-notes/design.md` / `dev-notes/notes.md`.
 builtins), the new `wkg`/`wac` dependencies, and the new project layout; design
 docs reflect the decoupled architecture; `cargo test` green.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
 
 ---
 
@@ -402,6 +409,7 @@ docs reflect the decoupled architecture; `cargo test` green.
 by an agent.
 
 **Scope.**
+
 - Rename `## [Unreleased]` to `## [X.Y.Z] - <date>` and add a fresh empty
   `## [Unreleased]`.
 - Bump the version in `Cargo.toml` *and* `tooling/wavelet-lsp/Cargo.toml` to
@@ -414,4 +422,4 @@ by an agent.
 **Done when.** `cargo test` green; `scripts/changelog-section.sh vX.Y.Z` prints
 the new section; the `vX.Y.Z` tag is pushed.
 
-**Handoff notes.** _(fill in)_
+**Handoff notes.** *(fill in)*
