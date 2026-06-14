@@ -298,6 +298,40 @@ fn infer_sig(
 /// Synthesize WIT text for a file (§6.1), as shown by `wavelet wit`.
 pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
     let info = collect(arena, roots)?;
+    synthesize_info(arena, &info, false)
+}
+
+/// Synthesize a fetch-ready world for a file: like [`synthesize`], but emitting
+/// only the *host* (`wasi:*`) imports.
+///
+/// `wkg wit fetch` reads the world(s) in a `wit/` directory and tries to fetch
+/// every referenced package from a registry. Build-set (sibling-`.wvl`) imports
+/// have no registry — they are satisfied locally — so handing them to `wkg`
+/// fails with "no registry configured". The host imports are exactly the ones
+/// `wkg` *should* fetch into `wit/deps`, and their WIT text here is byte-for-byte
+/// what [`synthesize`] emits, so the world `wkg` parses matches what the emitter
+/// componentizes against. (Sibling packages are kind-(2) dependencies wired by
+/// the build set / `wac`, not kind-(1) WIT fetched by `wkg`; see
+/// `dev-notes/decouple-wasi.md`.)
+pub fn synthesize_fetch_world(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
+    let info = collect(arena, roots)?;
+    synthesize_info(arena, &info, true)
+}
+
+/// Whether a file's synthesized world references any host (`wasi:*`) package,
+/// i.e. whether it has anything for `wkg wit fetch` to pull into `wit/deps`.
+pub fn has_host_deps(info: &FileInfo) -> bool {
+    info.target.is_some()
+        || info.imports.iter().any(|i| i.package.starts_with("wasi:"))
+        || iface_order(&info.exports, !info.types.is_empty())
+            .iter()
+            .any(|i| is_external_iface(i))
+}
+
+/// The body shared by [`synthesize`] and [`synthesize_fetch_world`]. When
+/// `host_only`, sibling (non-`wasi:`) imports are omitted so the result is a
+/// world `wkg wit fetch` can resolve entirely from registries.
+fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<String, String> {
     let mut out = String::new();
     out.push_str(&format!("package {};\n", info.package));
 
@@ -331,7 +365,18 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
     // wasi:http/proxy is realized by exporting the handler interface, not by
     // including the proxy world (which would pull in the whole proxy closure).
     if let Some(t) = &info.target {
-        if !is_http {
+        if host_only {
+            // `wkg wit fetch` can't merge a world that `include`s a world whose
+            // package it hasn't fetched yet (chicken-and-egg). Referencing one
+            // concrete interface of the target package instead makes `wkg` pull
+            // the whole package (and its transitive deps) into `wit/deps`. The
+            // `wasi:cli/command` world's natural concrete reference is its
+            // `wasi:cli/run` export. (This target translation is Step-2 glue
+            // that retires with `Target` itself — see decouple-wasi-todo.md.)
+            if t == "wasi:cli/command" {
+                out.push_str("  export wasi:cli/run@0.2.0;\n");
+            }
+        } else if !is_http {
             out.push_str(&format!("  include {t};\n"));
         }
     }
@@ -340,7 +385,7 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
         // build-set dependency is imported by its bare path.
         if imp.package.starts_with("wasi:") {
             out.push_str(&format!("  import {};\n", external_versioned(&imp.path)));
-        } else {
+        } else if !host_only {
             out.push_str(&format!("  import {};\n", imp.path));
         }
     }
@@ -350,7 +395,7 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
     for iface in &ifaces {
         if is_external_iface(iface) {
             out.push_str(&format!("  export {};\n", external_versioned(iface)));
-        } else {
+        } else if !host_only {
             out.push_str(&format!("  export {iface};\n"));
         }
     }
