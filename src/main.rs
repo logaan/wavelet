@@ -17,6 +17,7 @@ fn main() -> ExitCode {
             }
         },
         [cmd, path] if cmd == "wit" => wit_cmd(path),
+        [cmd, rest @ ..] if cmd == "new" && !rest.is_empty() => new_cmd(rest),
         [cmd, rest @ ..] if cmd == "run" && !rest.is_empty() => run_cmd(rest),
         [cmd, rest @ ..] if cmd == "build" && !rest.is_empty() => build_cmd(rest),
         [cmd, rest @ ..] if cmd == "compose" && !rest.is_empty() => compose_cmd(rest),
@@ -25,6 +26,7 @@ fn main() -> ExitCode {
             eprintln!("       wavelet expand <file.wvl>");
             eprintln!("       wavelet repl");
             eprintln!("       wavelet wit <file.wvl>");
+            eprintln!("       wavelet new <name> [--type=http]");
             eprintln!("       wavelet run <file.wvl>... [-- <args>...]");
             eprintln!("       wavelet build <file.wvl>... [-o <dir>]");
             eprintln!("       wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]");
@@ -92,6 +94,75 @@ fn compose_cmd(rest: &[String]) -> ExitCode {
         }
         Err(e) => {
             eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn new_cmd(rest: &[String]) -> ExitCode {
+    use wavelet::scaffold::{self, ProjectKind};
+
+    let mut name: Option<&str> = None;
+    let mut kind_str: Option<&str> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        let arg = rest[i].as_str();
+        if let Some(v) = arg.strip_prefix("--type=") {
+            kind_str = Some(v);
+        } else if arg == "--type" || arg == "-t" {
+            match rest.get(i + 1) {
+                Some(v) => {
+                    kind_str = Some(v);
+                    i += 1;
+                }
+                None => {
+                    eprintln!("new: `{arg}` needs a value (e.g. --type=http)");
+                    return ExitCode::from(2);
+                }
+            }
+        } else if arg.starts_with('-') {
+            eprintln!("new: unknown option `{arg}`");
+            return ExitCode::from(2);
+        } else if name.is_none() {
+            name = Some(arg);
+        } else {
+            eprintln!("new: unexpected argument `{arg}`");
+            return ExitCode::from(2);
+        }
+        i += 1;
+    }
+
+    let name = match name {
+        Some(n) => n,
+        None => {
+            eprintln!("new: missing project name (usage: wavelet new <name> [--type=http])");
+            return ExitCode::from(2);
+        }
+    };
+
+    // `http` is the only template, and the default when `--type` is omitted.
+    let kind = match kind_str {
+        Some(s) => match ProjectKind::parse(s) {
+            Ok(k) => k,
+            Err(e) => {
+                eprintln!("new: {e}");
+                return ExitCode::from(2);
+            }
+        },
+        None => ProjectKind::Http,
+    };
+
+    match scaffold::create(name, kind) {
+        Ok((root, files)) => {
+            println!("created {}/", root.display());
+            for f in files {
+                println!("  {}", f.display());
+            }
+            println!("\nnext:\n  cd {}\n  scripts/serve.sh", root.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("new: {e}");
             ExitCode::FAILURE
         }
     }

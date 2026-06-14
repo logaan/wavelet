@@ -13,6 +13,12 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+- `wavelet new <name>` scaffolds a new project: a `.gitignore`, a `src/` with a
+  `wasi:http/incoming-handler` front end and the domain model it imports, and
+  `scripts/build.sh` + `scripts/serve.sh`. `--type=http` selects the template
+  and is the default.
+
 ## [0.2.5] - 2026-06-14
 
 ### Added

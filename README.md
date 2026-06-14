@@ -106,6 +106,7 @@ scripts/coverage.sh --lcov   # write target/coverage/lcov.info (CI / editor gutt
 ## The `wavelet` CLI
 
 ```
+wavelet new <name> [--type=http]                     # scaffold a new project (http is the default)
 wavelet read <file.wvl>                              # parse and print the canonical WAVE form tree
 wavelet expand <file.wvl>                            # run macros to fixpoint and print the result
 wavelet wit <file.wvl>                               # show the synthesized WIT world
@@ -128,6 +129,18 @@ WASM!
 `build` emits a real wasm component per file (core wasm wrapped with
 canonical-ABI lift/lower and componentized via `wasm-tools`); `compose` links
 them with `wac`-style auto-plugging.
+
+`new` scaffolds a fresh project into a directory of the given name — a
+`.gitignore`, a `src/` with two `.wvl` files (a `wasi:http/incoming-handler`
+front end and the domain model it imports), and `scripts/build.sh` +
+`scripts/serve.sh`. `--type=http` selects the template and is the default, so
+`wavelet new my-app` is enough:
+
+```bash
+$ wavelet new my-app
+$ cd my-app
+$ scripts/serve.sh        # build, then `wasmtime serve` on http://localhost:8080
+```
 
 ## Editor support
 
