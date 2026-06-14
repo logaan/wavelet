@@ -1,8 +1,7 @@
 # Plan: decouple the compiler from WASI
 
-Status: draft for review, rewritten against **0.5.0** (which added the
-`wasi:http/proxy` support). Contains **open questions for Logan** (see the end,
-and inline `❓` markers). Nothing here is implemented yet.
+Status: draft, written against **0.5.0** (which added the `wasi:http/proxy`
+support). Nothing here is implemented yet.
 
 ## Goal
 
@@ -30,6 +29,9 @@ The end state:
   exists** — its signatures, types, and resource methods come from parsed WIT.
 - WASI becomes "just some WIT packages the user imports," resolved through the
   same generic mechanism as a user's own `Import`s.
+- External WIT and dependency components are fetched and composed with standard
+  Component-Model tooling (`wkg` for packages, `wac` for composition) rather
+  than vendored into the compiler binary.
 - The language still supports the *types* those interfaces require (resources,
   variants, results, …) generically, not via name allowlists.
 - A pure component that imports nothing compiles to a bare component with no WASI
@@ -39,6 +41,27 @@ This matches intent already recorded in `dev-notes/notes.md` ("By default
 wavelet should be working with absolutely no wasi"; "Where is it getting the
 definition of `wasi:cli/command` from?"; "If we weren't targeting wasi could we
 compile to bare components?").
+
+## Decisions driving this plan
+
+- **No magic worlds.** Drop the `Target` form entirely. A Wavelet file declares
+  the WIT worlds/interfaces it includes directly; there are no compiler-known
+  worlds.
+- **No WASI-flavoured builtins.** `print`, `println`, `args`, `read-line`, and
+  `env` are removed from the language. Output, args, etc. become ordinary calls
+  into imported WIT interfaces, provided by the wider ecosystem rather than the
+  compiler.
+- **External WIT comes from `wkg`.** The compiler does not vendor WASI WIT.
+  Dependency WIT is fetched into a project `wit/` tree (with a `wkg.lock` lock
+  file) by `wkg`, and parsed with `wit-parser`.
+- **Composition uses `wac`.** A built project is assembled into a single final
+  component by `wac`, wiring the project's own components (and any bundled
+  dependency components) together.
+- **No regression.** The http template must keep building and serving at every
+  step; http must work through the *generic* WIT path before the hand-coded path
+  is deleted.
+- **Breaking is fine.** This is pre-1.0. Land it as one breaking release; no
+  deprecation window for the magic worlds.
 
 ## What is special-cased today (the inventory)
 
@@ -113,40 +136,91 @@ hand-coded http set, cannot be used at all.
 `print`, `println`, `read-line`, `args`, `env` are first-class builtins
 (`src/builtins.rs:18`); `print`/`println` call `crate::emit_output`
 (`src/builtins.rs:343`+). They are the language-level surface of the CLI
-coupling.
+coupling and are being removed (see "Decisions").
 
 ### E. The interpreter is not the http oracle
 
 `interp.rs` has no `http/*` intrinsic support — the http codegen in `emit.rs`
-has **no interpreter counterpart**, so `wavelet run` cannot run an http
-component (only `wavelet build` can emit one). This violates "the interpreter is
-the semantics oracle" (CLAUDE.md): the wasm backend defines http behaviour with
-nothing to validate it against. Decoupling should fix this asymmetry, not deepen
-it.
+has **no interpreter counterpart**. Today this is a coupling smell, but the fix
+is *deletion*, not adding http to the interpreter: once http is just generic
+calls into an imported WIT interface (step 2), there are no http-specific
+backend intrinsics left for the interpreter to disagree with. See "Interpreter
+scope" below.
+
+## Tooling and external dependencies
+
+Two BytecodeAlliance CLIs become runtime dependencies of `wavelet`:
+
+- **`wkg`** (from <https://github.com/bytecodealliance/wasm-pkg-tools>) — WIT
+  package management. Used to fetch dependency WIT into a project's `wit/` tree
+  and maintain a `wkg.lock` lock file. Relevant subcommands:
+  - `wkg wit fetch` — reads the world(s) defined in `wit/`, downloads their
+    dependencies into `wit/deps/`, and writes/updates a lock file. Use
+    `--type wit` so deps land as WIT text that `wit-parser` can read.
+  - `wkg wit build` — builds the `wit/` directory into a single WIT package
+    binary, fetching and embedding deps and generating a lock file. Useful when
+    we want one self-contained WIT artifact rather than a `deps/` tree.
+  - `wkg wit update` — refreshes the lock file to latest dependencies.
+  - `wkg get` — fetch a single package (`wasi:http@0.2.0`, …) when needed.
+- **`wac`** (`wac-cli`, from <https://github.com/bytecodealliance/wac>,
+  `cargo install wac-cli`) — component composition. `wkg` has no compose command,
+  so this is a separate tool. Relevant commands:
+  - `wac plug <socket>.wasm --plug <impl>.wasm -o out.wasm` — plug a plug
+    component's exports into a socket component's imports (simple case; more than
+    one `--plug` allowed).
+  - `wac compose [--deps-dir <dir>] [-d pkg=path] -o out.wasm composition.wac` —
+    full composition driven by a `.wac` source file (the WAC language) for
+    multi-component / transitive wiring. Deps resolve from a deps directory
+    (default `deps/`, layout `deps/<namespace>/<package>.wasm`) or via
+    `--dep name:pkg=path.wasm`. By default referenced deps are **embedded** in
+    the output; `--import-dependencies` leaves them as imports instead.
+  - `wac targets <component>.wasm <world>` — verify a built component targets a
+    given world; useful as a build-time conformance check.
+
+The Homebrew formula for `wavelet` must declare **`wkg` and `wac`** as
+dependencies so they are present wherever `wavelet build` / `wavelet new` run.
+
+### Two distinct kinds of "dependency"
+
+The plan deliberately separates them:
+
+1. **WIT interface definitions** (types and signatures) needed at *compile
+   time* to know what an import/export looks like — e.g. `wasi:http` defines
+   `incoming-handler`, `outgoing-response`, etc. These are fetched by `wkg` into
+   `wit/deps/` and parsed by the compiler.
+2. **Component implementations** to be linked into the *final artifact* — e.g. a
+   sibling Wavelet component, or a third-party component. These are wired by
+   `wac`.
+
+A host interface such as `wasi:http` is kind (1) at compile time but is *not*
+composed in: it stays an import in the final component, satisfied by the host
+runtime (wasmtime, a server, etc.). `wac` composes only the project's own
+components and any bundled dependency components.
 
 ## Proposed architecture
 
 The throughline: replace every hand-coded WASI lowering with **one generic
 canonical-ABI bridge** that can call/implement an arbitrary WIT function (incl.
 resource methods), driven by parsed WIT. CLI and HTTP then stop being compiler
-features and become ordinary uses of that bridge.
+features and become ordinary uses of that bridge, with their WIT supplied by
+`wkg` and their final wiring by `wac`.
 
-### 1. A general source of external WIT packages
+### 1. A general source of external WIT packages (via `wkg`)
 
 The compiler needs WIT for packages it does not compile (`wasi:io`, `wasi:cli`,
-`wasi:http`, `wasi:keyvalue`, a third party's package, …). The Component Model
-convention is a `wit/` directory with `wit/deps/<pkg>/*.wit`. Proposal:
+`wasi:http`, `wasi:keyvalue`, a third party's package, …).
 
+- A project carries a `wit/` directory. The world(s)/interfaces a Wavelet file
+  includes determine the package's dependencies; `wkg wit fetch` populates
+  `wit/deps/` and a `wkg.lock`.
 - Resolve an `Import` package by: (a) a sibling Wavelet file in the build set
-  (today), else (b) an external WIT package found on a WIT search path (default
-  `wit/deps`, overridable). Parse with `wit-parser` (already a dependency).
+  (today), else (b) an external WIT package found under `wit/deps`. Parse with
+  `wit-parser` (already a dependency).
 - Feed parsed external interfaces into the same `Dep`-shaped structure the
   emitter already consumes for Wavelet deps — so the import loop has one path,
   not an `is_external_package` fork.
-- Delete the vendored `WASI_PACKAGES` and `wasi-http.wit` blobs; ship WASI WIT
-  as resolvable `wit/deps` instead (or per Q1).
-
-❓ See Q1 for where these WIT files come from and how they're discovered.
+- Delete the vendored `WASI_PACKAGES` and `wasi-http.wit` blobs; all dependency
+  WIT now comes from `wit/deps` populated by `wkg`.
 
 ### 2. A generic canonical-ABI bridge (the heart of the work)
 
@@ -160,7 +234,9 @@ against the WIT at encode time, so this stays honest.
 
 - Resource support becomes general: a `WitTy::Handle` is produced for any WIT
   `resource`/`own`/`borrow` from parsed WIT, retiring the `is_resource_name`
-  allowlist (`src/emit.rs:127`).
+  allowlist (`src/emit.rs:127`). This is the largest chunk of work and must be
+  delivered with the decoupling so http keeps working through the generic path
+  (no regression).
 - A `kv/get`, `http/write`, or `acme/frobnicate` call all compile the same way.
 
 ### 3. Generic export of arbitrary interfaces
@@ -171,105 +247,98 @@ The existing `is_external_iface` export naming (`src/emit.rs:2535`) generalises
 cleanly; the `run`-specific `() -> result` wrapper goes away once `run` is just
 "export this function into `wasi:cli/run` with its WIT signature."
 
-### 4. Remove the `is_command` / `is_http` special cases
+### 4. Remove `Target`, the magic worlds, and the WASI builtins
 
-Once (1)–(3) exist, `Target "wasi:cli/command"` and `Target "wasi:http/proxy"`
-are generic "this component targets WIT world X" — emit `include <world>;` from
-parsed WIT and let the import/export machinery do the rest. Delete `is_command`,
-`is_http`, the forced `wasi:io/streams` import, `WASI_PACKAGES`,
-`WASI_HTTP_WIT`, `http_imports`, `http_call`, and the duplicated target tests in
-`src/wit.rs`. `Features` shrinks to just cross-component call discovery.
+- **Drop `Target`.** A Wavelet file declares the WIT worlds/interfaces it
+  includes directly (the include set drives `wkg` dependency resolution and the
+  synthesized world). There is no compiler-known target world.
+- **Delete the special cases.** Remove `is_command`, `is_http`, the forced
+  `wasi:io/streams` import, `WASI_PACKAGES`, `WASI_HTTP_WIT`, `http_imports`,
+  `http_call`, and the duplicated target tests in `src/wit.rs`. `Features`
+  shrinks to just cross-component call discovery.
+- **Remove the WASI builtins.** Delete `print`, `println`, `args`, `read-line`,
+  and `env` from `builtins.rs` and the interpreter. A program that wants stdout
+  imports `wasi:cli/stdout` (or an ecosystem wrapper) and calls it through the
+  generic bridge like any other interface.
 
-This forces a decision on `print`/`println`/`args` (Q2) and on whether the
-interpreter gains generic host shims (Q4).
+### 5. Build and project workflow (`wavelet new` / `wavelet build`)
 
-### 5. Make the interpreter an oracle for host calls
+The compiler pipeline (`read → expand → interpret/analyze → emit →
+componentize`) gains WIT resolution before emit and composition after
+componentize:
 
-Per CLAUDE.md, the interpreter must define the semantics the wasm backend is
-validated against. Today it can't run http. Options are in Q4; whichever we
-pick, the goal is that `wavelet run` and the wasm backend agree on a
-host-importing program (or that we consciously scope `wavelet run` to exclude
-host effects).
+- **`wavelet new`** scaffolds a project that includes the relevant WIT, then
+  runs `wkg wit fetch` to populate `wit/deps/` and write `wkg.lock`, so a fresh
+  project has its dependency WIT pinned.
+- **`wavelet build`**:
+  1. Synthesizes the project's own WIT (the world a Wavelet file implements plus
+     its imports) into the `wit/` directory — the same world `wavelet wit`
+     prints, so synthesized and emitted WIT stay identical.
+  2. Ensures dependency WIT is present and locked via `wkg` (`wkg wit fetch`,
+     respecting/updating `wkg.lock`).
+  3. Parses the full WIT (project + `wit/deps`) and emits each component (core
+     wasm → componentize against its world) through the generic bridge.
+  4. Generates a `.wac` file describing how the project's components (and any
+     bundled dependency components) wire together, and runs `wac` (`wac compose`,
+     or `wac plug` for the simple single-plug case) to produce **one** final
+     composed component artifact. Host imports (`wasi:*`) are left unsatisfied in
+     that artifact for the runtime to provide. `wac targets` can verify the
+     result against its intended world.
+
+### Interpreter scope
+
+The interpreter remains the semantics oracle, but it is *not* given native WASI
+shims. There is no longer any backend-only intrinsic (no `http/*` codegen
+without an interpreter counterpart) for it to diverge from: after step 2 the
+backend only lowers generic WIT calls. `wavelet run` evaluates pure programs and
+generic logic; calls into *host* interfaces (WASI and friends) are out of scope
+for `run` and are exercised by running the built component on a wasm runtime.
+That the interpreter "can't run http" is expected and fine — the compiled code
+has no built-in concept of http either.
 
 ## Downstream surfaces to update (per CLAUDE.md)
 
-- **Scaffold** (`src/scaffold.rs`): `cli` and `http` templates should import the
-  WASI interfaces explicitly (or via a std module, per Q2) once the magic is
-  gone. Add integration tests that actually *build* both templates (today's
-  tests only assert template text).
+- **Scaffold** (`src/scaffold.rs`): the `cli` and `http` templates declare their
+  WIT includes explicitly and rely on `wkg`-fetched deps instead of magic. Add
+  integration tests that actually *build* both templates (today's tests only
+  assert template text), exercising the full `wkg` + `wac` pipeline.
 - **Docs** (`docs/`, `docs/scripts/gen-examples.mjs`): examples using
-  `print`/`args`/`Target` may change shape; regenerate `docs/examples.json` and
-  re-lock `tests/examples.rs` via `./scripts/regen-examples.sh`.
-- **`wavelet wit`** (`src/wit.rs`): currently duplicates the target tests; it
-  must track the generic mechanism so synthesized WIT and emitted WIT stay
-  identical.
-- **Syntax highlighting** (Prism / Neovim / VS Code): only if token classes
-  change (unlikely here).
-- **LSP** (`tooling/`): import resolution / diagnostics must learn about
-  external WIT packages.
-- **CHANGELOG.md**: record the (breaking) changes under `## [Unreleased]`.
-- **design.md / notes.md**: fold the resolved questions back in.
+  `print`/`args`/`Target` change shape (those builtins and `Target` are gone);
+  rewrite affected prose and examples, regenerate `docs/examples.json`, and
+  re-lock `tests/examples.rs` via `./scripts/regen-examples.sh`. Document the new
+  project layout (`wit/`, `wkg.lock`) and the `wkg`/`wac` dependencies.
+- **`wavelet wit`** (`src/wit.rs`): must track the generic mechanism so the
+  synthesized WIT and the emitted WIT stay identical; remove its duplicated
+  target tests.
+- **Homebrew formula**: add `wkg` and `wac` as dependencies.
+- **Syntax highlighting** (Prism / Neovim / VS Code): update if removing
+  `Target` and the WASI builtins changes any token classes (e.g. builtin/keyword
+  lists). The `tooling/neovim` submodule must be committed/pushed and its pointer
+  bumped if its grammar changes.
+- **LSP** (`tooling/`): import resolution and diagnostics must learn about
+  external WIT packages under `wit/deps`, and stop offering the removed builtins.
+- **CHANGELOG.md**: record the (breaking) changes under `## [Unreleased]` —
+  removal of `Target`, removal of `print`/`println`/`args`/`read-line`/`env`,
+  the new `wkg`/`wac` dependencies, and the new project layout.
+- **design.md / notes.md**: fold the resolved design into the language design.
 
 ## Suggested sequencing
-
-1. External WIT resolution + parsed `Dep` (1), WASI WIT vendored as `wit/deps`,
-   behind the existing import path. No behaviour change.
-2. Generic canonical-ABI bridge (2) + generic export (3); prove it by making a
-   hand-written http/cli component build *alongside* the existing magic.
-3. Delete the `is_command`/`is_http` paths and the vendored blobs (4); migrate
-   templates and examples to the explicit form; de-duplicate `wit.rs`.
-4. Interpreter oracle parity (5).
 
 Each step ends green (`cargo test`, plus `./scripts/regen-examples.sh` once
 examples move).
 
----
-
-## Open questions for Logan
-
-**Q1 — Where do external WIT definitions come from?**
-(a) Vendor WASI 0.2 WIT into the repo and resolve a `wit/deps` directory per
-project (Component-Model standard, offline, explicit); (b) keep a
-compiler-bundled WASI snapshot exposed through the generic resolver (less typing,
-but the binary stays pinned to a WASI version); (c) registry fetch (later?). I
-lean (a) for projects, optionally (b) as a built-in fallback for well-known
-`wasi:*` packages. What should the default project layout look like?
-
-**Q2 — What happens to `print` / `println` / `args` (and `read-line` / `env`)?**
-Once the compiler is WASI-agnostic these can't secretly wire to `wasi:cli`.
-(a) Remove them from the language — a CLI program imports `wasi:cli/stdout` and
-calls it like any interface (maximally decoupled; `print("hi")` stops being a
-one-liner and every example changes); (b) move them into an optional std module
-(e.g. `wavelet:std/io`) authored as a thin wrapper over the WASI interfaces, so
-the *std library* depends on WASI but the *compiler* doesn't; (c) keep them as
-builtins that lower generically but require the user's world to already import
-the relevant interface. Which trade-off? (Biggest user-facing decision.)
-
-**Q3 — What should `Target` mean?**
-Is `Target "wasi:cli/command"` just sugar for `include`-ing that WIT world?
-Should it name *any* world from external WIT? Should a `Target`-less component
-produce a bare component world? I'd map it to WIT `include`. Confirm, or
-describe what you want.
-
-**Q4 — Interpreter behaviour with no built-in WASI.**
-`interp.rs` is the oracle but already can't run http. For a component that
-imports a host interface, should `wavelet run` (a) grow a small set of native
-shims for well-known WASI imports (so CLI programs still print and http programs
-can be exercised), living *outside* the language core; or (b) be scoped to pure
-programs, with host-backed ones run only on `wasmtime`? The oracle principle
-pushes toward (a). Preference?
-
-**Q5 — How general should resource support get, and when?**
-The generic bridge (step 2) needs real resource support (handles, methods,
-own/borrow, drop) sourced from parsed WIT, replacing the `is_resource_name`
-allowlist. This is the largest chunk. Do you want it delivered together with the
-decoupling (so http keeps working through the *generic* path with no regression),
-or staged — keep the hand-coded http path temporarily while the generic bridge
-is built, then cut over? I recommend "no regression": the http template must
-still build and serve at every step.
-
-**Q6 — Breaking changes vs. deprecation.**
-This is pre-1.0 and several changes are breaking (`print` semantics, `Target`
-meaning, project layout, dropping the magic worlds). One documented breaking
-release, or a deprecation window where the magic `wasi:cli/command` /
-`wasi:http/proxy` keep working while the explicit form is introduced?
+1. **External WIT resolution.** Wire `wkg`-populated `wit/deps` into the import
+   resolver and parse it into the `Dep` structure, behind the existing import
+   path. Vendored `WASI_PACKAGES`/`wasi-http.wit` can stay temporarily as a
+   fallback. No behaviour change.
+2. **Generic bridge + generic export with real resource support** (steps 2–3).
+   Prove it by making a hand-written http/cli component build through the
+   *generic* path *alongside* the existing magic — http template still builds and
+   serves (no regression).
+3. **Delete the magic** (step 4): remove `is_command`/`is_http`, the vendored
+   blobs, `Target`, and the WASI builtins; migrate templates and examples to the
+   explicit form; de-duplicate `wit.rs`.
+4. **Build/compose workflow** (step 5): `wavelet new` fetches via `wkg`;
+   `wavelet build` synthesizes `wit/`, fetches/locks deps, emits, and composes
+   the final artifact via a generated `.wac` and `wac`. Add the template
+   build-and-serve integration tests.
