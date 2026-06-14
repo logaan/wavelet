@@ -4344,18 +4344,36 @@ fn synthesize_world_wit(
     }
     out.push_str("}\n");
 
-    if is_http {
-        out.push_str(WASI_HTTP_WIT);
-    } else if feats.needs_stdout || feats.needs_env || is_command {
-        out.push_str(WASI_PACKAGES);
-    }
     // Append each dep's nested-package WIT, but emit any given package only once.
     // A `wit/deps` dep carries its whole transitive closure (e.g. both the
     // `wasi:http` and `wasi:io/streams` deps render `wasi:io`, `wasi:clocks`,
     // …), so concatenating them verbatim would define a package twice.
+    //
+    // The `wit/deps` packages are emitted *first* (recording their names), and
+    // the vendored magic blobs only afterwards for packages the deps didn't
+    // already provide. This matters for cli: the `print`/`println`/`args`
+    // builtins still drive the magic `wasi:cli/stdout`/`environment` imports
+    // (until Step 10), but a Step-9 cli also exports `wasi:cli/run` generically,
+    // so `wit/deps` carries the *full* `wasi:cli`/`wasi:io`/… closure. Preferring
+    // those full packages over the trimmed `WASI_PACKAGES` keeps cross-references
+    // (e.g. `wasi:clocks` → `wasi:io/poll`) resolvable; the trimmed `wasi:io`
+    // would be missing `poll`. Where deps supply nothing (the pure-magic path),
+    // the vendored blobs are emitted exactly as before.
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for dep in deps.values() {
         for block in split_package_blocks(&dep.package_wit) {
+            let dup = package_block_name(block).is_some_and(|name| !seen.insert(name));
+            if !dup {
+                out.push_str(block);
+            }
+        }
+    }
+    if is_http {
+        // The legacy magic-http path vendors its whole closure as one blob and
+        // never carries overlapping `wit/deps`, so it is emitted wholesale.
+        out.push_str(WASI_HTTP_WIT);
+    } else if feats.needs_stdout || feats.needs_env || is_command {
+        for block in split_package_blocks(WASI_PACKAGES) {
             let dup = package_block_name(block).is_some_and(|name| !seen.insert(name));
             if !dup {
                 out.push_str(block);
