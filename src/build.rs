@@ -45,12 +45,6 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
     for u in &units {
         let mut deps = HashMap::new();
         for imp in &u.info.imports {
-            // External host imports (wasi:*) are satisfied by the host at
-            // runtime, not by a sibling file; their WIT is vendored, so they
-            // need no Dep entry.
-            if emit::is_external_package(&imp.package) {
-                continue;
-            }
             // (a) A sibling Wavelet file in the build set satisfies the import.
             if let Some(&di) = index.get(&imp.package) {
                 let d = &units[di];
@@ -68,11 +62,21 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
             }
             // (b) Fall back to an external WIT package vendored under
             // `wit/deps`, parsed with `wit-parser` into the same `Dep` shape.
+            // This is how host (`wasi:*`) imports now resolve: with a real `Dep`
+            // carrying the interface's parsed signatures, the generic bridge
+            // lowers calls into them (http is routed this way as of Step 8).
             if let Some(dir) = &wit_deps_dir {
                 if let Some(dep) = crate::witdep::resolve_dep(dir, &imp.package)? {
                     deps.insert(imp.package.clone(), dep);
                     continue;
                 }
+            }
+            // (c) A host package not present in `wit/deps`: leave it to the
+            // hand-coded magic path (cli builtins / the legacy http intrinsics),
+            // which supplies its own vendored WIT and needs no `Dep`. This keeps
+            // the magic working until it is deleted in Step 11.
+            if emit::is_external_package(&imp.package) {
+                continue;
             }
             return Err(format!(
                 "{}: import `{}` is not satisfied by any file in the build set or `wit/deps`",
