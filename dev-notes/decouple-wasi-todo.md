@@ -398,7 +398,8 @@ docs reflect the decoupled architecture; `cargo test` green.
 - [ ] Done
 
 **Goal.** Once every box above is ticked, cut the breaking release per
-`CLAUDE.md`. The agent does this — no human is required.
+`CLAUDE.md` — this is an ordinary subagent step like the others, spawned and run
+by an agent.
 
 **Scope.**
 - Rename `## [Unreleased]` to `## [X.Y.Z] - <date>` and add a fresh empty
