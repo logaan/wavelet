@@ -308,8 +308,11 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
             }
         }
     };
+    let is_http = info.target.as_deref() == Some("wasi:http/proxy");
     let ifaces = iface_order(&info.exports, !info.types.is_empty());
-    for iface in &ifaces {
+    // External interfaces (e.g. wasi:http/incoming-handler) are defined by the
+    // host's WIT; we only export them by name, never re-declare them.
+    for iface in ifaces.iter().filter(|i| !is_external_iface(i)) {
         out.push_str(&format!("\ninterface {iface} {{\n"));
         if iface == "api" {
             for (name, ty) in &info.types {
@@ -325,17 +328,45 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
     }
 
     out.push_str(&format!("\nworld {} {{\n", info.world));
+    // wasi:http/proxy is realized by exporting the handler interface, not by
+    // including the proxy world (which would pull in the whole proxy closure).
     if let Some(t) = &info.target {
-        out.push_str(&format!("  include {t};\n"));
+        if !is_http {
+            out.push_str(&format!("  include {t};\n"));
+        }
     }
     for imp in &info.imports {
-        out.push_str(&format!("  import {};\n", imp.path));
+        // Host (wasi:*) imports name an external, versioned interface; a
+        // build-set dependency is imported by its bare path.
+        if imp.package.starts_with("wasi:") {
+            out.push_str(&format!("  import {};\n", external_versioned(&imp.path)));
+        } else {
+            out.push_str(&format!("  import {};\n", imp.path));
+        }
+    }
+    if is_http {
+        out.push_str("  import wasi:io/streams@0.2.0;\n");
     }
     for iface in &ifaces {
-        out.push_str(&format!("  export {iface};\n"));
+        if is_external_iface(iface) {
+            out.push_str(&format!("  export {};\n", external_versioned(iface)));
+        } else {
+            out.push_str(&format!("  export {iface};\n"));
+        }
     }
     out.push_str("}\n");
     Ok(out)
+}
+
+/// An interface that names an external WIT interface directly — it contains a
+/// `:` (e.g. `wasi:http/incoming-handler`) — rather than a local one like `api`.
+fn is_external_iface(iface: &str) -> bool {
+    iface.contains(':')
+}
+
+/// Version an external interface path to the WASI version Wavelet vendors.
+fn external_versioned(path: &str) -> String {
+    format!("{path}@0.2.0")
 }
 
 pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String> {
