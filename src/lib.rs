@@ -21,6 +21,8 @@ pub mod runner;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scaffold;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod tools;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod wit;
 
 // Browser playground bindings (compiled only for wasm).

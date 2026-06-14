@@ -91,6 +91,22 @@ cargo build --release # optimized binary at ./target/release/wavelet
 cargo test            # run the test suite
 ```
 
+### External tools
+
+`wavelet build` and `wavelet new` shell out to two BytecodeAlliance CLIs, which
+must be on your `PATH`:
+
+- **[`wkg`](https://github.com/bytecodealliance/wasm-pkg-tools)** — WIT package
+  management (fetches dependency WIT into a project's `wit/` tree and maintains
+  `wkg.lock`). Install with `cargo install wkg` or `brew install wkg`.
+- **[`wac`](https://github.com/bytecodealliance/wac)** — component composition
+  (wires components into one final artifact). Install with `cargo install
+  wac-cli` or `brew install wac`.
+
+The Homebrew formula (`brew install logaan/tap/wavelet`) declares both as
+dependencies, so a Homebrew install pulls them in automatically. Building the
+interpreter or running `cargo test` does **not** require them.
+
 ### Test coverage
 
 `scripts/coverage.sh` measures native test coverage with
