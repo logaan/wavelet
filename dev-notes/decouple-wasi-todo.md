@@ -394,7 +394,7 @@ compile via the generic bridge and validate; http/cli magic untouched and green.
 
 ## Step 4 — Generic bridge: lists, strings, options, results, enums, variants, flags
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Extend the Step 3 lowering to the remaining value types: lists and
 strings (memory allocation/copy via `cabi_realloc`), `option`, `result`, `enum`,
@@ -409,7 +409,46 @@ strings (memory allocation/copy via `cabi_realloc`), `option`, `result`, `enum`,
 **Done when.** `cargo test` passes; functions over the full non-resource type set
 compile via the generic bridge and validate; magic untouched and green.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **The full non-resource type set now flows through the generic bridge.** Lists,
+  strings, `option`, and `result` already worked from Step 3; this step added the
+  discriminated/bitset kinds: `WitTy::{Enum, Variant, Flags}` (`src/emit.rs:72`).
+  - Variants use an N-case lower/lift/store/load that *generalises* the 2-case
+    `option`/`result` path (see `cases()` at `src/emit.rs:114`, which maps
+    option→`[none, some(t)]`, result→`[ok(t), err(e)]`, enum→payload-less cases,
+    variant→its declared cases). Layout uses 1/2/4-byte discriminant sizing
+    (`disc_size`) and a max-payload join. Enums are a payload-less variant
+    (i32 discriminant ↔ `TAG_VAR` box); flags are an i32 bitset ↔ a record-of-bools
+    box, with 1/2/4-byte flags-word sizing (`flags_align`/`flags_size`).
+- **New `Dep.type_defs: Vec<(String, TypeDef)>` carrier** (`src/emit.rs:41`).
+  Records keep their own existing map; enum/variant/flags type *declarations*
+  travel via `type_defs` so the boundary `TypeEnv` can resolve a named type to a
+  `WitTy` (`wit_ty` at `src/emit.rs:244`). `witdep` now projects enum/variant/flags
+  into `type_defs` and renders them in the nested-package WIT text — `type_decl`
+  no longer errors on them (the Step 1 limitation noted under Step 1 is resolved
+  for these three kinds).
+- **Any test or caller that constructs an `emit::Dep` by hand must set the new
+  `type_defs` field** (e.g. `tests/wit_deps.rs` now passes `type_defs: Vec::new()`).
+  Watch for this when adding fixtures in Steps 5–7.
+- **Test source gotcha (still true):** inference can't see through a dep call, so
+  each exported fn that forwards a dep value must use the explicit
+  `Export {name: … params: {…} result: …}` record form with a primitive result.
+  The Step 4 proof test (`generic_bridge_lowers_enum_variant_flags_lists_options`
+  in `tests/generic_bridge.rs`) keeps the dep-defined `color`/`shape`/`perms` types
+  *off* the app's own WIT by round-tripping each value entirely inside a body
+  (`make-X` lifts, `X-code` lowers) — Wavelet source has no enum/variant/flags
+  type syntax to re-declare them on an export, so this in-body round-trip is the
+  way to exercise those lowerings until that syntax exists.
+- **Next (Steps 5–6): resource handles/methods.** Add a `WitTy::Handle` arm and
+  thread it through the same layout/lower/lift/store/load functions and the
+  export-wrapper / import-signature loops — same extension shape as this step.
+  The `is_resource_name` allowlist (`src/emit.rs:127`) is what Step 5 retires for
+  the generic path.
+- **Process note:** the agent that wrote `e60304e` (the enum/variant/flags
+  codegen) was cut off by a session limit before committing the proof tests,
+  ticking this box, or writing these notes; the orchestrator finished those.
+  `cargo test` is fully green (incl. the http template — magic untouched).
 
 ---
 

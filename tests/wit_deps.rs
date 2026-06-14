@@ -26,6 +26,7 @@ fn dep_from_wavelet(src: &str) -> Dep {
         funcs: info.exports.clone(),
         package_wit: emit::dep_package_wit(&arena, &info).expect("package_wit"),
         types: emit::dep_record_types(&arena, &info),
+        type_defs: Vec::new(),
     }
 }
 

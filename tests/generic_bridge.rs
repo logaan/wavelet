@@ -116,3 +116,72 @@ fn generic_bridge_lifts_tuple_results_via_retptr() {
         "import not wired into the component"
     );
 }
+
+/// Step 4 kinds — `enum`, `variant`, `flags`, plus `list`/`string`/`option`/
+/// `result` — all flow through the *generic* bridge. Each is threaded entirely
+/// *inside* a body: a dep function that produces the value (the lift path) feeds
+/// another dep function that consumes it (the lower path), so the value crosses
+/// the boundary in both directions while the app's exported signature mentions
+/// only primitives. That keeps the dep-defined types (`color`, `shape`, `perms`)
+/// off the app's own interface — Wavelet source has no enum/variant/flags type
+/// syntax to re-declare them — yet still exercises every new lowering, and the
+/// whole component re-encodes/validates with `wit-component`.
+#[test]
+fn generic_bridge_lowers_enum_variant_flags_lists_options() {
+    // `make-*` lifts a host-returned value into a box; `*-code` lowers a box
+    // back across the boundary. Variant cases carry mixed payloads (one with a
+    // string, one payload-less) to exercise the join + payload-offset paths.
+    let wit = "package acme:kinds@0.1.0;\n\
+        interface api {\n  \
+          enum color { red, green, blue }\n  \
+          flags perms { read, write, exec }\n  \
+          variant shape { circle(s32), point, label(string) }\n  \
+          make-color: func(n: s32) -> color;\n  \
+          color-code: func(c: color) -> s32;\n  \
+          make-perms: func(n: s32) -> perms;\n  \
+          perms-code: func(p: perms) -> s32;\n  \
+          make-shape: func(n: s32) -> shape;\n  \
+          shape-code: func(s: shape) -> s32;\n  \
+          make-list: func(n: s32) -> list<s32>;\n  \
+          list-sum: func(xs: list<s32>) -> s32;\n  \
+          make-text: func(n: s32) -> string;\n  \
+          text-len: func(s: string) -> s32;\n  \
+          make-opt: func(n: s32) -> option<string>;\n  \
+          opt-len: func(o: option<string>) -> s32;\n  \
+          make-res: func(n: s32) -> result<s32, string>;\n  \
+          res-code: func(r: result<s32, string>) -> s32;\n\
+        }\n";
+
+    // Each exported `*-trip` forwards `make-X` straight into `X-code`, so the
+    // dep value is lifted then lowered without ever appearing in this package's
+    // own WIT. Inference can't see through a dep call, so each uses the explicit
+    // Export record form with a primitive `result`.
+    let app = "Package \"demo:app@0.1.0\"\n\n\
+        Import {pkg: \"acme:kinds/api\" as: k}\n\n\
+        Export {name: color-trip params: {n: s32} result: s32}\n\
+        Def color-trip Fn {n: s32}\n  \
+          k/color-code(k/make-color(n))\n\n\
+        Export {name: perms-trip params: {n: s32} result: s32}\n\
+        Def perms-trip Fn {n: s32}\n  \
+          k/perms-code(k/make-perms(n))\n\n\
+        Export {name: shape-trip params: {n: s32} result: s32}\n\
+        Def shape-trip Fn {n: s32}\n  \
+          k/shape-code(k/make-shape(n))\n\n\
+        Export {name: list-trip params: {n: s32} result: s32}\n\
+        Def list-trip Fn {n: s32}\n  \
+          k/list-sum(k/make-list(n))\n\n\
+        Export {name: text-trip params: {n: s32} result: s32}\n\
+        Def text-trip Fn {n: s32}\n  \
+          k/text-len(k/make-text(n))\n\n\
+        Export {name: opt-trip params: {n: s32} result: s32}\n\
+        Def opt-trip Fn {n: s32}\n  \
+          k/opt-len(k/make-opt(n))\n\n\
+        Export {name: res-trip params: {n: s32} result: s32}\n\
+        Def res-trip Fn {n: s32}\n  \
+          k/res-code(k/make-res(n))\n";
+
+    let bytes = build_against_wit("kinds", "acme-kinds.wit", wit, app);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("acme:kinds/api"), "import not wired into the component");
+    assert!(text.contains("demo:app/api"), "forwarding api not exported");
+}
