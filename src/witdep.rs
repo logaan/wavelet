@@ -106,6 +106,17 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
                     // reference (a param typed just `name`, not `own<name>`) to a
                     // handle through the generic path — no `is_resource_name`.
                     type_defs.push((type_name.clone(), TypeDef::Resource));
+                    // The component model gives every resource an implicit
+                    // `[resource-drop]name` import (it is not a WIT `function`).
+                    // Synthesize a `FuncSig` for it — `own<name> -> ()` — so the
+                    // generic bridge can lower a drop call like any other op
+                    // (reached from source by the bare op name `name`).
+                    funcs.push(FuncSig {
+                        name: format!("[resource-drop]{type_name}"),
+                        iface: iface_name.clone(),
+                        params: vec![("self".to_string(), format!("own<{type_name}>"))],
+                        result: None,
+                    });
                 }
                 TypeDefKind::Enum(en) => {
                     let cases = en.cases.iter().map(|c| c.name.clone()).collect();

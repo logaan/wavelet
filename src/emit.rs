@@ -797,6 +797,62 @@ fn versioned_iface(pkg: &str, iface: &str) -> String {
     }
 }
 
+/// The source-visible operation name a (possibly mangled) WIT function name is
+/// reached by. A freestanding `f` is called as `f`; a resource operation is
+/// called by its *bare op name*, just like the hand-coded `http/<op>` magic:
+///
+/// - `[constructor]res`      → `res`  (the magic spells these `http/fields`,
+///                                     `http/outgoing-response` — the resource name)
+/// - `[method]res.op`        → `op`
+/// - `[static]res.op`        → `op`
+/// - `[resource-drop]res`    → `res`  (synthetic, see [`crate::witdep`])
+///
+/// So `r/body` resolves to `[method]outgoing-response.body`, `r/fields` to
+/// `[constructor]fields`, etc. — the generic counterpart to the `match fname`
+/// in `http_call`.
+fn dep_func_op(name: &str) -> &str {
+    if let Some(rest) = name.strip_prefix("[constructor]") {
+        return rest;
+    }
+    if let Some(rest) = name.strip_prefix("[resource-drop]") {
+        return rest;
+    }
+    for prefix in ["[method]", "[static]"] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            // `res.op` → `op`
+            return rest.rsplit_once('.').map(|(_, op)| op).unwrap_or(rest);
+        }
+    }
+    name
+}
+
+/// Resolve a source-visible op name to the dep's [`FuncSig`] in `iface`,
+/// matching freestanding names directly and resource operations by their bare
+/// op name (see [`dep_func_op`]). Errors if nothing matches, or if two ops in
+/// the interface share a bare name (ambiguous — the source must then be
+/// disambiguated by exact WIT name, which is not yet expressible).
+fn resolve_dep_func<'a>(
+    dep: &'a Dep,
+    iface: &str,
+    fname: &str,
+) -> Result<&'a crate::wit::FuncSig, String> {
+    let mut matches = dep
+        .funcs
+        .iter()
+        .filter(|f| f.iface == iface && (f.name == fname || dep_func_op(&f.name) == fname));
+    let first = matches.next().ok_or(format!(
+        "`{}` does not export `{fname}` in `{iface}`",
+        dep.package
+    ))?;
+    if let Some(second) = matches.next() {
+        return Err(format!(
+            "`{fname}` is ambiguous in `{}/{iface}`: matches both `{}` and `{}`",
+            dep.package, first.name, second.name
+        ));
+    }
+    Ok(first)
+}
+
 struct Emitter<'a> {
     arena: &'a Arena,
     info: &'a FileInfo,
@@ -1546,14 +1602,15 @@ impl<'a> Emitter<'a> {
             .get(&imp.package)
             .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
         let iface = import_iface(&imp.path);
-        let sig = dep
-            .funcs
-            .iter()
-            .find(|f| f.name == fname && f.iface == iface)
-            .ok_or(format!("`{}` does not export `{fname}` in `{iface}`", imp.package))?
-            .clone();
+        // Resolve freestanding names directly, and resource operations
+        // (`[method]`/`[static]`/`[constructor]`/`[resource-drop]`) by their
+        // bare op name — the generic counterpart to `http_call`'s `match fname`.
+        let sig = resolve_dep_func(dep, &iface, fname)?.clone();
         let module = versioned_iface(&dep.package, &iface);
-        let fidx = self.import_idx(&module, fname);
+        // The host import is keyed by the *mangled* WIT name (`sig.name`), which
+        // is what the import-signature loop declares and what `wit-component`
+        // re-validates against the WIT.
+        let fidx = self.import_idx(&module, &sig.name);
 
         let param_names: Vec<String> = sig.params.iter().map(|(n, _)| n.clone()).collect();
         let args = self.bind_args(payload, &param_names)?;
@@ -2865,11 +2922,9 @@ fn emit_core_module(
             .get(&imp.package)
             .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
         let iface = import_iface(&imp.path);
-        let sig = dep
-            .funcs
-            .iter()
-            .find(|f| &f.name == fname && f.iface == iface)
-            .ok_or(format!("`{}` does not export `{fname}` in `{iface}`", imp.package))?;
+        // Same op-name resolution as `dep_call`, so a resource operation's
+        // core import is declared under its mangled WIT name (`sig.name`).
+        let sig = resolve_dep_func(dep, &iface, fname)?;
         let mut p = Vec::new();
         for (_, t) in &sig.params {
             p.extend_from_slice(&flat_checked(&wit_ty(t, &em.type_env)?)?);
@@ -2883,7 +2938,14 @@ fn emit_core_module(
             }
         };
         let module = versioned_iface(&dep.package, &iface);
-        add_import(&mut em, &module, fname, p, r);
+        // Declare the import once per mangled name; a method shared across ops
+        // (none today) would otherwise be added twice.
+        if !em
+            .import_fn
+            .contains_key(&(module.clone(), sig.name.clone()))
+        {
+            add_import(&mut em, &module, &sig.name, p, r);
+        }
     }
 
     // ---- assign helper indices
