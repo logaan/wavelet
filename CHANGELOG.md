@@ -13,6 +13,27 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+- **WASI HTTP support.** A Wavelet component can now implement the
+  `wasi:http/proxy` interface and be served by `wasmtime serve`. Targeting
+  `wasi:http/proxy` and exporting `wasi:http/incoming-handler` synthesizes a
+  world that imports the host `wasi:http/types` (+ `wasi:io/streams`) and
+  exports the handler; the released WASI 0.2.0 WIT (io + clocks + http) is
+  vendored in `src/wasi-http.wit`.
+- Resource handles (`own<T>`/`borrow<T>` and the wasi resource types) in the
+  wasm backend, carried as opaque i32 handles across the canonical ABI.
+- `http/*` intrinsics wrapping the wasi:http response pipeline — `fields`,
+  `outgoing-response`, `body`, `write` (write + flush + drop the child stream),
+  `set`, `finish`, and `path-with-query` — so the source reads like ordinary
+  calls.
+- The `--type=http` template now builds and runs end to end: a stateless page
+  that greets via the `greeting` domain component (across the boundary) and
+  echoes the request path. `scripts/serve.sh` serves it with `wasmtime serve`.
+
+### Changed
+- The `http` template's domain model is the shared `greeting` component
+  (`src/greeting.wvl`), replacing the previous (non-building) counter.
+
 ## [0.4.0] - 2026-06-14
 
 ### Added

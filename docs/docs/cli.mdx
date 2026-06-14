@@ -57,11 +57,13 @@ passing through any extra arguments.
 
 A web app whose front end, `src/app.wvl`, implements the
 [`wasi:http/incoming-handler`](https://github.com/WebAssembly/wasi-http)
-interface and renders an HTML page with a counter; `src/counter.wvl` is the pure
-domain model (the `increment` function) it imports. `scripts/serve.sh` serves the
-component with `wasmtime serve`. Targeting `wasi:http` needs no special language
-support — the front end simply implements the interface, the same way any
-component implements any WIT interface.
+interface and renders a stateless HTML page: it greets via `src/greeting.wvl`
+(the pure `greet` function, imported across the component boundary) and echoes
+the request path. `scripts/serve.sh` serves the component with `wasmtime serve`.
+Targeting `wasi:http/proxy` needs no special language support — the front end
+implements the interface the same way any component implements any WIT
+interface, using the `http/*` intrinsics to drive the wasi:http response
+pipeline.
 
 ## `read`
 

@@ -142,8 +142,15 @@ $ scripts/run.sh Ada          # build, then run with wasmtime → "Hello, Ada!"
 ```
 
 `--type=http` instead lays down a web app whose front end implements the
-`wasi:http/incoming-handler` interface (`scripts/serve.sh` runs it with
-`wasmtime serve`).
+`wasi:http/incoming-handler` interface — a stateless page that greets via the
+`greeting` domain component (across the component boundary) and echoes the
+request path. `scripts/serve.sh` builds it and runs it with `wasmtime serve`:
+
+```bash
+$ wavelet new my-site --type=http
+$ cd my-site
+$ scripts/serve.sh           # then open http://localhost:8080
+```
 
 ## Editor support
 
@@ -230,10 +237,15 @@ Draft 0.1, actively implemented. Working today:
   and option/result — including these types passed **across component
   boundaries** via the canonical ABI.
 - End-to-end `build` + `compose` producing components that run on wasmtime.
+- **WASI HTTP**: a component can implement the `wasi:http/proxy` interface
+  (resource handles + `http/*` intrinsics over the wasi:http response pipeline)
+  and be served by `wasmtime serve`. The `--type=http` template demonstrates it.
 
 Not yet done (see [`todo.md`](todo.md)): macro components (compile-time wasm
-instantiation), resource handles beyond `cell`, boundary coercions / the
-`safely` wrapper, richer type inference, and `compose --fuse`.
+instantiation), general resource definitions/methods beyond the wasi:http
+intrinsics, string/parsing builtins in the wasm backend (`split`, `reverse`,
+`read`, `to-s64`), boundary coercions / the `safely` wrapper, richer type
+inference, and `compose --fuse`.
 
 ## Repository layout
 
