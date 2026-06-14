@@ -76,6 +76,10 @@ enum WitTy {
     Record(Vec<(String, WitTy)>), // named record type, fully expanded
     Option(Box<WitTy>),
     Result(Box<WitTy>, Box<WitTy>),
+    /// A resource handle (`own<T>`/`borrow<T>` or a bare wasi resource name).
+    /// Opaque to Wavelet: a single i32 handle from the host, carried in an int
+    /// box so ordinary code can pass it around without inspecting it.
+    Handle,
 }
 
 impl WitTy {
@@ -117,7 +121,37 @@ fn split_type_args(inner: &str) -> Vec<String> {
 /// record references at component boundaries.
 type TypeEnv = HashMap<String, Vec<(String, String)>>;
 
+/// The wasi resource types Wavelet understands as opaque handles. Their methods
+/// are reached through the `http/*` intrinsics; the values themselves are never
+/// inspected, only passed along, so a single membership test is all we need.
+fn is_resource_name(s: &str) -> bool {
+    matches!(
+        s,
+        "incoming-request"
+            | "outgoing-request"
+            | "incoming-response"
+            | "outgoing-response"
+            | "request-options"
+            | "response-outparam"
+            | "fields"
+            | "headers"
+            | "trailers"
+            | "incoming-body"
+            | "outgoing-body"
+            | "future-trailers"
+            | "future-incoming-response"
+            | "input-stream"
+            | "output-stream"
+            | "pollable"
+            | "io-error"
+    )
+}
+
 fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
+    // A resource handle: `own<T>` / `borrow<T>`, or a bare wasi resource name.
+    if s.starts_with("own<") || s.starts_with("borrow<") || is_resource_name(s) {
+        return Ok(WitTy::Handle);
+    }
     if let Some(inner) = s.strip_prefix("list<").and_then(|r| r.strip_suffix('>')) {
         return Ok(WitTy::List(Box::new(wit_ty(inner.trim(), env)?)));
     }
@@ -181,7 +215,7 @@ fn flat(ty: &WitTy) -> Vec<ValType> {
 /// use when only the count matters (deciding direct return vs retptr).
 fn flat_len(ty: &WitTy) -> usize {
     match ty {
-        WitTy::Bool | WitTy::IntS | WitTy::IntU | WitTy::S64 | WitTy::F64 => 1,
+        WitTy::Bool | WitTy::IntS | WitTy::IntU | WitTy::S64 | WitTy::F64 | WitTy::Handle => 1,
         WitTy::Str | WitTy::List(_) => 2,
         WitTy::Record(fields) => fields.iter().map(|(_, t)| flat_len(t)).sum(),
         WitTy::Option(_) | WitTy::Result(..) => {
@@ -199,7 +233,7 @@ fn flat_len(ty: &WitTy) -> usize {
 
 fn flat_checked(ty: &WitTy) -> Result<Vec<ValType>, String> {
     Ok(match ty {
-        WitTy::Bool | WitTy::IntS | WitTy::IntU => vec![ValType::I32],
+        WitTy::Bool | WitTy::IntS | WitTy::IntU | WitTy::Handle => vec![ValType::I32],
         WitTy::S64 => vec![ValType::I64],
         WitTy::F64 => vec![ValType::F64],
         WitTy::Str | WitTy::List(_) => vec![ValType::I32, ValType::I32],
@@ -231,6 +265,7 @@ fn flat_checked(ty: &WitTy) -> Result<Vec<ValType>, String> {
 fn align_of(ty: &WitTy) -> u64 {
     match ty {
         WitTy::Bool => 1,
+        WitTy::Handle => 4,
         WitTy::IntS | WitTy::IntU => 4, // s8/s16 widen to 4 here (we only box i32)
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 4, // (ptr, len), pointer-aligned
@@ -258,6 +293,7 @@ fn variant_payload_offset(ty: &WitTy) -> u64 {
 fn size_of(ty: &WitTy) -> u64 {
     match ty {
         WitTy::Bool => 1,
+        WitTy::Handle => 4,
         WitTy::IntS | WitTy::IntU => 4,
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 8,
@@ -303,7 +339,7 @@ fn record_field_offsets(ty: &WitTy) -> Vec<(u64, WitTy)> {
 fn elem_size(ty: &WitTy) -> u64 {
     match ty {
         WitTy::Bool => 1,
-        WitTy::IntS | WitTy::IntU => 4,
+        WitTy::IntS | WitTy::IntU | WitTy::Handle => 4,
         WitTy::S64 | WitTy::F64 | WitTy::Str | WitTy::List(_) => 8,
         WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..) => size_of(ty),
     }
@@ -1328,7 +1364,7 @@ impl<'a> Emitter<'a> {
     fn lower(&mut self, fx: &mut FnCtx, ty: &WitTy) -> Result<(), String> {
         match ty {
             WitTy::Bool => fx.op(I::Call(self.h.truthy)),
-            WitTy::IntS | WitTy::IntU => {
+            WitTy::IntS | WitTy::IntU | WitTy::Handle => {
                 fx.op(I::Call(self.h.unbox_int));
                 fx.op(I::I32WrapI64);
             }
@@ -1521,7 +1557,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I64ExtendI32S);
                 fx.op(I::Call(self.h.box_int));
             }
-            WitTy::IntU => {
+            WitTy::IntU | WitTy::Handle => {
                 fx.op(I::I64ExtendI32U);
                 fx.op(I::Call(self.h.box_int));
             }
@@ -1630,7 +1666,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.truthy));
                 fx.op(I::I32Store8(ma(off, 0)));
             }
-            WitTy::IntS | WitTy::IntU => {
+            WitTy::IntS | WitTy::IntU | WitTy::Handle => {
                 fx.op(I::LocalGet(dst));
                 fx.op(I::LocalGet(src));
                 fx.op(I::Call(self.h.unbox_int));
@@ -1752,7 +1788,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I64ExtendI32S);
                 fx.op(I::Call(self.h.box_int));
             }
-            WitTy::IntU => {
+            WitTy::IntU | WitTy::Handle => {
                 fx.op(I::LocalGet(src));
                 fx.op(I::I32Load(ma(off, 2)));
                 fx.op(I::I64ExtendI32U);
