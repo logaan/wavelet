@@ -195,7 +195,7 @@ component with [`wasmtime`](https://docs.wasmtime.dev/).
 
 ## Layout
 
-- `src/main.wvl` — the entry point. Targets the `wasi:cli/command` world and
+- `src/main.wvl` — the entry point. Implements the `wasi:cli/run` interface and
   exports `run`, reading its arguments with `args`.
 - `src/greeting.wvl` — the domain model. The pure `greet` function, imported by
   `main.wvl` across the component boundary.
@@ -231,19 +231,25 @@ fn main_wvl(slug: &str) -> String {
         "\
 // main.wvl — the command-line entry point.
 //
-// Targets the wasi:cli/command world and exports `run`, the function a CLI host
-// (here, `wasmtime`) calls on startup. It reads its arguments with `args` and
-// greets the first one, leaving the wording to the domain model (greeting.wvl).
+// This component implements the `wasi:cli/run` interface: a CLI host (here,
+// `wasmtime`) calls `run` on startup. The interface is exported by name via
+// `Export {{iface: …}}` — `run: func() -> result` — with no compiler-special-cased
+// `wasi:cli/command` target. The WIT for `wasi:cli/run` is fetched into `wit/`
+// by `wkg`.
+//
+// It reads its arguments with `args` and greets the first one, leaving the
+// wording to the domain model (greeting.wvl), then returns `ok` to signal
+// success.
 Package \"{slug}:main@0.1.0\"
-Target \"wasi:cli/command\"
 
 Import {{pkg: \"{slug}:greeting/api\" as: greeting}}
 
-Export run
+Export {{iface: \"wasi:cli/run\" name: run result: result}}
 Def run Fn {{}}
-  If eq[len(args[]) 0]
-     println(greeting/greet(\"world\"))
-     println(greeting/greet(head(args[])))
+  Do [(If eq[len(args[]) 0]
+          println(greeting/greet(\"world\"))
+          println(greeting/greet(head(args[]))))
+      ok(0)]
 "
     )
 }
@@ -426,7 +432,9 @@ mod tests {
         // The slug derived from the directory name lands in the package ids.
         let main = fs::read_to_string(root.join("src/main.wvl")).unwrap();
         assert!(main.contains("Package \"widgets:main@0.1.0\""), "{main}");
-        assert!(main.contains("Target \"wasi:cli/command\""), "{main}");
+        // The cli entry exports wasi:cli/run generically and drops `Target`.
+        assert!(main.contains("wasi:cli/run"), "{main}");
+        assert!(!main.contains("Target"), "cli template should not use Target: {main}");
         assert!(main.contains("widgets:greeting/api"), "{main}");
         let greeting = fs::read_to_string(root.join("src/greeting.wvl")).unwrap();
         assert!(greeting.contains("Package \"widgets:greeting@0.1.0\""), "{greeting}");
