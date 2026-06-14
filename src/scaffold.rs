@@ -1,29 +1,31 @@
 //! `wavelet new` — scaffold a fresh Wavelet project.
 //!
 //! A project is just a directory of `.wvl` files plus the small amount of glue
-//! (a `.gitignore`, build/serve scripts, a README) that makes it pleasant to
-//! work on. The `http` template lays down a two-component web app: a front end
-//! that implements the `wasi:http/incoming-handler` interface and a domain
-//! model it calls across the component boundary.
+//! (a `.gitignore`, build/run scripts, a README) that makes it pleasant to work
+//! on. Two templates exist: `cli` (the default) lays down a `wasi:cli/command`
+//! program plus the domain model it imports; `http` lays down a web app whose
+//! front end implements the `wasi:http/incoming-handler` interface. Either way
+//! the entry point calls a separate domain-model component across the boundary.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Which template to lay down. `Http` is the only kind today — and the default —
-/// but the enum (and the `--type` flag that selects it) exists so more templates
-/// can join without changing the CLI surface.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Which template to lay down. `Cli` is the default; `--type` selects another.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ProjectKind {
+    #[default]
+    Cli,
     Http,
 }
 
 impl ProjectKind {
     /// Parse the `--type` value. The empty/absent case is handled by the caller,
-    /// which defaults to `Http`.
+    /// which defaults to [`ProjectKind::Cli`].
     pub fn parse(s: &str) -> Result<Self, String> {
         match s {
+            "cli" => Ok(ProjectKind::Cli),
             "http" => Ok(ProjectKind::Http),
-            other => Err(format!("unknown project type `{other}` (supported: http)")),
+            other => Err(format!("unknown project type `{other}` (supported: cli, http)")),
         }
     }
 }
@@ -33,8 +35,6 @@ impl ProjectKind {
 /// Returns the project root and every file written, so the CLI can report what
 /// it created. Fails rather than overwrite if the directory already exists.
 pub fn create(name: &str, kind: ProjectKind) -> Result<(PathBuf, Vec<PathBuf>), String> {
-    let ProjectKind::Http = kind; // exhaustive today; keeps the match honest as kinds grow
-
     let root = PathBuf::from(name);
     if root.exists() {
         return Err(format!("`{name}` already exists"));
@@ -57,12 +57,24 @@ pub fn create(name: &str, kind: ProjectKind) -> Result<(PathBuf, Vec<PathBuf>), 
         Ok(())
     };
 
+    // The .gitignore is the same for every template; the rest depends on kind.
     write(".gitignore", GITIGNORE.to_string(), false)?;
-    write("README.md", readme(name), false)?;
-    write("src/counter.wvl", counter_wvl(&slug), false)?;
-    write("src/app.wvl", app_wvl(&slug), false)?;
-    write("scripts/build.sh", build_sh(&slug), true)?;
-    write("scripts/serve.sh", SERVE_SH.to_string(), true)?;
+    match kind {
+        ProjectKind::Cli => {
+            write("README.md", cli_readme(name), false)?;
+            write("src/greeting.wvl", greeting_wvl(&slug), false)?;
+            write("src/main.wvl", main_wvl(&slug), false)?;
+            write("scripts/build.sh", cli_build_sh(&slug), true)?;
+            write("scripts/run.sh", RUN_SH.to_string(), true)?;
+        }
+        ProjectKind::Http => {
+            write("README.md", http_readme(name), false)?;
+            write("src/counter.wvl", counter_wvl(&slug), false)?;
+            write("src/app.wvl", app_wvl(&slug), false)?;
+            write("scripts/build.sh", http_build_sh(&slug), true)?;
+            write("scripts/serve.sh", SERVE_SH.to_string(), true)?;
+        }
+    }
 
     Ok((root, written))
 }
@@ -129,7 +141,118 @@ scripts/build.sh
 exec wasmtime serve out/app.wasm
 ";
 
-fn build_sh(slug: &str) -> String {
+// ---------------------------------------------------------------------------
+// cli template
+// ---------------------------------------------------------------------------
+
+const RUN_SH: &str = "\
+#!/usr/bin/env bash
+# Build the project, then run it with `wasmtime`. Any extra arguments are passed
+# through to the program (try `scripts/run.sh Ada`).
+set -euo pipefail
+here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
+cd \"$here\"
+
+scripts/build.sh
+exec wasmtime run out/app.wasm \"$@\"
+";
+
+fn cli_build_sh(slug: &str) -> String {
+    format!(
+        "\
+#!/usr/bin/env bash
+# Compile every component in src/ into the (git-ignored) out/ directory, then
+# link them into a single runnable component, out/app.wasm.
+set -euo pipefail
+here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
+cd \"$here\"
+
+wavelet build src/*.wvl -o out
+wavelet compose out/{slug}-main.wasm out/{slug}-greeting.wasm -o out/app.wasm
+echo \"built out/app.wasm\"
+"
+    )
+}
+
+fn cli_readme(name: &str) -> String {
+    format!(
+        "\
+# {name}
+
+A [Wavelet](https://logaan.github.io/wavelet/) command-line component: it prints
+a greeting for the name you give it.
+
+## Run it
+
+```sh
+scripts/run.sh           # greets the world
+scripts/run.sh Ada       # greets Ada
+```
+
+`scripts/build.sh` compiles `src/*.wvl` into the git-ignored `out/` directory
+and links them into `out/app.wasm`; `scripts/run.sh` does that and then runs the
+component with [`wasmtime`](https://docs.wasmtime.dev/).
+
+## Layout
+
+- `src/main.wvl` — the entry point. Targets the `wasi:cli/command` world and
+  exports `run`, reading its arguments with `args`.
+- `src/greeting.wvl` — the domain model. The pure `greet` function, imported by
+  `main.wvl` across the component boundary.
+
+## Learn more
+
+Wavelet is a homoiconic language for the WebAssembly Component Model. See the
+documentation at <https://logaan.github.io/wavelet/>.
+"
+    )
+}
+
+fn greeting_wvl(slug: &str) -> String {
+    format!(
+        "\
+// greeting.wvl — the domain model.
+//
+// Pure logic with no knowledge of the command line: just how to phrase a
+// greeting. Keeping it in its own component means main.wvl is only plumbing, and
+// the same logic could back an HTTP front end, a test, or a library unchanged.
+Package \"{slug}:greeting@0.1.0\"
+
+/// A friendly greeting for `name`.
+Export greet
+Def greet Fn {{name: string}}
+  str-cat[\"Hello, \" name \"!\"]
+"
+    )
+}
+
+fn main_wvl(slug: &str) -> String {
+    format!(
+        "\
+// main.wvl — the command-line entry point.
+//
+// Targets the wasi:cli/command world and exports `run`, the function a CLI host
+// (here, `wasmtime`) calls on startup. It reads its arguments with `args` and
+// greets the first one, leaving the wording to the domain model (greeting.wvl).
+Package \"{slug}:main@0.1.0\"
+Target \"wasi:cli/command\"
+
+Import {{pkg: \"{slug}:greeting/api\" as: greeting}}
+
+Export run
+Def run Fn {{}}
+  If eq[len(args[]) 0]
+     println(greeting/greet(\"world\"))
+     println(greeting/greet(head(args[])))
+"
+    )
+}
+
+// ---------------------------------------------------------------------------
+// http template
+// ---------------------------------------------------------------------------
+
+fn http_build_sh(slug: &str) -> String {
     format!(
         "\
 #!/usr/bin/env bash
@@ -146,7 +269,7 @@ echo \"built out/app.wasm\"
     )
 }
 
-fn readme(name: &str) -> String {
+fn http_readme(name: &str) -> String {
     format!(
         "\
 # {name}
@@ -274,9 +397,72 @@ mod tests {
     }
 
     #[test]
-    fn create_lays_down_the_project() {
-        let dir = std::env::temp_dir().join(format!("wavelet-scaffold-{}", std::process::id()));
+    fn cli_is_the_default_kind() {
+        assert_eq!(ProjectKind::default(), ProjectKind::Cli);
+        assert_eq!(ProjectKind::parse("cli").unwrap(), ProjectKind::Cli);
+        assert_eq!(ProjectKind::parse("http").unwrap(), ProjectKind::Http);
+        assert!(ProjectKind::parse("grpc").is_err());
+    }
+
+    /// A fresh temp directory unique to this test, cleaned on entry and exit.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "wavelet-scaffold-{}-{tag}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn create_lays_down_a_cli_project() {
+        let dir = scratch("cli");
+        let name = dir.join("widgets");
+        let name_str = name.to_str().unwrap();
+
+        let (root, files) = create(name_str, ProjectKind::Cli).unwrap();
+        assert_eq!(root, name);
+
+        for rel in [
+            ".gitignore",
+            "README.md",
+            "src/main.wvl",
+            "src/greeting.wvl",
+            "scripts/build.sh",
+            "scripts/run.sh",
+        ] {
+            assert!(root.join(rel).is_file(), "missing {rel}");
+        }
+        assert_eq!(files.len(), 6);
+
+        // The slug derived from the directory name lands in the package ids.
+        let main = fs::read_to_string(root.join("src/main.wvl")).unwrap();
+        assert!(main.contains("Package \"widgets:main@0.1.0\""), "{main}");
+        assert!(main.contains("Target \"wasi:cli/command\""), "{main}");
+        assert!(main.contains("widgets:greeting/api"), "{main}");
+        let greeting = fs::read_to_string(root.join("src/greeting.wvl")).unwrap();
+        assert!(greeting.contains("Package \"widgets:greeting@0.1.0\""), "{greeting}");
+
+        // The run script is executable.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(root.join("scripts/run.sh"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o111, 0o111, "run.sh not executable");
+        }
+
+        // Refuses to clobber an existing directory.
+        assert!(create(name_str, ProjectKind::Cli).is_err());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_lays_down_an_http_project() {
+        let dir = scratch("http");
         let name = dir.join("widgets");
         let name_str = name.to_str().unwrap();
 
@@ -295,26 +481,11 @@ mod tests {
         }
         assert_eq!(files.len(), 6);
 
-        // The slug derived from the directory name lands in the package ids.
         let app = fs::read_to_string(root.join("src/app.wvl")).unwrap();
         assert!(app.contains("Package \"widgets:app@0.1.0\""), "{app}");
         assert!(app.contains("widgets:counter/api"), "{app}");
         let counter = fs::read_to_string(root.join("src/counter.wvl")).unwrap();
         assert!(counter.contains("Package \"widgets:counter@0.1.0\""), "{counter}");
-
-        // Scripts are executable.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(root.join("scripts/serve.sh"))
-                .unwrap()
-                .permissions()
-                .mode();
-            assert_eq!(mode & 0o111, 0o111, "serve.sh not executable");
-        }
-
-        // Refuses to clobber an existing directory.
-        assert!(create(name_str, ProjectKind::Http).is_err());
 
         let _ = fs::remove_dir_all(&dir);
     }

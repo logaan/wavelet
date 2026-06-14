@@ -26,7 +26,7 @@ fn main() -> ExitCode {
             eprintln!("       wavelet expand <file.wvl>");
             eprintln!("       wavelet repl");
             eprintln!("       wavelet wit <file.wvl>");
-            eprintln!("       wavelet new <name> [--type=http]");
+            eprintln!("       wavelet new <name> [--type=cli|http]");
             eprintln!("       wavelet run <file.wvl>... [-- <args>...]");
             eprintln!("       wavelet build <file.wvl>... [-o <dir>]");
             eprintln!("       wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]");
@@ -140,7 +140,7 @@ fn new_cmd(rest: &[String]) -> ExitCode {
         }
     };
 
-    // `http` is the only template, and the default when `--type` is omitted.
+    // `cli` is the default when `--type` is omitted.
     let kind = match kind_str {
         Some(s) => match ProjectKind::parse(s) {
             Ok(k) => k,
@@ -149,7 +149,7 @@ fn new_cmd(rest: &[String]) -> ExitCode {
                 return ExitCode::from(2);
             }
         },
-        None => ProjectKind::Http,
+        None => ProjectKind::default(),
     };
 
     match scaffold::create(name, kind) {
@@ -158,7 +158,11 @@ fn new_cmd(rest: &[String]) -> ExitCode {
             for f in files {
                 println!("  {}", f.display());
             }
-            println!("\nnext:\n  cd {}\n  scripts/serve.sh", root.display());
+            let start = match kind {
+                ProjectKind::Cli => "scripts/run.sh",
+                ProjectKind::Http => "scripts/serve.sh",
+            };
+            println!("\nnext:\n  cd {}\n  {start}", root.display());
             ExitCode::SUCCESS
         }
         Err(e) => {

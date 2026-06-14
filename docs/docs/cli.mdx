@@ -9,7 +9,7 @@ description: Every wavelet subcommand — new, read, expand, repl, wit, run, bui
 The `wavelet` binary is built with `cargo build` (see [Getting started](./getting-started#building-the-compiler)). It exposes eight subcommands: `new` scaffolds a project, and the rest are organised around the compiler pipeline **read → expand → analyze → emit → componentize**.
 
 ```text
-wavelet new <name> [--type=http]                            # scaffold a new project
+wavelet new <name> [--type=cli|http]                        # scaffold a new project
 wavelet read <file.wvl>                                      # parse → canonical WAVE tree
 wavelet expand <file.wvl>                                    # run macros to fixpoint
 wavelet wit <file.wvl>                                       # synthesized WIT world
@@ -23,32 +23,45 @@ wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (
 
 ## `new`
 
-Scaffold a fresh project into a new directory of the given name. The `http`
-template — the default, and currently the only one — lays down a small web app:
+Scaffold a fresh project into a new directory of the given name. Every template
+lays down a `.gitignore`, a `src/` with an entry point and the domain model it
+imports across the component boundary, build/run scripts, and a short README.
+`--type` chooses the template; `cli` is the default.
+
+### `--type=cli` (default)
+
+A [`wasi:cli/command`](./language/special-forms#target) program: `src/main.wvl`
+exports `run` and greets its first argument, delegating the wording to the pure
+`greet` function in `src/greeting.wvl`.
 
 ```console
 $ wavelet new my-app
 created my-app/
   my-app/.gitignore
   my-app/README.md
-  my-app/src/counter.wvl
-  my-app/src/app.wvl
+  my-app/src/greeting.wvl
+  my-app/src/main.wvl
   my-app/scripts/build.sh
-  my-app/scripts/serve.sh
+  my-app/scripts/run.sh
+
+$ cd my-app
+$ scripts/run.sh Ada          # build, then run with wasmtime
+Hello, Ada!
 ```
 
-The two `src/` files split the app cleanly: `app.wvl` implements the
-[`wasi:http/incoming-handler`](https://github.com/WebAssembly/wasi-http)
-interface and renders an HTML page with a counter, while `counter.wvl` is the
-pure domain model (the `increment` function) that `app.wvl` imports across the
-component boundary. `scripts/build.sh` compiles `src/*.wvl` into a git-ignored
-`out/` and links them; `scripts/serve.sh` then serves the component with
-`wasmtime serve`.
+`scripts/build.sh` compiles `src/*.wvl` into a git-ignored `out/` and links them
+into `out/app.wasm`; `scripts/run.sh` does that and then runs it with `wasmtime`,
+passing through any extra arguments.
 
-`--type=http` selects the template explicitly, but it is the default, so
-`wavelet new my-app` is equivalent. Targeting `wasi:http` needs no special
-language support — the front end simply implements the interface, the same way
-any component implements any WIT interface.
+### `--type=http`
+
+A web app whose front end, `src/app.wvl`, implements the
+[`wasi:http/incoming-handler`](https://github.com/WebAssembly/wasi-http)
+interface and renders an HTML page with a counter; `src/counter.wvl` is the pure
+domain model (the `increment` function) it imports. `scripts/serve.sh` serves the
+component with `wasmtime serve`. Targeting `wasi:http` needs no special language
+support — the front end simply implements the interface, the same way any
+component implements any WIT interface.
 
 ## `read`
 
