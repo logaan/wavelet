@@ -48,7 +48,7 @@ subagent (and tell it to relay them onward if it spawns further agents):
 
 ## Step 0 — Tooling: require and shell out to `wkg` / `wac`
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Make the two external CLIs available to the compiler and add a thin
 internal wrapper for invoking them. No language/codegen change yet.
@@ -66,7 +66,45 @@ internal wrapper for invoking them. No language/codegen change yet.
 `wac --version` and surfaces a helpful error when a tool is absent. Nothing else
 calls the wrapper yet.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **New module: `src/tools.rs`** (native-only, registered in `lib.rs` under the
+  same `#[cfg(not(target_arch = "wasm32"))]` block as `emit`/`build`/`wit`). It
+  is the single place that shells out to the external CLIs. Public surface:
+  - `Tool::{Wkg, Wac}` enum with `.bin()`.
+  - `run(tool, args)` / `run_in(tool, args, cwd)` — the generic runner. On
+    success returns captured **stdout** as a `String`; on `ErrorKind::NotFound`
+    returns an actionable `"<bin> was not found on PATH; install it with …"`
+    error; on non-zero exit returns `"<bin> failed (<status>): <stderr>"`.
+  - `version(tool)` — preflight check; runs `<bin> --version`.
+  - Typed convenience wrappers for the invocations later steps need:
+    `wkg_wit_fetch` (uses `--type wit`), `wkg_wit_build`, `wac_plug`,
+    `wac_compose`, `wac_targets`. **None are called yet** — wire them in at the
+    steps that need them (Step 2 → `wkg_wit_fetch`; Step 12 → the `wac_*`).
+  - Error type is `Result<_, String>`, matching `build.rs`/`emit.rs` convention,
+    so callers can `?`/`map_err(|e| format!("…: {e}"))` as usual.
+- **Tests** (`src/tools.rs` `#[cfg(test)]`): `version_when_present` actually
+  invokes the real `wkg`/`wac` when on PATH (they are, at `~/.cargo/bin` on the
+  dev machine — `wkg 0.15.1`, `wac-cli 0.10.0`) and otherwise asserts the
+  not-found message, so the unit suite stays hermetic in toolless CI.
+- **Homebrew formula — NOT done here, by necessity.** The `wavelet` formula is
+  *not in this repo*; it lives in the separate tap repo
+  **`github.com/logaan/homebrew-tap`** (`brew install logaan/tap/wavelet`). This
+  repo's `release.yml` only publishes binaries/tarballs; it does not own the
+  `.rb`. So the `depends_on "wkg"` / `depends_on "wac"` lines must be added in
+  the `homebrew-tap` repo's `wavelet.rb` — a separate edit outside this worktree.
+  Whoever cuts the breaking release (Step 17) must make that tap change too, or
+  Homebrew installs will lack the tools. The README now documents the dep and
+  states the formula declares them, so the prose is ready for the tap to catch up.
+- **README:** added a "External tools" subsection under Building documenting the
+  `wkg`/`wac` runtime dependency and that `cargo test`/the interpreter don't need
+  them.
+- **CHANGELOG:** not touched — the dependency isn't user-visible yet (nothing
+  calls the wrapper). Fold the `wkg`/`wac` requirement into `## [Unreleased]` at
+  Step 16 (CHANGELOG & design notes), per the worklist.
+- No language/codegen/example change, so `regen-examples.sh` was not needed;
+  full `cargo test` is green (48 lib + examples + http, http template still
+  builds).
 
 ---
 
