@@ -122,8 +122,37 @@ pub fn version(tool: Tool) -> Result<String, String> {
 /// `wkg wit fetch` — fetch the dependencies of the world(s) in `wit_dir` into
 /// `wit_dir/deps/` and write/update the lock file. `--type wit` makes deps land
 /// as WIT text that `wit-parser` can read.
+///
+/// `wkg` resolves `--wit-dir` relative to its working directory and writes
+/// `wkg.lock` there, so we run from `wit_dir`'s parent (the project root) and
+/// point `--wit-dir` at `wit_dir` by name. The lock therefore lands beside
+/// `wit/` at the project root.
 pub fn wkg_wit_fetch(wit_dir: &Path) -> Result<String, String> {
-    run_in(Tool::Wkg, ["wit", "fetch", "--type", "wit"], Some(wit_dir))
+    let parent = run_dir_for(wit_dir);
+    let name = wit_dir.file_name().unwrap_or_else(|| OsStr::new("wit"));
+    run_in(
+        Tool::Wkg,
+        [
+            OsStr::new("wit"),
+            OsStr::new("fetch"),
+            OsStr::new("--type"),
+            OsStr::new("wit"),
+            OsStr::new("--wit-dir"),
+            name,
+        ],
+        Some(&parent),
+    )
+}
+
+/// The directory to run `wkg` from for a given `wit_dir`: its parent, except
+/// that a one-component relative path like `wit` has an empty (`""`) parent,
+/// and an empty `current_dir` makes the OS fail program lookup with a spurious
+/// not-found. Normalize that to the current directory `.`.
+fn run_dir_for(wit_dir: &Path) -> std::path::PathBuf {
+    match wit_dir.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    }
 }
 
 /// `wkg wit build` — build the `wit/` directory into a single self-contained
@@ -201,6 +230,23 @@ mod tests {
         assert!(Tool::Wac.install_hint().contains("/wac"));
         assert_eq!(Tool::Wkg.bin(), "wkg");
         assert_eq!(Tool::Wac.bin(), "wac");
+    }
+
+    /// A bare relative `wit` directory has an empty `Path::parent`; the wrapper
+    /// must run `wkg` from `.` rather than an empty `current_dir` (which the OS
+    /// rejects with a spurious not-found). We assert via the error *message*: if
+    /// the empty parent leaked through, `wkg` would report not-found even when
+    /// installed. When `wkg` is absent the not-found message is expected, so the
+    /// check is only meaningful — and only made — when `wkg` is present.
+    /// A bare relative `wit` directory has an empty `Path::parent`; running
+    /// `wkg` from an empty `current_dir` makes the OS fail program lookup with a
+    /// spurious not-found. `run_dir_for` must substitute `.` for that case while
+    /// preserving a real parent otherwise.
+    #[test]
+    fn run_dir_for_normalizes_empty_parent() {
+        assert_eq!(run_dir_for(Path::new("wit")), Path::new("."));
+        assert_eq!(run_dir_for(Path::new("proj/wit")), Path::new("proj"));
+        assert_eq!(run_dir_for(Path::new("/abs/proj/wit")), Path::new("/abs/proj"));
     }
 
     /// Only runs when the tools are actually installed (they are on this dev
