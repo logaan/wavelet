@@ -110,7 +110,7 @@ calls the wrapper yet.
 
 ## Step 1 — Consume external WIT from `wit/deps` (no behaviour change)
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Teach the import resolver to load a *parsed* external WIT package from
 a project `wit/deps` directory and feed it into the existing `Dep`-shaped
@@ -129,7 +129,53 @@ adds a new source, it doesn't remove the old one.
 **Done when.** `cargo test` passes; an external WIT package placed in `wit/deps`
 is parseable and resolvable; existing magic still primary and unchanged.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **New module `src/witdep.rs`** (native-only, gated `#[cfg(not(target_arch =
+  "wasm32"))]` like `build`/`emit`/`wit`). Public entry:
+  `witdep::resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>,
+  String>`. It builds a `wit_parser::Resolve`, `push_path`-es every entry in
+  `wit/deps` (a single `.wit`/`.wasm`/`.wat` file *or* a `ns-name/` package dir),
+  finds the package whose `namespace:name` matches the versionless import, and
+  projects it into `emit::Dep`. `Ok(None)` means "not here" (no dir, or package
+  absent) → caller falls through to its normal unsatisfied-import error;
+  `Err` only on a genuine parse failure.
+- **Resolution order in `build_files`** is now: (0) `is_external_package` /
+  `wasi:*` magic — *unchanged, still primary*; (a) sibling `.wvl` in the build
+  set; (b) `wit/deps` via `witdep`. So the new source is strictly a fallback
+  *after* sibling resolution, as specified. The unsatisfied-import error string
+  changed to mention `wit/deps`.
+- **`wit/deps` location**: derived in `build.rs::wit_deps_dir(paths)` as
+  `<src-parent>/wit/deps` from the first source path (sources live in `src/`,
+  `wit/` is a sibling). This matches the scaffold layout. If a future caller
+  passes sources from somewhere other than `src/`, revisit this; for now it's the
+  only layout `wavelet new` produces.
+- **The `Dep` from WIT is byte-identical to the Wavelet-dep `Dep`** for an
+  equivalent surface — verified in `tests/wit_deps.rs`
+  (`external_wit_dep_matches_wavelet_dep_shape` compares `package`, `funcs`,
+  `package_wit`, `types`). `package_wit_text` deliberately mirrors
+  `emit::dep_package_wit`'s nested-package formatting (2-space interface indent,
+  `record name { f: t, … }`), so the emitter sees one uniform shape.
+- **Type-string mapping** (`witdep::type_string`): primitives → their WIT names
+  (`s32`, `u32`, `string`, …); named types (record/variant/enum/resource/alias)
+  → their bare name; anonymous compounds rendered structurally
+  (`list<…>`/`option<…>`/`result<…>`/`tuple<…>`, `own<T>`/`borrow<T>`). Only
+  *record* type decls + resource/alias decls are emitted in the nested package
+  WIT today (`type_decl`); variant/enum/flags decls return an error rather than
+  emit wrong WIT — none of Step 1's fixtures need them, and the generic-bridge
+  steps (3–6) are where the richer types get real codegen. Extend `type_decl`
+  when a later step needs those declared.
+- **Known pre-existing limitation, NOT a regression**: actually *calling* an
+  imported dep function from a body (string- or even s32-returning) fails at
+  component encoding (`type mismatch: expected i32 but nothing on stack`) on the
+  current emitter — this is identical for a sibling `.wvl` dep and a `wit/deps`
+  dep (I checked both). That generic-call lowering is exactly Steps 3–6. So the
+  e2e test (`build_resolves_import_from_wit_deps`) only asserts the build gets
+  *past import resolution* (no "is not satisfied" error), not that it fully
+  builds. When Step 3+ lands, that test can be tightened to a full build/serve.
+- **No `wkg` invocation yet** — this step assumes `wit/deps` is already
+  populated (tests write fixtures by hand). Step 2 wires `tools::wkg_wit_fetch`
+  to populate it for real.
 
 ---
 
