@@ -312,22 +312,25 @@ fn app_wvl(slug: &str) -> String {
 // app.wvl — the HTTP front end.
 //
 // This component implements the `wasi:http/incoming-handler` interface: an HTTP
-// host (here, `wasmtime serve`) calls `handle` for every request. Adopting the
-// `wasi:http/proxy` world and exporting the interface is the whole story; the
-// `http/*` intrinsics wrap the wasi:http response pipeline so the source reads
-// like ordinary calls.
+// host (here, `wasmtime serve`) calls `handle` for every request. The interface
+// is exported by name via `Export {{iface: …}}`, and the response pipeline is
+// driven by ordinary calls into the imported `wasi:http/types` and
+// `wasi:io/streams` interfaces — no compiler-special-cased `http/*` magic. The
+// WIT for those interfaces is fetched into `wit/` by `wkg`.
 //
 // The page is stateless: it greets the world (wording from the greeting
 // component, across the boundary) and echoes the path you requested.
 Package \"{slug}:app@0.1.0\"
-Target \"wasi:http/proxy\"
 
 Import {{pkg: \"wasi:http/types@0.2.0\" as: http}}
+Import {{pkg: \"wasi:io/streams@0.2.0\" as: streams}}
 Import {{pkg: \"{slug}:greeting/api\" as: greeting}}
 
-// The path-and-query of a request, defaulting to \"/\".
+// The path-and-query of a request, defaulting to \"/\". Several wasi:http
+// resources share a `path-with-query` op, so the resource-qualified name picks
+// the one on `incoming-request`.
 Def path-of Fn {{request: incoming-request}}
-  Match http/path-with-query(request)
+  Match http/incoming-request-path-with-query(request)
     [(some(p)  p)
      (none     \"/\")]
 
@@ -340,19 +343,29 @@ Def page Fn {{path: string}}
     \"<p>You requested: \" path \"</p>\\n\"
   ]
 
-// wasi:http/incoming-handler: build the response, then write the page to it.
+// Write the page bytes into a body's stream, then drop the stream (a child
+// resource that must be released before the body is finished). Resource ops are
+// reached by their bare name when unique, or resource-qualified when not.
+Def write-page Fn {{body: outgoing-body, html: string}}
+  Match http/outgoing-body-write(body)
+    [(ok(stream)
+       Do [streams/blocking-write-and-flush[stream html]
+           streams/drop-output-stream(stream)])
+     (err(e)  0)]
+
+// wasi:http/incoming-handler: build the response, hand it to the outparam, write
+// the page, then finish the body. Each step is a plain call into the imported
+// wasi:http / wasi:io interfaces, lowered through the generic WIT bridge.
 Export {{iface: \"wasi:http/incoming-handler\" name: handle
          params: {{request: incoming-request response-out: response-outparam}}}}
 Def handle Fn {{request: incoming-request, response-out: response-outparam}}
-  Let {{response: http/outgoing-response(http/fields())
-        body:     http/body(response)}}
-    // The standard wasi:http 0.2 response sequence: hand the response to the
-    // outparam, write the body, then finish it.
-    Do [
-      http/set[response-out response]
-      http/write[body page(path-of(request))]
-      http/finish[body]
-    ]
+  Let {{response: http/outgoing-response(http/fields())}}
+    Match http/outgoing-response-body(response)
+      [(ok(body)
+         Do [http/response-outparam-set[response-out ok(response)]
+             write-page[body page(path-of(request))]
+             http/outgoing-body-finish[body none]])
+       (err(e)  0)]
 "
     )
 }
@@ -458,7 +471,12 @@ mod tests {
 
         let app = fs::read_to_string(root.join("src/app.wvl")).unwrap();
         assert!(app.contains("Package \"widgets:app@0.1.0\""), "{app}");
-        assert!(app.contains("Target \"wasi:http/proxy\""), "{app}");
+        // The http front end exports the handler interface generically and
+        // imports wasi:http/types + wasi:io/streams directly — no `Target`.
+        assert!(app.contains("wasi:http/incoming-handler"), "{app}");
+        assert!(app.contains("wasi:http/types"), "{app}");
+        assert!(app.contains("wasi:io/streams"), "{app}");
+        assert!(!app.contains("Target"), "http template should not use Target: {app}");
         assert!(app.contains("widgets:greeting/api"), "{app}");
         let greeting = fs::read_to_string(root.join("src/greeting.wvl")).unwrap();
         assert!(greeting.contains("Package \"widgets:greeting@0.1.0\""), "{greeting}");
