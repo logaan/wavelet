@@ -35,6 +35,11 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
 
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{out_dir}: {e}"))?;
 
+    // Project-level WIT vendored by `wkg` lives in `wit/deps`, a sibling of the
+    // `src/` directory the sources come from. Used as a fallback source of
+    // dependency interfaces after sibling-`.wvl` resolution.
+    let wit_deps_dir = wit_deps_dir(paths);
+
     let mut outputs = Vec::new();
     for u in &units {
         let mut deps = HashMap::new();
@@ -45,20 +50,32 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
             if emit::is_external_package(&imp.package) {
                 continue;
             }
-            let &di = index.get(&imp.package).ok_or(format!(
-                "{}: import `{}` is not satisfied by any file in the build set",
+            // (a) A sibling Wavelet file in the build set satisfies the import.
+            if let Some(&di) = index.get(&imp.package) {
+                let d = &units[di];
+                deps.insert(
+                    imp.package.clone(),
+                    Dep {
+                        package: d.info.package.clone(),
+                        funcs: d.info.exports.clone(),
+                        package_wit: emit::dep_package_wit(&d.arena, &d.info)?,
+                        types: emit::dep_record_types(&d.arena, &d.info),
+                    },
+                );
+                continue;
+            }
+            // (b) Fall back to an external WIT package vendored under
+            // `wit/deps`, parsed with `wit-parser` into the same `Dep` shape.
+            if let Some(dir) = &wit_deps_dir {
+                if let Some(dep) = crate::witdep::resolve_dep(dir, &imp.package)? {
+                    deps.insert(imp.package.clone(), dep);
+                    continue;
+                }
+            }
+            return Err(format!(
+                "{}: import `{}` is not satisfied by any file in the build set or `wit/deps`",
                 u.path, imp.path
-            ))?;
-            let d = &units[di];
-            deps.insert(
-                imp.package.clone(),
-                Dep {
-                    package: d.info.package.clone(),
-                    funcs: d.info.exports.clone(),
-                    package_wit: emit::dep_package_wit(&d.arena, &d.info)?,
-                    types: emit::dep_record_types(&d.arena, &d.info),
-                },
-            );
+            ));
         }
         let bytes = emit::emit_component(&u.arena, &u.roots, &u.info, &deps)
             .map_err(|e| format!("{}: {e}", u.path))?;
@@ -67,6 +84,19 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
         outputs.push(out);
     }
     Ok(outputs)
+}
+
+/// Locate the project's `wit/deps` directory from its source files.
+///
+/// A project lays its sources under `src/`, with `wit/` as a sibling of `src/`
+/// (so `wit/deps` is `<src-parent>/wit/deps`). We derive it from the first
+/// source path's parent directory. Returns `None` if no parent can be found.
+fn wit_deps_dir(paths: &[String]) -> Option<std::path::PathBuf> {
+    let first = paths.first()?;
+    let src_dir = Path::new(first).parent()?;
+    // `src/foo.wvl` -> project root is `src/`'s parent; `wit/` sits beside it.
+    let root = src_dir.parent().unwrap_or(src_dir);
+    Some(root.join("wit").join("deps"))
 }
 
 /// Compose components: the first file is the entry ("socket"); the rest are
