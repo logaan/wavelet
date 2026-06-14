@@ -721,7 +721,7 @@ dependencies = [
 
 [[package]]
 name = "wavelet"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "console_error_panic_hook",
  "wac-graph",
@@ -733,7 +733,7 @@ dependencies = [
 
 [[package]]
 name = "wavelet-lsp"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "lsp-server",
  "lsp-types",

@@ -71,9 +71,9 @@ personal [tap](https://github.com/logaan/homebrew-tap):
 brew install logaan/tap/wavelet
 ```
 
-This installs both `wavelet` and `wavelet-lsp` onto your `PATH`. (The formula
-builds from source, so a Rust toolchain is fetched at install time.) Track the
-bleeding edge from `main` with `brew install --HEAD logaan/tap/wavelet`.
+This installs both `wavelet` and `wavelet-lsp` onto your `PATH` as prebuilt
+binaries — no Rust toolchain is fetched. Track the bleeding edge from `main`
+(built from source) with `brew install --HEAD logaan/tap/wavelet`.
 
 ### From source
 

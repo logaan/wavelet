@@ -16,8 +16,17 @@ you work, and rename it to the new version when you cut a release.
 ## [0.2.4] - 2026-06-14
 
 ### Added
-- Homebrew install path: `brew install logaan/tap/wavelet`, documented in the
-  README.
+- Homebrew install path: `brew install logaan/tap/wavelet` installs prebuilt
+  `wavelet` and `wavelet-lsp` binaries (no Rust toolchain required), documented
+  in the README.
+- Release builds now publish the `wavelet` CLI as well (previously only
+  `wavelet-lsp`), for macOS (arm64 and x86_64) and Linux (x86_64 and arm64),
+  plus a per-platform `wavelet-<target>.tar.gz` bundle consumed by the Homebrew
+  formula.
+
+### Changed
+- The release workflow no longer fails the whole release when one target's
+  build leg fails; it publishes whatever binaries succeeded.
 
 ## [0.2.3] - 2026-06-14
 
