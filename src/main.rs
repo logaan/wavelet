@@ -155,9 +155,22 @@ fn new_cmd(rest: &[String]) -> ExitCode {
     match scaffold::create(name, kind) {
         Ok((root, files)) => {
             println!("created {}/", root.display());
-            for f in files {
+            for f in &files {
                 println!("  {}", f.display());
             }
+
+            // Vendor the new project's dependency WIT into `wit/deps` and write
+            // `wkg.lock`, so a fresh project's deps are pinned. Best-effort: a
+            // missing `wkg` or no network just leaves `wit/` unfetched.
+            let srcs: Vec<std::path::PathBuf> = files
+                .iter()
+                .filter(|f| f.extension().and_then(|e| e.to_str()) == Some("wvl"))
+                .cloned()
+                .collect();
+            if let Err(e) = wavelet::build::populate_project_wit(&root, &srcs) {
+                eprintln!("warning: could not fetch dependency WIT via wkg: {e}");
+            }
+
             let start = match kind {
                 ProjectKind::Cli => "scripts/run.sh",
                 ProjectKind::Http => "scripts/serve.sh",

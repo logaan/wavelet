@@ -2,10 +2,11 @@
 //! `wavelet compose`: auto-plug components into one app (§6.5).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::emit::{self, Dep};
 use crate::form::{Arena, NodeId};
+use crate::tools;
 use crate::wit::{self, FileInfo};
 
 struct Unit {
@@ -83,7 +84,109 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
         std::fs::write(&out, &bytes).map_err(|e| format!("{out}: {e}"))?;
         outputs.push(out);
     }
+
+    // Synthesize the project's own WIT into `wit/` and let `wkg` fetch+lock its
+    // host (`wasi:*`) dependencies into `wit/deps`. This runs *behind the
+    // scenes*: codegen above is unchanged and still uses the magic path. A
+    // toolless or offline environment (e.g. CI) just skips it with a warning —
+    // the build artifacts are already written.
+    if let Some(root) = project_root(paths)
+        && let Err(e) = populate_wit(&root, &units)
+    {
+        eprintln!("warning: could not populate wit/ via wkg: {e}");
+    }
+
     Ok(outputs)
+}
+
+/// Scaffold a project's `wit/` from its source files and fetch+lock its host
+/// dependencies, without emitting any components.
+///
+/// Used by `wavelet new` so a fresh project ships with its dependency WIT
+/// already vendored under `wit/deps` and pinned in `wkg.lock`. `root` is the
+/// project root (the parent of `src/`); `src_paths` are its `.wvl` source files.
+/// Like the build-time path, a `wkg` failure (absent tool, offline) is the
+/// caller's to treat as a warning.
+pub fn populate_project_wit(root: &Path, src_paths: &[PathBuf]) -> Result<(), String> {
+    let mut units = Vec::new();
+    for path in src_paths {
+        let path_str = path.display().to_string();
+        let src = std::fs::read_to_string(path).map_err(|e| format!("{path_str}: {e}"))?;
+        let (arena, roots) = crate::read_file(&src).map_err(|e| format!("{path_str}: {e}"))?;
+        let (arena, roots) =
+            crate::expand::expand_file(arena, &roots).map_err(|e| format!("{path_str}: {e}"))?;
+        let info = wit::collect(&arena, &roots).map_err(|e| format!("{path_str}: {e}"))?;
+        units.push(Unit { path: path_str, arena, roots, info });
+    }
+    populate_wit(root, &units)
+}
+
+/// Synthesize each component's world into `<root>/wit/` and run `wkg wit fetch`
+/// so the project ends up with a populated `wit/deps` and an up-to-date
+/// `wkg.lock`.
+///
+/// Only components that actually reference host (`wasi:*`) packages need
+/// fetching ([`wit::has_host_deps`]); pure components (a domain model with no
+/// imports) contribute nothing to fetch. For each such component we write its
+/// host-only fetch world ([`wit::synthesize_fetch_world`]) as the single root
+/// package in `wit/` and run `wkg wit fetch`; deps and the lock accumulate in
+/// the shared `wit/` across components.
+///
+/// Returns the first `wkg` error encountered. Callers treat that as a warning,
+/// not a hard failure: the magic path has already produced the components.
+fn populate_wit(root: &Path, units: &[Unit]) -> Result<(), String> {
+    let host_units: Vec<&Unit> = units.iter().filter(|u| wit::has_host_deps(&u.info)).collect();
+    if host_units.is_empty() {
+        return Ok(());
+    }
+
+    let wit_dir = root.join("wit");
+    std::fs::create_dir_all(&wit_dir).map_err(|e| format!("{}: {e}", wit_dir.display()))?;
+
+    // Preflight: surface a clear, actionable error if `wkg` is absent before we
+    // start writing world files.
+    tools::version(tools::Tool::Wkg)?;
+
+    for u in &host_units {
+        let world = wit::synthesize_fetch_world(&u.arena, &u.roots)
+            .map_err(|e| format!("{}: {e}", u.path))?;
+        // One root package per `wit/` at a time: clear any stale root world file
+        // from a previous component before writing this one. (Fetched packages
+        // live under `wit/deps`, never at the `wit/` root, so they are kept.)
+        clear_root_wit(&wit_dir)?;
+        let file = wit_dir.join(format!("{}.wit", u.info.world));
+        std::fs::write(&file, world).map_err(|e| format!("{}: {e}", file.display()))?;
+        tools::wkg_wit_fetch(&wit_dir)?;
+    }
+    Ok(())
+}
+
+/// Remove top-level `*.wit` files from `wit/` (the synthesized root world),
+/// leaving `wit/deps` and `wkg.lock` in place.
+fn clear_root_wit(wit_dir: &Path) -> Result<(), String> {
+    for entry in std::fs::read_dir(wit_dir).map_err(|e| format!("{}: {e}", wit_dir.display()))? {
+        let entry = entry.map_err(|e| format!("{}: {e}", wit_dir.display()))?;
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("wit") {
+            std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// The project root: the parent of the `src/` directory the sources live in
+/// (so `wit/` and `wkg.lock` sit beside `src/`). Mirrors [`wit_deps_dir`].
+fn project_root(paths: &[String]) -> Option<PathBuf> {
+    let first = paths.first()?;
+    let src_dir = Path::new(first).parent()?;
+    let root = src_dir.parent().unwrap_or(src_dir);
+    // A bare `src/foo.wvl` yields an empty parent; normalize to `.` so callers
+    // never hand an empty path to `current_dir` (which the OS rejects).
+    Some(if root.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        root.to_path_buf()
+    })
 }
 
 /// Locate the project's `wit/deps` directory from its source files.
@@ -92,11 +195,7 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
 /// (so `wit/deps` is `<src-parent>/wit/deps`). We derive it from the first
 /// source path's parent directory. Returns `None` if no parent can be found.
 fn wit_deps_dir(paths: &[String]) -> Option<std::path::PathBuf> {
-    let first = paths.first()?;
-    let src_dir = Path::new(first).parent()?;
-    // `src/foo.wvl` -> project root is `src/`'s parent; `wit/` sits beside it.
-    let root = src_dir.parent().unwrap_or(src_dir);
-    Some(root.join("wit").join("deps"))
+    Some(project_root(paths)?.join("wit").join("deps"))
 }
 
 /// Compose components: the first file is the entry ("socket"); the rest are
