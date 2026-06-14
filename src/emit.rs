@@ -306,20 +306,75 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
     })
 }
 
-/// Join two flat representations position-wise (canonical-ABI variant flatten).
-/// We only support cases that don't need numeric widening: the shorter list
-/// must be a prefix of the longer, and shared positions must match exactly.
+/// Canonical-ABI `join` of two core value types for variant flattening: equal
+/// types stay; `{i32, f32}` collapse to `i32` (same width, reinterpretable);
+/// anything else widens to `i64` (the canonical "everything fits in 64 bits"
+/// rule). See the Component Model canonical ABI `join`.
+fn join_vt(a: ValType, b: ValType) -> ValType {
+    use ValType::{F32, I32, I64};
+    if a == b {
+        a
+    } else if matches!((a, b), (I32, F32) | (F32, I32)) {
+        I32
+    } else {
+        I64
+    }
+}
+
+/// Join two flat representations position-wise (canonical-ABI variant flatten),
+/// widening per [`join_vt`]. Shared positions are widened to a common type;
+/// trailing positions of the longer arm are kept as-is.
 fn join_flat(a: &[ValType], b: &[ValType]) -> Result<Vec<ValType>, String> {
     let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    let mut out = long.to_vec();
     for (i, t) in short.iter().enumerate() {
-        if long[i] != *t {
-            return Err("option/result arms with differing flat shapes are not \
-                        supported by the wasm backend yet (use a record, or keep \
-                        the arms' types flat-compatible)"
-                .into());
-        }
+        out[i] = join_vt(out[i], *t);
     }
-    Ok(long.to_vec())
+    Ok(out)
+}
+
+/// Coerce a value of core type `have` (on the stack) into the joined slot type
+/// `want`, per the canonical ABI's variant payload widening. Used when *lowering*
+/// a variant arm whose payload flat is narrower than the joined union slot.
+fn coerce_flat_to(fx: &mut FnCtx, have: ValType, want: ValType) {
+    use ValType::{F32, F64, I32, I64};
+    match (have, want) {
+        _ if have == want => {}
+        // i32 → i64 (zero-extend; the canonical ABI treats the lane as a bag of
+        // bits, and the lifting side narrows it back).
+        (I32, I64) => fx.op(I::I64ExtendI32U),
+        // f32 → i32 (reinterpret bits), then possibly widen to i64.
+        (F32, I32) => fx.op(I::I32ReinterpretF32),
+        (F32, I64) => {
+            fx.op(I::I32ReinterpretF32);
+            fx.op(I::I64ExtendI32U);
+        }
+        // f64 → i64 (reinterpret bits).
+        (F64, I64) => fx.op(I::I64ReinterpretF64),
+        // Any remaining combination is unreachable for canonical `join` outputs
+        // (`want` is only ever the original type, `i32`, or `i64`). Leave the
+        // value untouched — a real mismatch then fails wasm validation loudly
+        // rather than silently corrupting the stack.
+        _ => {}
+    }
+}
+
+/// Reverse of [`coerce_flat_to`]: a value read from a joined slot of type `from`
+/// (on the stack) is narrowed back to the arm payload's core type `to`. Used
+/// when *lifting* a variant arm from flat locals.
+fn coerce_flat_from(fx: &mut FnCtx, from: ValType, to: ValType) {
+    use ValType::{F32, F64, I32, I64};
+    match (from, to) {
+        _ if from == to => {}
+        (I64, I32) => fx.op(I::I32WrapI64),
+        (I32, F32) => fx.op(I::F32ReinterpretI32),
+        (I64, F32) => {
+            fx.op(I::I32WrapI64);
+            fx.op(I::F32ReinterpretI32);
+        }
+        (I64, F64) => fx.op(I::F64ReinterpretI64),
+        _ => {}
+    }
 }
 
 fn flat(ty: &WitTy) -> Vec<ValType> {
@@ -518,6 +573,15 @@ fn record_field_offsets(ty: &WitTy) -> Vec<(u64, WitTy)> {
 }
 
 /// canonical-ABI element size for list payloads
+/// Whether a `list<elem>` may be supplied from a Wavelet string (its bytes used
+/// directly). True for the integer element kinds — in practice `list<u8>`, the
+/// canonical byte-buffer type (`wasi:io` write, http bodies). The actual choice
+/// is made at runtime on the value's box tag, so a real list still builds
+/// element-by-element; only a string value takes the zero-copy bytes path.
+fn is_byte_elem(ty: &WitTy) -> bool {
+    matches!(ty, WitTy::IntU | WitTy::IntS)
+}
+
 fn elem_size(ty: &WitTy) -> u64 {
     match ty {
         WitTy::Bool => 1,
@@ -876,28 +940,69 @@ fn dep_func_op(name: &str) -> std::borrow::Cow<'_, str> {
     Cow::Borrowed(name)
 }
 
-/// Resolve a source-visible op name to the dep's [`FuncSig`] in `iface`,
-/// matching freestanding names directly and resource operations by their bare
-/// op name (see [`dep_func_op`]). Errors if nothing matches, or if two ops in
-/// the interface share a bare name (ambiguous — the source must then be
-/// disambiguated by exact WIT name, which is not yet expressible).
+/// The *resource-qualified* source name for a resource operation, used to
+/// disambiguate when several resources in one interface share a bare op name
+/// (e.g. `wasi:http/types` has both `outgoing-request.body` and
+/// `outgoing-response.body`). Since a Wavelet qualified name is kebab-only (no
+/// `.`), the qualifier joins with `-`:
+///
+/// - `[method]outgoing-response.body` → `outgoing-response-body`
+/// - `[static]response-outparam.set`  → `response-outparam-set`
+/// - `[constructor]fields`            → `fields` (same as the bare op)
+///
+/// A freestanding function or a drop has no qualified form (`None`).
+fn dep_func_qualified(name: &str) -> Option<String> {
+    if let Some(rest) = name.strip_prefix("[constructor]") {
+        return Some(rest.to_string());
+    }
+    for prefix in ["[method]", "[static]"] {
+        if let Some(rest) = name.strip_prefix(prefix) {
+            // `res.op` → `res-op`
+            return Some(rest.replacen('.', "-", 1));
+        }
+    }
+    None
+}
+
+/// Resolve a source-visible op name to the dep's [`FuncSig`] in `iface`.
+///
+/// Matching is two-tier so that the common bare-op spelling stays terse while
+/// collisions stay resolvable:
+/// 1. An *exact* match — the mangled WIT name, the resource-qualified
+///    `res-op` form ([`dep_func_qualified`]), or a freestanding name — wins
+///    outright. This is unique by construction (WIT names are unique per
+///    interface), so `outgoing-response-body` selects exactly that method.
+/// 2. Otherwise the *bare* op name ([`dep_func_op`]) is tried. If two resources
+///    share it, the call is ambiguous and the source must use the qualified
+///    form instead.
 fn resolve_dep_func<'a>(
     dep: &'a Dep,
     iface: &str,
     fname: &str,
 ) -> Result<&'a crate::wit::FuncSig, String> {
-    let mut matches = dep
-        .funcs
-        .iter()
-        .filter(|f| f.iface == iface && (f.name == fname || dep_func_op(&f.name) == *fname));
-    let first = matches.next().ok_or(format!(
+    let in_iface = || dep.funcs.iter().filter(|f| f.iface == iface);
+
+    // Tier 1: an exact mangled-name / qualified-name / freestanding match.
+    if let Some(f) = in_iface()
+        .find(|f| f.name == fname || dep_func_qualified(&f.name).as_deref() == Some(fname))
+    {
+        return Ok(f);
+    }
+
+    // Tier 2: the bare op name, rejecting genuine collisions.
+    let mut bare = in_iface().filter(|f| dep_func_op(&f.name) == *fname);
+    let first = bare.next().ok_or(format!(
         "`{}` does not export `{fname}` in `{iface}`",
         dep.package
     ))?;
-    if let Some(second) = matches.next() {
+    if let Some(second) = bare.next() {
         return Err(format!(
-            "`{fname}` is ambiguous in `{}/{iface}`: matches both `{}` and `{}`",
-            dep.package, first.name, second.name
+            "`{fname}` is ambiguous in `{}/{iface}`: matches both `{}` and `{}`; \
+             use the resource-qualified name (e.g. `{}`)",
+            dep.package,
+            first.name,
+            second.name,
+            dep_func_qualified(&first.name).unwrap_or_else(|| first.name.clone()),
         ));
     }
     Ok(first)
@@ -1343,12 +1448,16 @@ impl<'a> Emitter<'a> {
         let head_node = self.arena.node(head).clone();
         match head_node {
             Node::Qsym(alias, fname) => {
-                let external = self
-                    .info
-                    .imports
-                    .iter()
-                    .any(|i| i.alias == alias && is_external_package(&i.package));
-                if external {
+                // Route through the generic bridge whenever the import resolved
+                // to a real `Dep` (a sibling `.wvl` or a `wit/deps` package —
+                // host `wasi:*` packages included, as of Step 8). Only an
+                // external import with *no* `Dep` falls to the hand-coded http
+                // magic, which is now dead for the http template but kept until
+                // Step 11.
+                let imp = self.info.imports.iter().find(|i| i.alias == alias);
+                let has_dep = imp.is_some_and(|i| self.deps.contains_key(&i.package));
+                let external = imp.is_some_and(|i| is_external_package(&i.package));
+                if external && !has_dep {
                     self.http_call(fx, &fname, payload)
                 } else {
                     self.dep_call(fx, &alias, &fname, payload)
@@ -1859,6 +1968,32 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(t));
                 fx.op(I::I32Load(ma(4, 2)));
             }
+            WitTy::List(elem) if is_byte_elem(elem) => {
+                // `list<u8>` accepts a Wavelet string directly: its bytes are
+                // already contiguous (a string box is `[tag, len, bytes…]`), so a
+                // string lowers to `(box+8, len)` with no copy. A real list box
+                // still goes through the element-by-element builder. The branch is
+                // on the box tag so e.g. an http body can be written from a string
+                // (`blocking-write-and-flush` takes `list<u8>`).
+                let b = fx.local(ValType::I32);
+                fx.op(I::LocalSet(b));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_STR));
+                fx.op(I::I32Eq);
+                let rty = self.ty_idx(vec![], vec![ValType::I32, ValType::I32]);
+                fx.op(I::If(BlockType::FunctionType(rty)));
+                // string box → (ptr = box+8, len = load@4)
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::Else);
+                fx.op(I::LocalGet(b));
+                self.lower_list(fx, elem)?;
+                fx.op(I::End);
+            }
             WitTy::List(elem) => self.lower_list(fx, elem)?,
             WitTy::Record(fields) => {
                 // record box on stack → field flats pushed in declaration order
@@ -1988,7 +2123,13 @@ impl<'a> Emitter<'a> {
     }
 
     /// One arm of a lowered option/result: push the discriminant, the payload's
-    /// flats (if any), then zero-pad the remaining joined positions.
+    /// flats (if any) widened into the joined slot types, then zero-pad the
+    /// remaining joined positions.
+    ///
+    /// Canonical-ABI variant flattening widens each arm's payload to a shared
+    /// union (`join`), so a payload flat (e.g. `i32`) may have to be coerced into
+    /// a wider joined slot (e.g. `i64`). We materialise the payload flats into
+    /// payload-typed locals first, then re-push each coerced to its joined slot.
     fn lower_variant_case(
         &mut self,
         fx: &mut FnCtx,
@@ -2000,10 +2141,21 @@ impl<'a> Emitter<'a> {
         fx.op(I::I32Const(disc));
         let consumed = match pay {
             Some(pt) => {
+                let pflat = flat(pt);
                 fx.op(I::LocalGet(b));
                 fx.op(I::I32Load(ma(8, 2)));
                 self.lower(fx, pt)?;
-                flat(pt).len()
+                // Pop the payload's flats (last-first) into payload-typed locals.
+                let locals: Vec<u32> = pflat.iter().rev().map(|&vt| fx.local(vt)).collect();
+                for &l in &locals {
+                    fx.op(I::LocalSet(l));
+                }
+                // Re-push in order, widening each into its joined slot type.
+                for (i, &have) in pflat.iter().enumerate() {
+                    fx.op(I::LocalGet(locals[pflat.len() - 1 - i]));
+                    coerce_flat_to(fx, have, joined[i]);
+                }
+                pflat.len()
             }
             None => 0,
         };
@@ -2276,7 +2428,8 @@ impl<'a> Emitter<'a> {
                     .into_iter()
                     .map(|(n, p)| (n.to_string(), p.cloned()))
                     .collect();
-                self.lift_variant_flat_chain(fx, base, &cases, 0)?;
+                let joined: Vec<ValType> = flat(ty)[1..].to_vec();
+                self.lift_variant_flat_chain(fx, base, &cases, &joined, 0)?;
             }
             _ => {
                 fx.op(I::LocalGet(base));
@@ -2293,18 +2446,19 @@ impl<'a> Emitter<'a> {
         fx: &mut FnCtx,
         base: u32,
         cases: &[(String, Option<WitTy>)],
+        joined: &[ValType],
         i: usize,
     ) -> Result<(), String> {
         if i + 1 == cases.len() {
-            return self.lift_variant_case(fx, &cases[i].0, cases[i].1.as_ref(), base + 1);
+            return self.lift_variant_case(fx, &cases[i].0, cases[i].1.as_ref(), base + 1, joined);
         }
         fx.op(I::LocalGet(base));
         fx.op(I::I32Const(i as i32));
         fx.op(I::I32Eq);
         fx.op(I::If(BlockType::Result(ValType::I32)));
-        self.lift_variant_case(fx, &cases[i].0, cases[i].1.as_ref(), base + 1)?;
+        self.lift_variant_case(fx, &cases[i].0, cases[i].1.as_ref(), base + 1, joined)?;
         fx.op(I::Else);
-        self.lift_variant_flat_chain(fx, base, cases, i + 1)?;
+        self.lift_variant_flat_chain(fx, base, cases, joined, i + 1)?;
         fx.op(I::End);
         Ok(())
     }
@@ -2318,10 +2472,29 @@ impl<'a> Emitter<'a> {
         case: &str,
         pay: Option<&WitTy>,
         payload_base: u32,
+        joined: &[ValType],
     ) -> Result<(), String> {
         match pay {
             Some(pt) => {
-                self.lift_flat(fx, pt, payload_base)?;
+                let pflat = flat(pt);
+                // The payload was widened into the joined union slots; narrow
+                // each joined-typed local back to the payload's flat type into a
+                // fresh contiguous block, then lift from that block. When no slot
+                // needs narrowing this is a straight copy.
+                let needs_narrowing =
+                    pflat.iter().zip(joined).any(|(have, want)| have != want);
+                if needs_narrowing {
+                    // Allocate the payload-typed block contiguously.
+                    let block: Vec<u32> = pflat.iter().map(|&vt| fx.local(vt)).collect();
+                    for (i, &have) in pflat.iter().enumerate() {
+                        fx.op(I::LocalGet(payload_base + i as u32));
+                        coerce_flat_from(fx, joined[i], have);
+                        fx.op(I::LocalSet(block[i]));
+                    }
+                    self.lift_flat(fx, pt, block[0])?;
+                } else {
+                    self.lift_flat(fx, pt, payload_base)?;
+                }
                 self.wrap_variant(fx, case);
             }
             None => {
@@ -2952,11 +3125,12 @@ fn emit_core_module(
             .iter()
             .find(|i| &i.alias == alias)
             .ok_or(format!("unknown import alias `{alias}`"))?;
-        // A call through a host (wasi:*) import is an http intrinsic: its core
-        // import signature comes from the canonical-ABI table, not a build-set
-        // dependency. The component encoder re-validates these against the
-        // vendored WIT, so a wrong signature fails the build loudly.
-        if is_external_package(&imp.package) {
+        // An external (wasi:*) import with *no* resolved `Dep` is a legacy http
+        // intrinsic: its core import signature comes from the hand-coded
+        // canonical-ABI table. Once the import resolves to a real `Dep` (the
+        // http template, as of Step 8), it instead flows through the generic
+        // import-signature path below — the same one sibling deps use.
+        if is_external_package(&imp.package) && !deps.contains_key(&imp.package) {
             let ops = http_imports(fname)
                 .ok_or(format!("`{}/{fname}` is not a supported wasi:http operation", imp.alias))?;
             for (module, field, p, r) in ops {
@@ -4141,14 +4315,16 @@ fn synthesize_world_wit(
     }
     for imp in &info.imports {
         let iface = import_iface(&imp.path);
-        if is_external_package(&imp.package) {
-            // host-provided: the path already is the external interface
+        if let Some(dep) = deps.get(&imp.package) {
+            // Resolved dependency (sibling `.wvl` or a `wit/deps` package, host
+            // `wasi:*` included as of Step 8): import its versioned interface.
+            out.push_str(&format!("  import {};\n", versioned_iface(&dep.package, &iface)));
+        } else if is_external_package(&imp.package) {
+            // host-provided with no `Dep` (the legacy magic path): the path
+            // already is the external interface.
             out.push_str(&format!("  import {};\n", external_versioned(&imp.path)));
         } else {
-            let dep = deps
-                .get(&imp.package)
-                .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
-            out.push_str(&format!("  import {};\n", versioned_iface(&dep.package, &iface)));
+            return Err(format!("dependency `{}` is not in the build set", imp.package));
         }
     }
     if is_http {
@@ -4173,8 +4349,69 @@ fn synthesize_world_wit(
     } else if feats.needs_stdout || feats.needs_env || is_command {
         out.push_str(WASI_PACKAGES);
     }
+    // Append each dep's nested-package WIT, but emit any given package only once.
+    // A `wit/deps` dep carries its whole transitive closure (e.g. both the
+    // `wasi:http` and `wasi:io/streams` deps render `wasi:io`, `wasi:clocks`,
+    // …), so concatenating them verbatim would define a package twice.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for dep in deps.values() {
-        out.push_str(&dep.package_wit);
+        for block in split_package_blocks(&dep.package_wit) {
+            let dup = package_block_name(block).is_some_and(|name| !seen.insert(name));
+            if !dup {
+                out.push_str(block);
+            }
+        }
     }
     Ok(out)
+}
+
+/// Split a concatenation of top-level `package NAME { … }` blocks (and any
+/// leading flat `package NAME;` lines) into individual block slices, splitting
+/// on brace balance returning to zero. Text that isn't a braced package block
+/// (e.g. a trailing `package x;` line) is returned as its own slice.
+fn split_package_blocks(s: &str) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut blocks = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0i32;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    // include the trailing newline if present
+                    let mut end = i + 1;
+                    if end < bytes.len() && bytes[end] == b'\n' {
+                        end += 1;
+                    }
+                    blocks.push(&s[start..end]);
+                    start = end;
+                    i = end;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if start < s.len() {
+        let tail = &s[start..];
+        if !tail.trim().is_empty() {
+            blocks.push(tail);
+        }
+    }
+    blocks
+}
+
+/// The `ns:name@ver` of a `package NAME { … }` or `package NAME;` block, if it
+/// starts with the `package` keyword.
+fn package_block_name(block: &str) -> Option<String> {
+    let rest = block.trim_start().strip_prefix("package ")?;
+    let name: String = rest
+        .chars()
+        .take_while(|&c| c != '{' && c != ';' && !c.is_whitespace())
+        .collect();
+    if name.is_empty() { None } else { Some(name) }
 }
