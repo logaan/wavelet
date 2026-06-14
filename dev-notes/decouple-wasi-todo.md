@@ -877,7 +877,7 @@ dead code reachable only by removal in Step 11.
 
 ## Step 9 — Cut cli over to the generic path
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Route the cli template through the generic import bridge + generic
 export, with WIT coming from `wit/deps`, leaving the cli magic physically present
@@ -889,7 +889,87 @@ the generic path where it already covers them, or via the magic until Step 10.
 generic path; the cli magic is now dead code reachable only by removal in
 Step 11.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **The cli template no longer touches `Target` or the `run` export magic.**
+  `src/scaffold.rs::main_wvl` dropped `Target "wasi:cli/command"` and now exports
+  `run` via the generic Step-7 form `Export {iface: "wasi:cli/run" name: run
+  result: result}`, with the body wrapped `Do [(If … println …) ok(0)]` so it
+  returns the `result` the `func() -> result` wrapper lowers (the single-i32
+  discriminant). So `is_command` is **false** for the cli template everywhere, the
+  `is_command && sig.name == "run"` export-wrapper special-case
+  (`src/emit.rs` ~3257) never fires, and the `Target "wasi:cli/command"` →
+  `wasi:cli/run` fetch-world translation (`src/wit.rs` ~376) is unused for it. All
+  of `is_command`, that run special-case, and the `Target` translation are now
+  **dead for the cli template** — Step 11 deletes them.
+
+- **Verified build-AND-run for real** (release binary, `wkg`/`wac`/`wasmtime` on
+  PATH): `wavelet new greeter --type=cli` (which runs `wkg wit fetch`, populating
+  `wit/deps/wasi-cli-0.2.0` + the transitive closure + `wkg.lock`),
+  `wavelet build src/*.wvl -o out`, `wavelet compose out/greeter-main.wasm
+  out/greeter-greeting.wasm -o out/app.wasm`, then `wasmtime run out/app.wasm` →
+  `Hello, world!` and `wasmtime run out/app.wasm Ada` → `Hello, Ada!`. `wavelet
+  wit src/main.wvl` shows `world main { import greeter:greeting/api; export
+  wasi:cli/run@0.2.0; }` — no `include wasi:cli/command`. The http template still
+  builds+serves (re-verified: `GET /` and `GET /hello/path` → 200 with the page).
+
+- **The `wasi:cli/run` export rides the generic path; its WIT comes from
+  `wit/deps`.** `build.rs` already resolves an external *export* iface's package
+  from `wit/deps` (Step 7), so `wasi:cli` lands in the `deps` map and
+  `external_versioned_in("wasi:cli/run", deps)` versions the export correctly. No
+  build.rs change was needed.
+
+- **THE BUILTINS STILL RIDE THE MAGIC — this is the carry-forward for Step 10.**
+  `print`/`println`/`args` are *builtins*, not `Import` forms, so they do NOT go
+  through the generic import bridge. They still set `feats.needs_stdout` /
+  `feats.needs_env` (`src/emit.rs` ~630), which still drive: the magic
+  `wasi:cli/stdout#get-stdout` + `wasi:cli/environment#get-arguments` imports, the
+  hand-coded `print_str`/`println_h`/`get_args` helper bodies, and the
+  `import wasi:cli/stdout@0.2.0;` / `import wasi:cli/environment@0.2.0;` world
+  lines. **Step 10 removes these builtins**; once they're gone, a cli that wants
+  stdout/args must `Import {pkg: "wasi:cli/stdout"}` / `wasi:cli/environment` and
+  call them by op name through the generic bridge (the routing already prefers a
+  `Dep` when present, exactly as http does), and `needs_stdout`/`needs_env` and
+  the magic helper bodies become dead (deleted in Step 11). Until then the cli
+  template's output path is *still magic*, by design.
+
+- **Routing-table summary after Step 9 (what rides what):**
+  - cli `run` **export** → generic export path (Step 7), WIT from `wit/deps`.
+  - cli `print`/`println`/`args` **builtins** → still the cli magic
+    (`needs_stdout`/`needs_env` → vendored `wasi:cli`/`wasi:io` text +
+    hand-coded helper bodies). Step 10 retires these.
+  - cli `greeting/greet` **import** → generic bridge (sibling `.wvl` `Dep`), as
+    before.
+  - http (everything) → generic path (Step 8), unchanged.
+
+- **One shared-emit fix was required: `WASI_PACKAGES` vs `wit/deps` package
+  collision** (`src/emit.rs::synthesize_world_wit`, the dep-WIT tail). A Step-9
+  cli exports `wasi:cli/run` generically (so `wit/deps` carries the **full**
+  `wasi:cli` + `wasi:io` + transitive closure as `Dep` packages) *and* uses the
+  builtins (so the trimmed `WASI_PACKAGES` blob — only `wasi:io.{error,streams}`
+  and `wasi:cli.{stdout,environment,run}` — is also appended). Emitting both
+  defined `wasi:cli`/`wasi:io` twice, *and* the trimmed `wasi:io` (missing
+  `poll`) shadowed the full one, breaking `wasi:clocks`'s `use wasi:io/poll`
+  cross-reference ("interface not found in package"). Fix: emit the **`wit/deps`
+  dep packages first** (recording each package name in `seen`), then emit only the
+  `WASI_PACKAGES` blocks whose package name isn't already provided
+  (split via the existing `split_package_blocks`/`package_block_name`). So the full
+  dep packages win; the trimmed blob fills only gaps. The pure-magic path (lib.rs
+  emit tests with `Target "wasi:cli/command"` and no deps) is unchanged — no dep
+  packages, so all of `WASI_PACKAGES` is still emitted. `WASI_HTTP_WIT` is still
+  pushed wholesale (the magic-http path never carries overlapping deps).
+
+- **Tests touched.** `src/scaffold.rs` `create_lays_down_a_cli_project` now
+  asserts the template contains `wasi:cli/run` and **no** `Target` (mirroring the
+  http test). `tests/wkg_populate.rs` `cli_fetch_world_references_wasi_cli_run`
+  kept its assertions (`export wasi:cli/run@0.2.0;`, no `include`, no `greeting`)
+  — they still hold via the generic export — only its comment was updated. The
+  magic-path emit tests in `src/lib.rs` (closures/records/variants over
+  `Target "wasi:cli/command"`) were **left on the magic** deliberately: they
+  exercise the magic codegen, which stays alive until Step 11. No
+  language/interpreter/example behaviour changed (the builtins still behave
+  identically), so `regen-examples.sh` was not needed. Full `cargo test` green
+  (49 lib + 8 generic_bridge + http + wit_deps + wkg_populate + examples).
 
 ---
 
