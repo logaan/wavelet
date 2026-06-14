@@ -558,9 +558,9 @@ duplicates target logic.
 
 **Goal.** Make `wavelet build` produce **one** final composed artifact: generate
 a `.wac` file describing how the project's components (and any bundled dependency
-components) wire together, and run `wac compose` (or `wac plug` for the simple
-single-plug case) via the Step 0 wrapper. Host imports (`wasi:*`) are left
-unsatisfied for the runtime to provide. Optionally verify with `wac targets`.
+components) wire together, and run `wac compose` via the Step 0 wrapper. Host
+imports (`wasi:*`) are left unsatisfied for the runtime to provide. Optionally
+verify with `wac targets`.
 
 **Scope.**
 
