@@ -67,6 +67,7 @@ fn push_zero(fx: &mut FnCtx, vt: ValType) {
 #[derive(Clone, PartialEq)]
 enum WitTy {
     Bool,
+    Char, // a Unicode scalar — i32 flat (u32 codepoint), carried in an int box
     IntS, // s8/s16/s32 — i32 flat, sign-extended into the int box
     IntU, // u8/u16/u32
     S64,  // s64/u64 — i64 flat
@@ -74,6 +75,10 @@ enum WitTy {
     Str,
     List(Box<WitTy>),
     Record(Vec<(String, WitTy)>), // named record type, fully expanded
+    /// An anonymous positional tuple (`tuple<a, b, …>`). Laid out in memory like
+    /// a record with fields `0`, `1`, …; carried at the value level as a
+    /// `TAG_TUP` box (element boxes at `@8+4i`).
+    Tuple(Vec<WitTy>),
     Option(Box<WitTy>),
     Result(Box<WitTy>, Box<WitTy>),
     /// A resource handle (`own<T>`/`borrow<T>` or a bare wasi resource name).
@@ -155,6 +160,13 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
     if let Some(inner) = s.strip_prefix("list<").and_then(|r| r.strip_suffix('>')) {
         return Ok(WitTy::List(Box::new(wit_ty(inner.trim(), env)?)));
     }
+    if let Some(inner) = s.strip_prefix("tuple<").and_then(|r| r.strip_suffix('>')) {
+        let mut elems = Vec::new();
+        for arg in split_type_args(inner) {
+            elems.push(wit_ty(&arg, env)?);
+        }
+        return Ok(WitTy::Tuple(elems));
+    }
     if let Some(inner) = s.strip_prefix("option<").and_then(|r| r.strip_suffix('>')) {
         return Ok(WitTy::Option(Box::new(wit_ty(inner.trim(), env)?)));
     }
@@ -172,6 +184,7 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
     }
     Ok(match s {
         "bool" => WitTy::Bool,
+        "char" => WitTy::Char,
         "s8" | "s16" | "s32" => WitTy::IntS,
         "u8" | "u16" | "u32" => WitTy::IntU,
         "s64" | "u64" => WitTy::S64,
@@ -215,9 +228,16 @@ fn flat(ty: &WitTy) -> Vec<ValType> {
 /// use when only the count matters (deciding direct return vs retptr).
 fn flat_len(ty: &WitTy) -> usize {
     match ty {
-        WitTy::Bool | WitTy::IntS | WitTy::IntU | WitTy::S64 | WitTy::F64 | WitTy::Handle => 1,
+        WitTy::Bool
+        | WitTy::Char
+        | WitTy::IntS
+        | WitTy::IntU
+        | WitTy::S64
+        | WitTy::F64
+        | WitTy::Handle => 1,
         WitTy::Str | WitTy::List(_) => 2,
         WitTy::Record(fields) => fields.iter().map(|(_, t)| flat_len(t)).sum(),
+        WitTy::Tuple(elems) => elems.iter().map(flat_len).sum(),
         WitTy::Option(_) | WitTy::Result(..) => {
             let payload = ty
                 .variant_cases()
@@ -233,13 +253,20 @@ fn flat_len(ty: &WitTy) -> usize {
 
 fn flat_checked(ty: &WitTy) -> Result<Vec<ValType>, String> {
     Ok(match ty {
-        WitTy::Bool | WitTy::IntS | WitTy::IntU | WitTy::Handle => vec![ValType::I32],
+        WitTy::Bool | WitTy::Char | WitTy::IntS | WitTy::IntU | WitTy::Handle => vec![ValType::I32],
         WitTy::S64 => vec![ValType::I64],
         WitTy::F64 => vec![ValType::F64],
         WitTy::Str | WitTy::List(_) => vec![ValType::I32, ValType::I32],
         WitTy::Record(fields) => {
             let mut v = Vec::new();
             for (_, t) in fields {
+                v.extend(flat_checked(t)?);
+            }
+            v
+        }
+        WitTy::Tuple(elems) => {
+            let mut v = Vec::new();
+            for t in elems {
                 v.extend(flat_checked(t)?);
             }
             v
@@ -265,11 +292,12 @@ fn flat_checked(ty: &WitTy) -> Result<Vec<ValType>, String> {
 fn align_of(ty: &WitTy) -> u64 {
     match ty {
         WitTy::Bool => 1,
-        WitTy::Handle => 4,
+        WitTy::Char | WitTy::Handle => 4,
         WitTy::IntS | WitTy::IntU => 4, // s8/s16 widen to 4 here (we only box i32)
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 4, // (ptr, len), pointer-aligned
         WitTy::Record(fields) => fields.iter().map(|(_, t)| align_of(t)).max().unwrap_or(1),
+        WitTy::Tuple(elems) => elems.iter().map(align_of).max().unwrap_or(1),
         WitTy::Option(_) | WitTy::Result(..) => {
             // disc is 1-byte; align is the max of disc and any payload align
             ty.variant_cases()
@@ -293,11 +321,11 @@ fn variant_payload_offset(ty: &WitTy) -> u64 {
 fn size_of(ty: &WitTy) -> u64 {
     match ty {
         WitTy::Bool => 1,
-        WitTy::Handle => 4,
+        WitTy::Char | WitTy::Handle => 4,
         WitTy::IntS | WitTy::IntU => 4,
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 8,
-        WitTy::Record(_) => {
+        WitTy::Record(_) | WitTy::Tuple(_) => {
             let a = align_of(ty);
             let mut off = 0u64;
             for (o, t) in record_field_offsets(ty) {
@@ -322,12 +350,18 @@ fn align_up(off: u64, align: u64) -> u64 {
     (off + align - 1) / align * align
 }
 
-/// (offset, field-type) for each field of a record, in declaration order.
+/// (offset, field-type) for each field of a record or element of a tuple, in
+/// declaration order. Tuples lay out exactly like records (canonical-ABI treats
+/// them identically — positional fields with the same alignment rules).
 fn record_field_offsets(ty: &WitTy) -> Vec<(u64, WitTy)> {
-    let WitTy::Record(fields) = ty else { return vec![] };
+    let fts: Vec<&WitTy> = match ty {
+        WitTy::Record(fields) => fields.iter().map(|(_, ft)| ft).collect(),
+        WitTy::Tuple(elems) => elems.iter().collect(),
+        _ => return vec![],
+    };
     let mut off = 0u64;
-    let mut out = Vec::with_capacity(fields.len());
-    for (_, ft) in fields {
+    let mut out = Vec::with_capacity(fts.len());
+    for ft in fts {
         off = align_up(off, align_of(ft));
         out.push((off, ft.clone()));
         off += size_of(ft);
@@ -339,9 +373,9 @@ fn record_field_offsets(ty: &WitTy) -> Vec<(u64, WitTy)> {
 fn elem_size(ty: &WitTy) -> u64 {
     match ty {
         WitTy::Bool => 1,
-        WitTy::IntS | WitTy::IntU | WitTy::Handle => 4,
+        WitTy::Char | WitTy::IntS | WitTy::IntU | WitTy::Handle => 4,
         WitTy::S64 | WitTy::F64 | WitTy::Str | WitTy::List(_) => 8,
-        WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..) => size_of(ty),
+        WitTy::Record(_) | WitTy::Tuple(_) | WitTy::Option(_) | WitTy::Result(..) => size_of(ty),
     }
 }
 
@@ -1416,7 +1450,10 @@ impl<'a> Emitter<'a> {
             }
             FlatRes::Retptr => {
                 let rty = wit_ty(sig.result.as_deref().unwrap(), &self.type_env)?;
-                if matches!(rty, WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..)) {
+                if matches!(
+                    rty,
+                    WitTy::Record(_) | WitTy::Tuple(_) | WitTy::Option(_) | WitTy::Result(..)
+                ) {
                     // allocate a result area sized to the value, pass it as the
                     // canonical retptr, then read the value back out of it
                     let area = fx.local(ValType::I32);
@@ -1578,7 +1615,7 @@ impl<'a> Emitter<'a> {
     fn lower(&mut self, fx: &mut FnCtx, ty: &WitTy) -> Result<(), String> {
         match ty {
             WitTy::Bool => fx.op(I::Call(self.h.truthy)),
-            WitTy::IntS | WitTy::IntU | WitTy::Handle => {
+            WitTy::Char | WitTy::IntS | WitTy::IntU | WitTy::Handle => {
                 fx.op(I::Call(self.h.unbox_int));
                 fx.op(I::I32WrapI64);
             }
@@ -1603,6 +1640,17 @@ impl<'a> Emitter<'a> {
                     fx.op(I::I32Const(kaddr as i32));
                     fx.op(I::Call(self.h.rec_get));
                     self.lower(fx, ft)?;
+                }
+            }
+            WitTy::Tuple(elems) => {
+                // TAG_TUP box on stack → element flats in order (element boxes
+                // live at @8+4i, the list/tuple layout)
+                let b = fx.local(ValType::I32);
+                fx.op(I::LocalSet(b));
+                for (i, et) in elems.iter().enumerate() {
+                    fx.op(I::LocalGet(b));
+                    fx.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
+                    self.lower(fx, et)?;
                 }
             }
             WitTy::Option(_) | WitTy::Result(..) => {
@@ -1771,13 +1819,18 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I64ExtendI32S);
                 fx.op(I::Call(self.h.box_int));
             }
-            WitTy::IntU | WitTy::Handle => {
+            WitTy::Char | WitTy::IntU | WitTy::Handle => {
                 fx.op(I::I64ExtendI32U);
                 fx.op(I::Call(self.h.box_int));
             }
             WitTy::S64 => fx.op(I::Call(self.h.box_int)),
             WitTy::F64 => fx.op(I::Call(self.h.box_dec)),
-            WitTy::Str | WitTy::List(_) | WitTy::Record(_) | WitTy::Option(_) | WitTy::Result(..) => {
+            WitTy::Str
+            | WitTy::List(_)
+            | WitTy::Record(_)
+            | WitTy::Tuple(_)
+            | WitTy::Option(_)
+            | WitTy::Result(..) => {
                 unreachable!("never a single flat value")
             }
         }
@@ -1817,6 +1870,28 @@ impl<'a> Emitter<'a> {
                     self.lift_flat(fx, ft, off)?;
                     fx.op(I::I32Store(ma(12 + 8 * i as u64, 2)));
                     off += flat(ft).len() as u32;
+                }
+                fx.op(I::LocalGet(p));
+            }
+            WitTy::Tuple(elems) => {
+                // build a TAG_TUP box `[tag, n, elem ptrs…]` from the flat locals
+                let n = elems.len();
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8 + 4 * n as i32));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_TUP));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(n as i32));
+                fx.op(I::I32Store(ma(4, 2)));
+                let mut off = base;
+                for (i, et) in elems.iter().enumerate() {
+                    fx.op(I::LocalGet(p));
+                    self.lift_flat(fx, et, off)?;
+                    fx.op(I::I32Store(ma(8 + 4 * i as u64, 2)));
+                    off += flat(et).len() as u32;
                 }
                 fx.op(I::LocalGet(p));
             }
@@ -1880,7 +1955,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.truthy));
                 fx.op(I::I32Store8(ma(off, 0)));
             }
-            WitTy::IntS | WitTy::IntU | WitTy::Handle => {
+            WitTy::Char | WitTy::IntS | WitTy::IntU | WitTy::Handle => {
                 fx.op(I::LocalGet(dst));
                 fx.op(I::LocalGet(src));
                 fx.op(I::Call(self.h.unbox_int));
@@ -1908,6 +1983,16 @@ impl<'a> Emitter<'a> {
                     fx.op(I::Call(self.h.rec_get));
                     fx.op(I::LocalSet(fld));
                     self.store_to_mem(fx, &ft, fld, dst, off + o)?;
+                }
+            }
+            WitTy::Tuple(_) => {
+                // element boxes live at @8+4i in the TAG_TUP box
+                for (i, (o, et)) in record_field_offsets(ty).into_iter().enumerate() {
+                    let fld = fx.local(ValType::I32);
+                    fx.op(I::LocalGet(src));
+                    fx.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
+                    fx.op(I::LocalSet(fld));
+                    self.store_to_mem(fx, &et, fld, dst, off + o)?;
                 }
             }
             WitTy::Option(_) | WitTy::Result(..) => {
@@ -2002,7 +2087,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I64ExtendI32S);
                 fx.op(I::Call(self.h.box_int));
             }
-            WitTy::IntU | WitTy::Handle => {
+            WitTy::Char | WitTy::IntU | WitTy::Handle => {
                 fx.op(I::LocalGet(src));
                 fx.op(I::I32Load(ma(off, 2)));
                 fx.op(I::I64ExtendI32U);
@@ -2040,6 +2125,25 @@ impl<'a> Emitter<'a> {
                     fx.op(I::LocalGet(p));
                     self.load_from_mem(fx, &ft, src, off + o)?;
                     fx.op(I::I32Store(ma(12 + 8 * i as u64, 2)));
+                }
+                fx.op(I::LocalGet(p));
+            }
+            WitTy::Tuple(elems) => {
+                let n = elems.len();
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8 + 4 * n as i32));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_TUP));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(n as i32));
+                fx.op(I::I32Store(ma(4, 2)));
+                for (i, (o, et)) in record_field_offsets(ty).into_iter().enumerate() {
+                    fx.op(I::LocalGet(p));
+                    self.load_from_mem(fx, &et, src, off + o)?;
+                    fx.op(I::I32Store(ma(8 + 4 * i as u64, 2)));
                 }
                 fx.op(I::LocalGet(p));
             }
