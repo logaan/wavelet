@@ -15,7 +15,7 @@
 use std::path::Path;
 
 use wit_parser::{
-    Function, Handle, Resolve, Type, TypeDefKind, TypeOwner,
+    Function, FunctionKind, Handle, Resolve, Type, TypeDefKind, TypeOwner,
 };
 
 use crate::emit::{Dep, TypeDef};
@@ -257,6 +257,11 @@ fn type_string(resolve: &Resolve, ty: &Type) -> Result<String, String> {
 /// Emit a nested-package WIT string for the dependency, matching the shape of
 /// [`crate::emit::dep_package_wit`] for a Wavelet dep:
 /// `package ns:name@ver { interface iface { …type decls…  …funcs… } }`.
+///
+/// Resource *operations* (`constructor`/`method`/`static`) are rendered *inside*
+/// their resource block — a `[constructor]res`/`[method]res.op` function is not
+/// valid WIT spelled flat — so only freestanding functions appear at interface
+/// scope.
 fn package_wit_text(
     resolve: &Resolve,
     full_package: &str,
@@ -267,10 +272,17 @@ fn package_wit_text(
         let iface = &resolve.interfaces[iface_id];
         out.push_str(&format!("  interface {iface_name} {{\n"));
         for (type_name, &type_id) in &iface.types {
-            out.push_str(&format!("    {}\n", type_decl(resolve, type_name, type_id)?));
+            out.push_str(&format!("    {}\n", type_decl(resolve, type_id, type_name, iface)?));
         }
         for (_fname, func) in &iface.functions {
-            out.push_str(&format!("    {}\n", func_sig(resolve, iface_name, func)?.to_wit()));
+            // Resource operations are emitted inside their resource block above;
+            // only freestanding functions are written at interface scope.
+            if matches!(func.kind, FunctionKind::Freestanding) {
+                out.push_str(&format!(
+                    "    {}\n",
+                    func_sig(resolve, iface_name, func)?.to_wit()
+                ));
+            }
         }
         out.push_str("  }\n");
     }
@@ -278,9 +290,53 @@ fn package_wit_text(
     Ok(out)
 }
 
-/// Render a single named type declaration (`record foo { … }`, or a type
-/// alias) for the nested-package WIT text.
-fn type_decl(resolve: &Resolve, name: &str, id: wit_parser::TypeId) -> Result<String, String> {
+/// Render one resource operation as it appears *inside* a `resource { … }` block
+/// — i.e. with the unmangled op name and the implicit `self` param dropped for
+/// methods: `op: func(args…) -> r;`, `op: static func(args…) -> r;`,
+/// `constructor(args…);`.
+fn resource_func_decl(resolve: &Resolve, func: &Function) -> Result<String, String> {
+    let render_params = |skip_self: bool| -> Result<String, String> {
+        let ps = func
+            .params
+            .iter()
+            .skip(skip_self as usize)
+            .map(|p| Ok(format!("{}: {}", p.name, type_string(resolve, &p.ty)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(ps.join(", "))
+    };
+    let result = match &func.result {
+        Some(t) => format!(" -> {}", type_string(resolve, t)?),
+        None => String::new(),
+    };
+    Ok(match &func.kind {
+        // `[constructor]res` → `constructor(args…);`
+        FunctionKind::Constructor(_) => format!("constructor({});", render_params(false)?),
+        // `[method]res.op` → `op: func(args…) -> r;` (self dropped)
+        FunctionKind::Method(_) => {
+            let op = func.name.rsplit_once('.').map(|(_, o)| o).unwrap_or(&func.name);
+            format!("{op}: func({}){result};", render_params(true)?)
+        }
+        // `[static]res.op` → `op: static func(args…) -> r;`
+        FunctionKind::Static(_) => {
+            let op = func.name.rsplit_once('.').map(|(_, o)| o).unwrap_or(&func.name);
+            format!("{op}: static func({}){result};", render_params(false)?)
+        }
+        other => {
+            return Err(format!(
+                "unsupported resource function kind in WIT dep: {other:?}"
+            ));
+        }
+    })
+}
+
+/// Render a single named type declaration (`record foo { … }`, a resource — with
+/// its operations nested — or a type alias) for the nested-package WIT text.
+fn type_decl(
+    resolve: &Resolve,
+    id: wit_parser::TypeId,
+    name: &str,
+    iface: &wit_parser::Interface,
+) -> Result<String, String> {
     let tdef = &resolve.types[id];
     // Only types owned by an interface are declared inline; this mirrors the
     // Wavelet dep path, which only declares its own record types.
@@ -294,7 +350,21 @@ fn type_decl(resolve: &Resolve, name: &str, id: wit_parser::TypeId) -> Result<St
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(format!("record {name} {{ {} }}", fields.join(", ")))
         }
-        TypeDefKind::Resource => Ok(format!("resource {name};")),
+        TypeDefKind::Resource => {
+            // Gather this resource's operations (constructor/method/static) and
+            // nest them in the block. A resource with no operations is `;`.
+            let mut ops = Vec::new();
+            for (_fname, func) in &iface.functions {
+                if func.kind.resource() == Some(id) {
+                    ops.push(resource_func_decl(resolve, func)?);
+                }
+            }
+            if ops.is_empty() {
+                Ok(format!("resource {name};"))
+            } else {
+                Ok(format!("resource {name} {{ {} }}", ops.join(" ")))
+            }
+        }
         TypeDefKind::Type(inner) => {
             Ok(format!("type {name} = {};", type_string(resolve, inner)?))
         }

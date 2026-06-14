@@ -229,3 +229,91 @@ fn generic_bridge_passes_resource_handles_own_borrow() {
     assert!(text.contains("acme:res/api"), "import not wired into the component");
     assert!(text.contains("demo:app/api"), "forwarding api not exported");
 }
+
+/// Step 6 — resource *operations*: `[constructor]`, `[method]`, `[static]`, and
+/// the implicit `[resource-drop]` all lower through the *generic* bridge — the
+/// generic counterpart to the hand-coded `http_call` `match fname`.
+///
+/// The synthetic `acme:wire` interface is shaped to exercise exactly the
+/// function-kinds (and handle / retptr signatures) the WASI-http magic uses:
+///
+/// | synthetic op                          | `http_call` counterpart                       |
+/// |---------------------------------------|-----------------------------------------------|
+/// | `[constructor]bag` (no self)          | `[constructor]fields` (`http/fields`)         |
+/// | `[constructor]packet(own<bag>)`       | `[constructor]outgoing-response`              |
+/// | `[method]packet.open(self)`           | `[method]outgoing-response.body` — retptr `result<own<T>>` |
+/// | `[method]packet.label(self)`          | `[method]incoming-request.path-with-query` — retptr `option<string>` |
+/// | `[method]packet.put(self, list<u8>)`  | `[method]outgoing-body.write` — method + list |
+/// | `[static]packet.deliver(result<…>)`   | `[static]response-outparam.set` — `result` arg |
+/// | `[static]packet.seal(own<packet>)`    | `[static]outgoing-body.finish` (`finish`)     |
+/// | `[resource-drop]packet`               | `[resource-drop]output-stream`                |
+///
+/// Each is reached from source by its **bare op name** (`wire/bag`, `wire/open`,
+/// `wire/deliver`, …) — exactly how the magic exposes `http/fields`,
+/// `http/body`, `http/set`. `[resource-drop]packet` is reached as `wire/packet`
+/// (its op name is the resource name). Every op is called inside a body that
+/// returns a primitive, so the `bag`/`packet`/`box` resources never appear on
+/// the app's own exported WIT, and the whole component re-encodes/validates
+/// with `wit-component`.
+#[test]
+fn generic_bridge_lowers_resource_methods_static_constructor_drop() {
+    let wit = "package acme:wire@0.1.0;\n\
+        interface api {\n  \
+          resource bag;\n  \
+          resource box;\n  \
+          resource packet {\n    \
+            constructor(headers: own<bag>);\n    \
+            open: func() -> result<own<box>, s32>;\n    \
+            label: func() -> option<string>;\n    \
+            put: func(bytes: list<u8>) -> s32;\n    \
+            deliver: static func(r: result<own<box>, s32>) -> s32;\n    \
+            seal: static func(this: own<packet>) -> s32;\n  \
+          }\n  \
+          new-bag: func() -> own<bag>;\n\
+        }\n";
+
+    // Each export drives one operation kind through the generic bridge:
+    //   ctor-trip   — `[constructor]bag` (no self) then `[constructor]packet`
+    //                 (taking the bag handle), then a method on the packet.
+    //   open-trip   — a method whose result is `result<own<box>, s32>` (retptr),
+    //                 destructured with Match to a primitive.
+    //   label-trip  — a method whose result is `option<string>` (retptr).
+    //   put-trip    — a method taking `(self, list<u8>)`.
+    //   static-trip — `[static]packet.seal` (a static over an `own` handle).
+    //   drop-trip   — the implicit `[resource-drop]packet`, reached as
+    //                 `wire/drop-packet`, then returns a primitive.
+    // Inference can't see through a dep call, so each uses the explicit Export
+    // record form with a primitive `result`.
+    let app = "Package \"demo:app@0.1.0\"\n\n\
+        Import {pkg: \"acme:wire/api\" as: w}\n\n\
+        Export {name: put-trip params: {n: s32} result: s32}\n\
+        Def put-trip Fn {n: s32}\n  \
+          w/put[w/packet(w/new-bag[]) \"hi\"]\n\n\
+        Export {name: label-trip params: {n: s32} result: s32}\n\
+        Def label-trip Fn {n: s32}\n  \
+          Match w/label(w/packet(w/new-bag[])) [\n    \
+            (some(s)  len(s))\n    \
+            (none     n)\n  \
+          ]\n\n\
+        Export {name: open-trip params: {n: s32} result: s32}\n\
+        Def open-trip Fn {n: s32}\n  \
+          Match w/open(w/packet(w/new-bag[])) [\n    \
+            (ok(b)   n)\n    \
+            (err(e)  0)\n  \
+          ]\n\n\
+        Export {name: deliver-trip params: {n: s32} result: s32}\n\
+        Def deliver-trip Fn {n: s32}\n  \
+          w/deliver(w/open(w/packet(w/new-bag[])))\n\n\
+        Export {name: seal-trip params: {n: s32} result: s32}\n\
+        Def seal-trip Fn {n: s32}\n  \
+          w/seal(w/packet(w/new-bag[]))\n\n\
+        Export {name: drop-trip params: {n: s32} result: s32}\n\
+        Def drop-trip Fn {n: s32}\n  \
+          Do [w/drop-packet(w/packet(w/new-bag[]))\n      \
+              n]\n";
+
+    let bytes = build_against_wit("wire", "acme-wire.wit", wit, app);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("acme:wire/api"), "import not wired into the component");
+    assert!(text.contains("demo:app/api"), "forwarding api not exported");
+}
