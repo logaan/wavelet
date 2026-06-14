@@ -13,6 +13,8 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-14
+
 ### Added
 - `wavelet new <name>` scaffolds a new project: a `.gitignore`, a `src/` with a
   `wasi:http/incoming-handler` front end and the domain model it imports, and
@@ -99,7 +101,8 @@ Initial release.
   artifacts.
 - Docusaurus documentation site with a live, wasm-compiled `<Playground>`.
 
-[Unreleased]: https://github.com/logaan/wavelet/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/logaan/wavelet/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/logaan/wavelet/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/logaan/wavelet/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/logaan/wavelet/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/logaan/wavelet/compare/v0.2.2...v0.2.3
