@@ -225,15 +225,45 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
     }
     if let Some(inner) = s.strip_prefix("result<").and_then(|r| r.strip_suffix('>')) {
         let args = split_type_args(inner);
-        if args.len() != 2 {
-            return Err(format!(
-                "`{s}`: only `result<T, E>` (both arms typed) is supported by the wasm backend"
-            ));
-        }
-        return Ok(WitTy::Result(
-            Box::new(wit_ty(&args[0], env)?),
-            Box::new(wit_ty(&args[1], env)?),
-        ));
+        // Both arms typed keeps the existing `WitTy::Result` path byte-for-byte.
+        // The single-arm and `_`-elided forms (`result<T>`, `result<_, E>`,
+        // `result<T, _>`) become a 2-case `ok`/`err` variant where a missing or
+        // `_` arm is payload-less — reusing the general variant lower/lift/store/
+        // load machinery, with the same case names so `Match [(ok …)(err …)]`
+        // still resolves. The canonical-ABI flattening is identical.
+        let arm = |a: &str| -> Result<Option<WitTy>, String> {
+            let a = a.trim();
+            if a.is_empty() || a == "_" { Ok(None) } else { Ok(Some(wit_ty(a, env)?)) }
+        };
+        let (ok, err) = match args.len() {
+            1 => (arm(&args[0])?, None),
+            2 => {
+                let ok = arm(&args[0])?;
+                let err = arm(&args[1])?;
+                if let (Some(o), Some(e)) = (&ok, &err) {
+                    // Both arms typed → the legacy `WitTy::Result` representation.
+                    return Ok(WitTy::Result(Box::new(o.clone()), Box::new(e.clone())));
+                }
+                (ok, err)
+            }
+            _ => {
+                return Err(format!(
+                    "`{s}`: a result takes at most two type arguments"
+                ));
+            }
+        };
+        return Ok(WitTy::Variant(vec![
+            ("ok".to_string(), ok),
+            ("err".to_string(), err),
+        ]));
+    }
+    // A bare `result` (no arms) — both sides unit. Used by `wasi:cli/run`'s
+    // `func() -> result`. Same `ok`/`err` 2-case variant, both payload-less.
+    if s == "result" {
+        return Ok(WitTy::Variant(vec![
+            ("ok".to_string(), None),
+            ("err".to_string(), None),
+        ]));
     }
     Ok(match s {
         "bool" => WitTy::Bool,
@@ -731,6 +761,23 @@ fn is_external_iface(iface: &str) -> bool {
 /// `wasi:http/incoming-handler` → `wasi:http/incoming-handler@0.2.0`.
 fn external_versioned(path: &str) -> String {
     format!("{path}@{WASI_VERSION}")
+}
+
+/// Version an external interface path (`ns:pkg/iface`) using the version of the
+/// resolved [`Dep`] for its package, when one is in scope — the generic export
+/// path, whose WIT comes from `wit/deps` at whatever version `wkg` pinned. Falls
+/// back to [`external_versioned`] (the hardcoded WASI version) for the magic
+/// http/cli path, which has no `Dep` for its vendored interfaces.
+///
+/// `ns:greet/greeter` with a dep `greet` at `acme:greet@0.1.0` → `…@0.1.0`.
+fn external_versioned_in(path: &str, deps: &HashMap<String, Dep>) -> String {
+    if let Some((pkg, _iface)) = path.split_once('/')
+        && let Some(dep) = deps.get(pkg)
+        && let Some((_base, ver)) = dep.package.split_once('@')
+    {
+        return format!("{path}@{ver}");
+    }
+    external_versioned(path)
 }
 
 /// One host function a `http/<fname>` intrinsic lowers to: the (module, field,
@@ -3110,10 +3157,12 @@ fn emit_core_module(
         };
         let t = em.ty_idx(fparams, fresults);
         em.bodies.push((t, fx.finish()));
-        // An external interface (wasi:http/incoming-handler) is exported under
-        // its own versioned name; a local one lands in this package.
+        // An external interface (wasi:http/incoming-handler, wasi:cli/run) is
+        // exported under its own versioned name — at the version of its resolved
+        // `wit/deps` package on the generic path, or the vendored WASI version
+        // for the magic path; a local one lands in this package.
         let own_iface = if is_external_iface(&sig.iface) {
-            external_versioned(&sig.iface)
+            external_versioned_in(&sig.iface, deps)
         } else {
             versioned_iface(&info.package, &sig.iface)
         };
@@ -4109,7 +4158,7 @@ fn synthesize_world_wit(
     }
     for iface in &ifaces {
         if is_external_iface(iface) {
-            out.push_str(&format!("  export {};\n", external_versioned(iface)));
+            out.push_str(&format!("  export {};\n", external_versioned_in(iface, deps)));
         } else {
             out.push_str(&format!("  export {iface};\n"));
         }

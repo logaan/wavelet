@@ -79,6 +79,23 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                 u.path, imp.path
             ));
         }
+        // External interfaces this component *exports* (e.g.
+        // `wasi:http/incoming-handler`, `wasi:cli/run`) also need their WIT
+        // package available to the encoder so the generic export wrapper
+        // validates against the real interface signature. Resolve each such
+        // package from `wit/deps` into the same `Dep` map; the magic http/cli
+        // export path supplies its own vendored WIT and needs no entry here.
+        for sig in &u.info.exports {
+            let Some((pkg, _)) = sig.iface.split_once('/') else { continue };
+            if !pkg.contains(':') || deps.contains_key(pkg) {
+                continue; // local iface (`api`) or already resolved.
+            }
+            if let Some(dir) = &wit_deps_dir
+                && let Some(dep) = crate::witdep::resolve_dep(dir, pkg)?
+            {
+                deps.insert(pkg.to_string(), dep);
+            }
+        }
         let bytes = emit::emit_component(&u.arena, &u.roots, &u.info, &deps)
             .map_err(|e| format!("{}: {e}", u.path))?;
         let out = format!("{out_dir}/{}.wasm", u.info.package_path.replace(':', "-"));
