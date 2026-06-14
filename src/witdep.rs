@@ -15,7 +15,7 @@
 use std::path::Path;
 
 use wit_parser::{
-    Function, FunctionKind, Handle, Resolve, Type, TypeDefKind, TypeOwner,
+    Function, Handle, Resolve, Type, TypeDefKind, UnresolvedPackageGroup,
 };
 
 use crate::emit::{Dep, TypeDef};
@@ -39,28 +39,44 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
     }
 
     let mut resolve = Resolve::default();
-    let mut any = false;
+
+    // Parse *every* entry in `wit/deps` into an unresolved package group first,
+    // then push them all together so cross-package references resolve. The deps
+    // `wkg` fetches are interdependent (`wasi:http` uses `wasi:io`, `wasi:clocks`,
+    // …), so pushing each directory on its own fails — a lone `wasi:clocks`
+    // package can't find `wasi:io`. `push_groups` topologically sorts the whole
+    // set and resolves the cross-references in one shot.
+    let mut groups: Vec<UnresolvedPackageGroup> = Vec::new();
     let entries = std::fs::read_dir(deps_dir)
         .map_err(|e| format!("{}: {e}", deps_dir.display()))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("{}: {e}", deps_dir.display()))?;
         let path = entry.path();
-        // Skip lock files / hidden files; `push_path` handles both a single WIT
-        // file and a package directory.
-        if path.is_file() {
+        let group = if path.is_dir() {
+            UnresolvedPackageGroup::parse_dir(&path)
+                .map_err(|e| format!("{}: {e:#}", path.display()))?
+        } else {
+            // A single-file package; skip lock files / hidden files.
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             if !matches!(ext, "wit" | "wasm" | "wat") {
                 continue;
             }
-        }
-        resolve
-            .push_path(&path)
-            .map_err(|e| format!("{}: {e:#}", path.display()))?;
-        any = true;
+            let contents = std::fs::read_to_string(&path)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            UnresolvedPackageGroup::parse(&path, &contents)
+                .map_err(|e| format!("{}: {e:#}", path.display()))?
+        };
+        groups.push(group);
     }
-    if !any {
+    if groups.is_empty() {
         return Ok(None);
     }
+    // `push_groups` takes one "main" group plus the rest as deps, but sorts the
+    // whole lot internally — which one is "main" is immaterial here.
+    let main = groups.remove(0);
+    resolve
+        .push_groups(main, groups)
+        .map_err(|e| format!("{}: {e:#}", deps_dir.display()))?;
 
     // Find the package whose `namespace:name` matches the (versionless) import.
     let pkg_id = resolve.packages.iter().find_map(|(id, pkg)| {
@@ -149,7 +165,7 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
         }
     }
 
-    let package_wit = package_wit_text(&resolve, &full_package, pkg)?;
+    let package_wit = package_wit_text(&resolve, pkg_id)?;
 
     Ok(Some(Dep { package: full_package, funcs, package_wit, types, type_defs }))
 }
@@ -198,199 +214,105 @@ fn type_string(resolve: &Resolve, ty: &Type) -> Result<String, String> {
             if let Some(name) = &tdef.name {
                 name.clone()
             } else {
-                match &tdef.kind {
-                    TypeDefKind::List(inner) => {
-                        format!("list<{}>", type_string(resolve, inner)?)
-                    }
-                    TypeDefKind::Option(inner) => {
-                        format!("option<{}>", type_string(resolve, inner)?)
-                    }
-                    TypeDefKind::Result(r) => match (&r.ok, &r.err) {
-                        (Some(o), Some(e)) => format!(
-                            "result<{}, {}>",
-                            type_string(resolve, o)?,
-                            type_string(resolve, e)?
-                        ),
-                        (Some(o), None) => {
-                            format!("result<{}>", type_string(resolve, o)?)
-                        }
-                        (None, Some(e)) => {
-                            format!("result<_, {}>", type_string(resolve, e)?)
-                        }
-                        (None, None) => "result".into(),
-                    },
-                    TypeDefKind::Tuple(t) => {
-                        let parts = t
-                            .types
-                            .iter()
-                            .map(|t| type_string(resolve, t))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        format!("tuple<{}>", parts.join(", "))
-                    }
-                    TypeDefKind::Handle(Handle::Own(id))
-                    | TypeDefKind::Handle(Handle::Borrow(id)) => {
-                        let inner = &resolve.types[*id];
-                        let name = inner
-                            .name
-                            .clone()
-                            .ok_or("anonymous resource handle in WIT dep")?;
-                        let kw = if matches!(tdef.kind, TypeDefKind::Handle(Handle::Own(_))) {
-                            "own"
-                        } else {
-                            "borrow"
-                        };
-                        format!("{kw}<{name}>")
-                    }
-                    TypeDefKind::Type(inner) => type_string(resolve, inner)?,
-                    other => {
-                        return Err(format!(
-                            "unsupported anonymous WIT type in dep: {}",
-                            other.as_str()
-                        ));
-                    }
-                }
+                structural_type_string(resolve, &tdef.kind)?
             }
         }
     })
 }
 
-/// Emit a nested-package WIT string for the dependency, matching the shape of
-/// [`crate::emit::dep_package_wit`] for a Wavelet dep:
-/// `package ns:name@ver { interface iface { …type decls…  …funcs… } }`.
-///
-/// Resource *operations* (`constructor`/`method`/`static`) are rendered *inside*
-/// their resource block — a `[constructor]res`/`[method]res.op` function is not
-/// valid WIT spelled flat — so only freestanding functions appear at interface
-/// scope.
-fn package_wit_text(
-    resolve: &Resolve,
-    full_package: &str,
-    pkg: &wit_parser::Package,
-) -> Result<String, String> {
-    let mut out = format!("package {full_package} {{\n");
-    for (iface_name, &iface_id) in &pkg.interfaces {
-        let iface = &resolve.interfaces[iface_id];
-        out.push_str(&format!("  interface {iface_name} {{\n"));
-        for (type_name, &type_id) in &iface.types {
-            out.push_str(&format!("    {}\n", type_decl(resolve, type_id, type_name, iface)?));
+/// Render a structural [`TypeDefKind`] (list/option/result/tuple/handle) as its
+/// WIT type string — used both for anonymous compound types and for *named*
+/// aliases of them (`type field-value = list<u8>`).
+fn structural_type_string(resolve: &Resolve, kind: &TypeDefKind) -> Result<String, String> {
+    Ok(match kind {
+        TypeDefKind::List(inner) => format!("list<{}>", type_string(resolve, inner)?),
+        TypeDefKind::Option(inner) => format!("option<{}>", type_string(resolve, inner)?),
+        TypeDefKind::Result(r) => match (&r.ok, &r.err) {
+            (Some(o), Some(e)) => format!(
+                "result<{}, {}>",
+                type_string(resolve, o)?,
+                type_string(resolve, e)?
+            ),
+            (Some(o), None) => format!("result<{}>", type_string(resolve, o)?),
+            (None, Some(e)) => format!("result<_, {}>", type_string(resolve, e)?),
+            (None, None) => "result".into(),
+        },
+        TypeDefKind::Tuple(t) => {
+            let parts = t
+                .types
+                .iter()
+                .map(|t| type_string(resolve, t))
+                .collect::<Result<Vec<_>, _>>()?;
+            format!("tuple<{}>", parts.join(", "))
         }
-        for (_fname, func) in &iface.functions {
-            // Resource operations are emitted inside their resource block above;
-            // only freestanding functions are written at interface scope.
-            if matches!(func.kind, FunctionKind::Freestanding) {
-                out.push_str(&format!(
-                    "    {}\n",
-                    func_sig(resolve, iface_name, func)?.to_wit()
-                ));
-            }
+        TypeDefKind::Handle(Handle::Own(id)) | TypeDefKind::Handle(Handle::Borrow(id)) => {
+            let inner = &resolve.types[*id];
+            let name = inner
+                .name
+                .clone()
+                .ok_or("anonymous resource handle in WIT dep")?;
+            let kw = if matches!(kind, TypeDefKind::Handle(Handle::Own(_))) {
+                "own"
+            } else {
+                "borrow"
+            };
+            format!("{kw}<{name}>")
         }
-        out.push_str("  }\n");
-    }
-    out.push_str("}\n");
-    Ok(out)
-}
-
-/// Render one resource operation as it appears *inside* a `resource { … }` block
-/// — i.e. with the unmangled op name and the implicit `self` param dropped for
-/// methods: `op: func(args…) -> r;`, `op: static func(args…) -> r;`,
-/// `constructor(args…);`.
-fn resource_func_decl(resolve: &Resolve, func: &Function) -> Result<String, String> {
-    let render_params = |skip_self: bool| -> Result<String, String> {
-        let ps = func
-            .params
-            .iter()
-            .skip(skip_self as usize)
-            .map(|p| Ok(format!("{}: {}", p.name, type_string(resolve, &p.ty)?)))
-            .collect::<Result<Vec<_>, String>>()?;
-        Ok(ps.join(", "))
-    };
-    let result = match &func.result {
-        Some(t) => format!(" -> {}", type_string(resolve, t)?),
-        None => String::new(),
-    };
-    Ok(match &func.kind {
-        // `[constructor]res` → `constructor(args…);`
-        FunctionKind::Constructor(_) => format!("constructor({});", render_params(false)?),
-        // `[method]res.op` → `op: func(args…) -> r;` (self dropped)
-        FunctionKind::Method(_) => {
-            let op = func.name.rsplit_once('.').map(|(_, o)| o).unwrap_or(&func.name);
-            format!("{op}: func({}){result};", render_params(true)?)
-        }
-        // `[static]res.op` → `op: static func(args…) -> r;`
-        FunctionKind::Static(_) => {
-            let op = func.name.rsplit_once('.').map(|(_, o)| o).unwrap_or(&func.name);
-            format!("{op}: static func({}){result};", render_params(false)?)
-        }
+        TypeDefKind::Type(inner) => type_string(resolve, inner)?,
         other => {
             return Err(format!(
-                "unsupported resource function kind in WIT dep: {other:?}"
+                "unsupported anonymous WIT type in dep: {}",
+                other.as_str()
             ));
         }
     })
 }
 
-/// Render a single named type declaration (`record foo { … }`, a resource — with
-/// its operations nested — or a type alias) for the nested-package WIT text.
-fn type_decl(
+/// Emit a nested-package WIT string for the dependency and *all* the packages it
+/// transitively pulls in, in `package ns:name@ver { … }` braced form so the block
+/// slots into the synthesized world file.
+///
+/// We delegate to `wit-component`'s [`WitPrinter`] rather than hand-rolling the
+/// WIT text. Real host WIT (`wasi:http` and friends) crosses interface and
+/// package boundaries with `use` statements, type aliases, and re-exports that a
+/// naive flattener gets wrong (e.g. it renders a `use`d `error-code` as the
+/// self-referential `type error-code = error-code`). The printer handles all of
+/// that correctly and stays in lockstep with the parser, so the encoder always
+/// gets valid WIT.
+///
+/// Every package in `resolve` is printed in nested-braced form. `resolve` holds
+/// exactly the project's `wit/deps`, so this is `pkg` plus its transitive
+/// dependency packages (`wasi:http` → `wasi:io`, `wasi:clocks`, …); they are all
+/// needed for the package to type-check at encode time.
+fn package_wit_text(
     resolve: &Resolve,
-    id: wit_parser::TypeId,
-    name: &str,
-    iface: &wit_parser::Interface,
+    pkg_id: wit_parser::PackageId,
 ) -> Result<String, String> {
-    let tdef = &resolve.types[id];
-    // Only types owned by an interface are declared inline; this mirrors the
-    // Wavelet dep path, which only declares its own record types.
-    debug_assert!(matches!(tdef.owner, TypeOwner::Interface(_) | TypeOwner::None));
-    match &tdef.kind {
-        TypeDefKind::Record(rec) => {
-            let fields = rec
-                .fields
-                .iter()
-                .map(|f| Ok(format!("{}: {}", f.name, type_string(resolve, &f.ty)?)))
-                .collect::<Result<Vec<_>, String>>()?;
-            Ok(format!("record {name} {{ {} }}", fields.join(", ")))
-        }
-        TypeDefKind::Resource => {
-            // Gather this resource's operations (constructor/method/static) and
-            // nest them in the block. A resource with no operations is `;`.
-            let mut ops = Vec::new();
-            for (_fname, func) in &iface.functions {
-                if func.kind.resource() == Some(id) {
-                    ops.push(resource_func_decl(resolve, func)?);
-                }
-            }
-            if ops.is_empty() {
-                Ok(format!("resource {name};"))
-            } else {
-                Ok(format!("resource {name} {{ {} }}", ops.join(" ")))
-            }
-        }
-        TypeDefKind::Type(inner) => {
-            Ok(format!("type {name} = {};", type_string(resolve, inner)?))
-        }
-        TypeDefKind::Enum(en) => {
-            let cases = en.cases.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
-            Ok(format!("enum {name} {{ {} }}", cases.join(", ")))
-        }
-        TypeDefKind::Flags(fl) => {
-            let names = fl.flags.iter().map(|f| f.name.clone()).collect::<Vec<_>>();
-            Ok(format!("flags {name} {{ {} }}", names.join(", ")))
-        }
-        TypeDefKind::Variant(var) => {
-            let cases = var
-                .cases
-                .iter()
-                .map(|c| match &c.ty {
-                    Some(t) => Ok(format!("{}({})", c.name, type_string(resolve, t)?)),
-                    None => Ok(c.name.clone()),
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            Ok(format!("variant {name} {{ {} }}", cases.join(", ")))
-        }
-        other => {
-            // Anything still unhandled (futures/streams/…): reject loudly rather
-            // than emit wrong WIT.
-            Err(format!("unsupported WIT type decl `{name}`: {}", other.as_str()))
+    use wit_component::{Output, WitPrinter};
+
+    // Print the dependency package first, then every other package as a nested
+    // `package … { … }` block. `print` renders its first argument with the
+    // top-level `package …;` syntax, but we want *all* packages braced so they
+    // can be appended after the synthesized world's own `package …; world …`.
+    // So print each package individually with `print_package(_, _, is_main=false)`.
+    let mut printer = WitPrinter::default();
+    printer.emit_docs(false);
+
+    // Order: the dep package first, then the rest in a stable order.
+    let mut ids: Vec<wit_parser::PackageId> = vec![pkg_id];
+    for (id, _) in resolve.packages.iter() {
+        if id != pkg_id {
+            ids.push(id);
         }
     }
+    for (i, id) in ids.iter().enumerate() {
+        if i > 0 {
+            printer.output.newline();
+            printer.output.newline();
+        }
+        printer
+            .print_package(resolve, *id, false)
+            .map_err(|e| format!("rendering WIT for dep package: {e:#}"))?;
+    }
+    Ok(printer.output.to_string())
 }
