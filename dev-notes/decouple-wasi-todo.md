@@ -637,7 +637,7 @@ magic path (no regression).
 
 ## Step 7 — Generic export of arbitrary interfaces
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Export an arbitrary interface (e.g. `wasi:http/incoming-handler`,
 `wasi:cli/run`) using the parsed WIT signature of the target, generalising
@@ -649,7 +649,102 @@ interface through the generic export path in a test; the `run`-specific
 `() -> result` wrapper is reproducible as "export this function into
 `wasi:cli/run` with its WIT signature." Magic untouched.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **The generic export path already mostly existed — Step 7 closed the three
+  gaps that kept it from carrying `wasi:cli/run`'s `() -> result` and an
+  arbitrary versioned interface.** The export-wrapper loop in `emit_core_module`
+  (search "`---- export wrappers`", ~`src/emit.rs:3076`) already lifts each
+  export's params and lowers its result *entirely off the parsed `FuncSig`*, and
+  already routes an external iface (`is_external_iface`, i.e. `iface.contains(':')`)
+  to its own versioned export name. So a `FuncSig` whose `iface` is e.g.
+  `wasi:cli/run` (set via the explicit `Export {iface: "…" …}` record form,
+  parsed in `wit::parse_explicit_sig`) flows through the generic wrapper with
+  **no `is_command`/`is_http` branch**. The hand-coded `run` special-case
+  (`if is_command && sig.name == "run"`, ~`src/emit.rs:3083`) is **untouched and
+  still present** — it only fires for the `wasi:cli/command` *target*, which the
+  generic path never sets.
+
+- **Gap 1 — single-arm / bare `result` (the Step 6 carry-forward).** `run`'s
+  signature is `func() -> result` (a bare `result`, no arms). `wit_ty`
+  (`src/emit.rs`) previously errored on anything but `result<T, E>`. Now it parses
+  `result<T>`, `result<_, E>`, `result<T, _>`, and bare `result` into a 2-case
+  `ok`/`err` `WitTy::Variant` where a missing/`_` arm is payload-less — reusing
+  the whole general variant lower/lift/store/load machinery (the canonical-ABI
+  flattening of a payload-less 2-case variant is a single i32 discriminant,
+  *identical* to `result<_, _>`). **`result<T, E>` with both arms typed is
+  unchanged** — still `WitTy::Result`, byte-for-byte. The case names stay `ok`/
+  `err` so `Match [(ok …)(err …)]` still resolves, and a unit `ok`/`err` is
+  built in source by `ok(0)` (the payload is dropped for a payload-less arm).
+  **This resolves the Step 6 gap** noted under Step 6 ("the generic `result`
+  lowering must learn the single-arm forms before Step 8 can route http"). The
+  real wasi-http `body`/`finish` return `result<own<T>>` / `result<_, error-code>`
+  — both now lower through the generic path (proven for `result<own<box>, s32>`
+  in Step 6 already, and `result<own<…>>`-style single-arm now too).
+
+- **Gap 2 — versioning external exports by their *resolved* package, not the
+  hardcoded WASI version.** `external_versioned(path)` hardcodes `@0.2.0`
+  (`WASI_VERSION`), which is wrong for any non-WASI package (the test deps are
+  `@0.1.0`). New `external_versioned_in(path, deps)` (`src/emit.rs`, beside
+  `external_versioned`) looks up the iface's package in the `deps` map and uses
+  *its* version (`Dep.package` carries the full `ns:name@ver`), falling back to
+  `external_versioned` (the WASI default) when there's no dep — i.e. the magic
+  http/cli path, which has no `Dep` for its vendored interfaces, is unaffected.
+  Both export callsites now use it: the world-export line in
+  `synthesize_world_wit` and the export-wrapper name in `emit_core_module`.
+
+- **Gap 3 — making the exported interface's WIT available to the encoder.**
+  `wit-component` validates the export wrapper against the real interface WIT,
+  so the exported external package must be in the synthesized world. `deps` was
+  only populated from a component's *imports*; `build_files` now also resolves
+  each *external export* iface's package (`sig.iface` split at `/`, e.g.
+  `wasi:cli/run` → package `wasi:cli`) from `wit/deps` via `witdep::resolve_dep`
+  into the same `deps` map (`src/build.rs`, right after the import loop). Its
+  `package_wit` is then appended by the existing `for dep in deps.values()` tail
+  in `synthesize_world_wit`. An export-only dep produces **no spurious import**
+  (the world's import lines come from `info.imports`, not from `deps`).
+
+- **Proof tests** (`tests/generic_bridge.rs`, two new):
+  - `generic_bridge_exports_arbitrary_interface` — exports `greet` into a
+    synthetic `acme:greet/greeter` (string + record params, retptr-string
+    result) via the explicit `Export {iface: …}` form, WIT from `wit/deps`, no
+    compiler knowledge of `acme:greet`; the component re-encodes/validates.
+  - `generic_bridge_exports_run_style_unit_result` — the `wasi:cli/run` shape
+    reproduced: exports `run: func() -> result` into a synthetic `acme:cli/run`,
+    body returns `ok(0)`; the wrapper lowers it to the single-i32 `result`
+    discriminant off the parsed signature. This is the literal "`run` is just
+    'export this function into `wasi:cli/run` with its WIT signature'" check.
+
+- **For Step 8 (cut http to the generic path end-to-end).** The generic *import*
+  (Steps 3–6) and *export* (this step) bridges are both complete and proven on
+  synthetic WIT. To drive http through them:
+  - **Export** `wasi:http/incoming-handler#handle` via `Export {name: handle
+    iface: "wasi:http/incoming-handler" params: {…} result: …}` with the real
+    handler signature; `build_files` will pull `wasi:http`'s WIT from `wit/deps`
+    (already fetched by Step 2's `wkg`) and `external_versioned_in` will version
+    it correctly. **Import** the http resource ops as a normal `Import {pkg:
+    "wasi:http/types" as: …}` dep and call them by bare op name (Step 6's
+    `dep_func_op` resolver), e.g. `http/body`. No more `http_call`/`http_imports`.
+  - **The single-arm `result` gap is closed** — http's `result<own<T>>` /
+    `result<_, error-code>` now lower generically. The one remaining thing to
+    confirm in Step 8 is that the *real* `wasi:http` WIT (with its `error-code`
+    variant and `wasi:io/streams` use) round-trips through `witdep` cleanly; the
+    synthetic tests use simplified arms (`result<own<box>, s32>`) and the magic
+    still force-imports `wasi:io/streams` (`is_http`), which Step 8/11 retires.
+  - **`is_external_package`/`is_external_iface` are still magic-flavoured.**
+    `is_external_package` is literally `starts_with("wasi:")`; the build skips a
+    Dep for those imports (`build.rs` line ~51) because the magic vendors their
+    WIT. For Step 8's http imports you'll want `wasi:http/types` resolved as a
+    real `Dep` from `wit/deps` (so `dep_call` has its `FuncSig`s) rather than
+    skipped — i.e. that `is_external_package` skip is the next thing to retire on
+    the http import side. Step 7 left it alone (only the *export* side needed
+    the dep) to keep the magic path green.
+
+- **No language/example/behaviour change** (the export path is parameterised by
+  the parsed signature; no `Node`/interpreter change, no new source syntax), so
+  `regen-examples.sh` was **not** run. Full `cargo test` green (49 lib + 7
+  generic_bridge + examples + http + wit_deps + wkg_populate); the http template
+  still builds via the untouched magic path (http suite green).
 
 ---
 

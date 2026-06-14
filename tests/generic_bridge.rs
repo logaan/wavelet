@@ -317,3 +317,68 @@ fn generic_bridge_lowers_resource_methods_static_constructor_drop() {
     assert!(text.contains("acme:wire/api"), "import not wired into the component");
     assert!(text.contains("demo:app/api"), "forwarding api not exported");
 }
+
+/// Step 7 — generic *export* of an arbitrary interface. A component exports a
+/// function into an external interface (`acme:greet/greeter`) named directly via
+/// the explicit `Export {iface: …}` form, with its WIT signature coming from the
+/// package vendored under `wit/deps` — no `is_command`/`is_http` branch, no
+/// compiler knowledge of `acme:greet`. The export wrapper lifts the incoming
+/// params and lowers the result entirely off the parsed signature, and
+/// `wit-component` re-validates the exported interface against the real WIT.
+#[test]
+fn generic_bridge_exports_arbitrary_interface() {
+    // The target interface the component implements. Its function takes a
+    // string and a record and returns a string — exercising param lifting
+    // (string + record) and a retptr-string result through the export wrapper.
+    let wit = "package acme:greet@0.1.0;\n\
+        interface greeter {\n  \
+          record who { name: string, times: s32 }\n  \
+          greet: func(prefix: string, w: who) -> string;\n\
+        }\n";
+
+    // `greet` is exported into `acme:greet/greeter` (not the local `api`). The
+    // body just returns the prefix, so the value flows back out through the
+    // generic string retptr path.
+    let app = "Package \"demo:app@0.1.0\"\n\n\
+        DefType who {name: string times: s32}\n\n\
+        Export {name: greet iface: \"acme:greet/greeter\" \
+          params: {prefix: string w: who} result: string}\n\
+        Def greet Fn {prefix: string w: who}\n  \
+          prefix\n";
+
+    let bytes = build_against_wit("greet", "acme-greet.wit", wit, app);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("acme:greet/greeter"),
+        "external interface not exported through the generic path"
+    );
+}
+
+/// Step 7 — the `wasi:cli/run` `() -> result` wrapper is just "export this
+/// function into `wasi:cli/run` with its WIT signature", reproduced through the
+/// *generic* export path with no `is_command` branch. The function returns a
+/// `result` value (`ok(0)`); the export wrapper lowers it to the canonical
+/// single-i32 `result` discriminant off the parsed `func() -> result` signature.
+/// A synthetic `acme:cli` package mirrors `wasi:cli/run`'s shape so the test
+/// stays hermetic, and `wit-component` re-validates the `() -> result` export.
+#[test]
+fn generic_bridge_exports_run_style_unit_result() {
+    let wit = "package acme:cli@0.1.0;\n\
+        interface run {\n  \
+          run: func() -> result;\n\
+        }\n";
+
+    // No params, returns a bare `result` — exactly the `wasi:cli/run` shape.
+    // `ok(0)` builds the ok arm (its payload is dropped: `result` is unit-armed).
+    let app = "Package \"demo:app@0.1.0\"\n\n\
+        Export {name: run iface: \"acme:cli/run\" result: result}\n\
+        Def run Fn {}\n  \
+          ok(0)\n";
+
+    let bytes = build_against_wit("cli-run", "acme-cli.wit", wit, app);
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("acme:cli/run"),
+        "run-style interface not exported through the generic path"
+    );
+}
