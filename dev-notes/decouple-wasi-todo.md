@@ -1,15 +1,14 @@
 # WASI-decoupling — step-by-step worklist
 
 This is the execution checklist for `dev-notes/decouple-wasi.md`. The work is
-split into steps **sized for one fresh subagent each**, so no single agent's
-context has to hold the whole project. Read this file *and* `decouple-wasi.md`
-before starting a step.
+split into small, self-contained steps, **one per subagent**. Read this file
+*and* `decouple-wasi.md` before starting a step.
 
 ## How this worklist is driven
 
 - **One subagent per step.** The orchestrator spawns a fresh agent for the next
   unchecked step, that agent does *only* that step, then stops. Do not run ahead
-  into the next step — the boundaries are deliberate context-size cut points.
+  into the next step — the boundaries are deliberate handoff points.
 - **Each step branches from `origin/main` and must land on `origin/main` before
   the next agent starts.** A subagent's worktree is created fresh from
   `origin/main`, so it can only see prior steps that were actually pushed. The
@@ -19,7 +18,7 @@ before starting a step.
   follow-ups), and commit that change together with the step's work.
 - **Every step ends green and never regresses http.** `cargo test` must pass, and
   the `http` template must still build and serve, at the end of *every* step
-  until it is intentionally re-routed (Step 7) — the magic path stays in place
+  until it is intentionally re-routed (Step 8) — the magic path stays in place
   and working until then.
 
 ## Rules every subagent must follow (paste verbatim into each subagent prompt)
@@ -69,9 +68,6 @@ internal wrapper for invoking them. No language/codegen change yet.
 `wac --version` and surfaces a helpful error when a tool is absent. Nothing else
 calls the wrapper yet.
 
-**Size.** Small. One module + formula + a couple of unit tests for the
-missing-tool error path.
-
 **Handoff notes.** _(fill in)_
 
 ---
@@ -96,8 +92,6 @@ adds a new source, it doesn't remove the old one.
 **Done when.** `cargo test` passes; an external WIT package placed in `wit/deps`
 is parseable and resolvable; existing magic still primary and unchanged.
 
-**Size.** Medium. The risk is matching the existing `Dep` representation exactly.
-
 **Handoff notes.** _(fill in)_
 
 ---
@@ -117,79 +111,105 @@ the scenes — the magic path remains the one actually used for codegen.
   invoke `wkg wit fetch`.
 - `wavelet new`: scaffold `wit/` and fetch+lock deps.
 - Tests that a built project ends up with a populated `wit/deps` and a
-  `wkg.lock` (may need to gate on `wkg` presence / network — prefer a hermetic
-  fixture or a feature-gated/integration test if registry access is unavailable
-  in CI).
+  `wkg.lock`. Keep the unit suite hermetic; make the live-fetch path an
+  integration test, since it needs registry access the way CI may not have.
 
 **Done when.** `cargo test` passes; a built sample project has `wit/deps` +
 `wkg.lock`; no codegen behaviour change.
 
-**Size.** Medium. Watch out for CI network access to the registry — keep the
-unit suite hermetic and make the live-fetch path an integration test.
+**Handoff notes.** _(fill in)_
+
+---
+
+## Step 3 — Generic bridge: primitives, flattening, retptr, records, tuples
+
+- [ ] Done
+
+**Goal.** Begin the generic canonical-ABI lowering that, given a WIT function
+signature from parsed WIT, emits the core call — starting with: parameter
+flattening, return via retptr, primitives (ints, floats, bool, char), records,
+and tuples. Built **alongside** the existing magic (not replacing it yet) and
+parameterised by the signature instead of by a `match fname`.
+
+**Scope.**
+- New lowering scaffold in `src/emit.rs` driven by a parsed WIT signature,
+  covering the value kinds listed above.
+- Prove it: a synthetic test interface whose functions take/return these kinds
+  compiles through the *generic* path and re-encodes cleanly with
+  `wit-component`. Do **not** delete any hand-coded path.
+
+**Done when.** `cargo test` passes; functions over primitives/records/tuples
+compile via the generic bridge and validate; http/cli magic untouched and green.
 
 **Handoff notes.** _(fill in)_
 
 ---
 
-## Step 3 — Generic canonical-ABI bridge: non-resource types
+## Step 4 — Generic bridge: lists, strings, options, results, enums, variants, flags
 
 - [ ] Done
 
-**Goal.** Add a general lowering that, given a WIT function signature from parsed
-WIT, emits the core call for everything *except* resources: param flattening,
-retptr results, records, tuples, lists, strings, options, results, enums,
-variants, flags, primitives. This is the parameterised replacement for the
-`match fname` hand-coding, built **alongside** the existing magic (not replacing
-it yet).
+**Goal.** Extend the Step 3 lowering to the remaining value types: lists and
+strings (memory allocation/copy via `cabi_realloc`), `option`, `result`, `enum`,
+`variant`, and `flags`. Still alongside the magic.
 
 **Scope.**
-- New lowering in `src/emit.rs` driven by a parsed WIT signature.
-- Prove it: make at least one real, non-resource WASI call (e.g. an
-  `wasi:cli/environment#get-arguments`-style list-returning function, or a
-  synthetic test interface) compile through the *generic* path and match the
-  hand-coded output, behind a test or temporary flag. Do **not** delete the
-  hand-coded path.
+- Add these kinds to the generic lowering.
+- Prove it: extend the synthetic test interface to exercise each kind through the
+  generic path; re-encode cleanly.
 
-**Done when.** `cargo test` passes; a non-resource WIT call compiles via the
-generic bridge and validates (`wit-component` re-encode succeeds); http/cli magic
-untouched and still green.
-
-**Size.** Large. This is the first half of the heart of the work. If it grows too
-big, stop at a coherent green point and split the remainder into a new
-"Step 3b" appended to this file with its own checkbox.
+**Done when.** `cargo test` passes; functions over the full non-resource type set
+compile via the generic bridge and validate; magic untouched and green.
 
 **Handoff notes.** _(fill in)_
 
 ---
 
-## Step 4 — Generic bridge: resources, methods, own/borrow, drop
+## Step 5 — Generic bridge: resource handles (own/borrow)
 
 - [ ] Done
 
-**Goal.** Extend the generic bridge with real resource support sourced from
-parsed WIT: `WitTy::Handle` for any `resource`/`own`/`borrow`, resource method
-calls, and drops — retiring the `is_resource_name` allowlist (`src/emit.rs:127`)
-*for the generic path*. Still alongside the magic.
+**Goal.** Add resource *handles* to the generic bridge: produce a `WitTy::Handle`
+for any WIT `resource`/`own`/`borrow` from parsed WIT (passing/returning i32
+handles), retiring the `is_resource_name` allowlist (`src/emit.rs:127`) *for the
+generic path*. Resource *methods* and *drop* come in Step 6. Still alongside the
+magic.
 
 **Scope.**
-- Resource handling in the generic lowering from Step 3.
+- Handle typing + lowering/lifting in the generic bridge from parsed WIT.
+- Prove it: a synthetic interface that passes own/borrow handles compiles through
+  the generic path and validates.
+
+**Done when.** `cargo test` passes; own/borrow handles flow through the generic
+bridge from parsed WIT; magic untouched and green.
+
+**Handoff notes.** _(fill in)_
+
+---
+
+## Step 6 — Generic bridge: resource methods + drop
+
+- [ ] Done
+
+**Goal.** Complete the generic bridge with resource method calls (`[method]`,
+`[static]`, `[constructor]`) and resource `drop`. Still alongside the magic.
+
+**Scope.**
+- Method/constructor/static/drop lowering in the generic bridge.
 - Prove it: the WASI-http operations currently hand-coded in `http_call`
   (`fields`, `outgoing-response`, `body`, `path-with-query`, `set`, `write`,
   `finish`) all compile through the *generic* path in a test, matching the magic
   output. Magic path still present.
 
 **Done when.** `cargo test` passes; the http resource operations build through the
-generic bridge in a test; existing http template still builds+serves via the
+generic bridge in a test; the existing http template still builds+serves via the
 magic path (no regression).
-
-**Size.** Large. The biggest single chunk. Split into "Step 4b" at a green point
-if needed (e.g. own/borrow first, methods+drop second).
 
 **Handoff notes.** _(fill in)_
 
 ---
 
-## Step 5 — Generic export of arbitrary interfaces
+## Step 7 — Generic export of arbitrary interfaces
 
 - [ ] Done
 
@@ -203,13 +223,11 @@ interface through the generic export path in a test; the `run`-specific
 `() -> result` wrapper is reproducible as "export this function into
 `wasi:cli/run` with its WIT signature." Magic untouched.
 
-**Size.** Medium.
-
 **Handoff notes.** _(fill in)_
 
 ---
 
-## Step 6 — Cut http over to the generic path
+## Step 8 — Cut http over to the generic path
 
 - [ ] Done
 
@@ -219,23 +237,37 @@ import bridge + generic export end-to-end, with WIT coming from `wit/deps`
 
 **Done when.** `cargo test` passes; the http template builds **and serves**
 through the generic path (this is the no-regression gate); the http magic is now
-dead code reachable only by removal in Step 8.
-
-**Size.** Medium–large. This is where Steps 1–5 get proven together on the real
-http template.
+dead code reachable only by removal in Step 11.
 
 **Handoff notes.** _(fill in)_
 
 ---
 
-## Step 7 — Cut cli over; remove the WASI builtins
+## Step 9 — Cut cli over to the generic path
 
 - [ ] Done
 
-**Goal.** Route the cli template through the generic path, and remove
-`print`/`println`/`args`/`read-line`/`env` from the language
-(`src/builtins.rs:18`, `:343`+ and the interpreter). CLI output now goes through
-an explicitly-imported `wasi:cli/stdout` (or ecosystem wrapper) via the generic
+**Goal.** Route the cli template through the generic import bridge + generic
+export, with WIT coming from `wit/deps`, leaving the cli magic physically present
+but unused. The `print`/`println`/`args` builtins still exist at this point —
+they are removed in Step 10 — so this step keeps them working but compiled via
+the generic path where it already covers them, or via the magic until Step 10.
+
+**Done when.** `cargo test` passes; the cli template builds and runs through the
+generic path; the cli magic is now dead code reachable only by removal in
+Step 11.
+
+**Handoff notes.** _(fill in)_
+
+---
+
+## Step 10 — Remove the WASI builtins and migrate examples
+
+- [ ] Done
+
+**Goal.** Remove `print`/`println`/`args`/`read-line`/`env` from the language
+(`src/builtins.rs:18`, `:343`+ and the interpreter). Output/args now go through
+explicitly-imported WASI interfaces (or an ecosystem wrapper) via the generic
 bridge.
 
 **Scope.**
@@ -243,18 +275,14 @@ bridge.
 - Migrate the `cli` template and every doc/example that used them; regenerate
   examples (`./scripts/regen-examples.sh`) and re-lock `tests/examples.rs`.
 
-**Done when.** `cargo test` and `./scripts/regen-examples.sh` both green; cli
-template builds and runs through the generic path; no references to the removed
-builtins remain.
-
-**Size.** Large (touches the language surface + every example). Split docs-heavy
-fallout into "Step 7b" if needed.
+**Done when.** `cargo test` and `./scripts/regen-examples.sh` both green; no
+references to the removed builtins remain.
 
 **Handoff notes.** _(fill in)_
 
 ---
 
-## Step 8 — Delete the magic and `Target`
+## Step 11 — Delete the magic and `Target`
 
 - [ ] Done
 
@@ -269,13 +297,11 @@ synthesized WIT and emitted WIT share one path.
 remaining references to the deleted symbols or to `Target`; `wit.rs` no longer
 duplicates target logic.
 
-**Size.** Medium. Mostly deletion, but expect compile-error fallout to chase.
-
 **Handoff notes.** _(fill in)_
 
 ---
 
-## Step 9 — Composition workflow via `wac`
+## Step 12 — Composition workflow via `wac`
 
 - [ ] Done
 
@@ -295,47 +321,96 @@ unsatisfied for the runtime to provide. Optionally verify with `wac targets`.
 **Done when.** `cargo test` green including the new build-and-serve integration
 tests; a multi-component project composes to a single component.
 
-**Size.** Medium–large.
-
 **Handoff notes.** _(fill in)_
 
 ---
 
-## Step 10 — Downstream surfaces & release prep
+## Step 13 — Docs prose & layout
 
 - [ ] Done
 
-**Goal.** Bring the remaining tracked surfaces in line and prepare the breaking
-release.
+**Goal.** Update the docs prose (`docs/`) for the new world: the project layout
+(`wit/`, `wkg.lock`), the `wkg`/`wac` dependencies, explicit WIT includes, and
+the removal of the builtins and `Target`.
 
-**Scope (per CLAUDE.md).**
-- Docs prose (`docs/`): document the new project layout (`wit/`, `wkg.lock`), the
-  `wkg`/`wac` dependencies, explicit WIT includes, and the removal of the
-  builtins/`Target`. Examples already regenerated in earlier steps — re-run
-  `./scripts/regen-examples.sh` to be sure.
-- Syntax highlighting (Prism / Neovim / VS Code): drop `Target` and the removed
-  builtins from token/keyword lists if present. Remember the `tooling/neovim`
-  submodule must be committed+pushed in `wavelet.nvim` and its pointer bumped
-  here.
-- LSP (`tooling/`): import resolution learns about `wit/deps`; stop offering the
-  removed builtins.
-- `CHANGELOG.md`: record all breaking changes under `## [Unreleased]`.
-- `design.md` / `notes.md`: fold the decoupled design into the language design.
-
-**Done when.** `cargo test` and `./scripts/regen-examples.sh` green; highlighting
-grammars and LSP no longer surface removed symbols; CHANGELOG + design docs
-updated.
-
-**Size.** Medium, but spread across many files — split into per-surface sub-steps
-("Step 10b", …) if any one agent's context gets tight.
+**Done when.** `cargo test` and `./scripts/regen-examples.sh` green; docs prose
+matches the new behaviour; no stale references to the removed builtins/`Target`
+remain in `docs/`.
 
 **Handoff notes.** _(fill in)_
 
 ---
 
-## When all boxes are ticked
+## Step 14 — Syntax highlighting (Prism / Neovim / VS Code)
 
-Cut the breaking release per `CLAUDE.md` (rename `## [Unreleased]`, bump
-`Cargo.toml` + `tooling/wavelet-lsp/Cargo.toml`, update compare-link footnotes,
-confirm `scripts/changelog-section.sh vX.Y.Z`, then tag). This is a separate,
-human-initiated step — do not tag a release as part of an ordinary step.
+- [ ] Done
+
+**Goal.** Drop `Target` and the removed builtins from the three highlighting
+grammars' token/keyword lists where present, keeping them in sync with the lexer.
+
+**Scope.**
+- `docs/src/prism/wavelet.js`, `tooling/neovim/syntax/wavelet.vim`,
+  `tooling/vscode/`.
+- The `tooling/neovim` submodule is a separate repo (`logaan/wavelet.nvim`):
+  ensure it's checked out (`./scripts/init-submodules.sh`), edit inside
+  `tooling/neovim/`, commit **and push** there, then bump the submodule pointer
+  here (`git add tooling/neovim`).
+
+**Done when.** All three grammars match the current lexer; the submodule pointer
+is bumped; `cargo test` green.
+
+**Handoff notes.** _(fill in)_
+
+---
+
+## Step 15 — LSP
+
+- [ ] Done
+
+**Goal.** Update the LSP (`tooling/`) so import resolution learns about external
+WIT packages under `wit/deps`, and diagnostics/completion stop offering the
+removed builtins.
+
+**Done when.** The LSP no longer surfaces the removed builtins and resolves
+`wit/deps` imports; `cargo test` green.
+
+**Handoff notes.** _(fill in)_
+
+---
+
+## Step 16 — CHANGELOG & design notes
+
+- [ ] Done
+
+**Goal.** Record all breaking changes under `## [Unreleased]` in `CHANGELOG.md`,
+and fold the decoupled design into `dev-notes/design.md` / `dev-notes/notes.md`.
+
+**Done when.** CHANGELOG `## [Unreleased]` lists the removals (`Target`, the
+builtins), the new `wkg`/`wac` dependencies, and the new project layout; design
+docs reflect the decoupled architecture; `cargo test` green.
+
+**Handoff notes.** _(fill in)_
+
+---
+
+## Step 17 — Cut the breaking release
+
+- [ ] Done
+
+**Goal.** Once every box above is ticked, cut the breaking release per
+`CLAUDE.md`. The agent does this — no human is required.
+
+**Scope.**
+- Rename `## [Unreleased]` to `## [X.Y.Z] - <date>` and add a fresh empty
+  `## [Unreleased]`.
+- Bump the version in `Cargo.toml` *and* `tooling/wavelet-lsp/Cargo.toml` to
+  match.
+- Update the compare-link footnotes at the bottom of `CHANGELOG.md`.
+- Confirm `scripts/changelog-section.sh vX.Y.Z` prints the right section before
+  tagging.
+- Tag `vX.Y.Z` and push the tag so the `Release` workflow publishes.
+
+**Done when.** `cargo test` green; `scripts/changelog-section.sh vX.Y.Z` prints
+the new section; the `vX.Y.Z` tag is pushed.
+
+**Handoff notes.** _(fill in)_
