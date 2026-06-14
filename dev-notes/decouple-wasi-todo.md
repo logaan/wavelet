@@ -535,7 +535,7 @@ bridge from parsed WIT; magic untouched and green.
 
 ## Step 6 — Generic bridge: resource methods + drop
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Complete the generic bridge with resource method calls (`[method]`,
 `[static]`, `[constructor]`) and resource `drop`. Still alongside the magic.
@@ -552,7 +552,86 @@ bridge from parsed WIT; magic untouched and green.
 generic bridge in a test; the existing http template still builds+serves via the
 magic path (no regression).
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **The generic *import* bridge is now complete.** Every WIT value kind *and*
+  every resource-operation kind lowers/lifts through `Emitter::dep_call` driven
+  by a parsed `FuncSig`. As Step 5 predicted, the codegen needed almost no new
+  work — a resource op's `self`/`this` handle is just its first param (parsed WIT
+  prepends `self: borrow<T>` for methods), so the existing `Handle` lower/lift
+  threading already carried it. Step 6 was **name resolution + WIT rendering +
+  synthesizing drop**, not new ABI codegen.
+
+- **How a source op name resolves to a (possibly mangled) WIT function**
+  (`src/emit.rs`, `dep_func_op` + `resolve_dep_func`, just below
+  `versioned_iface`). `wit-parser` names resource ops `[constructor]res`,
+  `[method]res.op`, `[static]res.op`; the implicit drop is `[resource-drop]res`.
+  The source reaches each by a **bare op name**, exactly like the magic's
+  `http/<op>`:
+  - `[constructor]res`   → source `r/res`        (e.g. `http/fields`)
+  - `[method]res.op`     → source `r/op`         (e.g. `http/body`)
+  - `[static]res.op`     → source `r/op`
+  - `[resource-drop]res` → source `r/drop-res`   (the `drop-` prefix keeps it from
+    colliding with the resource's own constructor, whose op name is `res`).
+  `resolve_dep_func` matches a freestanding name directly, else any func whose
+  `dep_func_op` equals the source name, and **errors on ambiguity** (two ops in
+  one interface sharing a bare op name — not yet disambiguable from source, since
+  names are kebab-only and can't spell the mangled form). Both `dep_call` and the
+  import-signature loop (the `feats.dep_calls` loop, ~`src/emit.rs:2920`) use this
+  resolver, and both key the host import by the **mangled** `sig.name` (what
+  `wit-component` re-validates against the WIT).
+
+- **`[resource-drop]` is synthesized, not parsed.** It is *not* a WIT
+  `function`, so `witdep::resolve_dep` now pushes a synthetic `FuncSig`
+  `[resource-drop]<res>` (params `[self: own<res>]`, no result) for every
+  `TypeDefKind::Resource`. That makes drop a normal `dep.funcs` entry — the
+  generic path emits the implicit `[resource-drop]res` import + call with zero
+  special-casing. (It is deliberately *not* rendered into the package-WIT text;
+  the component model adds the drop import implicitly from the `resource` decl.)
+
+- **`witdep` package-WIT rendering now nests resource operations.** Previously
+  `package_wit_text` emitted every `iface.functions` entry flat, which produced
+  invalid WIT like `[constructor]packet: func(...);`. It now: (a) emits only
+  *freestanding* funcs at interface scope; (b) renders each resource's
+  constructor/method/static **inside** its `resource name { … }` block
+  (`resource_func_decl` un-mangles the op name and drops the implicit `self` for
+  methods). `type_decl` gained the `iface` arg to find a resource's ops by
+  `func.kind.resource() == Some(id)`. Async/freestanding-on-resource kinds are
+  rejected loudly. This is the bit that bit me: the *lowering* worked
+  immediately; the synthesized-WIT-text round-trip is what failed to parse until
+  this fix.
+
+- **Proof test:** `generic_bridge_lowers_resource_methods_static_constructor_drop`
+  in `tests/generic_bridge.rs`. A synthetic `acme:wire` interface mirrors the
+  exact function-kinds + handle/retptr shapes `http_call` lowers by hand (a
+  doc-comment table maps each synthetic op to its http counterpart:
+  constructor↔`fields`/`outgoing-response`, retptr `result<own<T>>` method↔`body`,
+  retptr `option<string>` method↔`path-with-query`, method+list↔`write`, static
+  with a `result` arg↔`set`, static-over-`own`↔`finish`, drop↔the
+  `[resource-drop]output-stream` inside `write`). Each op is driven through the
+  generic path inside a body returning a primitive (so the resources stay off the
+  app's own WIT), and the component fully re-encodes/validates with
+  `wit-component`. **The magic `http_call` is untouched** and the http template
+  still builds *and serves* (verified for real: scaffolded `--type=http`, built +
+  composed + `wasmtime serve`, `GET /` returns the rendered page echoing the
+  path).
+
+- **One generic-vs-magic gap that is *not* a bug, but Step 8 must know about it.**
+  The generic `result` lowering requires **both arms typed** (`result<T, E>`); a
+  single-arm `result<own<T>>` errors `only result<T, E> … is supported`. The real
+  wasi-http `body`/`finish` return single-arm `result<own<T>>` /
+  `result<_, error-code>`, and the magic `http_call` sidesteps the generic
+  `result` path entirely — it hand-reads the `ok` handle at the payload offset and
+  discards the error. So **before Step 8 can route http through the generic
+  bridge, the generic `result` lowering must learn the single-arm forms**
+  (`result<T>`, `result<_, E>`, bare `result`), or http's WIT must be adapted.
+  My test uses `result<own<box>, s32>` (both arms) to stay inside today's generic
+  support while still exercising the retptr-result-method path. This is the main
+  carry-forward for Step 8.
+
+- **No language/example/behaviour change** (parallel path; no `Node`/interpreter
+  change), so `regen-examples.sh` was **not** run. Full `cargo test` green (49 lib
+  + 5 generic_bridge + examples + http + wit_deps + wkg_populate).
 
 ---
 
