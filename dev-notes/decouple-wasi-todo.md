@@ -1347,7 +1347,7 @@ tests; a multi-component project composes to a single component.
 
 ## Step 13 — Docs prose & layout
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Update the docs prose (`docs/`) for the new world: the project layout
 (`wit/`, `wkg.lock`), the `wkg`/`wac` dependencies, explicit WIT includes, and
@@ -1357,7 +1357,87 @@ the removal of the builtins and `Target`.
 matches the new behaviour; no stale references to the removed builtins/`Target`
 remain in `docs/`.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **What changed (all in `docs/docs/`).** Six prose/code commits, plus an MDX
+  fix:
+  - `language/special-forms.mdx` — dropped the `Target` row from the forms table
+    *and* its `### Target` subsection; retitled "seventeen" → "sixteen special
+    forms" (Target was the 17th). The component-level intro went "five … those
+    five" → "four … those four" (still "the other twelve are live" — the 12
+    runnable forms are unchanged). Added an "Adopting a host world" note under
+    `Export`: a file now adopts a world by *exporting its interface* via
+    `Export {iface: "wasi:cli/run" …}`, no compiler-known target.
+  - `intro.mdx`, `philosophy.mdx`, `roadmap.mdx`, `language/macros.mdx` — every
+    "seventeen [core/special] forms" → "sixteen". `intro.mdx`'s playground-scope
+    note dropped `Target` from the static-forms list; its "taste of components"
+    `main.wvl` was rewritten off `Target`/`println`/`args` to the new shape
+    (`Export {iface: "wasi:cli/run"}`, import `wasi:cli/stdout`+`wasi:io/streams`,
+    write via the stream) and the build transcript to the single-artifact
+    `wavelet build … && wasmtime run out/app.wasm`.
+  - `getting-started.mdx` — biggest rewrite. The old `println`-based "Hello,
+    world" run under `wavelet run` is **gone** (the builtin and the interpreter's
+    output path were removed in Step 10; `wavelet run` now prints nothing — see
+    "Interpreter reality" below). Now leads with `wavelet new` (which `wkg`-fetches
+    deps), shows the real cli template (`greeting.wvl` + `main.wvl` exporting
+    `wasi:cli/run`), adds a **"Project layout"** block (`src/`, `wit/`,
+    `wit/deps/`, `wkg.lock`, `out/`) and an **"External tools"** section for
+    `wkg`/`wac` (brew deps; `cargo install wkg wac-cli`; not needed for `run`).
+    The "Run vs. build" table column became just `wavelet build` (composes).
+  - `components.mdx` — file-anatomy list dropped `Target`; added a "Project layout
+    and external WIT" section (the compiler vendors no WASI WIT; `wkg` fetches it
+    into `wit/deps/`, pinned in `wkg.lock`) and reworked "Composition": `wavelet
+    build` now composes into one `out/app.wasm` via a generated `.wac` + `wac`,
+    with `wavelet compose` as the manual auto-plug alternative. The three-language
+    example migrated off `Target`/`println` to a value-returning `pick-word`.
+  - `cli.mdx` — `--type=cli` no longer links the dead `#target` anchor / says
+    "wasi:cli/command program"; both templates describe importing WASI directly
+    (cli: stdout/streams/environment; http: wasi:http/types + wasi:io/streams),
+    dropping the `http/*` intrinsics + `wasi:http/proxy` targeting wording. `new`
+    notes the `wkg wit fetch`. `run` is documented as **pure-only, no output**;
+    `build` composes into `out/app.wasm`; `compose` is the manual alternative.
+  - `language/values.mdx` (`a print` → a host stream-write) and
+    `language/syntax.mdx` (illustrative `print("hi")`/`print("match")` call
+    examples → `log(...)`, since `print` is no longer a real builtin and shouldn't
+    look like one).
+
+- **Interpreter reality the prose now reflects (verified against `src/runner.rs`
+  + `src/main.rs`).** After Steps 10–11, `wavelet run` calls the entry's exported
+  `run` but **discards the result** and has **no I/O builtins**, so it produces no
+  program output and a `run` that calls `wasi:*` (the cli/http templates) can't be
+  interpreted at all. Every doc that previously showed `wavelet run … -- wasm` →
+  `WASM!` was corrected: `run` is now framed as "exercise pure cross-component
+  logic; output/side-effects happen in a built component on a runtime."
+
+- **Examples were already migrated (Step 10), so this was prose-only.** `rg`
+  confirms `docs/examples.json` and `docs/scripts/gen-examples.mjs` have no
+  `Target`/`println`/`read-line`/builtin refs. `./scripts/regen-examples.sh` ran
+  green and produced **no** artifact diff (no runnable example changed), so
+  `docs/examples.json` / `docs/src/wasm/*` are untouched and consistent.
+
+- **Verification run.** `./scripts/regen-examples.sh` green (wasm-pack build +
+  gen-examples + full `cargo test`: 49 lib + 8 generic_bridge + 5 wit_deps + 4
+  wkg_populate + compose + examples). `cd docs && npm run build` (Docusaurus)
+  **succeeds** — it caught two real issues I then fixed: a `{#explicit-id}` MDX
+  heading anchor this MDX setup rejects (switched to the auto-slug, link still
+  resolves) and confirmed no broken internal links. Required `rg` checks over
+  `docs/docs/` and all of `docs/` (excluding `*.json` + the Prism grammar) are
+  clean of `Target`/`println`/`read-line` and of `print(`/`args[]`/`env/` Wavelet
+  calls.
+
+- **Deferred to later steps (intentionally not touched here):**
+  - **Step 14 (highlighting grammars).** The Prism grammar
+    `docs/src/prism/wavelet.js` does **not** enumerate `Target` or the builtins —
+    it styles *any* TitleCase token as a keyword generically and only hardcodes
+    `some|none|ok|err`. So there is **nothing literal to remove in Prism**; I left
+    it untouched. Step 14 still owns `tooling/neovim/syntax/wavelet.vim` and
+    `tooling/vscode/`, which (per Step 11's notes) *do* list `Target`/the builtins
+    as keywords and need the submodule edit + pointer bump.
+  - **Step 15 (LSP).** `tooling/wavelet-lsp/src/analysis.rs` still offers `Target`
+    + the removed builtins in completion — its step.
+  - **Step 16 (CHANGELOG & design).** `CHANGELOG.md [Unreleased]` is still empty;
+    `dev-notes/design.md`/`notes.md` aren't folded yet. The `docs/` prose now
+    matches the shipped behaviour, so Step 16 only needs the changelog/design.
 
 ---
 
