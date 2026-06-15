@@ -10,8 +10,8 @@
 #                                   every documented example into
 #                                   docs/examples.json, then `cargo test`
 #                                   (locks the example suite + all unit tests)
-#   3. scripts/build-lsp.sh         build the language server (host target)
-#   4. scripts/build-docs.sh        build the Docusaurus site into docs/build
+#   3. scripts/ci/build-lsp.sh      build the language server (host target)
+#   4. scripts/ci/build-docs.sh     build the Docusaurus site into docs/build
 #
 # Run from anywhere. Requires the Rust toolchain, `wasm-pack`, and `node`/`npm`.
 set -euo pipefail
@@ -25,10 +25,10 @@ echo "==> Regenerating examples + running tests"
 "$here/regen-examples.sh"
 
 echo "==> Building language server (host target)"
-"$here/build-lsp.sh"
+"$here/ci/build-lsp.sh"
 
 echo "==> Building docs site"
-"$here/build-docs.sh"
+"$here/ci/build-docs.sh"
 
 echo
 echo "Full build complete."

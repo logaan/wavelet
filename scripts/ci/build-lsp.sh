@@ -2,12 +2,12 @@
 # Cross-compile the Wavelet language server (tooling/wavelet-lsp) for one target
 # and stage the binary into dist/ under a stable, target-suffixed name.
 #
-# Usage: scripts/build-lsp.sh [TARGET]
+# Usage: scripts/ci/build-lsp.sh [TARGET]
 #   TARGET  Rust target triple (e.g. x86_64-unknown-linux-gnu). Defaults to the
 #           host's default target.
 #
 # Staged as dist/wavelet-lsp-<target>[.exe]. The release packaging step
-# (scripts/package-tooling.sh) bundles these into the editor zips, and they are
+# (scripts/ci/package-tooling.sh) bundles these into the editor zips, and they are
 # also published as standalone release assets.
 #
 # Used by the `Release` GitHub workflow (matrix builds the binary natively on
@@ -15,7 +15,7 @@
 #
 # Run from anywhere. Requires the Rust toolchain.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 manifest="tooling/wavelet-lsp/Cargo.toml"
 

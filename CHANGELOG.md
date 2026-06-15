@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This file is the source of truth for GitHub release notes: on a `v*` tag the
 release workflow extracts the matching version's section below and uses it as
 the release body (see `.github/workflows/release.yml` and
-`scripts/changelog-section.sh`). Keep the `[Unreleased]` section up to date as
+`scripts/ci/changelog-section.sh`). Keep the `[Unreleased]` section up to date as
 you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]

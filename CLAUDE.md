@@ -6,6 +6,10 @@ Wavelet is a homoiconic language for the WebAssembly Component Model, written in
 Rust (edition 2024). See `README.md` for the project overview and CLI, and
 `dev-notes/design.md` for the full language design (draft 0.1).
 
+The helper scripts (build, test, release, install) and how the release/docs
+pipelines fit together are documented in `scripts/README.md`; the rules below
+reference those scripts where they bear on language-change workflow.
+
 ## Compiler pipeline
 
 The compiler is **read → expand → interpret/analyze → emit → componentize**.
@@ -50,9 +54,10 @@ toolchain), so it must be regenerated locally when the language changes.
 
 `CHANGELOG.md` (Keep a Changelog format) is the source of truth for release
 notes. The `Release` workflow (`.github/workflows/release.yml`) runs
-`scripts/changelog-section.sh <tag>` on a `v*` tag and uses the matching
+`scripts/ci/changelog-section.sh <tag>` on a `v*` tag and uses the matching
 version's section as the GitHub release body; if the tag has no section the
-release **fails** rather than publishing empty notes.
+release **fails** rather than publishing empty notes. See `scripts/README.md`
+for the full release pipeline.
 
 This means:
 
@@ -65,7 +70,7 @@ This means:
   a fresh empty `## [Unreleased]`, bump the version in `Cargo.toml` *and*
   `tooling/wavelet-lsp/Cargo.toml` to match, update the compare-link footnotes
   at the bottom of the file, then tag `vX.Y.Z`. Confirm
-  `scripts/changelog-section.sh vX.Y.Z` prints the right section before tagging.
+  `scripts/ci/changelog-section.sh vX.Y.Z` prints the right section before tagging.
 
 ## A language change is not done until the downstream surfaces are checked
 

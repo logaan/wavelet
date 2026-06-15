@@ -14,10 +14,10 @@ name: Release
 # flaky platform never blocks the whole release.
 #
 # The release body is the curated CHANGELOG.md section for the tag, extracted by
-# scripts/changelog-section.sh; keep CHANGELOG.md up to date before tagging.
+# scripts/ci/changelog-section.sh; keep CHANGELOG.md up to date before tagging.
 #
-# The build/packaging steps live in scripts/build-cli.sh, scripts/build-lsp.sh
-# and scripts/package-tooling.sh so they can be run identically from a local
+# The build/packaging steps live in scripts/ci/build-cli.sh, scripts/ci/build-lsp.sh
+# and scripts/ci/package-tooling.sh so they can be run identically from a local
 # checkout.
 
 on:
@@ -54,11 +54,11 @@ jobs:
 
       - name: Build and stage wavelet (CLI)
         shell: bash
-        run: scripts/build-cli.sh ${{ matrix.target }}
+        run: scripts/ci/build-cli.sh ${{ matrix.target }}
 
       - name: Build and stage wavelet-lsp
         shell: bash
-        run: scripts/build-lsp.sh ${{ matrix.target }}
+        run: scripts/ci/build-lsp.sh ${{ matrix.target }}
 
       - uses: actions/upload-artifact@v7
         with:
@@ -87,7 +87,7 @@ jobs:
           merge-multiple: true
 
       - name: Package editor tooling, collect binaries, bundle tarballs
-        run: scripts/package-tooling.sh
+        run: scripts/ci/package-tooling.sh
         env:
           STAGED_BINS: staged-bins
 
@@ -96,7 +96,7 @@ jobs:
       # or stale notes. generate_release_notes appends the auto "Full Changelog"
       # compare link beneath the curated notes.
       - name: Extract changelog section for ${{ github.ref_name }}
-        run: scripts/changelog-section.sh "${{ github.ref_name }}" > release-notes.md
+        run: scripts/ci/changelog-section.sh "${{ github.ref_name }}" > release-notes.md
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
