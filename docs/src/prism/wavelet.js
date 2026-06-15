@@ -45,9 +45,10 @@ export const waveletGrammar = {
   'keyword': /\b(?:some|none|ok|err)\b/,
   'number': /-?\b(?:inf|nan|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/,
   // Attachment rule: a (possibly %-escaped, possibly qualified) name immediately
-  // followed by ( [ or { is a call head.
+  // followed by ( is a call head. Only `(` attaches now — a name before `[`/`{`
+  // is an ordinary name/reference, not a call head.
   'function': {
-    pattern: /%?[A-Za-z][\w-]*(?:\/%?[\w-]+)?(?=[([{])/,
+    pattern: /%?[A-Za-z][\w-]*(?:\/%?[\w-]+)?(?=\()/,
     greedy: true,
   },
   // The alias side of a free-standing qualified reference (`kv/get` as a value).
