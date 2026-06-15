@@ -10,7 +10,7 @@ The `wavelet` binary is built with `cargo build` (see [Getting started](./gettin
 
 ```text
 wavelet new <name> [--type=cli|http]                        # scaffold a new project
-wavelet read <file.wvl>                                      # parse → canonical WAVE tree
+wavelet read [file.wvl]                                      # parse → canonical WAVE tree (stdin if no file)
 wavelet expand <file.wvl>                                    # run macros to fixpoint
 wavelet wit <file.wvl>                                       # synthesized WIT world
 wavelet repl                                                 # interactive read-eval-print loop
@@ -72,10 +72,11 @@ component implements any WIT interface.
 
 ## `read`
 
-Parse a file and print the **canonical WAVE form tree** — every piece of [reader sugar](./language/syntax#desugaring) resolved.
+Parse a file and print the **canonical WAVE form tree** — every piece of [reader sugar](./language/syntax#desugaring) resolved. With no path argument it reads from stdin.
 
 ```console
 $ wavelet read shout.wvl
+$ echo 'shout("hi")' | wavelet read
 ```
 
 Use this to see exactly how the attachment rule, qualified calls, and TitleCase macro sugar desugar. It is the ground truth for "what does this syntax mean as data".

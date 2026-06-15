@@ -13,6 +13,12 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Changed
+
+- **`wavelet read` now defaults to stdin when given no file argument.** `echo
+  '...' | wavelet read` reads the program from standard input; passing a path
+  still reads that file. Previously stdin required an explicit `/dev/stdin`.
+
 ## [0.6.0] - 2026-06-15
 
 WASI decoupling: Wavelet no longer special-cases any WASI interface. The
