@@ -1,17 +1,16 @@
 ---
 sidebar_position: 4
-title: The seventeen special forms
+title: The sixteen special forms
 description: The entire core language, form by form, with live examples.
 ---
 
-# The seventeen special forms
+# The sixteen special forms
 
 This is the **entire core language**. Everything else is the [standard library](../stdlib) or [macros](./macros).
 
 | Form | Arity | Arguments | Meaning |
 |---|---|---|---|
 | [`Package`](#package) | 1 | string | declare this component's package id and version |
-| [`Target`](#target) | 1 | string | adopt a named WIT world |
 | [`Import`](#import) | 1 | string or record | import an interface |
 | [`Export`](#export) | 1 | name or record | export a definition or type |
 | [`DefType`](#deftype) | 2 | name, type form | declare a WIT type for this component |
@@ -29,7 +28,7 @@ This is the **entire core language**. Everything else is the [standard library](
 | [`The`](#the) | 2 | type form, expression | type ascription |
 
 :::note[Component-level forms run across files]
-`Package`, `Target`, `Import`, `Export`, and `DefType` describe a *file's* relationship to the component world, and are only valid at the top level of a file. The in-browser playground evaluates a single component's code, so those five are shown as static snippets; the other twelve are live.
+`Package`, `Import`, `Export`, and `DefType` describe a *file's* relationship to the component world, and are only valid at the top level of a file. The in-browser playground evaluates a single component's code, so those four are shown as static snippets; the other twelve are live.
 :::
 
 ---
@@ -141,7 +140,7 @@ A non-boolean condition is an error (there is no truthiness):
 
 ## Component-level forms
 
-These five describe how a file relates to the component world. They appear at the top level of a `.wvl` file and are covered in depth under [Components & composition](../components).
+These four describe how a file relates to the component world. They appear at the top level of a `.wvl` file and are covered in depth under [Components & composition](../components).
 
 ### `Package`
 
@@ -149,14 +148,6 @@ Declares the component's package id and version.
 
 ```wavelet
 Package "demo:shout@0.1.0"
-```
-
-### `Target`
-
-Adopts a named WIT world, e.g. a CLI command.
-
-```wavelet
-Target "wasi:cli/command"
 ```
 
 ### `Import`
@@ -171,11 +162,17 @@ Import {pkg: "demo:text/api" open: true}          // splat names in unqualified
 
 ### `Export`
 
-Exports a definition (or a type). A bare name exports that definition into the default interface `api`; a record form gives finer control.
+Exports a definition (or a type). A bare name exports that definition into the default interface `api`; a record form gives finer control over the signature and the interface it lands in.
 
 ```wavelet
 Export shout
 Export {name: shout params: {phrase: string} result: string}
+```
+
+There is no compiler-known "target world": a file adopts an external world by **exporting the interface that defines it**, naming it with the `iface` field. A CLI program exports `wasi:cli/run`; an HTTP front end exports `wasi:http/incoming-handler`. The interface's WIT comes from `wit/deps/` (fetched by `wkg`), so the compiler knows nothing special about it.
+
+```wavelet
+Export {iface: "wasi:cli/run" name: run result: result}
 ```
 
 ### `DefType`

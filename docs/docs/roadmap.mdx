@@ -16,7 +16,7 @@ These are implemented and exercised — most of them power the [live playgrounds
 |---|---|
 | **Reader** — WAVE tokens, the [attachment rule](./language/syntax#the-attachment-rule), the full [desugaring table](./language/syntax#desugaring), qualified calls, `///` doc comments | ✅ |
 | **TitleCase macro sugar** — arity-driven reading, `DefMacro` arity registration top-to-bottom, explicit-payload override | ✅ |
-| **The seventeen [special forms](./language/special-forms)** | ✅ |
+| **The sixteen [special forms](./language/special-forms)** | ✅ |
 | **[Macros](./language/macros)** — `DefMacro`, `Quote`/`Quasi`/`Unquote`/`Splice`, `gensym`, `expand` | ✅ |
 | **Tree-walking interpreter** with [tail-call elimination](./language/tail-calls), [pattern matching](./language/pattern-matching), closures | ✅ |
 | **[Standard library](./stdlib)** builtins + `none`/`pi` | ✅ |
@@ -89,7 +89,7 @@ The headline of the [supply-chain story](./supply-chain#how-it-helps-at-build-ti
 
 ## A note on the convenience macros
 
-`And`, `Or`, and `TryLet` appear throughout the design as examples. They are **not shipped** — the standard library provides [builtins](./stdlib) but no pre-defined macros beyond the seventeen core forms. Define them yourself with [`DefMacro`](./language/macros), as shown in the docs, or import them once macro components land.
+`And`, `Or`, and `TryLet` appear throughout the design as examples. They are **not shipped** — the standard library provides [builtins](./stdlib) but no pre-defined macros beyond the sixteen core forms. Define them yourself with [`DefMacro`](./language/macros), as shown in the docs, or import them once macro components land.
 
 ## Self-hosting
 

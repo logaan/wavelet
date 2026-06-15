@@ -11,7 +11,7 @@ description: A small homoiconic language for the WebAssembly Component Model.
 
 1. **One file is one component.** The unit you edit, compile, link, version, and deploy is the same thing. Nothing distinguishes a component written in Wavelet from one written in Rust, Go, or JavaScript — composition happens at the WIT level.
 2. **The syntax is [WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave).** Source code is WAVE text (the Component Model's human-readable value encoding) plus a thin layer of reader sugar. Wavelet is homoiconic the way Lisp is over s-expressions — except its "s-expressions" are exactly the values that cross component boundaries.
-3. **The core is minimal.** Seventeen special forms, closures, guaranteed tail-call elimination, and a macro system. Everything else — including the standard library and macros — is delivered as components.
+3. **The core is minimal.** Sixteen special forms, closures, guaranteed tail-call elimination, and a macro system. Everything else — including the standard library and macros — is delivered as components.
 
 The consequence that ties these together: **there is no FFI.** Wavelet has no native data types of its own. Its booleans, strings, lists, records, variants, options, results, and flags *are* WIT types, so calling a Rust component looks identical to calling a function defined two lines up.
 
@@ -30,7 +30,7 @@ Pattern matching over a `result`:
 <Playground id="match-result-inc" />
 
 :::note[Browser interpreter scope]
-The in-browser playground runs a single component's worth of code with the standard library in scope. File- and component-level forms — `Package`, `Target`, `Import`, `Export`, `DefType` — only make sense across files and are shown as static snippets. Everything else is editable and runnable.
+The in-browser playground runs a single component's worth of code with the standard library in scope. File- and component-level forms — `Package`, `Import`, `Export`, `DefType` — only make sense across files and are shown as static snippets. Everything else is editable and runnable.
 :::
 
 ## A taste of components
@@ -47,31 +47,35 @@ Def shout Fn {phrase: string}
 ```wavelet
 // main.wvl — compiles to demo:main.wasm
 Package "demo:main@0.1.0"
-Target "wasi:cli/command"
 
+// Output is an ordinary import of a WASI interface, not a builtin.
 Import {pkg: "demo:shout/api" as: sh}
+Import {pkg: "wasi:cli/stdout@0.2.0" as: stdout}
+Import {pkg: "wasi:io/streams@0.2.0" as: streams}
 
-Export run
+// A file adopts the CLI world by exporting wasi:cli/run — no compiler-known
+// target. The WIT for these interfaces is fetched into wit/ by wkg.
+Export {iface: "wasi:cli/run" name: run result: result}
 Def run Fn {}
-  If eq[len(args[]) 0]
-     println("usage: main <word>")
-     println(sh/shout{phrase: head(args[])})
+  Let {out: stdout/get-stdout()}
+    Do [streams/blocking-write-and-flush[out sh/shout{phrase: "wasm"}]
+        ok(0)]
 ```
 
 ```console
-$ wavelet build examples/shout.wvl examples/main.wvl
-$ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
-$ wasmtime app.wasm wasm
+$ wavelet build src/*.wvl -o out
+built out/app.wasm
+$ wasmtime run out/app.wasm
 WASM!
 ```
 
-Each file declares its own package, becomes its own component, and the composer wires `main`'s import of `demo:shout/api` to `shout`'s export. Swapping in a Rust implementation of `demo:shout/api` would require changing nothing in `main.wvl`.
+Each file declares its own package and becomes its own component; `wavelet build` composes them into a single `out/app.wasm`, wiring `main`'s import of `demo:shout/api` to `shout`'s export. Swapping in a Rust implementation of `demo:shout/api` would require changing nothing in `main.wvl`.
 
 ## Where to next
 
 - **[Philosophy](./philosophy)** — why no FFI, and the costs the design accepts.
 - **[Getting started](./getting-started)** — build the compiler and run your first program.
-- **[The language](./language/syntax)** — syntax, values, evaluation, the seventeen forms, macros.
+- **[The language](./language/syntax)** — syntax, values, evaluation, the sixteen forms, macros.
 - **[Standard library](./stdlib)** — every built-in function, with live examples.
 - **[CLI reference](./cli)** — `read`, `expand`, `repl`, `wit`, `run`, `build`, `compose`.
 - **[Supply-chain security](./supply-chain)** — how the component model narrows the attack surface.
