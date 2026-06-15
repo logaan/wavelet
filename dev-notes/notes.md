@@ -63,10 +63,8 @@
 
 ## Previously
 
-1. [ ] Add a readme to the scripts directory.
 1. [ ] Edit down the main repo readme.
 1. [ ] Prune comments through the code and config files
-1. [ ] Test the vscode tooling
 1. [ ] Prune back the implementation
 1. [ ] Add support for deploying to:
     1. [ ] A stand alone CLI tool. By bundling a runtime.
@@ -89,8 +87,6 @@
    1. It could be part of the standard library.
       1. The composer just leaves it out if no one's using it?
 1. [ ] Is the standard library composed in? Or is it part of the compile for each component?
-1. [ ] The "argument" language is too strong.
-1. [ ] The "NO-FFI!!" example is too strong.
 1. [ ] How slow is the compilation?
 1. [ ] How will `--fuse` work? Is there much overhead if we don't use it?
 1. [ ] Would be good to show examples of building all of the wasi app types
@@ -110,7 +106,6 @@
    1. Having to specify all the individual file names in the examples doesn't look great.
 1. [ ] Examples shouldn't be using `foo(1)` syntax for method calls
    1. I think I saw it somewhere. Perhaps it was actually creating a variant.
-1. [ ] I don't love the font.
 1. [ ] Need some kind of canonical formatting. Ideally with a way for user defined macros to specify it also.
    1. Eg: `If` breaks onto 3 lines
 
@@ -132,10 +127,6 @@
     1. Eg: Wtf are flags?
 1. [ ] Macros should use `if-MACRO([c t e])` not tuples.
 1. [ ] asdf
-1. [ ] `wavelet read` shouldn't need to take `/dev/stdin` as an argument
-1. [ ] `Quote` isn't just an "Inside the playground" feature.
-1. [ ] Formal grammar specification should be an appendix, not early in the learning flow.
-1. [ ] The sugar cases should have their own page and be numbered.
 1. [ ] Macros should have their own page with examples of how to write them and why they're so valuable.
 1. [ ] Macros shouldn't have special `DefMacro -> def-macro-MACRO` expansion.
     1. It should just be `Def-macro -> def-macro-MACRO`
@@ -170,8 +161,6 @@
 
 ### Evaluation
 
-1. [ ] It'd be good to have an "Trivia" callout that beginners can ignore.
-   1. Use it for the "Lisp-1" mention.
 1. [x] I haven't seen any word on functions being first class yet.
     1. They're there `Fn {f x} (f(f(x))`
 1. [ ] Can you call a returned function like `foo[x, y][z]`
@@ -308,4 +297,3 @@
 
 1. [ ] Where did `str-cat` and `upper` come from?
 1. [ ] We need some syntax highlighting.
-1. [ ] It'd be nice if we could support `#!/usr/bin/env wavelet`
