@@ -8,7 +8,7 @@ description: Every built-in function available today, grouped, with live example
 
 `wavelet:std/core` is implicitly imported and open in every file. Because identifiers are WIT labels, there is no `+` or `<` — the names are short and boring, a deliberate cost of "the syntax is WAVE, no exceptions".
 
-Every function below is **implemented and runnable today**. Most take their arguments as a list or tuple payload, so `add[2 3]` and `add(2, 3)` are equivalent; a few take a single value. Edit any example and press Run.
+Every function below is **implemented and runnable today**. A call bundles its arguments — `add(2 3)` passes two — so most functions read several arguments positionally; a few take a single value. Edit any example and press Run.
 
 :::note[What "function" means here]
 These are the core *builtins*. Convenience **macros** (`And`, `Or`, `TryLet`) are **not** shipped — define them yourself with [`DefMacro`](./language/macros). Two pre-bound *values* also live in core: `none` (the empty option) and `pi`.
@@ -20,8 +20,8 @@ These are the core *builtins*. Convenience **macros** (`And`, `Or`, `TryLet`) ar
 
 | Function | Shape | Result |
 |---|---|---|
-| `eq` | `eq[a b]` | structural equality |
-| `lt` `le` `gt` `ge` | `lt[a b]` | ordered comparison (numbers, strings, chars) |
+| `eq` | `eq(a b)` | structural equality |
+| `lt` `le` `gt` `ge` | `lt(a b)` | ordered comparison (numbers, strings, chars) |
 | `not` | `not(bool)` | boolean negation |
 
 `eq` is structural across all data types. The ordered comparisons work on numbers, strings, and chars.
@@ -32,10 +32,10 @@ These are the core *builtins*. Convenience **macros** (`And`, `Or`, `TryLet`) ar
 
 | Function | Shape | Notes |
 |---|---|---|
-| `add` `sub` `mul` `div` `rem` | `add[a b]` | int+int stays int (overflow & ÷0 trap); a float operand promotes to float |
+| `add` `sub` `mul` `div` `rem` | `add(a b)` | int+int stays int (overflow & ÷0 trap); a float operand promotes to float |
 | `neg` | `neg(x)` | negation |
 | `abs` | `abs(x)` | absolute value |
-| `min` `max` | `min[a b]` | smaller / larger of two |
+| `min` `max` | `min(a b)` | smaller / larger of two |
 
 <Playground id="std-arith" />
 
@@ -53,18 +53,18 @@ A float operand promotes the result to a float:
 |---|---|---|
 | `len` | `len(seq)` | length of a list, tuple, or string |
 | `empty` | `empty(seq)` | is it empty? |
-| `get` | `get[seq i]` | element at index `i` (list/tuple) |
-| `put` | `put[list i v]` | list with index `i` replaced by `v` |
-| `push` | `push[list v]` | list with `v` appended |
-| `concat` | `concat[a b]` | two lists joined |
+| `get` | `get(seq i)` | element at index `i` (list/tuple) |
+| `put` | `put(list i v)` | list with index `i` replaced by `v` |
+| `push` | `push(list v)` | list with `v` appended |
+| `concat` | `concat(a b)` | two lists joined |
 | `head` | `head(list)` | first element |
 | `tail` | `tail(list)` | all but the first |
 | `reverse` | `reverse(list)` | reversed list |
-| `range` | `range[lo hi]` | `[lo … hi-1]` |
-| `map` | `map[f list]` | apply `f` to each element |
-| `filter` | `filter[pred list]` | keep elements where `pred` is `true` |
-| `fold` | `fold[f init list]` | left fold; `f` receives `[acc elem]` |
-| `zip` | `zip[a b]` | list of `(a-elem, b-elem)` tuples |
+| `range` | `range(lo hi)` | `[lo … hi-1]` |
+| `map` | `map(f list)` | apply `f` to each element |
+| `filter` | `filter(pred list)` | keep elements where `pred` is `true` |
+| `fold` | `fold(f init list)` | left fold; `f` receives `[acc elem]` |
+| `zip` | `zip(a b)` | list of `(a-elem, b-elem)` tuples |
 
 <Playground id="std-seq-basics" />
 
@@ -90,11 +90,11 @@ A float operand promotes the result to a float:
 
 | Function | Shape | Result |
 |---|---|---|
-| `str-cat` | `str-cat[a b …]` | concatenate strings/chars (takes a list) |
+| `str-cat` | `str-cat(a b …)` | concatenate strings/chars (its arguments, or a single list of them) |
 | `upper` `lower` | `upper(s)` | case conversion |
-| `split` | `split[s sep]` | split on a separator → list of strings |
-| `join` | `join[parts sep]` | join a list of strings with a separator |
-| `contains` | `contains[s sub]` | does `s` contain `sub`? |
+| `split` | `split(s sep)` | split on a separator → list of strings |
+| `join` | `join(parts sep)` | join a list of strings with a separator |
+| `contains` | `contains(s sub)` | does `s` contain `sub`? |
 
 <Playground id="std-strcat" />
 
@@ -143,8 +143,8 @@ which evaluate pure programs only.
 
 | Function | Shape | Result |
 |---|---|---|
-| `apply` | `apply[f payload]` | call a function value with a payload |
-| `gensym` | `gensym[]` | a fresh, unique name |
+| `apply` | `apply(f payload)` | call a function value with a payload |
+| `gensym` | `gensym()` | a fresh, unique name |
 | `expand` | `expand(form)` | run one macro-expansion step on a form |
 | `form-kind` | `form-kind(v)` | the kind tag of a value-as-form |
 | `rec-key` | `rec-key(record)` | the first field's key, as a name |
@@ -152,7 +152,7 @@ which evaluate pure programs only.
 
 <Playground id="std-apply" />
 
-`form-kind` classifies a value the way the reader classifies a form (`"int"`, `"str"`, `"sym"`, `"call"`, `"lst"`, `"rec"`, …):
+`form-kind` classifies a value the way the reader classifies a form (`"int"`, `"str"`, `"sym"`, `"tup"`, `"lst"`, `"rec"`, …). A quoted call is a tuple, so it reports `"tup"`; `"call"` is reserved for a runtime variant carrying a payload (`ok(1)`):
 
 <Playground id="std-form-kind" />
 
@@ -179,7 +179,7 @@ A `cell` is the standard library's mutable reference — the one place mutation 
 |---|---|---|
 | `cell-new` | `cell-new(v)` | a new cell holding `v` |
 | `cell-get` | `cell-get(c)` | read the current value |
-| `cell-set` | `cell-set[c v]` | overwrite the value (returns unit) |
+| `cell-set` | `cell-set(c v)` | overwrite the value (returns unit) |
 | `drop` | `drop(h)` | release a resource handle |
 
 <Playground id="std-cells" />

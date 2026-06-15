@@ -109,7 +109,7 @@ Package "hello:greeting@0.1.0"
 
 Export greet
 Def greet Fn {name: string}
-  str-cat["Hello, " name "!"]
+  str-cat("Hello, " name "!")
 ```
 
 `src/main.wvl` is the entry point. It adopts the CLI world by **exporting `wasi:cli/run`** — there is no compiler-known target world — and does its output and argument reading through ordinary imported WASI interfaces (`wasi:cli/stdout`, `wasi:io/streams`, `wasi:cli/environment`), lowered through the generic WIT bridge:
@@ -124,8 +124,8 @@ Import {pkg: "wasi:io/streams@0.2.0" as: streams}
 Export {iface: "wasi:cli/run" name: run result: result}
 Def run Fn {}
   Let {out: stdout/get-stdout()}
-    Do [streams/blocking-write-and-flush[out
-          str-cat[greeting/greet("world") "\n"]]
+    Do [streams/blocking-write-and-flush(out
+          str-cat(greeting/greet("world") "\n"))
         ok(0)]
 ```
 

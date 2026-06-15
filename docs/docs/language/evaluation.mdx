@@ -10,16 +10,16 @@ There are four evaluation rules. That's the whole model.
 
 1. **Atoms** — booleans, numbers, chars, strings, flags — evaluate to themselves.
 2. **A bare name** evaluates to its binding in the current lexical environment. Wavelet is a **Lisp-1**: one namespace for everything. Unbound names are errors. Enum cases, imported functions, and constructors are all just bindings.
-3. **A call form** `head(payload)` evaluates the payload, then applies the value bound to `head`. Heads are names or qualified names; to call a *computed* function value, use [`apply`](../stdlib#meta--reflection).
+3. **A call form** — a tuple `(head arg…)` in evaluation position — evaluates its arguments, **bundles** them (0 ⇒ the empty tuple, 1 ⇒ that value, ≥2 ⇒ a tuple), and applies the value bound to `head`. Heads are names or qualified names; a literal tuple **value** comes from `Quote` or a builtin. To call a *computed* function value, use [`apply`](../stdlib#meta--reflection).
 4. **Special forms and macros** are recognised before evaluation and follow their own rules — see [Special forms](./special-forms) and [Macros](./macros).
 
 ## Functions take exactly one value
 
-This is the rule that makes everything else fit together. A function receives a single value — which may be a record, list, tuple, or scalar — and that's what gives calls their n-ary feel. The `Fn`'s parameter braces describe how to receive it:
+This is the rule that makes everything else fit together. A call bundles its arguments into one value — a scalar (1 argument) or a tuple (≥2) — which may also be a record or list, and that's what gives calls their n-ary feel. The `Fn`'s parameter braces describe how to receive it:
 
-- A **record** payload binds parameters by **name**.
-- A **list** or **tuple** payload binds them by **order**.
-- A **scalar** payload binds a sole parameter directly.
+- A **record** argument binds parameters by **name**.
+- A **list** or **tuple** argument binds them by **order**.
+- A **scalar** argument binds a sole parameter directly.
 
 So both of these reach the same two-parameter function:
 
