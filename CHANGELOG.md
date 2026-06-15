@@ -13,6 +13,8 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-15
+
 WASI decoupling: Wavelet no longer special-cases any WASI interface. The
 compiler vendors no WASI WIT and has no built-in `wasi:cli`/`wasi:http`
 knowledge; a component declares the host interfaces it imports and exports
@@ -20,6 +22,7 @@ explicitly, and their WIT is fetched into the project by `wkg`. These are
 breaking changes.
 
 ### Added
+
 - **`wkg` and `wac` are now runtime dependencies of `wavelet build`/`wavelet
   new`.** `wkg` (the WebAssembly package tooling) fetches host WIT, and `wac`
   (the WebAssembly composition tool) composes components. Both must be on
@@ -47,6 +50,7 @@ breaking changes.
   exported without compiler-side special-casing.
 
 ### Removed
+
 - **The `Target` special form is gone.** A file no longer adopts a host world
   with `Target "wasi:cli/command"`; instead it exports that world's interface
   directly, e.g. `Export {iface: "wasi:cli/run" name: run result: result}`.
@@ -63,6 +67,7 @@ breaking changes.
 ## [0.5.0] - 2026-06-14
 
 ### Added
+
 - **WASI HTTP support.** A Wavelet component can now implement the
   `wasi:http/proxy` interface and be served by `wasmtime serve`. Targeting
   `wasi:http/proxy` and exporting `wasi:http/incoming-handler` synthesizes a
@@ -80,22 +85,26 @@ breaking changes.
   echoes the request path. `scripts/serve.sh` serves it with `wasmtime serve`.
 
 ### Changed
+
 - The `http` template's domain model is the shared `greeting` component
   (`src/greeting.wvl`), replacing the previous (non-building) counter.
 
 ## [0.4.0] - 2026-06-14
 
 ### Added
+
 - `wavelet new --type=cli` scaffolds a `wasi:cli/command` program: `src/main.wvl`
   exports `run` and greets its first argument, delegating to the pure `greet`
   function in `src/greeting.wvl`, with `scripts/build.sh` + `scripts/run.sh`.
 
 ### Changed
+
 - `wavelet new` now defaults to `--type=cli` (was `--type=http`).
 
 ## [0.3.0] - 2026-06-14
 
 ### Added
+
 - `wavelet new <name>` scaffolds a new project: a `.gitignore`, a `src/` with a
   `wasi:http/incoming-handler` front end and the domain model it imports, and
   `scripts/build.sh` + `scripts/serve.sh`. `--type=http` selects the template
@@ -104,12 +113,14 @@ breaking changes.
 ## [0.2.5] - 2026-06-14
 
 ### Added
+
 - Release builds now publish the `wavelet` CLI as well (previously only
   `wavelet-lsp`), for macOS (arm64 and x86_64) and Linux (x86_64 and arm64),
   plus a per-platform `wavelet-<target>.tar.gz` bundle consumed by the Homebrew
   formula.
 
 ### Changed
+
 - The Homebrew formula now installs prebuilt binaries instead of building from
   source, so `brew install logaan/tap/wavelet` no longer fetches a Rust
   toolchain (`--HEAD` still builds from source).
@@ -119,29 +130,34 @@ breaking changes.
 ## [0.2.4] - 2026-06-14
 
 ### Added
+
 - Homebrew install path: `brew install logaan/tap/wavelet`, documented in the
   README.
 
 ## [0.2.3] - 2026-06-14
 
 ### Added
+
 - `--version` flag on both `wavelet` and `wavelet-lsp`.
 - `scripts/coverage.sh` for `cargo-llvm-cov` test-coverage reports.
 - `scripts/install.sh` to symlink `wavelet` and `wavelet-lsp` into `~/bin` for
   local development.
 
 ### Changed
+
 - Synced the `wavelet` and `wavelet-lsp` crate versions to 0.2.3.
 - Bumped the GitHub Actions runners to the Node 24 action versions.
 
 ## [0.2.2] - 2026-06-14
 
 ### Added
+
 - `scripts/init-submodules.sh` to check out the `tooling/neovim` submodule on a
   fresh clone.
 - MIT license.
 
 ### Changed
+
 - Moved the Neovim plugin out into the standalone `logaan/wavelet.nvim`
   repository, tracked here as the `tooling/neovim` submodule.
 - The docs site now also deploys on `v*` tags.
@@ -149,12 +165,14 @@ breaking changes.
 ## [0.2.1] - 2026-06-13
 
 ### Changed
+
 - Build the docs site only for releases rather than on every push.
 - Dropped the Apple x86_64 target from the release matrix.
 
 ## [0.2.0] - 2026-06-13
 
 ### Added
+
 - `wavelet-lsp` language server providing diagnostics, completion, and hover
   backed by the interpreter's reference semantics.
 - The language server is bundled into both the VS Code and Neovim editor
@@ -165,6 +183,7 @@ breaking changes.
 Initial release.
 
 ### Added
+
 - The full `read → expand → interpret/analyze → emit → componentize` compiler
   pipeline: WAVE lexer/reader/desugarer with a canonical printer, ahead-of-time
   macro expansion to fixpoint, a tree-walking interpreter (the language's
@@ -181,7 +200,8 @@ Initial release.
   artifacts.
 - Docusaurus documentation site with a live, wasm-compiled `<Playground>`.
 
-[Unreleased]: https://github.com/logaan/wavelet/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/logaan/wavelet/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/logaan/wavelet/compare/v0.6.0...v0.6.0
 [0.5.0]: https://github.com/logaan/wavelet/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/logaan/wavelet/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/logaan/wavelet/compare/v0.2.5...v0.3.0
