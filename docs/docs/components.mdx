@@ -10,7 +10,7 @@ In Wavelet, **one file is one component**. This page covers how a `.wvl` file de
 
 ## Anatomy of a file
 
-A file is a flat sequence of forms: an optional [`Package`](./language/special-forms#package), an optional [`Target`](./language/special-forms#target), any number of [`Import`](./language/special-forms#import)s, then [`DefType`](./language/special-forms#deftype)s, [`Def`](./language/special-forms#def)s, and [`Export`](./language/special-forms#export)s in any order.
+A file is a flat sequence of forms: an optional [`Package`](./language/special-forms#package), any number of [`Import`](./language/special-forms#import)s, then [`DefType`](./language/special-forms#deftype)s, [`Def`](./language/special-forms#def)s, and [`Export`](./language/special-forms#export)s in any order.
 
 ```wavelet
 // shout.wvl
@@ -62,11 +62,10 @@ Imported names are used qualified, Clojure-style: `kv/open`, `kv/get`. With `ope
 When you run a set of files together with [`wavelet run`](./cli#run), imports are resolved **by package id** against the other files on the command line — an interpreter stand-in for the composer:
 
 ```console
-$ wavelet run main.wvl shout.wvl -- wasm
-WASM!
+$ wavelet run main.wvl shout.wvl
 ```
 
-`main.wvl` imports `demo:shout/api`; because `shout.wvl` declares `Package "demo:shout@…"`, the runner wires them together and calls `main`'s exported `run`.
+`main.wvl` imports `demo:shout/api`; because `shout.wvl` declares `Package "demo:shout@…"`, the runner wires them together and calls `main`'s exported `run`. The interpreter evaluates **pure** logic only — calls into host interfaces (`wasi:*`) run only in a built component on a wasm runtime — so `run` is for exercising your cross-component logic, while output and side effects happen under `wavelet build` + a runtime.
 
 ## Exports
 
@@ -82,6 +81,16 @@ A record form gives finer control over the signature and interface grouping:
 Export {name: shout params: {phrase: string} result: string}
 Export {name: render iface: "html"}
 ```
+
+### Adopting a host world
+
+There is no compiler-known "target world". A component **implements** an external interface by exporting it: name the interface with the `iface` field and the compiler emits the export under that interface's WIT signature. A CLI program exports `wasi:cli/run`; an HTTP front end exports `wasi:http/incoming-handler`.
+
+```wavelet
+Export {iface: "wasi:cli/run" name: run result: result}
+```
+
+The interface's WIT comes from `wit/deps/` (fetched by `wkg`, see [below](#project-layout-and-external-wit)), so the compiler treats `wasi:cli/run` exactly as it would any third-party interface.
 
 ## Resources
 
@@ -106,24 +115,43 @@ each: func(f: borrow<fn-string-to-string>, items: list<string>) -> list<string>;
 First-class closures **inside** a component work today (and in the playground). Automatic lifting of an **escaping** closure into a resource across a component boundary, and the inbound duck-typing of any lone-`call` resource, are part of the interop design and are **not yet fully implemented**. See the [roadmap](./roadmap).
 :::
 
+## Project layout and external WIT {#project-layout-and-external-wit}
+
+A Wavelet project carries a `wit/` tree alongside its `src/`:
+
+```text
+my-app/
+  src/            # your .wvl components
+  wit/            # synthesized world + fetched dependency WIT
+    deps/         # wkg-fetched packages (wasi:cli, wasi:http, …)
+  wkg.lock        # pinned dependency versions
+  out/            # build artifacts (git-ignored)
+```
+
+The compiler vendors **no** WASI WIT of its own. Any host interface a component imports or exports (`wasi:cli/stdout`, `wasi:http/types`, a third party's `acme:foo/bar`) is fetched as ordinary WIT into `wit/deps/` by [**`wkg`**](https://github.com/bytecodealliance/wasm-pkg-tools) and parsed at build time, with versions pinned in `wkg.lock`. [`wavelet new`](./cli#new) fetches them when it scaffolds; `wavelet build` synthesizes each component's world into `wit/` and ensures the deps are present before emitting. So WASI is "just some WIT packages you import," resolved through the same mechanism as your own components.
+
 ## Composition
 
-[`wavelet build`](./cli#build) turns files into components; [`wavelet compose`](./cli#compose) links them. By default the composer **auto-plugs**: every unresolved import is matched by package id (and version compatibility) against the exports of the components on the command line, in the spirit of `wac plug`.
+[`wavelet build`](./cli#build) turns each file into a component **and composes them into one artifact**, `out/app.wasm`, wiring every cross-component import to the sibling that exports it via a generated `out/app.wac` run through [**`wac`**](https://github.com/bytecodealliance/wac). Host imports (`wasi:*`) are left unsatisfied for the runtime to provide.
 
 ```console
-$ wavelet build shout.wvl main.wvl
-out/demo-shout.wasm
-out/demo-main.wasm
+$ wavelet build src/*.wvl -o out
+built out/app.wasm
+$ wasmtime run out/app.wasm wasm
+WASM!
+```
+
+The individual `out/<package>.wasm` components are left alongside `app.wasm`. To compose hand-picked components yourself, [`wavelet compose`](./cli#compose) auto-plugs them: every unresolved import is matched by package id against the exports on the command line, in the spirit of `wac plug`.
+
+```console
 $ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
 app.wasm
-$ wasmtime app.wasm wasm
-WASM!
 ```
 
 Boundary calls copy data (the canonical ABI). For graphs that are entirely Wavelet, a planned `wavelet compose --fuse` would merge the core modules into one, eliding copies and restoring cross-component tail calls — with identical observable semantics.
 
 :::info[Status]
-`build`, `compose` (auto-plug), and `wit` synthesis are implemented. A WAVE-document compose **manifest** for settling ambiguities/substitutions, and the **`--fuse`** optimisation, are **not yet implemented**. See the [roadmap](./roadmap).
+`build` (composing via `wac`), `compose` (auto-plug), and `wit` synthesis are implemented. A WAVE-document compose **manifest** for settling ambiguities/substitutions, and the **`--fuse`** optimisation, are **not yet implemented**. See the [roadmap](./roadmap).
 :::
 
 ## A three-language program
@@ -139,23 +167,22 @@ interface picker { pick: func(seed: u64) -> result<string, string>; }
 ```wavelet
 // main.wvl
 Package "demo:main@0.1.0"
-Target "wasi:cli/command"
 
 Import {pkg: "acme:words/picker@1.0.0" as: words}
 Import {pkg: "demo:caps/api"           as: caps}
 
-Export run
-Def run Fn {}
+Export pick-word
+Def pick-word Fn {} -> string
   Match words/pick{seed: 42} [
-    (ok(w)  println(caps/shout{phrase: w}))
-    (err(e) println(str-cat["no word today: " e]))
+    (ok(w)  caps/shout{phrase: w})
+    (err(e) str-cat["no word today: " e])
   ]
 ```
 
+`main` calls `words/pick` (the Rust component) and `caps/shout` (a Wavelet sibling) identically — neither call reveals which language is on the other side. Build composes the Wavelet components; a third-party component is wired in with `wavelet compose`:
+
 ```console
 $ cargo component build --release          # acme_words.wasm
-$ wavelet build caps.wvl main.wvl
-$ wavelet compose out/*.wasm target/release/acme_words.wasm -o app.wasm
-$ wasmtime app.wasm
-BANANA!
+$ wavelet build src/*.wvl -o out
+$ wavelet compose out/app.wasm target/release/acme_words.wasm -o final.wasm
 ```
