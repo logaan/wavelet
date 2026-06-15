@@ -32,8 +32,6 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
 - [x] `///` doc comments: lexed as tokens, attached to the following form
       (arena `docs` map), surfaced as `///` lines in `wavelet wit` output
       (docs on Export/Def/DefType key by defined name)
-- [ ] Qualified TitleCase macros `Dsl/Element` arity reading (parses, but arity
-      lookup ignores the alias; revisit with macro imports in Phase 2)
 
 ## Phase 2 — expander (§2.4, §6.3)
 
@@ -49,8 +47,6 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       and dropped, call sites rewritten to fixpoint; wired into `wavelet
       build`; `wavelet expand <file>` prints the expanded tree. Macro bodies
       see builtins + earlier macros only (not file-local fns yet)
-- [ ] Macro components: instantiate wasm at compile time, `manifest`/`expand`
-      interface, `Import {… macros: true}`
 
 ## Phase 3 — interpreter (validate semantics before emitting wasm)
 
@@ -73,7 +69,6 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       prints `WASM!`
 - [x] `expand` builtin: one expansion step on a macro-call form value
       (macros looked up in the caller's env); pass-through otherwise
-- [ ] Resource handles beyond `cell`; owned-handle drop semantics (§6.1)
 
 ## Phase 4 — module/component model surface (§6.1)
 
@@ -86,11 +81,8 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
 - [x] Cross-def inference: an export whose body calls another module-level
       `Def` follows the call (recursion-guarded; recursive fns still need the
       Export record form)
-- [ ] Richer inference for lists/options/results — currently errors and asks
-      for annotations when it cannot infer
 - [x] Result inference through `Match` (unify all clause results; pattern-bound
       names left untyped) — unblocks exports whose body ends in a Match
-- [ ] Boundary coercions + `safely` wrapper semantics (§3)
 - [x] Grouped exports `Export {iface: "render" ...}`: wit synthesis, runner
       import filtering, and the wasm backend (per-iface export names + dep
       lookup); name-only record forms still get inferred signatures
@@ -168,16 +160,8 @@ Keep this file updated: mark items `[x]` when done, add notes inline.
       marshalling to `store_to_mem`/`load_from_mem`, which removed the
       duplicated per-type store/load and made list elements compose with every
       supported type. Verified composed on wasmtime: `list<point>` round-trips.
-- [ ] v0 backend gaps still open: option/result *params* with mismatched arm
-      flat shapes (needs the numeric-widening variant join); >16-flat param
-      spill-to-memory; named 3+-case `variant`/`enum` DefTypes across boundaries
-      (blocked anyway — the dynamic core has no constructor for user variant
-      cases, only the `ok`/`some`/`err`/`none` builtins); GC (leaks by design),
-      `compose.wave` manifest, `--fuse`
 
 ## Phase 6 — beyond
 
-- [ ] Closures across boundaries → resource lifting (§6.4)
 - [x] REPL (§9): `wavelet repl` — interpreter-backed, multi-line input,
       DefMacro arities persist across lines (`reader::read_with`)
-- [ ] Registry fetch `wavelet add`, exhaustiveness lint, hygiene (§10)

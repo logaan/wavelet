@@ -40,6 +40,27 @@
 
 [in the docs]: https://logaan.github.io/wavelet/components#imports
 
+## From todo.md
+
+- [ ] Qualified TitleCase macros `Dsl/Element` arity reading (parses, but arity
+      lookup ignores the alias; revisit with macro imports in Phase 2)
+- [ ] Macro components: instantiate wasm at compile time, `manifest`/`expand`
+      interface, `Import {… macros: true}`
+- [ ] Resource handles beyond `cell`; owned-handle drop semantics
+- [ ] Boundary coercions + `safely` wrapper semantics
+- [ ] Richer inference for lists/options/results — currently errors and asks
+      for annotations when it cannot infer
+- [ ] v0 backend gaps still open: option/result *params* with mismatched arm
+      flat shapes (needs the numeric-widening variant join); >16-flat param
+      spill-to-memory; named 3+-case `variant`/`enum` DefTypes across boundaries
+      (blocked anyway — the dynamic core has no constructor for user variant
+      cases, only the `ok`/`some`/`err`/`none` builtins); GC (leaks by design),
+      `compose.wave` manifest, `--fuse`
+- [ ] Closures across boundaries → resource lifting
+- [ ] Registry fetch `wavelet add`
+- [ ] Exhaustiveness lint
+- [ ] Hygiene
+
 ## Previously
 
 1. [ ] Add a readme to the scripts directory.
