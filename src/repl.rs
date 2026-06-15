@@ -10,7 +10,7 @@ use crate::reader::MacroTable;
 use crate::value::{print_value, Env};
 
 pub fn repl() -> Result<(), String> {
-    let interp = Interp::new(vec![]);
+    let interp = Interp::new();
     let env = Env::root();
     crate::builtins::install(&env);
     let mut macros = MacroTable::core();

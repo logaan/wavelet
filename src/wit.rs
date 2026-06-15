@@ -525,7 +525,7 @@ fn infer(
                         _ => Inferred::Known("s64".into()),
                     }
                 }
-                "print" | "println" => Inferred::Unit,
+                "drop" | "cell-set" => Inferred::Unit,
                 "if-MACRO" => match arena.node(*payload) {
                     Node::Tup(items) if items.len() == 3 => unify(
                         infer(arena, items[1], params, defs, visiting),

@@ -617,8 +617,6 @@ fn flat_result(sig: &FuncSig, env: &TypeEnv) -> Result<FlatRes, String> {
 
 #[derive(Default)]
 struct Features {
-    needs_stdout: bool,
-    needs_env: bool,
     /// unique (alias, func) cross-component calls, in first-use order
     dep_calls: Vec<(String, String)>,
 }
@@ -627,8 +625,6 @@ fn scan(arena: &Arena, id: NodeId, feats: &mut Features) {
     match arena.node(id) {
         Node::Call(head, payload) => {
             match arena.node(*head) {
-                Node::Sym(s) if s == "print" || s == "println" => feats.needs_stdout = true,
-                Node::Sym(s) if s == "args" => feats.needs_env = true,
                 Node::Qsym(alias, name) => {
                     let key = (alias.clone(), name.clone());
                     if !feats.dep_calls.contains(&key) {
@@ -712,9 +708,6 @@ struct Helpers {
     case_h: u32,
     to_str: u32,
     rec_get: u32,
-    print_str: Option<u32>,
-    println_h: Option<u32>,
-    get_args: Option<u32>,
 }
 
 // ---------------------------------------------------------------- emitter
@@ -726,7 +719,7 @@ pub fn emit_component(
     deps: &HashMap<String, Dep>,
 ) -> Result<Vec<u8>, String> {
     let mut module = emit_core_module(arena, roots, info, deps)?;
-    let wit = synthesize_world_wit(arena, info, deps, &features_of(arena, info))?;
+    let wit = synthesize_world_wit(arena, info, deps)?;
 
     let mut resolve = wit_parser::Resolve::default();
     let pkg = resolve
@@ -2980,17 +2973,6 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Const(if name == "upper" { 1 } else { 0 }));
                 fx.op(I::Call(self.h.case_h));
             }
-            "print" | "println" => {
-                nargs(1)?;
-                self.expr(fx, items[0], false)?;
-                let h = if name == "print" { self.h.print_str } else { self.h.println_h };
-                fx.op(I::Call(h.expect("print helpers emitted when used")));
-                fx.op(I::I32Const(self.unit_addr() as i32));
-            }
-            "args" => {
-                nargs(0)?;
-                fx.op(I::Call(self.h.get_args.expect("args helper emitted when used")));
-            }
             "some" | "ok" | "err" => {
                 // the single argument is the whole payload (which may itself be
                 // a list/tuple/record), exactly as the interpreter binds it
@@ -3068,9 +3050,6 @@ fn emit_core_module(
             case_h: 0,
             to_str: 0,
             rec_get: 0,
-            print_str: None,
-            println_h: None,
-            get_args: None,
         },
         funcs: HashMap::new(),
         value_globals: HashMap::new(),
@@ -3105,20 +3084,7 @@ fn emit_core_module(
     };
 
     use ValType::{F64, I32, I64};
-    let _ = (I64, F64);
-    if feats.needs_stdout {
-        add_import(&mut em, "wasi:cli/stdout@0.2.0", "get-stdout", vec![], vec![I32]);
-        add_import(
-            &mut em,
-            "wasi:io/streams@0.2.0",
-            "[method]output-stream.blocking-write-and-flush",
-            vec![I32, I32, I32, I32],
-            vec![],
-        );
-    }
-    if feats.needs_env {
-        add_import(&mut em, "wasi:cli/environment@0.2.0", "get-arguments", vec![I32], vec![]);
-    }
+    let _ = (I32, I64, F64);
     for (alias, fname) in &feats.dep_calls {
         let imp = info
             .imports
@@ -3195,13 +3161,6 @@ fn emit_core_module(
     em.h.case_h = take();
     em.h.to_str = take();
     em.h.rec_get = take();
-    if feats.needs_stdout {
-        em.h.print_str = Some(take());
-        em.h.println_h = Some(take());
-    }
-    if feats.needs_env {
-        em.h.get_args = Some(take());
-    }
 
     // ---- assign internal function indices (file order)
     let mut internal_order: Vec<String> = Vec::new();
@@ -3228,7 +3187,7 @@ fn emit_core_module(
     }
 
     // ---- helper bodies (order must match index assignment above)
-    emit_helpers(&mut em, &feats)?;
+    emit_helpers(&mut em)?;
 
     // ---- internal function bodies
     for name in &internal_order {
@@ -3455,7 +3414,7 @@ fn param_names(arena: &Arena, params_id: NodeId) -> Result<Vec<String>, String> 
     }
 }
 
-fn emit_helpers(em: &mut Emitter, feats: &Features) -> Result<(), String> {
+fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
     use ValType::{F64, I32, I64};
 
     // alloc(n) -> ptr   [locals: r=1, end=2]
@@ -4101,123 +4060,6 @@ fn emit_helpers(em: &mut Emitter, feats: &Features) -> Result<(), String> {
         em.bodies.push((t, fx.finish()));
     }
 
-    if feats.needs_stdout {
-        let get_stdout = em.import_idx("wasi:cli/stdout@0.2.0", "get-stdout");
-        let write = em.import_idx(
-            "wasi:io/streams@0.2.0",
-            "[method]output-stream.blocking-write-and-flush",
-        );
-        // print_str(box)
-        {
-            let mut fx = FnCtx::new(1);
-            fx.op(I::Call(get_stdout));
-            fx.op(I::LocalGet(0));
-            fx.op(I::I32Const(8));
-            fx.op(I::I32Add);
-            fx.op(I::LocalGet(0));
-            fx.op(I::I32Load(ma(4, 2)));
-            fx.op(I::I32Const(SCRATCH));
-            fx.op(I::Call(write));
-            let t = em.ty_idx(vec![I32], vec![]);
-            em.bodies.push((t, fx.finish()));
-        }
-        // println_h(box)
-        {
-            let mut fx = FnCtx::new(1);
-            fx.op(I::LocalGet(0));
-            fx.op(I::Call(em.h.print_str.unwrap()));
-            fx.op(I::I32Const(em.nl_addr as i32));
-            fx.op(I::Call(em.h.print_str.unwrap()));
-            let t = em.ty_idx(vec![I32], vec![]);
-            em.bodies.push((t, fx.finish()));
-        }
-    }
-
-    if feats.needs_env {
-        let get_arguments = em.import_idx("wasi:cli/environment@0.2.0", "get-arguments");
-        // get_args() -> list box, dropping argv[0]
-        // locals: base, n, m, lst, i, tmp, bx
-        let mut fx = FnCtx::new(0);
-        let base = fx.local(I32);
-        let n = fx.local(I32);
-        let m = fx.local(I32);
-        let lst = fx.local(I32);
-        let i = fx.local(I32);
-        let tmp = fx.local(I32);
-        let bx = fx.local(I32);
-        fx.op(I::I32Const(SCRATCH));
-        fx.op(I::Call(get_arguments));
-        fx.op(I::I32Const(SCRATCH));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::LocalSet(base));
-        fx.op(I::I32Const(SCRATCH));
-        fx.op(I::I32Load(ma(4, 2)));
-        fx.op(I::LocalSet(n));
-        fx.op(I::LocalGet(n));
-        fx.op(I::If(BlockType::Result(I32)));
-        fx.op(I::LocalGet(n));
-        fx.op(I::I32Const(1));
-        fx.op(I::I32Sub);
-        fx.op(I::Else);
-        fx.op(I::I32Const(0));
-        fx.op(I::End);
-        fx.op(I::LocalSet(m));
-        fx.op(I::I32Const(8));
-        fx.op(I::LocalGet(m));
-        fx.op(I::I32Const(2));
-        fx.op(I::I32Shl);
-        fx.op(I::I32Add);
-        fx.op(I::Call(em.h.alloc));
-        fx.op(I::LocalTee(lst));
-        fx.op(I::I32Const(TAG_LIST));
-        fx.op(I::I32Store(ma(0, 2)));
-        fx.op(I::LocalGet(lst));
-        fx.op(I::LocalGet(m));
-        fx.op(I::I32Store(ma(4, 2)));
-        fx.op(I::I32Const(0));
-        fx.op(I::LocalSet(i));
-        fx.op(I::Block(BlockType::Empty));
-        fx.op(I::Loop(BlockType::Empty));
-        fx.op(I::LocalGet(i));
-        fx.op(I::LocalGet(m));
-        fx.op(I::I32GeU);
-        fx.op(I::BrIf(1));
-        // tmp = base + 8*(i+1)
-        fx.op(I::LocalGet(base));
-        fx.op(I::LocalGet(i));
-        fx.op(I::I32Const(1));
-        fx.op(I::I32Add);
-        fx.op(I::I32Const(3));
-        fx.op(I::I32Shl);
-        fx.op(I::I32Add);
-        fx.op(I::LocalSet(tmp));
-        fx.op(I::LocalGet(tmp));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::LocalGet(tmp));
-        fx.op(I::I32Load(ma(4, 2)));
-        fx.op(I::Call(em.h.box_str));
-        fx.op(I::LocalSet(bx));
-        fx.op(I::LocalGet(lst));
-        fx.op(I::I32Const(8));
-        fx.op(I::I32Add);
-        fx.op(I::LocalGet(i));
-        fx.op(I::I32Const(2));
-        fx.op(I::I32Shl);
-        fx.op(I::I32Add);
-        fx.op(I::LocalGet(bx));
-        fx.op(I::I32Store(ma(0, 2)));
-        fx.op(I::LocalGet(i));
-        fx.op(I::I32Const(1));
-        fx.op(I::I32Add);
-        fx.op(I::LocalSet(i));
-        fx.op(I::Br(0));
-        fx.op(I::End);
-        fx.op(I::End);
-        fx.op(I::LocalGet(lst));
-        let t = em.ty_idx(vec![], vec![I32]);
-        em.bodies.push((t, fx.finish()));
-    }
-
     Ok(())
 }
 
@@ -4276,7 +4118,6 @@ fn synthesize_world_wit(
     arena: &Arena,
     info: &FileInfo,
     deps: &HashMap<String, Dep>,
-    feats: &Features,
 ) -> Result<String, String> {
     let is_command = info.target.as_deref() == Some("wasi:cli/command");
     let is_http = info.target.as_deref() == Some("wasi:http/proxy");
@@ -4307,12 +4148,6 @@ fn synthesize_world_wit(
     }
 
     out.push_str(&format!("world {} {{\n", info.world));
-    if feats.needs_stdout {
-        out.push_str("  import wasi:cli/stdout@0.2.0;\n");
-    }
-    if feats.needs_env {
-        out.push_str("  import wasi:cli/environment@0.2.0;\n");
-    }
     for imp in &info.imports {
         let iface = import_iface(&imp.path);
         if let Some(dep) = deps.get(&imp.package) {
@@ -4372,7 +4207,7 @@ fn synthesize_world_wit(
         // The legacy magic-http path vendors its whole closure as one blob and
         // never carries overlapping `wit/deps`, so it is emitted wholesale.
         out.push_str(WASI_HTTP_WIT);
-    } else if feats.needs_stdout || feats.needs_env || is_command {
+    } else if is_command {
         for block in split_package_blocks(WASI_PACKAGES) {
             let dup = package_block_name(block).is_some_and(|name| !seen.insert(name));
             if !dup {

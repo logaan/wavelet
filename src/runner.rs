@@ -27,8 +27,8 @@ pub enum ModState {
 /// Load and evaluate a set of `.wvl` files; the first is the entry component.
 /// Imports are resolved by package id against the other files — an
 /// interpreter stand-in for `wavelet compose` (§6.5).
-pub fn run_files(paths: &[String], prog_args: Vec<String>) -> Result<(), String> {
-    let interp = Interp::new(prog_args);
+pub fn run_files(paths: &[String]) -> Result<(), String> {
+    let interp = Interp::new();
     let std_env = Env::root();
     builtins::install(&std_env);
 

@@ -108,7 +108,7 @@ pub fn eval_snippet(src: &str) -> EvalOutcome {
     };
     let arena = Rc::new(arena);
 
-    let interp = interp::Interp::new(vec![]);
+    let interp = interp::Interp::new();
     let env = Env::root();
     builtins::install(&env);
 
@@ -214,8 +214,8 @@ mod tests {
     fn macro_arity_reading() {
         assert_eq!(read1("Quote foo"), "quote-MACRO(foo)");
         assert_eq!(
-            read1(r#"If eq[foo bar] print("match") print("nope")"#),
-            r#"if-MACRO((eq([foo, bar]), print("match"), print("nope")))"#
+            read1(r#"If eq[foo bar] say("match") say("nope")"#),
+            r#"if-MACRO((eq([foo, bar]), say("match"), say("nope")))"#
         );
         // nested macro forms need no delimiters
         assert_eq!(
@@ -270,7 +270,7 @@ mod tests {
         let env = value::Env::root();
         builtins::install(&env);
         let env = env.child();
-        let interp = interp::Interp::new(vec![]);
+        let interp = interp::Interp::new();
         let mut last = value::unit();
         for root in roots {
             last = interp.eval(&arena, root, &env).expect(src);
@@ -324,7 +324,7 @@ mod tests {
         let arena = std::rc::Rc::new(arena);
         let env = value::Env::root();
         builtins::install(&env);
-        let interp = interp::Interp::new(vec![]);
+        let interp = interp::Interp::new();
         let mut result = Ok(value::unit());
         for root in roots {
             result = interp.eval(&arena, root, &env);
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn eval_let_do_match() {
         assert_eq!(eval_str("Let {x: 2 y: mul[x 3]} add[x y]"), "8");
-        assert_eq!(eval_str("Do [print(\"\") 7]"), "7");
+        assert_eq!(eval_str("Do [drop(\"\") 7]"), "7");
         assert_eq!(
             eval_str("Match ok(5) [ (ok(n) add[n 1]) (err(e) 0) ]"),
             "6"
@@ -448,7 +448,7 @@ world shout {
                    Target \"wasi:cli/command\"\n\
                    Import {pkg: \"demo:shout/api\" as: sh}\n\
                    Export run\n\
-                   Def run Fn {} println(\"hi\")";
+                   Def run Fn {} drop(\"hi\")";
         let (arena, roots) = read_file(src).unwrap();
         let got = wit::synthesize(&arena, &roots).unwrap();
         assert!(got.contains("run: func();"), "{got}");
@@ -479,10 +479,10 @@ world shout {
                    Target \"wasi:cli/command\"\n\
                    Export run\n\
                    Def run Fn {}\n\
-                     println(Match args() [\n\
+                     Match [\"wasm\"] [\n\
                        ([\"wasm\"] \"WASM!\")\n\
                        ([w] str-cat[\"got \" w])\n\
-                       (other \"usage\")])";
+                       (other \"usage\")]";
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
@@ -505,9 +505,9 @@ world shout {
                    Def add5 make-adder(5)\n\
                    Def run Fn {}\n\
                      Do [\n\
-                       println(to-string(add5(3)))\n\
-                       println(to-string(twice(add5 10)))\n\
-                       println(to-string(twice(inc neg(1))))]";
+                       to-string(add5(3))\n\
+                       to-string(twice(add5 10))\n\
+                       to-string(twice(inc neg(1)))]";
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
@@ -524,10 +524,10 @@ world shout {
                    Export run\n\
                    Def run Fn {}\n\
                      Do [\n\
-                       println(greeting)\n\
-                       println(Match [\"a\" \"b\"] [\n\
-                         ([\"a\" x] x)\n\
-                         (other \"no\")])]";
+                       greeting\n\
+                       Match [\"a\" \"b\"] [\n\
+                         ([\"a\" x] str-cat[x])\n\
+                         (other \"no\")]]";
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
@@ -546,8 +546,8 @@ world shout {
                    Def run Fn {}\n\
                      Let {p: {x: 3 y: 7 label: \"pt\"}}\n\
                        Match p [\n\
-                         ({x: a label: l} println(str-cat[l to-string(a)]))\n\
-                         (other println(\"no\"))]";
+                         ({x: a label: l} str-cat[l to-string(a)])\n\
+                         (other \"no\")]";
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
@@ -583,9 +583,9 @@ world shout {
                    Export run\n\
                    Def run Fn {}\n\
                      Do [\n\
-                       println(describe(ok(42)))\n\
-                       println(describe(none))\n\
-                       println(to-string(pair-sum((10 20))))]";
+                       describe(ok(42))\n\
+                       describe(none)\n\
+                       to-string(pair-sum((10 20)))]";
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
@@ -717,9 +717,9 @@ world shout {
                     Export run\n\
                     Def run Fn {}\n\
                       Do [\n\
-                        println(lst/first-up{words: [\"hello\"]})\n\
-                        println(head(lst/echo{words: args()}))\n\
-                        println(to-string(lst/sum3{ns: [10 20 12]}))]";
+                        lst/first-up{words: [\"hello\"]}\n\
+                        head(lst/echo{words: [\"a\" \"b\"]})\n\
+                        to-string(lst/sum3{ns: [10 20 12]})]";
         let (ma, mr) = read_file(msrc).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
@@ -762,7 +762,7 @@ world shout {
                     Export run\n\
                     Def run Fn {}\n\
                       Let {p: g/make-point{x: 3 y: 39}}\n\
-                        println(to-string(g/sum-coords{p: p}))";
+                        to-string(g/sum-coords{p: p})";
         let (ma, mr) = read_file(msrc).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
@@ -802,8 +802,8 @@ world shout {
                     Export run\n\
                     Def run Fn {}\n\
                       Do [\n\
-                        println(Match o/lookup{k: 4} [(some(v) to-string(v)) (none \"none\")])\n\
-                        println(Match o/checked{k: 0} [(ok(v) to-string(v)) (err(e) e)])]";
+                        Match o/lookup{k: 4} [(some(v) to-string(v)) (none \"none\")]\n\
+                        Match o/checked{k: 0} [(ok(v) to-string(v)) (err(e) str-cat[e])]]";
         let (ma, mr) = read_file(msrc).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();

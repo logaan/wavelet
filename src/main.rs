@@ -186,11 +186,14 @@ fn new_cmd(rest: &[String]) -> ExitCode {
 }
 
 fn run_cmd(rest: &[String]) -> ExitCode {
-    let (files, prog_args) = match rest.iter().position(|a| a == "--") {
-        Some(i) => (rest[..i].to_vec(), rest[i + 1..].to_vec()),
-        None => (rest.to_vec(), vec![]),
+    // Everything before a `--` separator is treated as files; anything after is
+    // ignored (the removed `args` builtin used to read it). Keep accepting the
+    // `--` form so existing invocations don't error.
+    let files: Vec<String> = match rest.iter().position(|a| a == "--") {
+        Some(i) => rest[..i].to_vec(),
+        None => rest.to_vec(),
     };
-    match wavelet::runner::run_files(&files, prog_args) {
+    match wavelet::runner::run_files(&files) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e}");

@@ -15,7 +15,7 @@ use crate::interp::Interp;
 use crate::value::{Env, Value};
 
 pub fn expand_file(arena: Arena, roots: &[NodeId]) -> Result<(Arena, Vec<NodeId>), String> {
-    let interp = Interp::new(vec![]);
+    let interp = Interp::new();
     let env = Env::root();
     crate::builtins::install(&env);
 

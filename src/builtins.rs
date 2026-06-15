@@ -15,7 +15,6 @@ pub const NAMES: &[&str] = &[
     "to-string", "read",
     "to-u8", "to-u16", "to-u32", "to-u64", "to-s8", "to-s16", "to-s32", "to-s64",
     "to-f32", "to-f64",
-    "print", "println", "read-line", "args", "env",
     "apply", "gensym", "expand",
     "form-kind", "rec-key", "rec-val",
     "some", "ok", "err",
@@ -340,29 +339,6 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             Num::I(n) => Ok(Value::Dec(n as f64)),
             Num::D(f) => Ok(Value::Dec(f)),
         },
-        "print" | "println" => {
-            let text = match &arg {
-                Value::Str(s) => s.clone(),
-                other => print_value(other),
-            };
-            crate::emit_output(&text, name == "println");
-            Ok(unit())
-        }
-        "read-line" => {
-            let mut line = String::new();
-            match std::io::stdin().read_line(&mut line) {
-                Ok(_) => Ok(Value::Str(line.trim_end_matches(['\n', '\r']).to_string())),
-                Err(e) => err(format!("read-line: {e}")),
-            }
-        }
-        "args" => Ok(Value::Lst(
-            interp.prog_args.iter().map(|a| Value::Str(a.clone())).collect(),
-        )),
-        "env" => Ok(Value::Lst(
-            std::env::vars()
-                .map(|(k, v)| Value::Tup(vec![Value::Str(k), Value::Str(v)]))
-                .collect(),
-        )),
         "apply" => {
             let mut a = args_n(arg, 2, name)?;
             let payload = a.pop().unwrap();

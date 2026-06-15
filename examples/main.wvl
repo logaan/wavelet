@@ -6,6 +6,4 @@ Import {pkg: "demo:shout/api" as: sh}
 
 Export run
 Def run Fn {}
-  If eq[len(args[]) 0]
-     println("usage: main <word>")
-     println(sh/shout{phrase: head(args[])})
+  Do [str-cat[sh/shout{phrase: "hello"}]]

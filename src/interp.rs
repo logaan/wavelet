@@ -33,12 +33,17 @@ enum Step {
 
 pub struct Interp {
     pub gensym: Cell<u64>,
-    pub prog_args: Vec<String>,
+}
+
+impl Default for Interp {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Interp {
-    pub fn new(prog_args: Vec<String>) -> Self {
-        Self { gensym: Cell::new(0), prog_args }
+    pub fn new() -> Self {
+        Self { gensym: Cell::new(0) }
     }
 
     pub fn eval(&self, arena: &Rc<Arena>, id: NodeId, env: &Env) -> R<Value> {
