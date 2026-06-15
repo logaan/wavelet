@@ -49,7 +49,7 @@ Every surface form desugars to a canonical WAVE value:
 | `{read write}` | `{read, write}` | flags |
 | `If c t e` | `if-MACRO((c, t, e))` | macro use (see below) |
 
-Function calls are **variant cases**. `print("hi")` is, as data, the WAVE variant case `print` carrying a string; `delete-file{...}` is the case `delete-file` carrying a record. A bare identifier is a payload-less case, which Wavelet reads as a variable reference.
+Function calls are **variant cases**. `log("hi")` is, as data, the WAVE variant case `log` carrying a string; `delete-file{...}` is the case `delete-file` carrying a record. A bare identifier is a payload-less case, which Wavelet reads as a variable reference.
 
 You can see the desugaring directly with `wavelet read`, which prints the canonical WAVE tree:
 
@@ -69,13 +69,13 @@ A **TitleCase** identifier — mixed-case words, each starting with a capital (`
 A TitleCase head does **not** require parentheses. The reader looks up the macro's declared **arity** and consumes exactly that many following forms:
 
 ```wavelet
-If eq[foo bar] print("match") print("nope")
+If eq[foo bar] log("match") log("nope")
 ```
 
 desugars to
 
 ```wavelet
-if-MACRO((eq([foo, bar]), print("match"), print("nope")))
+if-MACRO((eq([foo, bar]), log("match"), log("nope")))
 ```
 
 Three consequences:
