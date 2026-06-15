@@ -6,11 +6,8 @@
 //! the build set, we parse a WIT package with `wit-parser` and project it into
 //! the *same* [`Dep`] shape the emitter already consumes. The emitter therefore
 //! sees one uniform dependency structure regardless of where the interface came
-//! from.
-//!
-//! Step 1 of the WASI-decoupling plan only *adds* this source; the vendored
-//! `WASI_PACKAGES` / `wasi-http.wit` magic stays primary and unchanged, and this
-//! lookup is tried only as a fallback after sibling-`.wvl` resolution.
+//! from. This is the only source of external (host, `wasi:*`) WIT: host imports
+//! and exports resolve through it just like a third party's package.
 
 use std::path::Path;
 
@@ -120,7 +117,7 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
                     // An opaque host resource: carried as a handle. Recording it
                     // in `type_defs` lets the boundary `TypeEnv` resolve a bare
                     // reference (a param typed just `name`, not `own<name>`) to a
-                    // handle through the generic path — no `is_resource_name`.
+                    // handle through the generic path.
                     type_defs.push((type_name.clone(), TypeDef::Resource));
                     // The component model gives every resource an implicit
                     // `[resource-drop]name` import (it is not a WIT `function`).

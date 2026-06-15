@@ -14,7 +14,6 @@ impl MacroTable {
         let mut map = HashMap::new();
         for (name, arity) in [
             ("package-MACRO", 1),
-            ("target-MACRO", 1),
             ("import-MACRO", 1),
             ("export-MACRO", 1),
             ("def-type-MACRO", 2),

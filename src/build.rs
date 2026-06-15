@@ -71,13 +71,6 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                     continue;
                 }
             }
-            // (c) A host package not present in `wit/deps`: leave it to the
-            // hand-coded magic path (cli builtins / the legacy http intrinsics),
-            // which supplies its own vendored WIT and needs no `Dep`. This keeps
-            // the magic working until it is deleted in Step 11.
-            if emit::is_external_package(&imp.package) {
-                continue;
-            }
             return Err(format!(
                 "{}: import `{}` is not satisfied by any file in the build set or `wit/deps`",
                 u.path, imp.path

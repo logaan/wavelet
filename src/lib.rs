@@ -445,14 +445,12 @@ world shout {
     #[test]
     fn wit_synthesis_world_imports() {
         let src = "Package \"demo:main@0.1.0\"\n\
-                   Target \"wasi:cli/command\"\n\
                    Import {pkg: \"demo:shout/api\" as: sh}\n\
                    Export run\n\
                    Def run Fn {} drop(\"hi\")";
         let (arena, roots) = read_file(src).unwrap();
         let got = wit::synthesize(&arena, &roots).unwrap();
         assert!(got.contains("run: func();"), "{got}");
-        assert!(got.contains("include wasi:cli/command;"), "{got}");
         assert!(got.contains("import demo:shout/api;"), "{got}");
     }
 
@@ -476,7 +474,6 @@ world shout {
     #[test]
     fn emit_match_componentizes() {
         let src = "Package \"demo:matchy@0.1.0\"\n\
-                   Target \"wasi:cli/command\"\n\
                    Export run\n\
                    Def run Fn {}\n\
                      Match [\"wasm\"] [\n\
@@ -496,7 +493,6 @@ world shout {
         // anonymous Fn with capture, higher-order param, named def as value,
         // module-level value def holding a closure, to-string of ints
         let src = "Package \"demo:clo@0.1.0\"\n\
-                   Target \"wasi:cli/command\"\n\
                    Export run\n\
                    Def make-adder Fn {n: s64}\n\
                      Fn {m: s64} add(n m)\n\
@@ -519,7 +515,6 @@ world shout {
     #[test]
     fn emit_value_defs_and_list_literals() {
         let src = "Package \"demo:vals@0.1.0\"\n\
-                   Target \"wasi:cli/command\"\n\
                    Def greeting str-cat[\"hello\" \", world\"]\n\
                    Export run\n\
                    Def run Fn {}\n\
@@ -541,7 +536,6 @@ world shout {
         // record literal construction + record-pattern Match (subset of fields);
         // run's result is inferred through Let/Match to Unit
         let src = "Package \"demo:rec@0.1.0\"\n\
-                   Target \"wasi:cli/command\"\n\
                    Export run\n\
                    Def run Fn {}\n\
                      Let {p: {x: 3 y: 7 label: \"pt\"}}\n\
@@ -571,7 +565,6 @@ world shout {
         // variant constructors (some/ok/err/none), variant patterns, tuple
         // literals + tuple patterns, all in the wasm backend
         let src = "Package \"demo:var@0.1.0\"\n\
-                   Target \"wasi:cli/command\"\n\
                    Def describe Fn {r}\n\
                      Match r [\n\
                        (ok(n) to-string(n))\n\
@@ -674,7 +667,7 @@ world shout {
             .expect("shout componentizes");
         assert_eq!(&bytes[0..4], b"\0asm");
 
-        // main.wvl: targets wasi:cli/command, imports demo:shout/api
+        // main.wvl: imports demo:shout/api, exports run
         let (ma, mr) = read_file(include_str!("../examples/main.wvl")).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
@@ -712,8 +705,7 @@ world shout {
         assert_eq!(&bytes[0..4], b"\0asm");
 
         let msrc = "Package \"demo:listmain@0.1.0\"\n\
-                    Target \"wasi:cli/command\"\n\
-                    Import {pkg: \"demo:lists/api\" as: lst}\n\
+                     Import {pkg: \"demo:lists/api\" as: lst}\n\
                     Export run\n\
                     Def run Fn {}\n\
                       Do [\n\
@@ -757,8 +749,7 @@ world shout {
         assert_eq!(&bytes[0..4], b"\0asm");
 
         let msrc = "Package \"demo:geomain@0.1.0\"\n\
-                    Target \"wasi:cli/command\"\n\
-                    Import {pkg: \"demo:geo/api\" as: g}\n\
+                     Import {pkg: \"demo:geo/api\" as: g}\n\
                     Export run\n\
                     Def run Fn {}\n\
                       Let {p: g/make-point{x: 3 y: 39}}\n\
@@ -797,8 +788,7 @@ world shout {
         assert_eq!(&bytes[0..4], b"\0asm");
 
         let msrc = "Package \"demo:optmain@0.1.0\"\n\
-                    Target \"wasi:cli/command\"\n\
-                    Import {pkg: \"demo:opt/api\" as: o}\n\
+                     Import {pkg: \"demo:opt/api\" as: o}\n\
                     Export run\n\
                     Def run Fn {}\n\
                       Do [\n\

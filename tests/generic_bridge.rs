@@ -187,8 +187,7 @@ fn generic_bridge_lowers_enum_variant_flags_lists_options() {
 }
 
 /// Step 5 kinds — resource *handles* (`own`/`borrow`, and a bare resource-name
-/// reference) — flow through the *generic* bridge from parsed WIT, with no
-/// `is_resource_name` allowlist entry for the dep's resource. A handle is a
+/// reference) — flow through the *generic* bridge from parsed WIT. A handle is a
 /// single i32 flat (own and borrow lower/lift identically), carried in an int
 /// box so ordinary code can pass it around without inspecting it.
 ///
@@ -203,7 +202,7 @@ fn generic_bridge_passes_resource_handles_own_borrow() {
     // `open` mints an `own<widget>`; `tag` reads a `borrow<widget>`; `peek`
     // takes the resource *by bare name* (no `own`/`borrow` wrapper), which only
     // types as a handle if the boundary resolves `widget` as a resource through
-    // the generic path — i.e. with `is_resource_name` retired here.
+    // the generic path (from the dep's parsed WIT).
     let wit = "package acme:res@0.1.0;\n\
         interface api {\n  \
           resource widget;\n  \
@@ -231,26 +230,24 @@ fn generic_bridge_passes_resource_handles_own_borrow() {
 }
 
 /// Step 6 — resource *operations*: `[constructor]`, `[method]`, `[static]`, and
-/// the implicit `[resource-drop]` all lower through the *generic* bridge — the
-/// generic counterpart to the hand-coded `http_call` `match fname`.
+/// the implicit `[resource-drop]` all lower through the *generic* bridge.
 ///
-/// The synthetic `acme:wire` interface is shaped to exercise exactly the
-/// function-kinds (and handle / retptr signatures) the WASI-http magic uses:
+/// The synthetic `acme:wire` interface is shaped to exercise every resource
+/// function-kind, with the handle / retptr signatures real host interfaces use:
 ///
-/// | synthetic op                          | `http_call` counterpart                       |
-/// |---------------------------------------|-----------------------------------------------|
-/// | `[constructor]bag` (no self)          | `[constructor]fields` (`http/fields`)         |
-/// | `[constructor]packet(own<bag>)`       | `[constructor]outgoing-response`              |
-/// | `[method]packet.open(self)`           | `[method]outgoing-response.body` — retptr `result<own<T>>` |
-/// | `[method]packet.label(self)`          | `[method]incoming-request.path-with-query` — retptr `option<string>` |
-/// | `[method]packet.put(self, list<u8>)`  | `[method]outgoing-body.write` — method + list |
-/// | `[static]packet.deliver(result<…>)`   | `[static]response-outparam.set` — `result` arg |
-/// | `[static]packet.seal(own<packet>)`    | `[static]outgoing-body.finish` (`finish`)     |
-/// | `[resource-drop]packet`               | `[resource-drop]output-stream`                |
+/// | synthetic op                          | shape exercised                            |
+/// |---------------------------------------|--------------------------------------------|
+/// | `[constructor]bag` (no self)          | constructor, no args                       |
+/// | `[constructor]packet(own<bag>)`       | constructor taking an `own` handle         |
+/// | `[method]packet.open(self)`           | method, retptr `result<own<T>>`            |
+/// | `[method]packet.label(self)`          | method, retptr `option<string>`            |
+/// | `[method]packet.put(self, list<u8>)`  | method taking a list                       |
+/// | `[static]packet.deliver(result<…>)`   | static taking a `result` arg               |
+/// | `[static]packet.seal(own<packet>)`    | static taking an `own` handle              |
+/// | `[resource-drop]packet`               | the implicit resource drop                 |
 ///
 /// Each is reached from source by its **bare op name** (`wire/bag`, `wire/open`,
-/// `wire/deliver`, …) — exactly how the magic exposes `http/fields`,
-/// `http/body`, `http/set`. `[resource-drop]packet` is reached as `wire/packet`
+/// `wire/deliver`, …). `[resource-drop]packet` is reached as `wire/packet`
 /// (its op name is the resource name). Every op is called inside a body that
 /// returns a primitive, so the `bag`/`packet`/`box` resources never appear on
 /// the app's own exported WIT, and the whole component re-encodes/validates
@@ -321,8 +318,8 @@ fn generic_bridge_lowers_resource_methods_static_constructor_drop() {
 /// Step 7 — generic *export* of an arbitrary interface. A component exports a
 /// function into an external interface (`acme:greet/greeter`) named directly via
 /// the explicit `Export {iface: …}` form, with its WIT signature coming from the
-/// package vendored under `wit/deps` — no `is_command`/`is_http` branch, no
-/// compiler knowledge of `acme:greet`. The export wrapper lifts the incoming
+/// package vendored under `wit/deps` — no compiler knowledge of `acme:greet`.
+/// The export wrapper lifts the incoming
 /// params and lowers the result entirely off the parsed signature, and
 /// `wit-component` re-validates the exported interface against the real WIT.
 #[test]
@@ -356,7 +353,7 @@ fn generic_bridge_exports_arbitrary_interface() {
 
 /// Step 7 — the `wasi:cli/run` `() -> result` wrapper is just "export this
 /// function into `wasi:cli/run` with its WIT signature", reproduced through the
-/// *generic* export path with no `is_command` branch. The function returns a
+/// *generic* export path. The function returns a
 /// `result` value (`ok(0)`); the export wrapper lowers it to the canonical
 /// single-i32 `result` discriminant off the parsed `func() -> result` signature.
 /// A synthetic `acme:cli` package mirrors `wasi:cli/run`'s shape so the test

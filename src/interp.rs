@@ -270,8 +270,7 @@ impl Interp {
                 }
                 Step::Done(v)
             }
-            "package-MACRO" | "target-MACRO" | "import-MACRO" | "export-MACRO"
-            | "def-type-MACRO" => {
+            "package-MACRO" | "import-MACRO" | "export-MACRO" | "def-type-MACRO" => {
                 return err(format!(
                     "`{}` is only allowed at the top level of a file",
                     name.trim_end_matches("-MACRO")

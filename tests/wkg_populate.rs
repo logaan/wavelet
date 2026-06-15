@@ -54,10 +54,10 @@ fn http_fetch_world_is_host_only() {
     let _ = std::fs::remove_dir_all(proj.parent().unwrap());
 }
 
-/// The cli entry exports `wasi:cli/run` directly (Step 9 routes it through the
-/// generic export path rather than a `Target "wasi:cli/command"` translation),
-/// so the fetch world references that concrete interface — which makes `wkg`
-/// pull the whole `wasi:cli` package — and drops the sibling greeting import.
+/// The cli entry exports `wasi:cli/run` directly through the generic export
+/// path, so the fetch world references that concrete interface — which makes
+/// `wkg` pull the whole `wasi:cli` package — and drops the sibling greeting
+/// import.
 #[test]
 fn cli_fetch_world_references_wasi_cli_run() {
     let proj = scratch("cli-synth").join("widgets");

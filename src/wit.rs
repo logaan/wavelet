@@ -10,7 +10,6 @@ pub struct FileInfo {
     pub package_path: String,
     /// world name, e.g. `shout`
     pub world: String,
-    pub target: Option<String>,
     pub imports: Vec<ImportInfo>,
     pub exports: Vec<FuncSig>,
     pub types: Vec<(String, NodeId)>,
@@ -51,7 +50,6 @@ impl FuncSig {
 
 pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     let mut package = None;
-    let mut target = None;
     let mut imports = Vec::new();
     let mut export_decls: Vec<(String, Option<FuncSig>)> = Vec::new();
     let mut types = Vec::new();
@@ -71,11 +69,6 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
             "package-MACRO" => {
                 if let Node::Str(s) = arena.node(*payload) {
                     package = Some(s.clone());
-                }
-            }
-            "target-MACRO" => {
-                if let Node::Str(s) = arena.node(*payload) {
-                    target = Some(s.clone());
                 }
             }
             "import-MACRO" => {
@@ -182,7 +175,6 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
         package,
         package_path,
         world,
-        target,
         imports,
         exports,
         types,
@@ -321,8 +313,7 @@ pub fn synthesize_fetch_world(arena: &Arena, roots: &[NodeId]) -> Result<String,
 /// Whether a file's synthesized world references any host (`wasi:*`) package,
 /// i.e. whether it has anything for `wkg wit fetch` to pull into `wit/deps`.
 pub fn has_host_deps(info: &FileInfo) -> bool {
-    info.target.is_some()
-        || info.imports.iter().any(|i| i.package.starts_with("wasi:"))
+    info.imports.iter().any(|i| i.package.starts_with("wasi:"))
         || iface_order(&info.exports, !info.types.is_empty())
             .iter()
             .any(|i| is_external_iface(i))
@@ -342,7 +333,6 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
             }
         }
     };
-    let is_http = info.target.as_deref() == Some("wasi:http/proxy");
     let ifaces = iface_order(&info.exports, !info.types.is_empty());
     // External interfaces (e.g. wasi:http/incoming-handler) are defined by the
     // host's WIT; we only export them by name, never re-declare them.
@@ -362,24 +352,6 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
     }
 
     out.push_str(&format!("\nworld {} {{\n", info.world));
-    // wasi:http/proxy is realized by exporting the handler interface, not by
-    // including the proxy world (which would pull in the whole proxy closure).
-    if let Some(t) = &info.target {
-        if host_only {
-            // `wkg wit fetch` can't merge a world that `include`s a world whose
-            // package it hasn't fetched yet (chicken-and-egg). Referencing one
-            // concrete interface of the target package instead makes `wkg` pull
-            // the whole package (and its transitive deps) into `wit/deps`. The
-            // `wasi:cli/command` world's natural concrete reference is its
-            // `wasi:cli/run` export. (This target translation is Step-2 glue
-            // that retires with `Target` itself — see decouple-wasi-todo.md.)
-            if t == "wasi:cli/command" {
-                out.push_str("  export wasi:cli/run@0.2.0;\n");
-            }
-        } else if !is_http {
-            out.push_str(&format!("  include {t};\n"));
-        }
-    }
     for imp in &info.imports {
         // Host (wasi:*) imports name an external, versioned interface; a
         // build-set dependency is imported by its bare path.
@@ -388,9 +360,6 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
         } else if !host_only {
             out.push_str(&format!("  import {};\n", imp.path));
         }
-    }
-    if is_http {
-        out.push_str("  import wasi:io/streams@0.2.0;\n");
     }
     for iface in &ifaces {
         if is_external_iface(iface) {
