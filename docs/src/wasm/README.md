@@ -121,7 +121,7 @@ scripts/coverage.sh --lcov   # write target/coverage/lcov.info (CI / editor gutt
 
 ```
 wavelet new <name> [--type=cli|http]                 # scaffold a new project (cli is the default)
-wavelet read <file.wvl>                              # parse and print the canonical WAVE form tree
+wavelet read [file.wvl]                              # parse and print the canonical WAVE form tree (reads stdin if no file)
 wavelet expand <file.wvl>                            # run macros to fixpoint and print the result
 wavelet wit <file.wvl>                               # show the synthesized WIT world
 wavelet repl                                         # interactive read-eval-print loop

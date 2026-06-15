@@ -46,13 +46,15 @@ fn want_list(v: Value, name: &str) -> R<Vec<Value>> {
     }
 }
 
-/// Like [`want_list`] but also accepts a tuple. Used where the value is the
-/// bundled call payload (≥2 args bundle to a `Tup`, a single list arg stays a
-/// `Lst`), e.g. `str-cat(a b)` and `str-cat([a b])` are both valid.
-fn want_seq(v: Value, name: &str) -> R<Vec<Value>> {
+/// The parts of a `str-cat`/sequence-style call, read from the bundled payload:
+/// ≥2 args bundle to a `Tup`, a single list arg stays a `Lst`, and a single
+/// scalar arg is one part on its own — so `str-cat(a b)`, `str-cat([a b])`, and
+/// `str-cat(x)` are all valid (matching the wasm backend, where each argument is
+/// one part).
+fn payload_parts(v: Value) -> Vec<Value> {
     match v {
-        Value::Lst(items) | Value::Tup(items) => Ok(items),
-        other => err(format!("`{name}` expects a list, got {}", print_value(&other))),
+        Value::Lst(items) | Value::Tup(items) => items,
+        other => vec![other],
     }
 }
 
@@ -272,7 +274,7 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             Ok(acc)
         }
         "str-cat" => {
-            let parts = want_seq(arg, name)?;
+            let parts = payload_parts(arg);
             let mut out = String::new();
             for p in parts {
                 match p {
