@@ -5,4 +5,4 @@ Import {pkg: "demo:shout/api" as: sh}
 
 Export run
 Def run Fn {}
-  Do [str-cat[sh/shout{phrase: "hello"}]]
+  Do [str-cat(sh/shout({phrase: "hello"}))]

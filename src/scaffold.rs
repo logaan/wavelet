@@ -223,7 +223,7 @@ Package \"{slug}:greeting@0.1.0\"
 /// A friendly greeting for `name`.
 Export greet
 Def greet Fn {{name: string}}
-  str-cat[\"Hello, \" name \"!\"]
+  str-cat(\"Hello, \" name \"!\")
 "
     )
 }
@@ -253,18 +253,18 @@ Import {{pkg: \"wasi:io/streams@0.2.0\" as: streams}}
 // includes the program name as `argv[0]`, so the user's first word is `argv[1]`.
 Def who Fn {{}}
   Let {{a: env/get-arguments()}}
-    If gt[len(a) 1] head(tail(a)) \"world\"
+    If gt(len(a) 1) head(tail(a)) \"world\"
 
 // Write a line to stdout, then drop the stream (a child resource that must be
 // released). A Wavelet string lowers to the `list<u8>` the stream expects.
 Def say Fn {{line: string}}
   Let {{out: stdout/get-stdout()}}
-    Do [streams/blocking-write-and-flush[out line]
+    Do [streams/blocking-write-and-flush(out line)
         streams/drop-output-stream(out)]
 
 Export {{iface: \"wasi:cli/run\" name: run result: result}}
 Def run Fn {{}}
-  Do [say(str-cat[greeting/greet(who()) \"\\n\"])
+  Do [say(str-cat(greeting/greet(who()) \"\\n\"))
       ok(0)]
 "
     )
@@ -359,12 +359,12 @@ Def path-of Fn {{request: incoming-request}}
 
 // The HTML page: a greeting from the domain component, plus the request path.
 Def page Fn {{path: string}}
-  str-cat[
+  str-cat(
     \"<!doctype html>\\n\"
     \"<title>{slug}</title>\\n\"
     \"<h1>\" greeting/greet(\"world\") \"</h1>\\n\"
     \"<p>You requested: \" path \"</p>\\n\"
-  ]
+  )
 
 // Write the page bytes into a body's stream, then drop the stream (a child
 // resource that must be released before the body is finished). Resource ops are
@@ -372,7 +372,7 @@ Def page Fn {{path: string}}
 Def write-page Fn {{body: outgoing-body, html: string}}
   Match http/outgoing-body-write(body)
     [(ok(stream)
-       Do [streams/blocking-write-and-flush[stream html]
+       Do [streams/blocking-write-and-flush(stream html)
            streams/drop-output-stream(stream)])
      (err(e)  0)]
 
@@ -385,9 +385,9 @@ Def handle Fn {{request: incoming-request, response-out: response-outparam}}
   Let {{response: http/outgoing-response(http/fields())}}
     Match http/outgoing-response-body(response)
       [(ok(body)
-         Do [http/response-outparam-set[response-out ok(response)]
-             write-page[body page(path-of(request))]
-             http/outgoing-body-finish[body none]])
+         Do [http/response-outparam-set(response-out ok(response))
+             write-page(body page(path-of(request)))
+             http/outgoing-body-finish(body none)])
        (err(e)  0)]
 "
     )
