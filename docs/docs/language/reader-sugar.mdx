@@ -1,0 +1,224 @@
+---
+sidebar_position: 2
+title: Reader sugar
+description: Every reader-sugar form, enumerated — what you write and the canonical WAVE value it desugars to.
+---
+
+# Reader sugar
+
+Wavelet's tokens *are* [WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave)'s tokens, and the reader is where all sugar dies: every surface form desugars to a canonical WAVE value before anything is evaluated. This page enumerates each reader-sugar form, one per section, with the canonical value it produces.
+
+You can confirm any of these yourself with `wavelet read`, which prints the canonical WAVE tree for a piece of source:
+
+```console
+$ echo 'f(x y)' | wavelet read /dev/stdin
+f((x, y))
+```
+
+Because every form below collapses to a plain WAVE value, Wavelet source is a *superset* of WAVE text, and the canonical printer always emits strict WAVE (with commas) — so anything Wavelet reads can be handed back to any WAVE tooling.
+
+## 1. Commas and newlines are whitespace
+
+As in Clojure, commas are whitespace, and so are newlines. These all read identically:
+
+```wavelet
+[1 2 3]
+[1, 2, 3]
+[1,
+ 2,
+ 3]
+```
+
+```console
+$ echo '[1 2 3]' | wavelet read /dev/stdin
+[1, 2, 3]
+```
+
+This is the one piece of sugar that makes Wavelet a superset of WAVE rather than a different language: drop the commas and a WAVE value is already Wavelet.
+
+<Playground id="syntax-commas" />
+
+## 2. Grouping parentheses
+
+Parentheses around a *single* form are transparent — they group for readability and then disappear:
+
+| You write | Canonical WAVE form |
+|---|---|
+| `(a)` | `a` |
+
+```console
+$ echo '(a)' | wavelet read /dev/stdin
+a
+```
+
+A single-element parenthesised form is **not** a one-tuple; it is just the form inside. (Tuples need two or more elements — see below.)
+
+## 3. Tuples
+
+Two or more whitespace-separated forms inside parentheses are a tuple:
+
+| You write | Canonical WAVE form |
+|---|---|
+| `(a b)` | `(a, b)` |
+
+```console
+$ echo '(a b)' | wavelet read /dev/stdin
+(a, b)
+```
+
+The only sugar here is the optional commas (form 1); `(a, b)` is already canonical WAVE.
+
+## 4. Lists
+
+Whitespace-separated forms inside square brackets are a `list`:
+
+| You write | Canonical WAVE form |
+|---|---|
+| `[a b]` | `[a, b]` |
+
+```console
+$ echo '[a b]' | wavelet read /dev/stdin
+[a, b]
+```
+
+## 5. Records
+
+Colon-separated `field: value` pairs inside braces are a `record`:
+
+| You write | Canonical WAVE form |
+|---|---|
+| `{k: v}` | `{k: v}` |
+
+```console
+$ echo '{a: 1 b: 2}' | wavelet read /dev/stdin
+{a: 1, b: 2}
+```
+
+## 6. Flag sets
+
+Bare names (no colons) inside braces are a `flags` value — a set of enabled flags:
+
+| You write | Canonical WAVE form |
+|---|---|
+| `{read write}` | `{read, write}` |
+
+```console
+$ echo '{read write}' | wavelet read /dev/stdin
+{read, write}
+```
+
+The brace shape is disambiguated by its contents: `field: value` pairs make a record (form 5), bare names make flags.
+
+## 7. Bare identifiers are variable references
+
+A bare, payload-less identifier reads as a variable reference — as data, it is a variant case with no payload:
+
+| You write | Canonical WAVE form | Meaning |
+|---|---|---|
+| `foo` | `foo` | variable reference — a payload-less case |
+
+```console
+$ echo 'foo' | wavelet read /dev/stdin
+foo
+```
+
+Atoms — `true`, `42`, `-1.5`, `'x'`, `"hi"` — carry no sugar at all: they read unchanged and are self-evaluating.
+
+## 8. The attachment rule (call forms)
+
+Wavelet has exactly **one** whitespace-sensitive rule. A `(`, `[`, or `{` that *immediately* follows an identifier — with no intervening whitespace — supplies that identifier's payload. This is a call form. With whitespace in between, the bracketed expression is a separate, free-standing value:
+
+```wavelet
+delete-file{path: "foo.md" force: true}   // a call: payload is a record
+delete-file {path: "foo.md" force: true}  // two forms: a variable, then a record
+```
+
+The bracket you attach chooses the payload shape:
+
+| You write | Canonical WAVE form | Meaning |
+|---|---|---|
+| `f(x)` | `f(x)` | call with a single payload value |
+| `f(x y)` | `f((x, y))` | call with a tuple payload — positional arguments |
+| `f[x y]` | `f([x, y])` | call with a list payload — positional arguments |
+| `f{a: 1 b: 2}` | `f({a: 1, b: 2})` | call with a record payload — named arguments |
+| `f()` or `f[]` | `f([])` | call with zero arguments |
+
+```console
+$ echo 'f(x y)' | wavelet read /dev/stdin
+f((x, y))
+$ echo 'f{a: 1 b: 2}' | wavelet read /dev/stdin
+f({a: 1, b: 2})
+```
+
+A call form is, as data, a variant case: `log("hi")` is the WAVE case `log` carrying a string; `delete-file{...}` is the case `delete-file` carrying a record. Evaluation gives these case-shaped values their meaning; under `Quote`, they are just data.
+
+<Playground id="syntax-quote-call" />
+
+## 9. Qualified calls
+
+A `/` between two names is a qualified reference: the name after the slash, taken from the import aliased by the name before it. It attaches a payload exactly like an ordinary call:
+
+| You write | Canonical WAVE form | Meaning |
+|---|---|---|
+| `kv/get{...}` | `kv/get({...})` | name `get` from the import aliased `kv` |
+
+```console
+$ echo 'kv/get{bucket: b}' | wavelet read /dev/stdin
+kv/get({bucket: b})
+```
+
+## 10. Doc comments
+
+`//` runs to the end of the line and is discarded. A *doc* comment — `///` — is sugar: instead of being thrown away, its text attaches to the following form as metadata, surfaced in `wavelet wit` output.
+
+```wavelet
+/// Delete a file from the working directory.
+Def delete-file Fn {path: string} ...
+```
+
+Plain `//` comments leave no trace in the read tree; `///` doc comments ride along on the form they precede.
+
+## 11. TitleCase macro sugar
+
+A **TitleCase** identifier — mixed-case words, each starting with a capital (`If`, `DefMacro`, `TryLet`) — is reader sugar for a macro call. This can't collide with ordinary identifiers: WIT words are all-lower or all-UPPER, so TitleCase tokens are syntactically free. The token kebab-izes and gains a `-MACRO` suffix: `If` ↦ `if-MACRO`, `DefMacro` ↦ `def-macro-MACRO`.
+
+A TitleCase head does **not** require parentheses. The reader looks up the macro's declared **arity** and consumes exactly that many following forms, collecting them into a tuple payload:
+
+```wavelet
+If eq[foo bar] log("match") log("nope")
+```
+
+```console
+$ echo 'If eq[foo bar] log("match") log("nope")' | wavelet read /dev/stdin
+if-MACRO((eq([foo, bar]), log("match"), log("nope")))
+```
+
+Three consequences:
+
+1. **Define before use.** A macro must be in scope before it's read — a core form, defined earlier in the file, or imported. The reader processes a file top to bottom and always knows every visible macro's arity.
+2. **Explicit payload overrides arity reading.** `Unquote(x)` and `If(c t e)` attach their payload directly. The fully explicit `if-MACRO((c, t, e))` is always available too, and is what macros emit.
+3. **Nesting needs no delimiters** when the last argument is itself a macro: `Def run Fn {} If c a b` reads exactly as intended, since each TitleCase head consumes its own arity recursively.
+
+Variadic macros take a single list argument — arity stays fixed, the list flexes (`Do [a b c]`).
+
+<Playground id="syntax-if-arity" />
+
+## At a glance
+
+Every reader-sugar form, in one table:
+
+| # | You write | Canonical WAVE form |
+|---|---|---|
+| 1 | `[1 2 3]` | `[1, 2, 3]` — commas/newlines are whitespace |
+| 2 | `(a)` | `a` — grouping, transparent |
+| 3 | `(a b)` | `(a, b)` — tuple |
+| 4 | `[a b]` | `[a, b]` — list |
+| 5 | `{k: v}` | `{k: v}` — record |
+| 6 | `{read write}` | `{read, write}` — flags |
+| 7 | `foo` | `foo` — variable reference (payload-less case) |
+| 8 | `f(x y)` | `f((x, y))` — call, attachment rule |
+| 9 | `kv/get{...}` | `kv/get({...})` — qualified call |
+| 10 | `/// text` | metadata on the following form |
+| 11 | `If c t e` | `if-MACRO((c, t, e))` — TitleCase macro |
+
+The [Syntax & reading](./syntax) page covers the same ground as prose, and [`wavelet read`](../cli#read) prints the canonical tree for any source so you can check the desugaring for yourself.
