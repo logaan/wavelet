@@ -975,7 +975,7 @@ Step 11.
 
 ## Step 10 — Remove the WASI builtins and migrate examples
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Remove `print`/`println`/`args`/`read-line`/`env` from the language
 (`src/builtins.rs:18`, `:343`+ and the interpreter). Output/args now go through
@@ -991,7 +991,104 @@ bridge.
 **Done when.** `cargo test` and `./scripts/regen-examples.sh` both green; no
 references to the removed builtins remain.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **The five builtins are gone from the language.** Removed from
+  `builtins.rs` `NAMES` + the `call()` match arms (`print`/`println` →
+  `emit_output`, `read-line` → stdin, `args` → `prog_args`, `env` →
+  `std::env::vars`). The interpreter's `Interp.prog_args` field went with them:
+  `Interp::new()` now takes no args (added a `Default` impl); `runner::run_files`
+  dropped its `prog_args` param; `main.rs::run_cmd` still *accepts* the `run --
+  …` separator but ignores everything after it. `rg '\bprintln\b|\bprint\b|
+  \bread-line\b|\bargs\b|\benv\b'` over `src/`/templates/`docs/examples.json`
+  finds only Rust (`std::env::args`, `printer::print`, `println!`) — no
+  Wavelet-level uses.
+
+- **emit.rs magic helpers removed (builtin-specific only).** Gone:
+  `Features.needs_stdout`/`needs_env` (+ the print/println/args branches in
+  `scan`), the `print`/`println`/`args` body-codegen arms, the helper struct
+  fields `print_str`/`println_h`/`get_args` and their index assignment + helper
+  bodies, the magic `wasi:cli/stdout#get-stdout` /
+  `wasi:io/streams#blocking-write-and-flush` / `wasi:cli/environment#get-arguments`
+  imports, and the two world-import lines they drove. `emit_helpers` and
+  `synthesize_world_wit` lost their now-unused `feats` parameter.
+
+- **LEFT FOR STEP 11 (entangled with the broader magic, per the "if shared,
+  leave it" rule):**
+  - `WASI_PACKAGES` (the trimmed vendored cli/io WIT blob) and its append site:
+    now gated on **`is_command` alone** (was `needs_stdout || needs_env ||
+    is_command`). Still reached only by the `Target "wasi:cli/command"` magic
+    path, which Step 11 deletes along with `is_command`/`Target`.
+  - `is_command`, `is_http`, `http_call`/`http_imports`, `is_resource_name`,
+    `is_external_package`, `WASI_HTTP_WIT`, and the `Emitter.nl_addr` field
+    (interned `"\n"`, now read by nothing after println_h's removal — left it
+    set to avoid touching the magic; trivially deletable in Step 11).
+  - The "WASI_PACKAGES vs wit/deps collision" dedup logic in
+    `synthesize_world_wit` (Step 9 note) stays; it only matters for the
+    `is_command` magic path now.
+
+- **New: `tail` in the wasm backend.** The cli template needs `argv[1]`
+  (`get-arguments` includes the program name as `argv[0]`), and the backend had
+  no list op past `head`. Added a `tail_h` helper body + a `tail` codegen arm +
+  `tail` to the `BUILTINS` allowlist (and removed `print`/`println`/`args` from
+  that list). `tail` was already an interpreter builtin; this just lets compiled
+  code use it. Also taught `wit::infer` that `drop`/`cell-set` infer to unit
+  (it used to special-case `print`/`println` → unit; those are gone).
+
+- **cli template migrated (`src/scaffold.rs::main_wvl`).** Now imports
+  `wasi:cli/stdout`, `wasi:cli/environment`, and `wasi:io/streams` and drives
+  output + argument reading through the generic bridge, exactly like the http
+  template: `who` reads `env/get-arguments()` (greets `argv[1]`, else "world"),
+  `say` does `stdout/get-stdout()` → `streams/blocking-write-and-flush` →
+  `streams/drop-output-stream` (a Wavelet string lowers to the `list<u8>` the
+  stream wants), and `run` returns `ok(0)`. **Verified end-to-end** (release
+  binary, `wkg`/`wac`/`wasmtime`): `wavelet new greeter --type=cli`; `wavelet
+  build`; `wavelet compose`; `wasmtime run out/app.wasm` → `Hello, world!`,
+  `… Ada` → `Hello, Ada!`, `… Grace` → `Hello, Grace!`. `wavelet wit
+  src/main.wvl` shows the four imports + `export wasi:cli/run@0.2.0;`, no magic.
+
+- **Build ordering gotcha (the one real surprise).** The cli template now needs
+  its host WIT in `wit/deps` **before emit** (the imports must resolve to a
+  `Dep` so the generic bridge lowers them; otherwise routing falls through to
+  the magic-http `http_imports` table → `"env/get-arguments is not a supported
+  wasi:http operation"`). `build_files` still fetches *after* emit (Step 2's
+  behind-the-scenes design), so a from-scratch `build_files` on an unfetched
+  project fails for cli — exactly as it already did for http. The real flow is
+  fine because `wavelet new` fetches first (`main.rs::new_cmd` →
+  `populate_project_wit`). The gated cli live-build test
+  (`tests/wkg_populate.rs::build_populates_wit_deps_and_lock`) was updated to
+  call `populate_project_wit` before `build_files`, mirroring the http test.
+  **If Step 12 reworks `wavelet build` to be one-shot, it must fetch host WIT
+  before emit for the cli/http templates to build from a clean checkout.**
+
+- **lib.rs magic-CLI smoke tests migrated.** The `Target "wasi:cli/command"`
+  emit/wit tests (closures/records/variants/match/value-defs/cross-boundary)
+  used `println`/`args` to exercise codegen; rewritten to return values
+  directly (inference can't see through dep calls, so a few needed a `str-cat`/
+  `to-string` wrapper to keep `run`'s result inferable). `examples/main.wvl`
+  (used by `emit_components_for_spec_demo`) likewise dropped `args`/`println`.
+
+- **Examples regenerated.** `gs-hello` and `sf-do` became pure value examples;
+  `std-io-print`/`std-args` were **removed** (no interpreter output path
+  exists now). `docs/docs/stdlib.mdx`'s "Input / output" section was replaced
+  with a short note that I/O goes through imported WASI interfaces (the cli
+  template), not builtins. `docs/examples.json` + the committed
+  `docs/src/wasm/*` artifact regenerated via `./scripts/regen-examples.sh`
+  (this also refreshed `wavelet_bg.wasm`, the wasm-pack `README.md`, and
+  `package.json`).
+
+- **STILL STALE — Step 13's job, NOT done here.** The static `wavelet` code
+  blocks in `docs/docs/{intro,getting-started,components}.mdx` and the
+  illustrative `print(...)` variant-case examples in
+  `docs/docs/language/syntax.mdx` still *show* `println`/`args` in prose. They
+  are not runnable `<Playground>`s, so they don't break `cargo test` /
+  `regen-examples`, and Step 13 ("Docs prose & layout") owns rewriting them —
+  left them deliberately to avoid clobbering its scope. The LSP (Step 15) still
+  offers the removed builtins in completion; that's its step.
+
+- **Verification:** `cargo test` green (49 lib + 8 generic_bridge + http +
+  wit_deps + wkg_populate + examples); `./scripts/regen-examples.sh` green; cli
+  template build-and-run transcript above.
 
 ---
 
