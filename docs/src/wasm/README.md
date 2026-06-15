@@ -38,27 +38,25 @@ Def shout Fn {phrase: string}
 ```rust
 // main.wvl — compiles to demo:main.wasm
 Package "demo:main@0.1.0"
-Target "wasi:cli/command"
 
 Import {pkg: "demo:shout/api" as: sh}
 
-Export run
-Def run Fn {}
-  If eq[len(args[]) 0]
-     println("usage: main <word>")
-     println(sh/shout{phrase: head(args[])})
+Export greet
+Def greet Fn {phrase: string}
+  sh/shout{phrase: phrase}
 ```
 
 ```bash
 $ wavelet build examples/shout.wvl examples/main.wvl
 $ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
-$ wasmtime app.wasm wasm
-WASM!
 ```
 
 Each file declares its own package, becomes its own component, and the composer
 wires `main`'s import of `demo:shout/api` to `shout`'s export. Swapping in a Rust
 implementation of `demo:shout/api` would require changing nothing in `main.wvl`.
+A component that wants stdout, args, or to handle HTTP imports the relevant WASI
+interface (e.g. `wasi:cli/stdout`) and calls it like any other dependency — see
+the `wavelet new --type=cli` / `--type=http` templates.
 
 ## Installing
 
