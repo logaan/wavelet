@@ -7,6 +7,7 @@ fn main() -> ExitCode {
             println!("wavelet {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        [cmd] if cmd == "read" => read_stdin_cmd(),
         [cmd, path] if cmd == "read" => read_cmd(path),
         [cmd, path] if cmd == "expand" => expand_cmd(path),
         [cmd] if cmd == "repl" => match wavelet::repl::repl() {
@@ -22,7 +23,7 @@ fn main() -> ExitCode {
         [cmd, rest @ ..] if cmd == "build" && !rest.is_empty() => build_cmd(rest),
         [cmd, rest @ ..] if cmd == "compose" && !rest.is_empty() => compose_cmd(rest),
         _ => {
-            eprintln!("usage: wavelet read <file.wvl>");
+            eprintln!("usage: wavelet read [file.wvl]");
             eprintln!("       wavelet expand <file.wvl>");
             eprintln!("       wavelet repl");
             eprintln!("       wavelet wit <file.wvl>");
@@ -235,7 +236,21 @@ fn read_cmd(path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match wavelet::read_file(&src) {
+    read_source(&src, path)
+}
+
+fn read_stdin_cmd() -> ExitCode {
+    use std::io::Read;
+    let mut src = String::new();
+    if let Err(e) = std::io::stdin().read_to_string(&mut src) {
+        eprintln!("error: cannot read <stdin>: {e}");
+        return ExitCode::FAILURE;
+    }
+    read_source(&src, "<stdin>")
+}
+
+fn read_source(src: &str, label: &str) -> ExitCode {
+    match wavelet::read_file(src) {
         Ok((arena, roots)) => {
             for root in roots {
                 println!("{}", wavelet::print(&arena, root));
@@ -243,7 +258,7 @@ fn read_cmd(path: &str) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("{path}: {e}");
+            eprintln!("{label}: {e}");
             ExitCode::FAILURE
         }
     }

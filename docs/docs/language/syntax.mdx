@@ -54,7 +54,7 @@ Function calls are **variant cases**. `log("hi")` is, as data, the WAVE variant 
 You can see the desugaring directly with `wavelet read`, which prints the canonical WAVE tree:
 
 ```console
-$ echo 'f(x y)' | wavelet read /dev/stdin
+$ echo 'f(x y)' | wavelet read
 f((x, y))
 ```
 
