@@ -30,9 +30,12 @@ imports across the component boundary, build/run scripts, and a short README.
 
 ### `--type=cli` (default)
 
-A [`wasi:cli/command`](./language/special-forms#target) program: `src/main.wvl`
-exports `run` and greets its first argument, delegating the wording to the pure
-`greet` function in `src/greeting.wvl`.
+A command-line program: `src/main.wvl` adopts the CLI world by exporting
+[`wasi:cli/run`](./language/special-forms#export) and greets its first argument,
+delegating the wording to the pure `greet` function in `src/greeting.wvl`. Its
+output and argument reading go through imported WASI interfaces
+(`wasi:cli/stdout`, `wasi:io/streams`, `wasi:cli/environment`), whose WIT is
+fetched into `wit/` by `wkg`.
 
 ```console
 $ wavelet new my-app
@@ -49,9 +52,11 @@ $ scripts/run.sh Ada          # build, then run with wasmtime
 Hello, Ada!
 ```
 
-`scripts/build.sh` compiles `src/*.wvl` into a git-ignored `out/` and links them
-into `out/app.wasm`; `scripts/run.sh` does that and then runs it with `wasmtime`,
-passing through any extra arguments.
+`new` also runs `wkg wit fetch` to populate the project's `wit/deps/` with the
+dependency WIT and write a `wkg.lock`, so a fresh project has its WASI
+dependencies pinned. `scripts/build.sh` compiles `src/*.wvl` into a git-ignored
+`out/` and composes them into `out/app.wasm`; `scripts/run.sh` does that and then
+runs it with `wasmtime`, passing through any extra arguments.
 
 ### `--type=http`
 
@@ -60,10 +65,10 @@ A web app whose front end, `src/app.wvl`, implements the
 interface and renders a stateless HTML page: it greets via `src/greeting.wvl`
 (the pure `greet` function, imported across the component boundary) and echoes
 the request path. `scripts/serve.sh` serves the component with `wasmtime serve`.
-Targeting `wasi:http/proxy` needs no special language support — the front end
-implements the interface the same way any component implements any WIT
-interface, using the `http/*` intrinsics to drive the wasi:http response
-pipeline.
+The front end needs no special language support — it imports `wasi:http/types`
+and `wasi:io/streams` (their WIT fetched into `wit/` by `wkg`) and drives the
+response pipeline with ordinary calls into those interfaces, the same way any
+component implements any WIT interface.
 
 ## `read`
 
@@ -121,36 +126,33 @@ The [in-browser playgrounds](./intro.mdx#try-it) throughout these docs are this 
 
 ## `run`
 
-Interpret a set of files together — **no code generation**. Resolves `Import`s by package id, honours `Export`/`as:`/`open:`, and calls the entry file's exported `run`. The fastest way to try a program.
+Interpret a set of files together — **no code generation**. Resolves `Import`s by package id, honours `Export`/`as:`/`open:`, and calls the entry file's exported `run`. The fastest way to exercise a program's logic.
 
 ```console
-$ wavelet run main.wvl shout.wvl -- wasm
-WASM!
+$ wavelet run main.wvl shout.wvl
 ```
 
-Everything after `--` is passed to the program as its arguments (available via [`args`](./stdlib#input--output)). The first file listed is the entry component.
+The interpreter evaluates **pure** programs: it has no host interfaces, so a `run` that calls into `wasi:*` only works in a built component on a wasm runtime. Use `run` to validate cross-component logic; build the component for anything that touches the world. The first file listed is the entry component. (Anything after `--` is still accepted and ignored, for compatibility with the build flow.)
 
 ## `build`
 
-Compile **each** file to a real `.wasm` component: core wasm (linear-memory value boxes, `return_call` tail calls) wrapped with canonical-ABI lift/lower and componentized via `wasm-tools`. Output goes to `out/` by default, or `-o <dir>`.
+Compile each file to a real `.wasm` component — core wasm (linear-memory value boxes, `return_call` tail calls) wrapped with canonical-ABI lift/lower and componentized via `wasm-tools` — **and compose them into a single `out/app.wasm`**. Each cross-component import is wired to the sibling that exports it via a generated `out/app.wac` run through `wac`; host imports (`wasi:*`) are left unsatisfied for the runtime. Output goes to `out/` by default, or `-o <dir>`.
 
 ```console
-$ wavelet build shout.wvl main.wvl
-out/demo-shout.wasm
-out/demo-main.wasm
-
-$ wavelet build *.wvl -o dist
+$ wavelet build src/*.wvl -o out
+built out/app.wasm
+$ wasmtime run out/app.wasm
 ```
+
+The individual `out/<package>.wasm` components are left alongside `app.wasm`. Dependency WIT must already be present in `wit/deps/` (run `wavelet new`, or `wkg wit fetch`, first).
 
 ## `compose`
 
-Link components by **auto-plugging**: each unresolved import is matched by package id (and version compatibility) against the exports of the other components on the command line, in the spirit of `wac plug`. The first argument is the entry component. Output is `app.wasm` by default, or `-o <file>`.
+Compose hand-picked components by **auto-plugging**: each unresolved import is matched by package id (and version compatibility) against the exports of the other components on the command line, in the spirit of `wac plug`. `wavelet build` does this for you; `compose` is the manual alternative. The first argument is the entry component. Output is `app.wasm` by default, or `-o <file>`.
 
 ```console
 $ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
 app.wasm
-$ wasmtime app.wasm wasm
-WASM!
 ```
 
 Because this drives standard `wasm-tools` / WAC machinery, the result participates in any component ecosystem workflow.
