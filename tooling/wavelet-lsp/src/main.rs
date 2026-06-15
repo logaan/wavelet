@@ -86,8 +86,15 @@ fn main_loop(connection: Connection) -> LspResult<()> {
                     "textDocument/completion" => {
                         let params: CompletionParams = serde_json::from_value(req.params)?;
                         let uri = params.text_document_position.text_document.uri;
+                        // A `file://` URI gives a filesystem path, which the
+                        // analysis uses to locate `wit/deps`; other schemes
+                        // (untitled buffers) yield `None` and skip that step.
+                        let path = uri.to_file_path().ok();
                         let result = docs.get(&uri).map(|(text, _)| {
-                            CompletionResponse::Array(analysis::completions(text))
+                            CompletionResponse::Array(analysis::completions(
+                                text,
+                                path.as_deref(),
+                            ))
                         });
                         ok_response(req.id, result)?
                     }

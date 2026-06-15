@@ -1522,7 +1522,7 @@ is bumped; `cargo test` green.
 
 ## Step 15 — LSP
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Update the LSP (`tooling/`) so import resolution learns about external
 WIT packages under `wit/deps`, and diagnostics/completion stop offering the
@@ -1531,7 +1531,71 @@ removed builtins.
 **Done when.** The LSP no longer surfaces the removed builtins and resolves
 `wit/deps` imports; `cargo test` green.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **All edits are in `tooling/wavelet-lsp/` (a plain in-repo crate, *not* a
+  submodule)** — ordinary edit + commit here, no push-to-other-repo dance.
+- **Removed builtins/`Target` are gone from the offered data.**
+  `tooling/wavelet-lsp/src/analysis.rs`:
+  - Dropped the `("Target", …)` entry from the `SPECIAL_FORMS` completion/hover
+    table (Step 11 removed `Target` from the language).
+  - Deleted the dead `builtin_doc` match arms for `print`/`println`/`read-line`/
+    `args`/`env`. These were already gone from `wavelet::builtins::NAMES` (Step
+    10), so the *completion list* (driven by `NAMES`) already didn't offer them
+    — the arms were just unreachable docs. The completion/hover surface now mirrors
+    the current `NAMES` exactly.
+  - **`builtin_doc` is best-effort, not exhaustive**: newer builtins (`to-u8`…
+    `to-f64`, `form-kind`, `rec-key`, `rec-val`) fall through to the generic
+    `"Builtin function."` blurb. They still *complete* (they're in `NAMES`); only
+    the custom one-liner is missing. Out of this step's scope — add blurbs if a
+    later polish step wants them.
+  - **Diagnostics needed no change**: `diagnostics()` only surfaces reader errors
+    (`wavelet::read_file`); it never enumerated builtins or `Target`, so there was
+    nothing to remove there.
+- **Import resolution now reads `wit/deps`.** New `imported_completions` +
+  `wit_deps_dir` helpers in `analysis.rs`. On completion, the file's `Import`
+  forms are collected via `wavelet::wit::collect`, and each import's package is
+  resolved with **`wavelet::witdep::resolve_dep`** — the *same* resolver the
+  compiler uses (`src/witdep.rs`), so the LSP and the build agree on what exists.
+  Each resolved dep's functions are offered as `alias/func-name` (e.g.
+  `greeting/greet`), the way source calls a dep function, with the function's WIT
+  signature as the doc.
+  - **`wit/deps` location**: derived from the document path as
+    `<src-parent>/wit/deps`, mirroring `build.rs::wit_deps_dir` (sources live in
+    `src/`, `wit/` is a sibling).
+  - **Path plumbing**: `completions(text, path: Option<&Path>)` gained the path
+    arg; `main.rs` passes `uri.to_file_path().ok()` (so `file://` docs get
+    resolution, untitled buffers get `None` and just skip it). Resolution is
+    best-effort: no path, no `wit/deps`, package absent, or a parse failure all
+    yield zero extra completions, never an error/diagnostic.
+- **Hover** was left resolving only special forms + builtins + in-file defs. It
+  does **not** yet hover dep functions (would need offset→`alias/func` parsing
+  and the same `witdep` lookup). Completion was the Step-15 ask ("stop offering
+  removed builtins; resolve `wit/deps` imports"); dep-function hover is a clean
+  follow-up if wanted, using the same `imported_completions` plumbing.
+- **Tests** (hermetic, in `analysis.rs` `#[cfg(test)]`):
+  `removed_builtins_and_target_are_gone` asserts none of `Target`/`print`/
+  `println`/`read-line`/`args`/`env` are offered (and that surviving `Import`/`map`
+  still are); `import_resolves_functions_from_wit_deps` writes a temp
+  `src/main.wvl` + `wit/deps/acme-greet.wit` fixture and asserts the import
+  surfaces `greeting/greet`, and that with `None` path the dep completions are
+  skipped. `cargo test -p wavelet-lsp` green (2 tests); whole-workspace `cargo
+  test` green (49 lib + 8 generic_bridge + examples + http + wit_deps +
+  wkg_populate). `cargo build -p wavelet-lsp` clean.
+- **Incidental: `tooling/wavelet-lsp/Cargo.lock` relocked** 0.4.0 → 0.5.0 (the
+  version bump already in the `Cargo.toml`s; the lock just hadn't caught up).
+  Committed alongside.
+- **`rg` verification** over `tooling/wavelet-lsp/`: the only remaining matches
+  for the removed names are legitimate non-keyword hits — `main.rs`'s
+  `std::env::args()` / `println!` for `--version`, the new test's assertion list
+  + `std::env::temp_dir()`, and `README.md`'s Lua `function(args)` callback param.
+- **For Step 16 (CHANGELOG & design).** Unchanged from the Step 14 note:
+  `CHANGELOG.md`'s `## [Unreleased]` is still empty and needs the breaking
+  removals (`Target`, the `print`/`println`/`args`/`read-line`/`env` builtins),
+  the new `wkg`/`wac` deps, and the `wit/`+`wkg.lock` layout; `dev-notes/design.md`
+  / `dev-notes/notes.md` still describe the WASI-magic architecture. Docs prose
+  (Step 13), grammars (Step 14), and now the LSP (this step) all match shipped
+  behaviour, so Step 16 is purely changelog + design-doc text.
 
 ---
 

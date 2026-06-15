@@ -6,6 +6,8 @@
 //! oracle"). We deliberately stop at *read* — no expansion, evaluation, or
 //! codegen — to keep responses fast and side-effect free.
 
+use std::path::{Path, PathBuf};
+
 use lsp_types::{
     CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol,
     Hover, HoverContents, MarkupContent, MarkupKind, Range, SymbolKind,
@@ -18,7 +20,6 @@ use crate::line_index::LineIndex;
 /// one-line summary. The reader stores these heads as `name-MACRO` symbols.
 const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("Package", "Package \"ns:name@ver\" — declare the component's package id"),
-    ("Target", "Target \"wasi:cli/command\" — declare the target world"),
     ("Import", "Import {pkg: \"…\" as: alias} — import another component's interface"),
     ("Export", "Export name — export a function from this component"),
     ("DefType", "DefType Name type — define a named WIT type"),
@@ -63,10 +64,6 @@ fn builtin_doc(name: &str) -> &'static str {
         "contains" => "Substring / membership test.",
         "to-string" => "Render a value as a string.",
         "read" => "Parse a string into a form.",
-        "print" | "println" => "Write to standard output.",
-        "read-line" => "Read a line from standard input.",
-        "args" => "The program's command-line arguments.",
-        "env" => "Environment variables.",
         "apply" => "Call a function with a list of arguments.",
         "gensym" => "A fresh, unique symbol (for macros).",
         "expand" => "Macro-expand a form.",
@@ -110,9 +107,15 @@ fn diag(range: Range, message: String) -> Diagnostic {
     }
 }
 
-/// Completions: special forms, builtins, and names defined in this document.
+/// Completions: special forms, builtins, names defined in this document, and —
+/// when the document's path is known — the functions of every external WIT
+/// package it `Import`s, resolved from the project's `wit/deps` directory.
 /// Context-insensitive — a deliberately basic offering.
-pub fn completions(text: &str) -> Vec<CompletionItem> {
+///
+/// `path` is the document's filesystem path (from its `file://` URI), used only
+/// to locate `wit/deps`; pass `None` for untitled/in-memory buffers, which
+/// simply skips the import-resolution completions.
+pub fn completions(text: &str, path: Option<&Path>) -> Vec<CompletionItem> {
     let mut items = Vec::new();
 
     for (title, detail) in SPECIAL_FORMS {
@@ -148,9 +151,64 @@ pub fn completions(text: &str) -> Vec<CompletionItem> {
                 ..Default::default()
             });
         }
+
+        items.extend(imported_completions(&arena, &roots, path));
     }
 
     items
+}
+
+/// Completions contributed by the document's `Import`s: each imported external
+/// WIT package (resolved from `wit/deps`) offers its functions, labelled the way
+/// they are called in source — `alias/func-name` (e.g. `http/body`).
+///
+/// Mirrors the compiler's own resolution (`wavelet::witdep::resolve_dep`): the
+/// LSP and the build therefore agree on which packages and functions exist.
+/// Silently yields nothing when the path is unknown, no `wit/deps` exists, or a
+/// package isn't present there — completion stays best-effort, never an error.
+fn imported_completions(
+    arena: &Arena,
+    roots: &[NodeId],
+    path: Option<&Path>,
+) -> Vec<CompletionItem> {
+    let Some(deps_dir) = path.and_then(wit_deps_dir) else {
+        return Vec::new();
+    };
+    if !deps_dir.is_dir() {
+        return Vec::new();
+    }
+    let Ok(info) = wavelet::wit::collect(arena, roots) else {
+        return Vec::new();
+    };
+
+    let mut items = Vec::new();
+    for import in &info.imports {
+        // `Ok(None)` = package not vendored here; `Err` = a parse failure in
+        // `wit/deps`. Either way we just contribute no completions for it.
+        let Ok(Some(dep)) = wavelet::witdep::resolve_dep(&deps_dir, &import.package) else {
+            continue;
+        };
+        for func in &dep.funcs {
+            items.push(CompletionItem {
+                label: format!("{}/{}", import.alias, func.name),
+                kind: Some(CompletionItemKind::FUNCTION),
+                detail: Some(format!("imported from {}", import.package)),
+                documentation: Some(doc_string(&func.to_wit())),
+                ..Default::default()
+            });
+        }
+    }
+    items
+}
+
+/// A `.wvl` source lives in a project's `src/`; its external WIT dependencies
+/// sit beside that in `<project-root>/wit/deps`. Derive that directory from the
+/// document path, matching `build.rs`'s `wit_deps_dir`. Returns `None` for a
+/// path with no parent chain to a project root.
+fn wit_deps_dir(file: &Path) -> Option<PathBuf> {
+    let src_dir = file.parent()?;
+    let root = src_dir.parent().unwrap_or(src_dir);
+    Some(root.join("wit").join("deps"))
 }
 
 /// Hover: explain special forms and builtins, and surface a definition's `///`
@@ -335,4 +393,68 @@ fn prev_char_boundary(text: &str, mut i: usize) -> usize {
         i -= 1;
     }
     i
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn labels(text: &str, path: Option<&Path>) -> Vec<String> {
+        completions(text, path).into_iter().map(|c| c.label).collect()
+    }
+
+    /// The WASI builtins and the `Target` form were removed from the language
+    /// (the WASI-decoupling work); completion must no longer surface them.
+    #[test]
+    fn removed_builtins_and_target_are_gone() {
+        let got = labels("", None);
+        for dead in ["Target", "print", "println", "read-line", "args", "env"] {
+            assert!(
+                !got.iter().any(|l| l == dead),
+                "completion still offers removed `{dead}`: {got:?}"
+            );
+        }
+        // Sanity: a surviving special form and builtin are still offered.
+        assert!(got.iter().any(|l| l == "Import"));
+        assert!(got.iter().any(|l| l == "map"));
+    }
+
+    /// An `Import` of a package vendored under the project's `wit/deps` offers
+    /// that package's functions, labelled `alias/func` the way source calls them.
+    #[test]
+    fn import_resolves_functions_from_wit_deps() {
+        let dir = std::env::temp_dir()
+            .join(format!("wavelet-lsp-analysis-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let src = dir.join("src");
+        let deps = dir.join("wit").join("deps");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&deps).unwrap();
+        std::fs::write(
+            deps.join("acme-greet.wit"),
+            "package acme:greet@0.1.0;\n\
+             interface api {\n  \
+               greet: func(name: string) -> string;\n\
+             }\n",
+        )
+        .unwrap();
+
+        let file = src.join("main.wvl");
+        let text = "Package \"demo:app@0.1.0\"\n\
+                    Import {pkg: \"acme:greet/api\" as: greeting}\n";
+
+        let got = labels(text, Some(&file));
+        assert!(
+            got.iter().any(|l| l == "greeting/greet"),
+            "expected `greeting/greet` from wit/deps import: {got:?}"
+        );
+
+        // Without a path (in-memory buffer) the import completions are skipped,
+        // but the rest is unaffected.
+        let no_path = labels(text, None);
+        assert!(!no_path.iter().any(|l| l == "greeting/greet"));
+        assert!(no_path.iter().any(|l| l == "Import"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
