@@ -99,8 +99,8 @@ impl Env {
     }
 }
 
-/// `Quote`: a form, as data. Calls become variant cases, bare names
-/// payload-less cases (§2.3).
+/// `Quote`: a form, as data. Calls are tuples whose first element is the head,
+/// bare names payload-less variant cases (symbols) (§2.3).
 pub fn form_to_value(arena: &Arena, id: NodeId) -> Value {
     match arena.node(id) {
         Node::Bool(b) => Value::Bool(*b),
@@ -110,6 +110,7 @@ pub fn form_to_value(arena: &Arena, id: NodeId) -> Value {
         Node::Str(s) => Value::Str(s.clone()),
         Node::Sym(s) => Value::Variant(s.clone(), None),
         Node::Qsym(a, n) => Value::Variant(format!("{a}/{n}"), None),
+        // The reader no longer produces `Node::Call`; calls are tuples.
         Node::Call(head, payload) => {
             let name = match arena.node(*head) {
                 Node::Sym(s) => s.clone(),
@@ -138,9 +139,11 @@ pub fn value_to_form(value: &Value, arena: &mut Arena) -> Result<NodeId, String>
         Value::Str(s) => Node::Str(s.clone()),
         Value::Variant(name, None) => sym_node(name),
         Value::Variant(name, Some(p)) => {
+            // A payloaded runtime variant serializes back to a 1-argument call
+            // form: `ok(x)` ⇒ `Tup[Sym(ok), value_to_form(x)]`.
             let head = arena.add(sym_node(name), sp);
             let payload = value_to_form(p, arena)?;
-            Node::Call(head, payload)
+            Node::Tup(vec![head, payload])
         }
         Value::Tup(items) => Node::Tup(values_to_forms(items, arena)?),
         Value::Lst(items) => Node::Lst(values_to_forms(items, arena)?),

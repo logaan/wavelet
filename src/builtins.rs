@@ -364,7 +364,7 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
                             None => arena.add(crate::form::Node::Lst(vec![]), (0, 0)),
                         };
                         let arena = Rc::new(arena);
-                        let (out, root) = interp.expand_once(&mac, &arena, pid)?;
+                        let (out, root) = interp.expand_once(&mac, &arena, std::slice::from_ref(&pid))?;
                         Ok(form_to_value(&out, root))
                     }
                     _ => Ok(arg.clone()),

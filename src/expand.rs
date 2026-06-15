@@ -54,7 +54,7 @@ fn expand_form(
             }
             if let Some(Value::Macro(mac)) = env.lookup(name) {
                 let (expanded_arena, expanded) = interp
-                    .expand_once(&mac, arena, *payload)
+                    .expand_once(&mac, arena, std::slice::from_ref(payload))
                     .map_err(|e| format!("expanding `{}`: {e}", name.trim_end_matches("-MACRO")))?;
                 return expand_form(interp, env, &expanded_arena, expanded, out);
             }
