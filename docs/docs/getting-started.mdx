@@ -14,6 +14,15 @@ You don't need to install anything to experiment — the playgrounds throughout 
 
 To run Wavelet on real components — to build `.wasm`, compose, and execute on a host like [wasmtime](https://wasmtime.dev/) — install the compiler.
 
+## External tools
+
+Building and composing components shells out to two [Bytecode Alliance](https://bytecodealliance.org/) CLIs, so they must be on your `PATH`:
+
+- [**`wkg`**](https://github.com/bytecodealliance/wasm-pkg-tools) fetches dependency WIT (e.g. `wasi:cli`, `wasi:http`) into a project's `wit/` tree and maintains a `wkg.lock` lock file.
+- [**`wac`**](https://github.com/bytecodealliance/wac) composes the project's components into a single artifact.
+
+The Homebrew formula declares both as dependencies, so `brew install` brings them along. Installing by hand: `cargo install wkg wac-cli`. Neither is needed for `wavelet run` or the in-browser interpreter, which evaluate pure programs and don't emit components.
+
 ## Installing with Homebrew
 
 On macOS and Linux the quickest way to get the `wavelet` CLI and the `wavelet-lsp` language server is the personal [tap](https://github.com/logaan/homebrew-tap):
@@ -74,80 +83,91 @@ The extension is self-contained — it bundles the matching `wavelet-lsp` server
 
 ## Hello, world
 
-Create `hello.wvl`:
-
-```wavelet
-Package "demo:hello@0.1.0"
-Target "wasi:cli/command"
-
-Export run
-Def run Fn {}
-  println("Hello, world!")
-```
-
-The quickest path is the interpreter, which skips code generation entirely:
+The quickest way to a runnable component is [`wavelet new`](./cli#new), which scaffolds a project, fetches its dependency WIT with `wkg`, and lays down build/run scripts:
 
 ```console
-$ wavelet run hello.wvl
+$ wavelet new hello
+created hello/
+  hello/.gitignore
+  hello/README.md
+  hello/src/greeting.wvl
+  hello/src/main.wvl
+  hello/scripts/build.sh
+  hello/scripts/run.sh
+
+$ cd hello
+$ scripts/run.sh           # build, then run with wasmtime
 Hello, world!
+$ scripts/run.sh Ada
+Hello, Ada!
 ```
 
-`run` reads the files, resolves `Import`s by package id, and calls the exported `run`. It is the fastest way to try a program.
+The default `cli` template lays down two components. `src/greeting.wvl` is the pure domain model:
+
+```wavelet
+Package "hello:greeting@0.1.0"
+
+Export greet
+Def greet Fn {name: string}
+  str-cat["Hello, " name "!"]
+```
+
+`src/main.wvl` is the entry point. It adopts the CLI world by **exporting `wasi:cli/run`** — there is no compiler-known target world — and does its output and argument reading through ordinary imported WASI interfaces (`wasi:cli/stdout`, `wasi:io/streams`, `wasi:cli/environment`), lowered through the generic WIT bridge:
+
+```wavelet
+Package "hello:main@0.1.0"
+
+Import {pkg: "hello:greeting/api" as: greeting}
+Import {pkg: "wasi:cli/stdout@0.2.0" as: stdout}
+Import {pkg: "wasi:io/streams@0.2.0" as: streams}
+
+Export {iface: "wasi:cli/run" name: run result: result}
+Def run Fn {}
+  Let {out: stdout/get-stdout()}
+    Do [streams/blocking-write-and-flush[out
+          str-cat[greeting/greet("world") "\n"]]
+        ok(0)]
+```
+
+## Project layout
+
+A scaffolded project pins its dependency WIT in the repository:
+
+```text
+hello/
+  src/            # your .wvl components
+  wit/            # synthesized world + fetched dependency WIT
+    deps/         # wkg-fetched packages (wasi:cli, wasi:io, …)
+  wkg.lock        # pinned dependency versions
+  out/            # build artifacts (git-ignored)
+```
+
+`wavelet build` synthesizes each component's world into `wit/`, ensures the dependency WIT is present (via `wkg`), emits the components, and composes them with `wac` into a single `out/app.wasm`.
 
 ## Run vs. build
 
 Wavelet has two execution paths, and understanding the split is the key to the workflow:
 
-| | `wavelet run` | `wavelet build` + `wavelet compose` |
+| | `wavelet run` | `wavelet build` |
 |---|---|---|
-| What it does | Interprets the files directly | Emits real `.wasm` components, then links them |
-| Speed | Instant — no codegen | Slower; produces deployable artifacts |
-| Output | Program output | `.wasm` files you can ship and run on any host |
+| What it does | Interprets the files directly | Emits real `.wasm` components and composes them |
+| Speed | Instant — no codegen | Slower; produces a deployable artifact |
+| Output | The value of the program | One `out/app.wasm` you can ship and run on any host |
 | Role | The semantics oracle; fastest iteration | Production artifacts |
 
-The interpreter exists so the language's semantics can be validated independently of code generation — the wasm backend is checked against it. Day to day you iterate with `run`, then `build`/`compose` when you want a real component.
+The interpreter exists so the language's semantics can be validated independently of code generation — the wasm backend is checked against it. It evaluates **pure** programs: calls into host interfaces (`wasi:*`) only run in a built component on a wasm runtime, so `run` is for the logic, `build` for anything that touches the world.
 
 ## A two-component program
 
-`shout.wvl`:
-
-```wavelet
-Package "demo:shout@0.1.0"
-
-Export shout
-Def shout Fn {phrase: string}
-  str-cat[upper(phrase) "!"]
-```
-
-`main.wvl`:
-
-```wavelet
-Package "demo:main@0.1.0"
-Target "wasi:cli/command"
-
-Import {pkg: "demo:shout/api" as: sh}
-
-Export run
-Def run Fn {}
-  If eq[len(args[]) 0]
-     println("usage: main <word>")
-     println(sh/shout{phrase: head(args[])})
-```
-
-Interpret both together (the entry file's `run` is called):
+The `greeting` and `main` files above are a two-component program: `main.wvl` imports `hello:greeting/api`, and `greeting.wvl` declares `Package "hello:greeting@…"`, so the composer wires them together. `wavelet build` emits each component and links them into one artifact:
 
 ```console
-$ wavelet run main.wvl shout.wvl -- wasm
-WASM!
+$ wavelet build src/*.wvl -o out
+built out/app.wasm
+$ wasmtime run out/app.wasm Ada
+Hello, Ada!
 ```
 
-Or build real components and compose them:
-
-```console
-$ wavelet build shout.wvl main.wvl
-$ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
-$ wasmtime app.wasm wasm
-WASM!
-```
+You can compose hand-picked components yourself with [`wavelet compose`](./cli#compose) instead; `wavelet build` runs it for you.
 
 See the [CLI reference](./cli) for every command and flag, and [Components & composition](./components) for how files become components and link together.
