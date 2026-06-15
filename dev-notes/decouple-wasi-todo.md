@@ -1443,7 +1443,7 @@ remain in `docs/`.
 
 ## Step 14 — Syntax highlighting (Prism / Neovim / VS Code)
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Drop `Target` and the removed builtins from the three highlighting
 grammars' token/keyword lists where present, keeping them in sync with the lexer.
@@ -1460,7 +1460,63 @@ grammars' token/keyword lists where present, keeping them in sync with the lexer
 **Done when.** All three grammars match the current lexer; the submodule pointer
 is bumped; `cargo test` green.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **No grammar edits were needed — all three were already fully generic and in
+  sync with the lexer.** The Step 11/13 handoff prediction that the Neovim and VS
+  Code grammars *enumerate* `Target` + the removed builtins was **wrong**; I
+  verified each grammar file directly. None of the three ever listed `Target`,
+  `print`, `println`, `args`, `read-line`, or `env` as keywords. They all
+  highlight a TitleCase head (`If`, `Def`, `Target`, …) by a single pattern that
+  mirrors the lexer's `is_title`, and the *only* enumerated names are
+  `true/false` (booleans) and `some/none/ok/err` (WAVE constructors) — none of
+  which the WASI-decoupling work removed. So `Target` was always styled by the
+  generic TitleCase rule (not by name), and the builtins were never special-cased
+  at all; removing them from the language changed nothing the grammars name.
+  - `docs/src/prism/wavelet.js` — `macro` = `/\b[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*\b/`
+    (TitleCase → keyword); `keyword` = `/\b(?:some|none|ok|err)\b/`. As the Step
+    13 note already said: nothing literal to remove. Untouched.
+  - `tooling/vscode/syntaxes/wavelet.tmLanguage.json` — `#macro` match
+    `\\b[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*\\b`; `#constant`
+    `\\b(?:some|none|ok|err)\\b`; `#boolean` `true|false`. No `Target`/builtins.
+    Untouched.
+  - `tooling/neovim/syntax/wavelet.vim` — `waveletMacro` match
+    `\<[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*\>`; `syntax keyword waveletConstant
+    some none ok err`; `syntax keyword waveletBoolean true false`. No
+    `Target`/builtins. Untouched.
+- **Submodule pointer NOT bumped — correct, because the Neovim grammar needed no
+  change.** `tooling/neovim` is unchanged from `9f02db0`; no `wavelet.nvim` commit
+  or push was made (none was warranted). The "push wavelet.nvim, then `git add
+  tooling/neovim`" procedure only applies when the grammar is edited; it isn't
+  here. So there is no half-moved pointer to worry about.
+- **`rg` verification (the leftover matches are all legitimate, non-keyword):**
+  `rg -n 'Target|println|read-line|\bprint\b|\bargs\b|\benv\b'` over
+  `docs/src/prism/`, `tooling/vscode/`, `tooling/neovim/` returns only:
+  `tooling/vscode/extension.js` (a Rust *target triple* for asset names),
+  `tooling/vscode/README.md` (a build path `.../target/release/...` and prose
+  "targeting scopes"), and `tooling/neovim/plugin/wavelet.lua` (`function(args)`
+  — a Lua autocmd callback param). None are language keyword/builtin entries.
+  Also confirmed `src/lexer.rs` itself enumerates none of these as token classes,
+  so "generic TitleCase + `some/none/ok/err`" is the correct, in-sync mirror.
+- **`cargo test` green** (49 lib + 8 generic_bridge + examples + http + wit_deps +
+  wkg_populate + compose; grammars don't affect tests, but nothing else broke).
+  No language/example change → `regen-examples.sh` not needed.
+- **For Step 15 (LSP).** `tooling/wavelet-lsp/src/analysis.rs` still offers
+  `Target` + the removed builtins (`print`/`println`/`args`/`read-line`/`env`) in
+  its completion list (per the Step 11/13 notes). That is real, enumerated data
+  (unlike the grammars), so it *does* need editing: drop those entries, and teach
+  import resolution about `wit/deps` external WIT packages. Note the LSP is a
+  *plain in-repo crate* (`tooling/wavelet-lsp`), **not** a submodule, so it's an
+  ordinary edit + commit here — no push-to-other-repo dance like the Neovim
+  grammar would have needed.
+- **For Step 16 (CHANGELOG & design).** `CHANGELOG.md`'s `## [Unreleased]` is
+  still empty and needs the breaking removals (`Target` and the
+  `print`/`println`/`args`/`read-line`/`env` builtins), the new `wkg`/`wac`
+  dependencies, and the new `wit/`+`wkg.lock` project layout. `dev-notes/design.md`
+  / `dev-notes/notes.md` still describe the WASI-magic architecture and need the
+  decoupled design folded in. The `docs/` prose (Step 13) and the highlighting
+  grammars (this step) already match shipped behaviour, so Step 16 is purely the
+  changelog + design-doc text.
 
 ---
 
