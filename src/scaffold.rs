@@ -196,7 +196,8 @@ component with [`wasmtime`](https://docs.wasmtime.dev/).
 ## Layout
 
 - `src/main.wvl` — the entry point. Implements the `wasi:cli/run` interface and
-  exports `run`, reading its arguments with `args`.
+  exports `run`, reading its arguments from `wasi:cli/environment` and writing
+  to `wasi:cli/stdout`.
 - `src/greeting.wvl` — the domain model. The pure `greet` function, imported by
   `main.wvl` across the component boundary.
 
@@ -234,21 +235,35 @@ fn main_wvl(slug: &str) -> String {
 // This component implements the `wasi:cli/run` interface: a CLI host (here,
 // `wasmtime`) calls `run` on startup. The interface is exported by name via
 // `Export {{iface: …}}` — `run: func() -> result` — with no compiler-special-cased
-// `wasi:cli/command` target. The WIT for `wasi:cli/run` is fetched into `wit/`
-// by `wkg`.
+// `wasi:cli/command` target.
 //
-// It reads its arguments with `args` and greets the first one, leaving the
-// wording to the domain model (greeting.wvl), then returns `ok` to signal
-// success.
+// Output and arguments are ordinary calls into imported WASI interfaces, lowered
+// through the generic WIT bridge: `wasi:cli/stdout` for the output stream,
+// `wasi:io/streams` to write it, and `wasi:cli/environment` for the argument
+// vector. Their WIT is fetched into `wit/` by `wkg`.
 Package \"{slug}:main@0.1.0\"
 
 Import {{pkg: \"{slug}:greeting/api\" as: greeting}}
+Import {{pkg: \"wasi:cli/stdout@0.2.0\" as: stdout}}
+Import {{pkg: \"wasi:cli/environment@0.2.0\" as: env}}
+Import {{pkg: \"wasi:io/streams@0.2.0\" as: streams}}
+
+// The first *user* argument, or \"world\" when none was given. `get-arguments`
+// includes the program name as `argv[0]`, so the user's first word is `argv[1]`.
+Def who Fn {{}}
+  Let {{a: env/get-arguments()}}
+    If gt[len(a) 1] head(tail(a)) \"world\"
+
+// Write a line to stdout, then drop the stream (a child resource that must be
+// released). A Wavelet string lowers to the `list<u8>` the stream expects.
+Def say Fn {{line: string}}
+  Let {{out: stdout/get-stdout()}}
+    Do [streams/blocking-write-and-flush[out line]
+        streams/drop-output-stream(out)]
 
 Export {{iface: \"wasi:cli/run\" name: run result: result}}
 Def run Fn {{}}
-  Do [(If eq[len(args[]) 0]
-          println(greeting/greet(\"world\"))
-          println(greeting/greet(head(args[]))))
+  Do [say(str-cat[greeting/greet(who()) \"\\n\"])
       ok(0)]
 "
     )

@@ -704,6 +704,7 @@ struct Helpers {
     eq_raw: u32,
     len_raw: u32,
     head_h: u32,
+    tail_h: u32,
     strcat2: u32,
     case_h: u32,
     to_str: u32,
@@ -2950,6 +2951,11 @@ impl<'a> Emitter<'a> {
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.head_h));
             }
+            "tail" => {
+                nargs(1)?;
+                self.expr(fx, items[0], false)?;
+                fx.op(I::Call(self.h.tail_h));
+            }
             "str-cat" => {
                 if items.is_empty() {
                     let a = self.intern_str("");
@@ -2986,7 +2992,7 @@ impl<'a> Emitter<'a> {
 
 const BUILTINS: &[&str] = &[
     "eq", "not", "lt", "le", "gt", "ge", "add", "sub", "mul", "div", "rem", "neg", "len",
-    "head", "str-cat", "upper", "lower", "to-string", "print", "println", "args",
+    "head", "tail", "str-cat", "upper", "lower", "to-string",
     "some", "ok", "err",
 ];
 
@@ -3046,6 +3052,7 @@ fn emit_core_module(
             eq_raw: 0,
             len_raw: 0,
             head_h: 0,
+            tail_h: 0,
             strcat2: 0,
             case_h: 0,
             to_str: 0,
@@ -3157,6 +3164,7 @@ fn emit_core_module(
     em.h.eq_raw = take();
     em.h.len_raw = take();
     em.h.head_h = take();
+    em.h.tail_h = take();
     em.h.strcat2 = take();
     em.h.case_h = take();
     em.h.to_str = take();
@@ -3749,6 +3757,86 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::End);
         fx.op(I::LocalGet(0));
         fx.op(I::I32Load(ma(8, 2)));
+        let t = em.ty_idx(vec![I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // tail_h(list box) -> list box   [locals: src=0, n, m, dst, i]
+    {
+        let mut fx = FnCtx::new(1);
+        let n = fx.local(I32);
+        let m = fx.local(I32);
+        let dst = fx.local(I32);
+        let i = fx.local(I32);
+        // require a non-empty list
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalTee(n));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        // m = n - 1
+        fx.op(I::LocalGet(n));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Sub);
+        fx.op(I::LocalSet(m));
+        // dst = alloc(8 + 4*m)
+        fx.op(I::I32Const(8));
+        fx.op(I::LocalGet(m));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Shl);
+        fx.op(I::I32Add);
+        fx.op(I::Call(em.h.alloc));
+        fx.op(I::LocalSet(dst));
+        fx.op(I::LocalGet(dst));
+        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(dst));
+        fx.op(I::LocalGet(m));
+        fx.op(I::I32Store(ma(4, 2)));
+        // for i in 0..m: dst[8+4i] = src[8+4(i+1)]
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(m));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        // dst + 8 + 4*i
+        fx.op(I::LocalGet(dst));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Shl);
+        fx.op(I::I32Add);
+        // value: src[8 + 4*(i+1)] = src + 12 + 4*i
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Const(12));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Shl);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::LocalGet(dst));
         let t = em.ty_idx(vec![I32], vec![I32]);
         em.bodies.push((t, fx.finish()));
     }
