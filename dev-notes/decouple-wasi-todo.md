@@ -631,7 +631,7 @@ magic path (no regression).
 
 - **No language/example/behaviour change** (parallel path; no `Node`/interpreter
   change), so `regen-examples.sh` was **not** run. Full `cargo test` green (49 lib
-  + 5 generic_bridge + examples + http + wit_deps + wkg_populate).
+  - 5 generic_bridge + examples + http + wit_deps + wkg_populate).
 
 ---
 
@@ -1197,7 +1197,7 @@ duplicates target logic.
     shows `import wasi:http/types@0.2.0; import wasi:io/streams@0.2.0; import
     web:greeting/api; export wasi:http/incoming-handler@0.2.0;`.
   - `cargo test` green (49 lib + 8 generic_bridge + http live build + 5 wit_deps
-    + 4 wkg_populate + examples); `./scripts/regen-examples.sh` green. The http
+    - 4 wkg_populate + examples); `./scripts/regen-examples.sh` green. The http
     and wkg_populate suites do *real* wkg-fetch + generic-path builds (4–5s
     each), so they exercise the post-deletion path, not a mock.
 
@@ -1266,7 +1266,7 @@ tests; a multi-component project composes to a single component.
   **`wavelet build` yields a single `out/app.wasm`** — and can mention `wavelet
   compose` as the manual/explicit alternative. The template `scripts/build.sh`
   files were simplified to a single `wavelet build` line (the old `wavelet build`
-  + `wavelet compose` two-step is gone); update any docs prose that still shows
+  - `wavelet compose` two-step is gone); update any docs prose that still shows
   the two-step flow.
 
 - **When composition runs vs. doesn't.** `compose_units` only composes when some
@@ -1402,7 +1402,7 @@ remain in `docs/`.
     look like one).
 
 - **Interpreter reality the prose now reflects (verified against `src/runner.rs`
-  + `src/main.rs`).** After Steps 10–11, `wavelet run` calls the entry's exported
+  - `src/main.rs`).** After Steps 10–11, `wavelet run` calls the entry's exported
   `run` but **discards the result** and has **no I/O builtins**, so it produces no
   program output and a `run` that calls `wasi:*` (the cli/http templates) can't be
   interpreted at all. Every doc that previously showed `wavelet run … -- wasm` →
@@ -1434,7 +1434,7 @@ remain in `docs/`.
     `tooling/vscode/`, which (per Step 11's notes) *do* list `Target`/the builtins
     as keywords and need the submodule edit + pointer bump.
   - **Step 15 (LSP).** `tooling/wavelet-lsp/src/analysis.rs` still offers `Target`
-    + the removed builtins in completion — its step.
+    - the removed builtins in completion — its step.
   - **Step 16 (CHANGELOG & design).** `CHANGELOG.md [Unreleased]` is still empty;
     `dev-notes/design.md`/`notes.md` aren't folded yet. The `docs/` prose now
     matches the shipped behaviour, so Step 16 only needs the changelog/design.
@@ -1588,7 +1588,7 @@ removed builtins.
 - **`rg` verification** over `tooling/wavelet-lsp/`: the only remaining matches
   for the removed names are legitimate non-keyword hits — `main.rs`'s
   `std::env::args()` / `println!` for `--version`, the new test's assertion list
-  + `std::env::temp_dir()`, and `README.md`'s Lua `function(args)` callback param.
+  - `std::env::temp_dir()`, and `README.md`'s Lua `function(args)` callback param.
 - **For Step 16 (CHANGELOG & design).** Unchanged from the Step 14 note:
   `CHANGELOG.md`'s `## [Unreleased]` is still empty and needs the breaking
   removals (`Target`, the `print`/`println`/`args`/`read-line`/`env` builtins),
@@ -1601,7 +1601,7 @@ removed builtins.
 
 ## Step 16 — CHANGELOG & design notes
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Record all breaking changes under `## [Unreleased]` in `CHANGELOG.md`,
 and fold the decoupled design into `dev-notes/design.md` / `dev-notes/notes.md`.
@@ -1610,13 +1610,15 @@ and fold the decoupled design into `dev-notes/design.md` / `dev-notes/notes.md`.
 builtins), the new `wkg`/`wac` dependencies, and the new project layout; design
 docs reflect the decoupled architecture; `cargo test` green.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- Done by hand.
 
 ---
 
 ## Step 17 — Cut the breaking release
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Once every box above is ticked, cut the breaking release per
 `CLAUDE.md` — this is an ordinary subagent step like the others, spawned and run
@@ -1636,4 +1638,6 @@ by an agent.
 **Done when.** `cargo test` green; `scripts/changelog-section.sh vX.Y.Z` prints
 the new section; the `vX.Y.Z` tag is pushed.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- Done by hand.
