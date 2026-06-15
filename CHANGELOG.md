@@ -15,9 +15,26 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- **Function calls are now WAVE tuples with the head first.** `foo(1 "baz")`
+  reads and prints as `(foo, 1, "baz")` (previously the variant case `foo`
+  carrying a payload). Special forms and macros share the shape: `If c t e` is
+  `(if-MACRO, c, t, e)`, and `If(c t e)` reads identically. Evaluating any
+  parenthesized form is a call — its head is resolved and applied to the bundled
+  arguments (0 ⇒ the empty tuple, 1 ⇒ that value, ≥2 ⇒ a tuple) — so a literal
+  tuple **value** now comes only from `Quote` or a builtin. `(foo)` is a
+  zero-argument call (parenthesized grouping is gone), and `()` is the empty
+  tuple (an error if evaluated). `form-kind` reports `tup` for a quoted call;
+  `call` is now only a runtime variant carrying a payload (`ok(1)`).
 - **`wavelet read` now defaults to stdin when given no file argument.** `echo
   '...' | wavelet read` reads the program from standard input; passing a path
   still reads that file. Previously stdin required an explicit `/dev/stdin`.
+
+### Removed
+
+- **List and record call sugar `foo[a b]` and `foo{k: v}`.** Write `foo([a b])`
+  and `foo({k: v})` instead. Only `(` attaches to a name now; attaching `[` or
+  `{` to a name is a read error that points at the new spelling. (Free-standing
+  `[…]` list and `{…}` record/flag values are unaffected.)
 
 ## [0.6.0] - 2026-06-15
 
