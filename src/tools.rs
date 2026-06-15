@@ -186,17 +186,40 @@ pub fn wac_plug(socket: &Path, plugs: &[&Path], out: &Path) -> Result<String, St
     run(Tool::Wac, args)
 }
 
-/// `wac compose [--deps-dir <dir>] -o <out> <composition>` — full composition
-/// driven by a `.wac` source file (multi-component / transitive wiring).
+/// `wac compose [--deps-dir <dir>] [-d pkg=path]... -o <out> <composition>` —
+/// full composition driven by a `.wac` source file (multi-component / transitive
+/// wiring).
+///
+/// `deps_dir` points `wac` at a `deps/<namespace>/<package>.wasm` tree; `deps`
+/// supplies individual packages by name (`-d ns:pkg=path.wasm`), which is how
+/// `wavelet build` hands `wac` the components it just emitted (their on-disk
+/// names — `ns-pkg.wasm` — don't match the deps-dir layout, so they're passed
+/// explicitly). Either or both may be given.
 pub fn wac_compose(
     composition: &Path,
     deps_dir: Option<&Path>,
+    deps: &[(String, &Path)],
     out: &Path,
 ) -> Result<String, String> {
+    // `-d` takes a single `pkg=path` token, so build owned `OsString`s up front.
+    let dep_args: Vec<std::ffi::OsString> = deps
+        .iter()
+        .map(|(name, path)| {
+            let mut s = std::ffi::OsString::from(name);
+            s.push("=");
+            s.push(path.as_os_str());
+            s
+        })
+        .collect();
+
     let mut args: Vec<&OsStr> = vec![OsStr::new("compose")];
     if let Some(dir) = deps_dir {
         args.push(OsStr::new("--deps-dir"));
         args.push(dir.as_os_str());
+    }
+    for d in &dep_args {
+        args.push(OsStr::new("-d"));
+        args.push(d.as_os_str());
     }
     args.push(OsStr::new("-o"));
     args.push(out.as_os_str());
