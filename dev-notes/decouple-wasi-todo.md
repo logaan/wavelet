@@ -1094,7 +1094,7 @@ references to the removed builtins remain.
 
 ## Step 11 — Delete the magic and `Target`
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Now that nothing uses them, delete the special cases: `is_command`,
 `is_http`, the forced `wasi:io/streams` import, `WASI_PACKAGES`, `WASI_HTTP_WIT`
@@ -1107,7 +1107,125 @@ synthesized WIT and emitted WIT share one path.
 remaining references to the deleted symbols or to `Target`; `wit.rs` no longer
 duplicates target logic.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **`Target` is gone as a parsed form.** It was never a lexer keyword — the
+  lexer turns any TitleCase head into `<kebab>-MACRO` generically, so removing
+  `Target` was just dropping the `("target-MACRO", 1)` entry from
+  `reader::MacroTable::core()`, the `"target-MACRO"` arm in `wit::collect`, the
+  `FileInfo.target` field, and the `"target-MACRO"` name in `interp.rs`'s
+  "only allowed at top level" guard. A source file with `Target "…"` now fails
+  to read with *unknown macro `target-MACRO`* (the standard arity-table error),
+  which is the desired behaviour. **There is no `Target` token in the lexer** —
+  so Steps 14/15 (highlighting/LSP) don't need a lexer change; they only need to
+  drop `Target` from their own keyword/completion lists (see "STILL STALE").
+
+- **The whole magic is deleted from `emit.rs`.** Gone: `is_command`/`is_http`
+  (both were `info.target == Some(...)`), `http_call`, `http_imports` (+ the
+  `HttpImport` type), `is_resource_name`, `is_external_package`, the
+  `WASI_PACKAGES`/`WASI_HTTP_WIT` consts (and `include_str!("wasi-http.wit")` →
+  `src/wasi-http.wit` `git rm`'d), the `Emitter.nl_addr` field + its
+  `intern_str("\n")` init, and the `run`→`wasi:cli/run` export special-case in
+  the export-wrapper loop. Routing simplified everywhere:
+  - the body `Qsym` arm (`Emitter::expr`) now *always* calls `dep_call` — every
+    imported call is generic.
+  - the import-signature loop (`feats.dep_calls` in `emit_core_module`) dropped
+    its `is_external_package && !deps.contains_key` → `http_imports` branch; it
+    only builds core import sigs from resolved `Dep`s.
+  - `WASI_VERSION` (the `@0.2.0` literal) is **kept** — `external_versioned` is
+    still the fallback for an external iface whose package isn't a resolved
+    `Dep` (it never fires for the templates, which resolve everything from
+    `wit/deps`, but the helper stays as the documented default).
+
+- **`synthesize_world_wit` (emit.rs) and `synthesize_info` (wit.rs) now share
+  one path — the "de-dupe the target tests" goal.** Both lost their
+  `is_command`/`is_http`/target branches and now emit imports/exports *directly*
+  from `info.imports`/`info.exports`: an import line is `versioned_iface` of its
+  resolved `Dep` (a missing `Dep` is now a hard error, not a magic fallback); an
+  external export iface is `external_versioned_in`; nothing force-imports
+  `wasi:io/streams` or force-exports `wasi:cli/run`. The emit-side
+  dep-package-WIT tail kept its **`split_package_blocks` + `seen` dedup** — that
+  is *not* magic, it's needed because a `wit/deps` `Dep` carries its whole
+  transitive closure, so the http app's `wasi:http` and `wasi:io/streams` deps
+  both render `wasi:io`/`wasi:clocks` and would define them twice. (NB: wit.rs's
+  `synthesize_info` doesn't emit dep package text at all — it only prints the
+  world/interfaces — so there's nothing to dedup there.)
+
+- **`build.rs`: a `wasi:*` import absent from `wit/deps` is now a genuine
+  unsatisfied-import error.** The old branch `(c)` (`if is_external_package(pkg)
+  { continue }`, which let the magic supply the WIT) is removed. So a host
+  import only works if `wkg` fetched its WIT into `wit/deps` — which `wavelet
+  new` does, and the build-time `populate_wit` does after emit. The Step-10
+  build-ordering gotcha still stands: `build_files` fetches *after* emit, so a
+  from-clean `build_files` on an unfetched cli/http project fails (the imports
+  don't resolve to a `Dep`). The real flow is fine because `wavelet new` fetches
+  first. **If Step 12 reworks `wavelet build` to be one-shot, it must fetch host
+  WIT before emit** (this was already flagged under Step 10; now it's the *only*
+  path — there's no magic fallback to mask an unfetched project).
+
+- **Tests/examples migrated off `Target`.** `examples/main.wvl` and the lib.rs
+  magic-CLI emit/wit tests (closures/records/variants/lists/options/records-
+  across-boundaries) dropped `Target "wasi:cli/command"`; their `run` is now an
+  ordinary local `api` export (the bodies all return strings, so inference is
+  happy). `wit_synthesis_world_imports` dropped its `include wasi:cli/command`
+  assertion. Stale doc-comments in `tests/generic_bridge.rs`,
+  `tests/wkg_populate.rs`, and `src/witdep.rs`/`src/emit.rs` that named the
+  deleted symbols were reworded (the http_call↔synthetic-op mapping table in the
+  Step 6 test became a "shape exercised" table). README's two-file taste example
+  was migrated to a plain `greet` export (it can't show a cli run anymore) and
+  the obsolete root `todo.md` (which tracked the now-deleted 0.5.0 http magic)
+  was removed.
+
+- **`docs/examples.json` was unchanged by the regen** — Step 10 had already
+  migrated every runnable example off the removed builtins, and none used
+  `Target`. `./scripts/regen-examples.sh` still rebuilt the committed playground
+  wasm (`docs/src/wasm/wavelet_bg.wasm` + wasm-pack README); both are committed.
+
+- **Verified both templates end-to-end with the magic physically gone**
+  (release binary; `wkg`/`wac` at `~/.cargo/bin`, `wasmtime` at
+  `/opt/homebrew/bin`):
+  - **cli:** `wavelet new greeter --type=cli`; `wavelet build src/*.wvl -o out`;
+    `wavelet compose out/greeter-main.wasm out/greeter-greeting.wasm -o
+    out/app.wasm`; `wasmtime run out/app.wasm` → `Hello, world!`, `… Ada` →
+    `Hello, Ada!`, `… Grace` → `Hello, Grace!`. `wavelet wit src/main.wvl` shows
+    `import wasi:cli/stdout@0.2.0; import wasi:cli/environment@0.2.0; import
+    wasi:io/streams@0.2.0; export wasi:cli/run@0.2.0;` — no `include`, no magic.
+  - **http:** `wavelet new web --type=http`; build; `wavelet compose
+    out/web-app.wasm out/web-greeting.wasm -o out/app.wasm`; `wasmtime serve
+    out/app.wasm` → `GET /` and `GET /hello/path` both `200 OK` rendering
+    `<h1>Hello, world!</h1><p>You requested: /…</p>`. `wavelet wit src/app.wvl`
+    shows `import wasi:http/types@0.2.0; import wasi:io/streams@0.2.0; import
+    web:greeting/api; export wasi:http/incoming-handler@0.2.0;`.
+  - `cargo test` green (49 lib + 8 generic_bridge + http live build + 5 wit_deps
+    + 4 wkg_populate + examples); `./scripts/regen-examples.sh` green. The http
+    and wkg_populate suites do *real* wkg-fetch + generic-path builds (4–5s
+    each), so they exercise the post-deletion path, not a mock.
+
+- **STILL STALE — owned by later steps, deliberately NOT touched here (per the
+  "leave it if another step owns it" rule):**
+  - **The three highlighting grammars (Step 14)** still list `Target` (and the
+    removed builtins) as keywords: `docs/src/prism/wavelet.js`,
+    `tooling/neovim/syntax/wavelet.vim` (the `wavelet.nvim` submodule),
+    `tooling/vscode/`. The lexer no longer knows `Target`, so these are pure
+    keyword-list drift.
+  - **The LSP (Step 15)** — `tooling/wavelet-lsp/src/analysis.rs:21` still offers
+    `("Target", "Target \"wasi:cli/command\" — declare the target world")` in
+    completion. Drop that entry (and the removed builtins) in Step 15.
+  - **Docs prose (Step 13)** — `docs/docs/{intro,getting-started,components,
+    language/special-forms}.mdx` still document/show `Target` in static snippets
+    and the special-forms table. Step 13 owns rewriting them.
+  - **CHANGELOG (Step 16)** — `[Unreleased]` is still empty; record the breaking
+    removals (`Target`, the builtins, the new `wkg`/`wac` deps + `wit/` layout)
+    there in Step 16. The `wasi-http.wit` mention at `CHANGELOG.md:24` is inside
+    the *released* `[0.5.0]` section — historical, do **not** edit it.
+
+- **Carry-forward for Step 12 (wac composition).** The compose step is still the
+  separate `wavelet compose <socket> <plug…>` command (the http template's
+  `build.sh` calls `wavelet compose out/web-app.wasm out/web-greeting.wasm`;
+  order matters — socket first, then plugs). Step 12 should fold a generated
+  `.wac` + `wac compose` into `wavelet build` so it emits **one** `out/app.wasm`,
+  and add build-and-serve integration tests for both templates. Note the
+  build-ordering gotcha above: host WIT must be in `wit/deps` before emit.
 
 ---
 
