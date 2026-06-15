@@ -1231,7 +1231,7 @@ duplicates target logic.
 
 ## Step 12 — Composition workflow via `wac`
 
-- [ ] Done
+- [x] Done
 
 **Goal.** Make `wavelet build` produce **one** final composed artifact: generate
 a `.wac` file describing how the project's components (and any bundled dependency
@@ -1250,7 +1250,98 @@ verify with `wac targets`.
 **Done when.** `cargo test` green including the new build-and-serve integration
 tests; a multi-component project composes to a single component.
 
-**Handoff notes.** *(fill in)*
+**Handoff notes.**
+
+- **`wavelet build` now composes — the headline output is one artifact.**
+  `build::build_files` still emits one `out/<ns-pkg>.wasm` per source file (kept
+  for tooling/back-compat and because the hermetic single-component tests rely on
+  them), then `compose_units` generates `out/app.wac` and runs `wac compose` (via
+  the Step 0 `tools::wac_compose` wrapper) to produce **`out/app.wasm`** — the
+  composed component, with host (`wasi:*`) imports left unsatisfied for the
+  runtime. `app.wasm` is appended to the returned outputs list.
+
+- **`wavelet compose` (the separate command) still exists, unchanged.** It uses
+  the in-process `wac_graph` library (auto-plug) and is a valid way to compose
+  hand-picked components. Step 13 (docs) should describe the new default —
+  **`wavelet build` yields a single `out/app.wasm`** — and can mention `wavelet
+  compose` as the manual/explicit alternative. The template `scripts/build.sh`
+  files were simplified to a single `wavelet build` line (the old `wavelet build`
+  + `wavelet compose` two-step is gone); update any docs prose that still shows
+  the two-step flow.
+
+- **When composition runs vs. doesn't.** `compose_units` only composes when some
+  component imports a *sibling* in the build set (a cross-component edge). A lone
+  component (or the synthetic single-component builds in `tests/generic_bridge.rs`
+  / `tests/wit_deps.rs`) returns `Ok(None)` — nothing to wire, no `app.wasm`, no
+  `wac` invocation — so those hermetic tests are unaffected. Host (`wasi:*`)
+  imports are never sibling edges (they resolve from `wit/deps`), so they stay
+  unsatisfied in the composed artifact, as intended.
+
+- **The generated `.wac` uses explicit named wiring, not auto-spread.** A bare
+  `new pkg { ... }` spread does **not** auto-plug a sibling instance — it only
+  forwards a component's own unsatisfied imports as imports of the composed
+  component (verified: greeting stayed an import). So for each sibling edge the
+  `.wac` emits an explicit `"<pkg>/<iface>@<ver>": <plugvar>["<pkg>/<iface>@<ver>"]`
+  entry (the composed import is versioned by the *plug's* package version — e.g.
+  `demo:shout/api@0.1.0`, both sides identical). `let` bindings are emitted in
+  topological order (plug before socket); the root export is the component nothing
+  else imports. **WAC identifiers are kebab labels** (letters/digits/`-`, *no*
+  `_`, must start with a letter) — the per-unit `var` maps a package path's `:`/`/`
+  to `-` (`demo:shout` → `demo-shout`). An `_` in a `let` name is a hard `wac`
+  parse error; don't reintroduce one.
+
+- **Step 0 wrapper change: `tools::wac_compose` gained a `deps: &[(String,
+  &Path)]` param** (the previous signature was `(composition, deps_dir, out)`).
+  The emitted components' on-disk names (`ns-pkg.wasm`) don't match `wac`'s
+  `--deps-dir` layout (`deps/<namespace>/<package>.wasm`), so the build hands them
+  to `wac` explicitly as `-d ns:pkg=path.wasm`. `deps_dir` is still accepted (and
+  passed `None` by the build). The wrapper had **no callers** before this step, so
+  the signature change is safe.
+
+- **`wac targets` left unused.** The Step 0 `tools::wac_targets(component, world)`
+  wrapper signature predates `wac-cli 0.10.0`, whose `wac targets` takes
+  `--wit <path>` (+ optional `--world`), **not** a world *string*. So the optional
+  `wac targets` verification was skipped; the composed component is instead
+  validated by `wac compose` itself (validation on by default) and by the new
+  integration tests running/serving it. If a later step wants `wac targets`, fix
+  the wrapper to pass `--wit`/`--world` first.
+
+- **Integration tests: `tests/compose.rs`** (replaces the old narrow
+  `tests/http.rs`, which was `git rm`'d — its component-shape checks were folded
+  in). Three tests, gated to skip cleanly in toolless/offline CI:
+  - `cli_template_builds_and_runs` — scaffold → `populate_project_wit` (wkg) →
+    `build_files` (composes) → `wasmtime run out/app.wasm` asserts `Hello, world!`
+    / `Hello, Ada!`. Gated on `wkg`+`wac`+`wasmtime` present **and** registry
+    reachable.
+  - `http_template_builds_and_serves` — same build path, then **decodes the
+    composed component's WIT** (via `wit_component::decode` + `WitPrinter`) to
+    assert it *exports* `wasi:http/incoming-handler`, *imports* `wasi:http/types`,
+    and **no longer imports `web:greeting`** (it was composed in). Then `wasmtime
+    serve --addr 127.0.0.1:8753` + a hand-rolled HTTP/1.0 GET (no http crate
+    dep) asserts the page renders the greeting and echoes the path. Same gating.
+  - `multi_component_composes_to_one` — the `demo:main` + `demo:shout` shape
+    (both pure local-interface components, no host WIT), built and composed;
+    decoded WIT asserts `demo:shout` is embedded (not imported) and only
+    `demo:main`'s export remains. **Needs only `wac`** (no `wkg`/registry), so it
+    runs in more CI environments than the template tests.
+  - Note: assert on **decoded** WIT, not raw component bytes — a raw-byte
+    `contains("greeting")` false-matches the *embedded* greeting package text;
+    `import web:greeting` on the decoded world is the real check.
+
+- **Build-ordering gotcha still applies (from Steps 10/11).** `build_files`
+  fetches host WIT *after* emit, so a from-clean `build_files` on an unfetched
+  cli/http project still fails at import resolution — the real flow works because
+  `wavelet new` fetches first (and the tests call `populate_project_wit` before
+  `build_files`). Composition is the *last* step in `build_files`, after emit and
+  the wkg populate, so it doesn't change this ordering.
+
+- **No language/example/interpreter change** (pure build-tooling), so
+  `regen-examples.sh` was **not** needed. Full `cargo test` green: 49 lib + 3
+  compose (new, gated live) + 8 generic_bridge + 5 wit_deps + 4 wkg_populate +
+  examples. Manually verified both templates end-to-end via the simplified
+  `scripts/build.sh`: cli → `wasmtime run` → `Hello, world!`/`Hello, Ada!`; http →
+  `wasmtime serve` → `GET /hello/path` renders the greeting + echoes the path; and
+  the demo multi-component project collapses to a single component.
 
 ---
 
