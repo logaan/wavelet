@@ -15,9 +15,9 @@
     "output": ""
   },
   "gs-hello": {
-    "code": "println(\"hello from wavelet\")",
-    "value": "",
-    "output": "hello from wavelet\n"
+    "code": "str-cat[upper(\"hello\") \" from wavelet\"]",
+    "value": "\"HELLO from wavelet\"",
+    "output": ""
   },
   "noffi-shout": {
     "code": "// 'sh/shout' (an import) and 'shout' (local) would be called identically.\n// Here we just call the local one — the point is there's no glue either way.\nDef shout Fn {phrase: string}\n  str-cat[upper(phrase) \"!\"]\nshout{phrase: \"no ffi\"}",
@@ -147,9 +147,9 @@
     "output": ""
   },
   "sf-do": {
-    "code": "Do [println(\"first\")\n    println(\"second\")\n    add[2 2]]",
+    "code": "Do [str-cat[\"first\"]\n    str-cat[\"second\"]\n    add[2 2]]",
     "value": "4",
-    "output": "first\nsecond\n"
+    "output": ""
   },
   "sf-match": {
     "code": "Match [1 2 3] [\n  ([]        \"empty\")\n  ([x]       str-cat[\"one: \" to-string(x)])\n  ([x y z]   str-cat[\"three, head \" to-string(x)])\n  (other     \"something else\")\n]",
@@ -346,16 +346,6 @@
   "std-conv-bad": {
     "code": "to-u8(256)",
     "error": "eval error: `to-u8`: 256 out of range"
-  },
-  "std-io-print": {
-    "code": "Do [print(\"no newline… \")\n    println(\"then a line\")\n    println([1 2 3])]",
-    "value": "",
-    "output": "no newline… then a line\n[1, 2, 3]\n"
-  },
-  "std-args": {
-    "code": "args[]",
-    "value": "[]",
-    "output": ""
   },
   "std-apply": {
     "code": "apply[Fn {a b} add[a b] [20 22]]",

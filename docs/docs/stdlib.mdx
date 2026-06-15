@@ -127,21 +127,17 @@ Numeric conversions range-check:
 
 ## Input / output
 
-| Function | Shape | Effect |
-|---|---|---|
-| `print` | `print(v)` | write without a trailing newline |
-| `println` | `println(v)` | write with a trailing newline |
-| `read-line` | `read-line[]` | read one line from stdin |
-| `args` | `args[]` | program arguments (list of strings) |
-| `env` | `env[]` | environment as a list of `(key, value)` tuples |
+The standard library has **no** I/O builtins. The language and compiler know
+nothing about WASI: a program that wants to write to stdout, read its arguments,
+or talk to the host imports the relevant WIT interface (e.g. `wasi:cli/stdout`,
+`wasi:cli/environment`, `wasi:io/streams`) and calls it like any other
+[imported component](./components). The `cli` template scaffolded by
+[`wavelet new`](./cli#new) shows the pattern: it imports `wasi:cli/stdout` and
+`wasi:io/streams`, builds the greeting, and writes it through the stream.
 
-<Playground id="std-io-print" autoRun />
-
-<Playground id="std-args" autoRun />
-
-:::note[In the playground]
-`read-line` and `args`/`env` are wired to the host process when you run a real program. In this in-browser sandbox there is no stdin and no argument vector, so `args[]` is empty and `read-line` returns an empty string. They behave normally under [`wavelet run`](./cli#run) and in a compiled component.
-:::
+Because these are host calls, they only run in a compiled component on a wasm
+runtime — not in the in-browser playground or under [`wavelet run`](./cli#run),
+which evaluate pure programs only.
 
 ## Meta & reflection
 

@@ -27,7 +27,7 @@ E['match-result-inc'] = `Match ok(42) [
   (ok(n)   add[n 1])
   (err(e)  0)
 ]`;
-E['gs-hello'] = `println("hello from wavelet")`;
+E['gs-hello'] = `str-cat[upper("hello") " from wavelet"]`;
 
 E['noffi-shout'] = `// 'sh/shout' (an import) and 'shout' (local) would be called identically.
 // Here we just call the local one — the point is there's no glue either way.
@@ -89,8 +89,8 @@ E['sf-if-nonbool'] = `If 1 "yes" "no"`;
 E['sf-let'] = `Let {radius: 10
      area: mul[pi mul[radius radius]]}
   str-cat["area = " to-string(area)]`;
-E['sf-do'] = `Do [println("first")
-    println("second")
+E['sf-do'] = `Do [str-cat["first"]
+    str-cat["second"]
     add[2 2]]`;
 E['sf-match'] = `Match [1 2 3] [
   ([]        "empty")
@@ -197,10 +197,6 @@ E['std-tostring'] = `to-string([1 some(2) {k: "v"}])`;
 E['std-read'] = `read("add[1 2]")`;
 E['std-conv'] = `[to-u8(255)  to-s8(-128)  to-f64(3)]`;
 E['std-conv-bad'] = `to-u8(256)`;
-E['std-io-print'] = `Do [print("no newline… ")
-    println("then a line")
-    println([1 2 3])]`;
-E['std-args'] = `args[]`;
 E['std-apply'] = `apply[Fn {a b} add[a b] [20 22]]`;
 E['std-form-kind'] = `[form-kind(42)  form-kind("hi")  form-kind(Quote foo)  form-kind(Quote foo(1))  form-kind([1 2])]`;
 E['std-rec-key-val'] = `Let {b: {text: "hello"}}

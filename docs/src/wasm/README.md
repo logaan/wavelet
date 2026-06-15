@@ -26,7 +26,7 @@ See [`design.md`](design.md) for the full language design (draft 0.1).
 
 ## A taste
 
-```
+```rust
 // shout.wvl — compiles to demo:shout.wasm
 Package "demo:shout@0.1.0"
 
@@ -35,7 +35,7 @@ Def shout Fn {phrase: string}
   str-cat[upper(phrase) "!"]
 ```
 
-```
+```rust
 // main.wvl — compiles to demo:main.wasm
 Package "demo:main@0.1.0"
 Target "wasi:cli/command"
@@ -49,7 +49,7 @@ Def run Fn {}
      println(sh/shout{phrase: head(args[])})
 ```
 
-```console
+```bash
 $ wavelet build examples/shout.wvl examples/main.wvl
 $ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
 $ wasmtime app.wasm wasm
@@ -60,19 +60,69 @@ Each file declares its own package, becomes its own component, and the composer
 wires `main`'s import of `demo:shout/api` to `shout`'s export. Swapping in a Rust
 implementation of `demo:shout/api` would require changing nothing in `main.wvl`.
 
+## Installing
+
+### Homebrew
+
+The `wavelet` CLI and the `wavelet-lsp` language server are available from a
+personal [tap](https://github.com/logaan/homebrew-tap):
+
+```bash
+brew install logaan/tap/wavelet
+```
+
+This installs both `wavelet` and `wavelet-lsp` onto your `PATH` as prebuilt
+binaries — no Rust toolchain is fetched. Track the bleeding edge from `main`
+(built from source) with `brew install --HEAD logaan/tap/wavelet`.
+
+### From source
+
+Clone the repo and run `scripts/install.sh`, which builds both binaries and
+symlinks them into `~/bin` (override with `BIN_DIR`). See [Building](#building)
+to compile by hand.
+
 ## Building
 
 Wavelet is written in Rust (2024 edition).
 
-```console
-$ cargo build           # debug binary at ./target/debug/wavelet
-$ cargo build --release # optimized binary at ./target/release/wavelet
-$ cargo test            # run the test suite
+```bash
+cargo build           # debug binary at ./target/debug/wavelet
+cargo build --release # optimized binary at ./target/release/wavelet
+cargo test            # run the test suite
+```
+
+### External tools
+
+`wavelet build` and `wavelet new` shell out to two BytecodeAlliance CLIs, which
+must be on your `PATH`:
+
+- **[`wkg`](https://github.com/bytecodealliance/wasm-pkg-tools)** — WIT package
+  management (fetches dependency WIT into a project's `wit/` tree and maintains
+  `wkg.lock`). Install with `cargo install wkg` or `brew install wkg`.
+- **[`wac`](https://github.com/bytecodealliance/wac)** — component composition
+  (wires components into one final artifact). Install with `cargo install
+  wac-cli` or `brew install wac`.
+
+The Homebrew formula (`brew install logaan/tap/wavelet`) declares both as
+dependencies, so a Homebrew install pulls them in automatically. Building the
+interpreter or running `cargo test` does **not** require them.
+
+### Test coverage
+
+`scripts/coverage.sh` measures native test coverage with
+[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) (LLVM
+source-based coverage). It bootstraps the tool on first run.
+
+```bash
+scripts/coverage.sh          # per-file summary table in the terminal
+scripts/coverage.sh --html   # write + open an HTML report (target/coverage/html)
+scripts/coverage.sh --lcov   # write target/coverage/lcov.info (CI / editor gutters)
 ```
 
 ## The `wavelet` CLI
 
 ```
+wavelet new <name> [--type=cli|http]                 # scaffold a new project (cli is the default)
 wavelet read <file.wvl>                              # parse and print the canonical WAVE form tree
 wavelet expand <file.wvl>                            # run macros to fixpoint and print the result
 wavelet wit <file.wvl>                               # show the synthesized WIT world
@@ -80,13 +130,14 @@ wavelet repl                                         # interactive read-eval-pri
 wavelet run <file.wvl>... [-- <args>...]             # interpret directly (no codegen)
 wavelet build <file.wvl>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
 wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
+wavelet --version                                    # print the wavelet version
 ```
 
 `run` interprets a set of files together — resolving `Import`s by package id,
 honoring `Export`/`as:`/`open:`, and calling the exported `run`. It is the
 fastest way to try a program:
 
-```console
+```bash
 $ wavelet run examples/main.wvl examples/shout.wvl -- wasm
 WASM!
 ```
@@ -95,36 +146,73 @@ WASM!
 canonical-ABI lift/lower and componentized via `wasm-tools`); `compose` links
 them with `wac`-style auto-plugging.
 
-## Editor support
+`new` scaffolds a fresh project into a directory of the given name — a
+`.gitignore`, a `src/` with two `.wvl` files (an entry point and the domain
+model it imports across the component boundary), build/run scripts, and a short
+README. `--type` picks the template; `cli` is the default:
 
-Syntax highlighting for `.wvl` files ships as a download per editor on the
-[releases page](https://github.com/logaan/wavelet/releases/latest). The grammars
-are derived from the lexer, so highlighting matches the compiler. A language
-server, `wavelet-lsp`, adds diagnostics, completion, hover, and document symbols;
-it ships as a standalone binary per platform on the same releases page and is
-used automatically by the VS Code extension. (The source for all of this lives in
-[`tooling/`](tooling/) if you'd rather build it yourself.)
-
-### Vim / Neovim
-
-Download `wavelet-vim.zip` and unzip it as a package on your `runtimepath`:
-
-```console
-$ curl -L -o wavelet-vim.zip \
-    https://github.com/logaan/wavelet/releases/latest/download/wavelet-vim.zip
-$ mkdir -p ~/.vim/pack/wavelet/start            # Neovim: ~/.config/nvim/pack/wavelet/start
-$ unzip wavelet-vim.zip -d ~/.vim/pack/wavelet/start/
+```bash
+$ wavelet new my-app          # cli: a wasi:cli/command program
+$ cd my-app
+$ scripts/run.sh Ada          # build, then run with wasmtime → "Hello, Ada!"
 ```
 
-Open any `.wvl` file and it is highlighted. On Neovim, the zip also bundles the
-`wavelet-lsp` server and starts it automatically for `.wvl` buffers.
+`--type=http` instead lays down a web app whose front end implements the
+`wasi:http/incoming-handler` interface — a stateless page that greets via the
+`greeting` domain component (across the component boundary) and echoes the
+request path. `scripts/serve.sh` builds it and runs it with `wasmtime serve`:
+
+```bash
+$ wavelet new my-site --type=http
+$ cd my-site
+$ scripts/serve.sh           # then open http://localhost:8080
+```
+
+## Editor support
+
+`.wvl` files get syntax highlighting plus a language server, `wavelet-lsp`,
+adding diagnostics, completion, hover, and document symbols. The highlighting
+grammars are derived from the lexer, so they match the compiler. `wavelet-lsp`
+ships as a standalone binary per platform on the
+[releases page](https://github.com/logaan/wavelet/releases/latest) and is used
+automatically by the VS Code extension and the Neovim plugin.
+
+### Neovim (LazyVim / lazy.nvim)
+
+The Neovim plugin lives in its own repo,
+[`logaan/wavelet.nvim`](https://github.com/logaan/wavelet.nvim) (vendored here as
+the [`tooling/neovim`](tooling/neovim) submodule). Add it to LazyVim by dropping a
+spec in `~/.config/nvim/lua/plugins/wavelet.lua`:
+
+```lua
+return {
+  {
+    "logaan/wavelet.nvim",
+    ft = "wavelet",
+    init = function()
+      vim.filetype.add({ extension = { wvl = "wavelet" } })
+    end,
+  },
+}
+```
+
+Open any `.wvl` file and it is highlighted. For language features, put the
+`wavelet-lsp` server on your `PATH` — the plugin starts it automatically:
+
+```bash
+cargo install --path tooling/wavelet-lsp     # installs into ~/.cargo/bin
+```
+
+or download a prebuilt `wavelet-lsp-<platform>` binary from the releases page.
+To point at a specific binary instead, set `vim.g.wavelet_lsp_path`. See
+[`tooling/wavelet-lsp/`](tooling/wavelet-lsp/) for other editors.
 
 ### VS Code
 
 Download `wavelet-vscode.zip`, unzip it into your extensions folder, and reload
 the window:
 
-```console
+```bash
 $ curl -L -o wavelet-vscode.zip \
     https://github.com/logaan/wavelet/releases/latest/download/wavelet-vscode.zip
 $ unzip wavelet-vscode.zip -d ~/.vscode/extensions/
@@ -165,17 +253,22 @@ Draft 0.1, actively implemented. Working today:
   and option/result — including these types passed **across component
   boundaries** via the canonical ABI.
 - End-to-end `build` + `compose` producing components that run on wasmtime.
+- **WASI HTTP**: a component can implement the `wasi:http/proxy` interface
+  (resource handles + `http/*` intrinsics over the wasi:http response pipeline)
+  and be served by `wasmtime serve`. The `--type=http` template demonstrates it.
 
 Not yet done (see [`todo.md`](todo.md)): macro components (compile-time wasm
-instantiation), resource handles beyond `cell`, boundary coercions / the
-`safely` wrapper, richer type inference, and `compose --fuse`.
+instantiation), general resource definitions/methods beyond the wasi:http
+intrinsics, string/parsing builtins in the wasm backend (`split`, `reverse`,
+`read`, `to-s64`), boundary coercions / the `safely` wrapper, richer type
+inference, and `compose --fuse`.
 
 ## Repository layout
 
 ```
 src/        compiler and CLI
 examples/   shout.wvl + main.wvl (the §1 demo)
-tooling/    editor support (Vim/Neovim, VS Code, wavelet-lsp language server)
+tooling/    editor support: VS Code, wavelet-lsp, and the neovim/ submodule
 out/        build artifacts (.wasm / .wat / .wit)
 design.md   the language design, draft 0.1
 todo.md     implementation tracking

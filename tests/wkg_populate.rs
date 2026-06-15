@@ -123,6 +123,14 @@ fn build_populates_wit_deps_and_lock() {
         }
     }
 
+    // Fetch the cli template's host WIT into `wit/deps` first, exactly as
+    // `wavelet new` does — the template now imports `wasi:cli/stdout`,
+    // `wasi:cli/environment`, and `wasi:io/streams` directly, so their parsed
+    // WIT must be present before emit can lower the calls through the generic
+    // bridge.
+    let src_paths = vec![proj.join("src/greeting.wvl"), proj.join("src/main.wvl")];
+    wavelet::build::populate_project_wit(&proj, &src_paths).expect("populate wit/deps via wkg");
+
     let out = proj.join("out");
     let sources = vec![
         proj.join("src/greeting.wvl").to_str().unwrap().to_string(),
