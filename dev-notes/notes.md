@@ -1,7 +1,49 @@
 # Notes
 
-1. [ ] Add a readme to the scripts directory
-1. [ ] Edit down the readme
+## 15 June
+
+1. [ ] Allow for alternatives to the standard library.
+   1. You could have an alternative version of `Package` that doesn't implicitly import the standard library.
+   1. Or maybe just don't import it by default ever.
+   1. Maybe it doesn't even need to be bundled with the language. It's just another dependency that you pull down.
+   1. I can provide a basic one that gives you all of the basic functions.
+   1. But if someone else wants to do a purely functional version, or a real time version, or something like that then your file can just as easily live in that world.
+   1. Does this become a problem for macros? Probably not once they're componentised.
+   1. Once macros are componentised do we even need macros like `Quote`, `Quasi` and `Unquote` in the core language?
+   1. For that matter do we even need `If` or `Match`?
+   1. Yes. Because they aren't macros they're special forms. They couldn't be implemented as macros.
+1. [ ] Maybe drop the interpreter?
+1. [ ] I'd like a docs page that explicitly enumerates all of the sugar.
+   1. I'm not sure that we need "Clojure-style: `kv/open`, `kv/get`" as shown [in the docs].
+   1. We could do automatic renaming? So people write `kv-open`.
+   1. It would mean one less form of sugar.
+1. [ ] Make the compiler a bit more modular
+   1. If it's just going off the AST then people can potentially put whatever sugar in front that they want.
+   1. And because of our component boundaries you could even have language authors who're writing with a very different syntax to you.
+   1. I could like a Clojure style lisp syntax. You could like a ML style syntax like Grain.
+   1. Having 2 steps in the compilation pipeline is a small cost to pay.
+   1. Potentially it could make sense to go Wavelet -> Wave (ast) -> Wat -> Wasm components -> Composed component -> Component with bundled runtime.
+   1. With each step represented with files in your build directory.
+   1. Though given the rust libraries I'm not sure that it would simplify things at all to target Wat rather than going straight to the wasm component.
+1. [ ] Add a test that uses the wave parser to validate homoiconicity.
+   1. Reads in an example app that exercises every syntax sugar feature and every language feature.
+   1. Then writes that read data out to a file.
+   1. Wave parses it, if wave can't then the test fails.
+   1. Wave writes out to a new file and the two should be the same.
+   1. Then the wave written file is taken through the remaining compiler steps.
+1. [ ] Switch to tuples for calls.
+1. [ ] Maybe compile closures to components so they can be sent over the wire?
+   1. Like Erlang.
+1. [ ] Maybe make the compiler itself a component that you can chose to to import.
+   1. Enabling the closure compilation above?
+   1. It might be easier to do it using explicit partials.
+
+[in the docs]: https://logaan.github.io/wavelet/components#imports
+
+## Previously
+
+1. [ ] Add a readme to the scripts directory.
+1. [ ] Edit down the main repo readme.
 1. [ ] Prune comments through the code and config files
 1. [ ] Test the vscode tooling
 1. [ ] Prune back the implementation
@@ -13,55 +55,19 @@
     1. [ ] Docker?
     1. [ ] Kubernetes?
 1. [ ] Have a wasm version of the compiler and/or interpreter published as a package to some kind of wasm package repository?
-1. [x] Vim tooling re-written for neovim/lazyvim
-    1. [x] Only give instructions for neovim installed using lazyvim
-    1. [x] The plugin is its own repo, `logaan/wavelet.nvim`, installed directly
-       from git by lazy.nvim (`{ "logaan/wavelet.nvim" }`) — no release zip
-       needed. It's vendored back into this repo as the `tooling/neovim`
-       submodule.
-    1. [x] Dropped `wavelet-vim.zip` from the release workflow; the plugin runs
-       `wavelet-lsp` from PATH (`cargo install`, or a standalone release binary).
-1. [x] Should be installable via homebrew.
-1. [x] Where can I run the command line tools?
-1. [x] I should MIT license this.
-1. [x] I need a `readme.md`.
-1. [x] I need a `scripts` directory.
-   1. [x] A script that builds and tests everything
-   1. [x] A script that does a release
-      1. It's just tagging and pushing, that might be fine not to script.
-   1. [x] Scripts that capture all of the Github workflow stuff
-      1. Or do workflows look better when they're all in the yaml?
-1. [x] Add code coverage tools
 1. [ ] Add static analysis tools
-1. [x] Refactor the compiler so that it's a series of steps performed by wasm components
-   1. Initially have rust compiling down to each of those components
-   1. Then re-implement them one by one in wavelet
-   1. Bad idea. The wasm folks keep all the rust libraries up to date. If I self hosted I'd lose access to all of that. Unless they start publishing those tools as components (which would be sweet).
-1. [x] How big is my file?
-   1. 4.4k  demo-main.wasm
-   1. 1.8k  demo-shout.wasm
 1. [ ] Have a read of the wat representation of the compiled wasm.
-1. [x] It might be nice to be able to write some functions as pure `wat` style
-   wasm.
-    1. Nope. Folks in other languages can deal with wasm and expose it through components.
-    1. Wavelet will just deal with wave and the component model.
-1. [x] It would be nice to be able to compile to wat directly with fully
-   maintained $ style names.
-    1. Meh.
 1. [ ] I'd like the file extension to be .wlt rather than wvl
    - Assuming that doesn't conflict with anything else.
 
 ## Docs
 
-1. [x] Needs syntax highlighting.
-1. [x] Github actions to build and produce releases.
 1. [ ] Should be written for someone unfamiliar with wasm.
 1. [ ] Maybe we should drop the interpreter?
    1. If the compiler compiles to a wasm component then the compiler itself can called from the examples in the docs.
    1. It could be part of the standard library.
       1. The composer just leaves it out if no one's using it?
 1. [ ] Is the standard library composed in? Or is it part of the compile for each component?
-1. [x] The `:::note` and `:::info` blocks don't work.
 1. [ ] The "argument" language is too strong.
 1. [ ] The "NO-FFI!!" example is too strong.
 1. [ ] How slow is the compilation?
@@ -282,3 +288,42 @@
 1. [ ] Where did `str-cat` and `upper` come from?
 1. [ ] We need some syntax highlighting.
 1. [ ] It'd be nice if we could support `#!/usr/bin/env wavelet`
+
+## Done
+
+1. [x] Vim tooling re-written for neovim/lazyvim
+    1. [x] Only give instructions for neovim installed using lazyvim
+    1. [x] The plugin is its own repo, `logaan/wavelet.nvim`, installed directly
+       from git by lazy.nvim (`{ "logaan/wavelet.nvim" }`) — no release zip
+       needed. It's vendored back into this repo as the `tooling/neovim`
+       submodule.
+    1. [x] Dropped `wavelet-vim.zip` from the release workflow; the plugin runs
+       `wavelet-lsp` from PATH (`cargo install`, or a standalone release binary).
+1. [x] Should be installable via homebrew.
+1. [x] Where can I run the command line tools?
+1. [x] I should MIT license this.
+1. [x] I need a `readme.md`.
+1. [x] I need a `scripts` directory.
+   1. [x] A script that builds and tests everything
+   1. [x] A script that does a release
+      1. It's just tagging and pushing, that might be fine not to script.
+   1. [x] Scripts that capture all of the Github workflow stuff
+      1. Or do workflows look better when they're all in the yaml?
+1. [x] Add code coverage tools
+1. [x] Refactor the compiler so that it's a series of steps performed by wasm components
+   1. Initially have rust compiling down to each of those components
+   1. Then re-implement them one by one in wavelet
+   1. Bad idea. The wasm folks keep all the rust libraries up to date. If I self hosted I'd lose access to all of that. Unless they start publishing those tools as components (which would be sweet).
+1. [x] How big is my file?
+   1. 4.4k  demo-main.wasm
+   1. 1.8k  demo-shout.wasm
+1. [x] It might be nice to be able to write some functions as pure `wat` style
+   wasm.
+    1. Nope. Folks in other languages can deal with wasm and expose it through components.
+    1. Wavelet will just deal with wave and the component model.
+1. [x] It would be nice to be able to compile to wat directly with fully
+   maintained $ style names.
+    1. Meh.
+1. [x] Needs syntax highlighting.
+1. [x] Github actions to build and produce releases.
+1. [x] The `:::note` and `:::info` blocks don't work.
