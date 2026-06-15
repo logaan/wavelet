@@ -157,21 +157,22 @@ scripts/build.sh
 exec wasmtime run out/app.wasm \"$@\"
 ";
 
-fn cli_build_sh(slug: &str) -> String {
-    format!(
-        "\
+fn cli_build_sh(_slug: &str) -> String {
+    "\
 #!/usr/bin/env bash
-# Compile every component in src/ into the (git-ignored) out/ directory, then
-# link them into a single runnable component, out/app.wasm.
+# Compile every component in src/ into the (git-ignored) out/ directory and link
+# them into a single runnable component, out/app.wasm. `wavelet build` composes
+# the project's components (wiring each cross-component import to the component
+# that exports it) into one artifact via a generated out/app.wac + `wac`; the
+# individual out/<pkg>.wasm components are left alongside it.
 set -euo pipefail
 here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
 cd \"$here\"
 
 wavelet build src/*.wvl -o out
-wavelet compose out/{slug}-main.wasm out/{slug}-greeting.wasm -o out/app.wasm
 echo \"built out/app.wasm\"
 "
-    )
+    .to_string()
 }
 
 fn cli_readme(name: &str) -> String {
@@ -273,21 +274,22 @@ Def run Fn {{}}
 // http template
 // ---------------------------------------------------------------------------
 
-fn http_build_sh(slug: &str) -> String {
-    format!(
-        "\
+fn http_build_sh(_slug: &str) -> String {
+    "\
 #!/usr/bin/env bash
-# Compile every component in src/ into the (git-ignored) out/ directory, then
-# link them into a single deployable component, out/app.wasm.
+# Compile every component in src/ into the (git-ignored) out/ directory and link
+# them into a single deployable component, out/app.wasm. `wavelet build` composes
+# the project's components (wiring each cross-component import to the component
+# that exports it) into one artifact via a generated out/app.wac + `wac`; the
+# individual out/<pkg>.wasm components are left alongside it.
 set -euo pipefail
 here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
 cd \"$here\"
 
 wavelet build src/*.wvl -o out
-wavelet compose out/{slug}-app.wasm out/{slug}-greeting.wasm -o out/app.wasm
 echo \"built out/app.wasm\"
 "
-    )
+    .to_string()
 }
 
 fn http_readme(name: &str) -> String {
