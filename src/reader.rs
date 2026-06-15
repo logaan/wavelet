@@ -110,13 +110,22 @@ impl Parser {
         Err(ReadError { msg: msg.into(), at })
     }
 
-    /// §2.2: an opener immediately after an identifier (no whitespace) is a payload.
-    fn attached_opener(&self, end: u32) -> Option<Tok> {
+    /// §2.2: only `(` attaches to an identifier to form a call. An attached
+    /// `[` or `{` (no whitespace) is a read error — the list/record call sugar
+    /// was removed; it points the user at the new `name([…])` / `name({…})`
+    /// spelling. Free-standing `[…]`/`{…}` (with whitespace) are unaffected.
+    fn attached_paren(&self, end: u32) -> Result<bool, ReadError> {
         match self.peek() {
-            Some((tok @ (Tok::LParen | Tok::LBracket | Tok::LBrace), span)) if span.start == end => {
-                Some(tok.clone())
-            }
-            _ => None,
+            Some((Tok::LParen, span)) if span.start == end => Ok(true),
+            Some((Tok::LBracket, span)) if span.start == end => self.err(
+                "list call sugar was removed: write `name([...])` instead of `name[...]`",
+                span.start,
+            ),
+            Some((Tok::LBrace, span)) if span.start == end => self.err(
+                "record call sugar was removed: write `name({...})` instead of `name{...}`",
+                span.start,
+            ),
+            _ => Ok(false),
         }
     }
 
@@ -180,24 +189,23 @@ impl Parser {
         }
     }
 
-    /// Identifier head: a call if an opener is attached, otherwise a plain reference.
+    /// Identifier head: a call (`Tup[head, …items]`) if `(` is attached,
+    /// otherwise a plain variable reference.
     fn maybe_call(&mut self, head: NodeId, span: Token) -> Result<NodeId, ReadError> {
-        match self.attached_opener(span.end) {
-            Some(_) => {
-                let payload = self.parse_payload()?;
-                let end = self.arena.span(payload).1;
-                Ok(self.arena.add(Node::Call(head, payload), (span.start, end)))
-            }
-            None => Ok(head),
+        if self.attached_paren(span.end)? {
+            let (items, end) = self.parse_paren_items()?;
+            Ok(self.call_tup(head, items, span.start, end))
+        } else {
+            Ok(head)
         }
     }
 
     /// TitleCase head: explicit payload overrides arity-driven reading (§2.4).
+    /// Either way the head is prepended into a flat `Tup`.
     fn title_form(&mut self, head: NodeId, span: Token) -> Result<NodeId, ReadError> {
-        if self.attached_opener(span.end).is_some() {
-            let payload = self.parse_payload()?;
-            let end = self.arena.span(payload).1;
-            return Ok(self.arena.add(Node::Call(head, payload), (span.start, end)));
+        if self.attached_paren(span.end)? {
+            let (items, end) = self.parse_paren_items()?;
+            return Ok(self.call_tup(head, items, span.start, end));
         }
         let name = match self.arena.node(head) {
             Node::Sym(s) | Node::Qsym(_, s) => s.clone(),
@@ -212,56 +220,54 @@ impl Parser {
                 )
             }
         };
-        let mut args = Vec::with_capacity(arity);
+        let mut items = Vec::with_capacity(arity);
         for _ in 0..arity {
-            args.push(self.parse_form()?);
+            items.push(self.parse_form()?);
         }
-        let payload = match args.len() {
-            0 => self.arena.add(Node::Lst(vec![]), (span.end, span.end)),
-            1 => args[0],
-            _ => {
-                let s = (self.arena.span(args[0]).0, self.arena.span(*args.last().unwrap()).1);
-                self.arena.add(Node::Tup(args), s)
-            }
-        };
-        let end = self.arena.span(payload).1;
-        Ok(self.arena.add(Node::Call(head, payload), (span.start, end)))
+        let end = items
+            .last()
+            .map(|&n| self.arena.span(n).1)
+            .unwrap_or(span.end);
+        Ok(self.call_tup(head, items, span.start, end))
     }
 
-    /// Attached `(…)`, `[…]`, or `{…}` after a head.
-    fn parse_payload(&mut self) -> Result<NodeId, ReadError> {
-        let (tok, span) = self.next()?;
-        let sp = (span.start, span.end);
-        match tok {
-            Tok::LParen => {
-                let items = self.parse_until_paren()?;
-                match items.len() {
-                    0 => Ok(self.arena.add(Node::Lst(vec![]), sp)),
-                    1 => Ok(items[0]),
-                    _ => Ok(self.arena.add(Node::Tup(items), sp)),
-                }
-            }
-            Tok::LBracket => {
-                let items = self.parse_until_bracket()?;
-                Ok(self.arena.add(Node::Lst(items), sp))
-            }
-            Tok::LBrace => self.parse_braces(span),
-            _ => unreachable!("attached_opener guaranteed an opener"),
-        }
+    /// Build a call form `Tup[head, …items]` (the head spliced in front).
+    fn call_tup(&mut self, head: NodeId, items: Vec<NodeId>, start: u32, end: u32) -> NodeId {
+        let mut all = Vec::with_capacity(items.len() + 1);
+        all.push(head);
+        all.extend(items);
+        self.arena.add(Node::Tup(all), (start, end))
     }
 
-    /// Free-standing parens: `(a)` is grouping, `(a b …)` a tuple, `()` an error.
+    /// Consume an attached `(`, parse items up to `)`, return `(items, close_end)`.
+    fn parse_paren_items(&mut self) -> Result<(Vec<NodeId>, u32), ReadError> {
+        self.next()?; // the attached `(`
+        self.parse_paren_body()
+    }
+
+    /// Free-standing parens: every `( … )` is a tuple/call form.
+    /// `()` ⇒ `Tup[]` (errors only at eval time); `(a)` ⇒ `Tup[a]` (0-arg call,
+    /// not transparent grouping); `(a b …)` ⇒ `Tup[a, b, …]`.
     fn parse_parens(&mut self, span: Token) -> Result<NodeId, ReadError> {
-        let items = self.parse_until_paren()?;
-        match items.len() {
-            0 => self.err("empty `()` — a tuple needs two or more elements", span.start),
-            1 => Ok(items[0]),
-            _ => Ok(self.arena.add(Node::Tup(items), (span.start, span.end))),
-        }
+        let (items, end) = self.parse_paren_body()?;
+        Ok(self.arena.add(Node::Tup(items), (span.start, end)))
     }
 
-    fn parse_until_paren(&mut self) -> Result<Vec<NodeId>, ReadError> {
-        self.parse_until(Tok::RParen)
+    /// Parse items up to the closing `)` (already past the `(`), returning the
+    /// items and the closing paren's end offset.
+    fn parse_paren_body(&mut self) -> Result<(Vec<NodeId>, u32), ReadError> {
+        let mut items = Vec::new();
+        loop {
+            match self.peek() {
+                Some((Tok::RParen, span)) => {
+                    let end = span.end;
+                    self.pos += 1;
+                    return Ok((items, end));
+                }
+                Some(_) => items.push(self.parse_form()?),
+                None => return Err(self.eof_err()),
+            }
+        }
     }
 
     fn parse_until_bracket(&mut self) -> Result<Vec<NodeId>, ReadError> {
@@ -321,17 +327,18 @@ impl Parser {
     /// After a top-level `DefMacro name {params} body`, register the macro's
     /// arity so later TitleCase uses in this file can be read (§2.4).
     fn register_if_def_macro(&mut self, id: NodeId) {
-        let Node::Call(head, payload) = self.arena.node(id) else { return };
-        let Node::Sym(h) = self.arena.node(*head) else { return };
+        // A top-level `DefMacro name {params} body` reads as the 4-element
+        // tuple `Tup[def-macro-MACRO, name, params, body]`.
+        let Node::Tup(items) = self.arena.node(id) else { return };
+        if items.len() != 4 {
+            return;
+        }
+        let Node::Sym(h) = self.arena.node(items[0]) else { return };
         if h != "def-macro-MACRO" {
             return;
         }
-        let Node::Tup(args) = self.arena.node(*payload) else { return };
-        if args.len() != 3 {
-            return;
-        }
-        let Node::Sym(name) = self.arena.node(args[0]) else { return };
-        let arity = match self.arena.node(args[1]) {
+        let Node::Sym(name) = self.arena.node(items[1]) else { return };
+        let arity = match self.arena.node(items[2]) {
             Node::Flg(names) => names.len(),
             Node::Rec(fields) => fields.len(),
             _ => return,
