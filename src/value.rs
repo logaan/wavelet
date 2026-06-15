@@ -110,15 +110,6 @@ pub fn form_to_value(arena: &Arena, id: NodeId) -> Value {
         Node::Str(s) => Value::Str(s.clone()),
         Node::Sym(s) => Value::Variant(s.clone(), None),
         Node::Qsym(a, n) => Value::Variant(format!("{a}/{n}"), None),
-        // The reader no longer produces `Node::Call`; calls are tuples.
-        Node::Call(head, payload) => {
-            let name = match arena.node(*head) {
-                Node::Sym(s) => s.clone(),
-                Node::Qsym(a, n) => format!("{a}/{n}"),
-                _ => "?".into(),
-            };
-            Value::Variant(name, Some(Rc::new(form_to_value(arena, *payload))))
-        }
         Node::Tup(items) => Value::Tup(items.iter().map(|&i| form_to_value(arena, i)).collect()),
         Node::Lst(items) => Value::Lst(items.iter().map(|&i| form_to_value(arena, i)).collect()),
         Node::Rec(fields) => Value::Rec(

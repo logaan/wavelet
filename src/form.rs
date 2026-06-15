@@ -9,7 +9,9 @@ pub enum Node {
     Str(String),
     Sym(String),
     Qsym(String, String),
-    Call(NodeId, NodeId),
+    /// A parenthesized form `(a b c …)`: the single call/application/tuple node.
+    /// In evaluation position it is a call (head = items[0]); under `Quote` it is
+    /// a tuple value.
     Tup(Vec<NodeId>),
     Lst(Vec<NodeId>),
     Rec(Vec<(String, NodeId)>),

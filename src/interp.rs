@@ -102,8 +102,6 @@ impl Interp {
                 }
                 Ok(Step::Done(Value::Rec(out)))
             }
-            // The reader no longer emits `Node::Call`; calls are tuples.
-            Node::Call(..) => unreachable!("Node::Call is no longer produced by the reader"),
         }
     }
 
@@ -383,7 +381,6 @@ impl Interp {
                 }
                 Ok(Value::Tup(self.quasi_seq(arena, items, env, depth)?))
             }
-            Node::Call(..) => unreachable!("Node::Call is no longer produced by the reader"),
             Node::Lst(items) => Ok(Value::Lst(self.quasi_seq(arena, items, env, depth)?)),
             Node::Rec(fields) => {
                 let mut out = Vec::with_capacity(fields.len());
@@ -556,7 +553,6 @@ fn match_pattern(
             Ok(true)
         }
         Node::Qsym(..) => err("qualified names cannot appear in patterns"),
-        Node::Call(..) => unreachable!("Node::Call is no longer produced by the reader"),
         // A tuple pattern is disambiguated by the scrutinee value: against a
         // variant it is a variant-case pattern `(case …rest)`; against a tuple
         // value it destructures element-wise.

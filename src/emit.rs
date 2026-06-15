@@ -592,22 +592,32 @@ struct Features {
     dep_calls: Vec<(String, String)>,
 }
 
+/// Result of binding a call's argument forms to a callee's parameters.
+enum BoundArgs {
+    /// one argument form per parameter, in parameter order
+    PerParam(Vec<NodeId>),
+    /// the sole parameter receives every argument bundled as one tuple
+    Bundle,
+}
+
 fn scan(arena: &Arena, id: NodeId, feats: &mut Features) {
     match arena.node(id) {
-        Node::Call(head, payload) => {
-            match arena.node(*head) {
-                Node::Qsym(alias, name) => {
+        // A call is a tuple whose head (items[0]) may be a cross-component
+        // (Qsym) dependency; recurse over every element either way.
+        Node::Tup(items) => {
+            if let Some(&head) = items.first() {
+                if let Node::Qsym(alias, name) = arena.node(head) {
                     let key = (alias.clone(), name.clone());
                     if !feats.dep_calls.contains(&key) {
                         feats.dep_calls.push(key);
                     }
                 }
-                _ => {}
             }
-            scan(arena, *head, feats);
-            scan(arena, *payload, feats);
+            for &x in items {
+                scan(arena, x, feats);
+            }
         }
-        Node::Tup(xs) | Node::Lst(xs) => {
+        Node::Lst(xs) => {
             for &x in xs {
                 scan(arena, x, feats);
             }
@@ -1001,10 +1011,15 @@ impl<'a> Emitter<'a> {
                 Some(idx) => fx.op(I::LocalGet(idx)),
                 None => return self.value_def_ref(fx, &name),
             },
-            Node::Call(head, payload) => return self.call(fx, head, payload, tail),
+            // Every fully-expanded tuple in evaluation position is a call.
+            Node::Tup(items) => {
+                if items.is_empty() {
+                    return Err("cannot evaluate empty form ()".into());
+                }
+                return self.call(fx, items[0], &items[1..], tail);
+            }
             Node::Lst(items) => return self.list_box(fx, &items),
             Node::Rec(fields) => return self.rec_box(fx, &fields),
-            Node::Tup(items) => return self.seq_box(fx, &items, TAG_TUP),
             Node::Flg(_) => {
                 return Err("flag literals not supported by the wasm backend yet".into());
             }
@@ -1116,7 +1131,10 @@ impl<'a> Emitter<'a> {
     /// Build a variant box `[TAG_VAR, case str box, payload box]` for a case
     /// carrying a payload (`some`/`ok`/`err` and user cases). Leaves the box
     /// pointer on the stack; `payload` is the form for the carried value.
-    fn var_box(&mut self, fx: &mut FnCtx, case: &str, payload: NodeId) -> Result<(), String> {
+    /// Build a payloaded variant box `[TAG_VAR, case, payload]`. The payload is
+    /// the call's bundled arguments, matching the interpreter's `ok`/`err`/`some`
+    /// exactly: 0 args ⇒ the empty tuple, 1 arg ⇒ that value, ≥2 ⇒ a tuple.
+    fn var_box(&mut self, fx: &mut FnCtx, case: &str, args: &[NodeId]) -> Result<(), String> {
         let caddr = self.intern_str(case);
         let p = fx.local(ValType::I32);
         fx.op(I::I32Const(12));
@@ -1129,7 +1147,10 @@ impl<'a> Emitter<'a> {
         fx.op(I::I32Const(caddr as i32));
         fx.op(I::I32Store(ma(4, 2)));
         fx.op(I::LocalGet(p));
-        self.expr(fx, payload, false)?;
+        match args {
+            [one] => self.expr(fx, *one, false)?,
+            _ => self.seq_box(fx, args, TAG_TUP)?,
+        }
         fx.op(I::I32Store(ma(8, 2)));
         fx.op(I::LocalGet(p));
         Ok(())
@@ -1217,12 +1238,11 @@ impl<'a> Emitter<'a> {
     /// `Fn {params} body` as an expression: compile the body to a uniform
     /// `(env, payload) -> box` table function capturing every visible local,
     /// and allocate a closure box `[TAG_FN, slot, k, captures…]` at the site.
-    fn fn_form(&mut self, fx: &mut FnCtx, payload: NodeId) -> Result<(), String> {
-        let Node::Tup(items) = self.arena.node(payload).clone() else {
+    fn fn_form(&mut self, fx: &mut FnCtx, args: &[NodeId]) -> Result<(), String> {
+        let [params_id, body] = *args else {
             return Err("malformed Fn".into());
         };
-        let params = param_names(self.arena, items[0])?;
-        let body = items[1];
+        let params = param_names(self.arena, params_id)?;
 
         // captures: every visible local by name (later scopes shadow earlier),
         // sorted so the layout is deterministic
@@ -1309,17 +1329,14 @@ impl<'a> Emitter<'a> {
         &mut self,
         fx: &mut FnCtx,
         head: NodeId,
-        payload: NodeId,
+        args: &[NodeId],
         tail: bool,
     ) -> Result<(), String> {
         self.expr(fx, head, false)?;
         let c = fx.local(ValType::I32);
         fx.op(I::LocalSet(c));
         fx.op(I::LocalGet(c)); // env argument = the closure box itself
-        match self.arena.node(payload).clone() {
-            Node::Lst(items) | Node::Tup(items) => self.list_box(fx, &items)?,
-            _ => self.expr(fx, payload, false)?,
-        }
+        self.payload_box(fx, args)?;
         fx.op(I::LocalGet(c));
         fx.op(I::I32Load(ma(4, 2))); // table slot
         let t = self.ty_idx(vec![ValType::I32; 2], vec![ValType::I32]);
@@ -1331,10 +1348,15 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    fn payload_items(&self, payload: NodeId) -> Vec<NodeId> {
-        match self.arena.node(payload) {
-            Node::Lst(xs) | Node::Tup(xs) => xs.clone(),
-            _ => vec![payload],
+    /// Bundle a call's evaluated arguments into one payload box, mirroring the
+    /// interpreter: 0 args ⇒ an empty list box, 1 arg ⇒ the value itself, ≥2 ⇒ a
+    /// list box. (A record arg binds by name, a list/tuple by order, a scalar to
+    /// the sole parameter — matching `bind_args`.)
+    fn payload_box(&mut self, fx: &mut FnCtx, args: &[NodeId]) -> Result<(), String> {
+        match args {
+            [] => self.list_box(fx, &[]),
+            [one] => self.expr(fx, *one, false),
+            many => self.list_box(fx, many),
         }
     }
 
@@ -1342,7 +1364,7 @@ impl<'a> Emitter<'a> {
         &mut self,
         fx: &mut FnCtx,
         head: NodeId,
-        payload: NodeId,
+        args: &[NodeId],
         tail: bool,
     ) -> Result<(), String> {
         let head_node = self.arena.node(head).clone();
@@ -1352,46 +1374,45 @@ impl<'a> Emitter<'a> {
                 // bridge, driven by the import's parsed WIT signature (from a
                 // sibling `.wvl` or a `wit/deps` package — host `wasi:*`
                 // packages included).
-                self.dep_call(fx, &alias, &fname, payload)
+                self.dep_call(fx, &alias, &fname, args)
             }
             Node::Sym(name) => match name.as_str() {
-                "if-MACRO" => self.if_form(fx, payload, tail),
-                "do-MACRO" => self.do_form(fx, payload, tail),
-                "let-MACRO" => self.let_form(fx, payload, tail),
+                "if-MACRO" => self.if_form(fx, args, tail),
+                "do-MACRO" => self.do_form(fx, args, tail),
+                "let-MACRO" => self.let_form(fx, args, tail),
                 "the-MACRO" => {
-                    let Node::Tup(items) = self.arena.node(payload) else {
+                    // args = [ty, expr]
+                    let [_ty, expr] = *args else {
                         return Err("malformed The".into());
                     };
-                    let expr = items[1];
                     self.expr(fx, expr, tail)
                 }
-                "match-MACRO" => self.match_form(fx, payload, tail),
-                "fn-MACRO" => self.fn_form(fx, payload),
+                "match-MACRO" => self.match_form(fx, args, tail),
+                "fn-MACRO" => self.fn_form(fx, args),
                 "quote-MACRO" | "quasi-MACRO" | "def-MACRO" | "def-macro-MACRO" => {
                     Err(format!("`{name}` not supported by the wasm backend yet"))
                 }
-                _ if fx.lookup(&name).is_some() => self.closure_call(fx, head, payload, tail),
-                _ if BUILTINS.contains(&name.as_str()) => self.builtin(fx, &name, payload),
+                _ if fx.lookup(&name).is_some() => self.closure_call(fx, head, args, tail),
+                _ if BUILTINS.contains(&name.as_str()) => self.builtin(fx, &name, args),
                 _ => {
                     if self.funcs.contains_key(&name) {
-                        self.internal_call(fx, &name, payload, tail)
+                        self.internal_call(fx, &name, args, tail)
                     } else if self.value_globals.contains_key(&name) {
-                        self.closure_call(fx, head, payload, tail)
+                        self.closure_call(fx, head, args, tail)
                     } else {
                         Err(format!("unknown function `{name}` (wasm backend)"))
                     }
                 }
             },
             // any other head evaluates to a closure box
-            _ => self.closure_call(fx, head, payload, tail),
+            _ => self.closure_call(fx, head, args, tail),
         }
     }
 
-    fn if_form(&mut self, fx: &mut FnCtx, payload: NodeId, tail: bool) -> Result<(), String> {
-        let Node::Tup(items) = self.arena.node(payload).clone() else {
+    fn if_form(&mut self, fx: &mut FnCtx, args: &[NodeId], tail: bool) -> Result<(), String> {
+        let [c, t, e] = *args else {
             return Err("malformed If".into());
         };
-        let (c, t, e) = (items[0], items[1], items[2]);
         self.expr(fx, c, false)?;
         fx.op(I::Call(self.h.truthy));
         fx.op(I::If(BlockType::Result(ValType::I32)));
@@ -1402,8 +1423,13 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    fn do_form(&mut self, fx: &mut FnCtx, payload: NodeId, tail: bool) -> Result<(), String> {
-        let items = self.payload_items(payload);
+    fn do_form(&mut self, fx: &mut FnCtx, args: &[NodeId], tail: bool) -> Result<(), String> {
+        let [list] = *args else {
+            return Err("malformed Do".into());
+        };
+        let Node::Lst(items) = self.arena.node(list).clone() else {
+            return Err("Do expects a list of expressions".into());
+        };
         if items.is_empty() {
             fx.op(I::I32Const(self.unit_addr() as i32));
             return Ok(());
@@ -1415,11 +1441,11 @@ impl<'a> Emitter<'a> {
         self.expr(fx, items[items.len() - 1], tail)
     }
 
-    fn let_form(&mut self, fx: &mut FnCtx, payload: NodeId, tail: bool) -> Result<(), String> {
-        let Node::Tup(items) = self.arena.node(payload).clone() else {
+    fn let_form(&mut self, fx: &mut FnCtx, args: &[NodeId], tail: bool) -> Result<(), String> {
+        let [bindings, body] = *args else {
             return Err("malformed Let".into());
         };
-        let Node::Rec(fields) = self.arena.node(items[0]).clone() else {
+        let Node::Rec(fields) = self.arena.node(bindings).clone() else {
             return Err("Let bindings must be a record".into());
         };
         fx.scopes.push(HashMap::new());
@@ -1429,7 +1455,7 @@ impl<'a> Emitter<'a> {
             fx.op(I::LocalSet(l));
             fx.scopes.last_mut().unwrap().insert(k.clone(), l);
         }
-        let r = self.expr(fx, items[1], tail);
+        let r = self.expr(fx, body, tail);
         fx.scopes.pop();
         r
     }
@@ -1437,14 +1463,14 @@ impl<'a> Emitter<'a> {
     /// Each clause is a block: a failed test branches past the clause; a
     /// matched clause leaves its result and branches to the end. No clause
     /// matching traps (the interpreter raises "no Match clause" instead).
-    fn match_form(&mut self, fx: &mut FnCtx, payload: NodeId, tail: bool) -> Result<(), String> {
-        let Node::Tup(items) = self.arena.node(payload).clone() else {
+    fn match_form(&mut self, fx: &mut FnCtx, args: &[NodeId], tail: bool) -> Result<(), String> {
+        let [scrut_form, clauses_form] = *args else {
             return Err("malformed Match".into());
         };
-        let Node::Lst(clauses) = self.arena.node(items[1]).clone() else {
+        let Node::Lst(clauses) = self.arena.node(clauses_form).clone() else {
             return Err("Match expects a list of (pattern result) clauses".into());
         };
-        self.expr(fx, items[0], false)?;
+        self.expr(fx, scrut_form, false)?;
         let scrut = fx.local(ValType::I32);
         fx.op(I::LocalSet(scrut));
         fx.op(I::Block(BlockType::Result(ValType::I32)));
@@ -1501,31 +1527,6 @@ impl<'a> Emitter<'a> {
                 fx.scopes.last_mut().unwrap().insert(name, l);
                 Ok(())
             }
-            // variant case with payload: `ok(x)`, `some(x)`, `err(e)`, …
-            Node::Call(head, vpayload) => {
-                let Node::Sym(case) = self.arena.node(head).clone() else {
-                    return Err("pattern call head must be a name".into());
-                };
-                let caddr = self.intern_str(&case);
-                fx.op(I::LocalGet(v));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Const(TAG_VAR));
-                fx.op(I::I32Ne);
-                fx.op(I::BrIf(fail));
-                fx.op(I::LocalGet(v));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::I32Const(caddr as i32));
-                fx.op(I::Call(self.h.eq_raw));
-                fx.op(I::I32Eqz);
-                fx.op(I::BrIf(fail));
-                let inner = fx.local(ValType::I32);
-                fx.op(I::LocalGet(v));
-                fx.op(I::I32Load(ma(8, 2)));
-                fx.op(I::LocalTee(inner));
-                fx.op(I::I32Eqz);
-                fx.op(I::BrIf(fail));
-                self.pattern(fx, vpayload, inner, fail)
-            }
             Node::Int(_) | Node::Dec(_) | Node::Bool(_) | Node::Str(_) => {
                 fx.op(I::LocalGet(v));
                 self.expr(fx, pat, false)?;
@@ -1535,7 +1536,56 @@ impl<'a> Emitter<'a> {
                 Ok(())
             }
             Node::Lst(pats) => self.seq_pattern(fx, &pats, v, fail, TAG_LIST),
-            Node::Tup(pats) => self.seq_pattern(fx, &pats, v, fail, TAG_TUP),
+            // A tuple pattern is disambiguated by its first element: a `Sym`
+            // head is a variant-case pattern (`ok(x)`, `some(x)`, `none`, …);
+            // anything else is a tuple destructure. (Limitation: a tuple
+            // pattern whose first element is a bare name is always read as a
+            // variant case here, never as a tuple binding the first element.)
+            Node::Tup(pats) => match pats.first().map(|&p| self.arena.node(p).clone()) {
+                Some(Node::Sym(case)) => {
+                    let caddr = self.intern_str(&case);
+                    fx.op(I::LocalGet(v));
+                    fx.op(I::I32Load(ma(0, 2)));
+                    fx.op(I::I32Const(TAG_VAR));
+                    fx.op(I::I32Ne);
+                    fx.op(I::BrIf(fail));
+                    fx.op(I::LocalGet(v));
+                    fx.op(I::I32Load(ma(4, 2)));
+                    fx.op(I::I32Const(caddr as i32));
+                    fx.op(I::Call(self.h.eq_raw));
+                    fx.op(I::I32Eqz);
+                    fx.op(I::BrIf(fail));
+                    match pats.len() {
+                        1 => {
+                            // payload must be absent
+                            fx.op(I::LocalGet(v));
+                            fx.op(I::I32Load(ma(8, 2)));
+                            fx.op(I::BrIf(fail));
+                            Ok(())
+                        }
+                        2 => {
+                            let inner = fx.local(ValType::I32);
+                            fx.op(I::LocalGet(v));
+                            fx.op(I::I32Load(ma(8, 2)));
+                            fx.op(I::LocalTee(inner));
+                            fx.op(I::I32Eqz);
+                            fx.op(I::BrIf(fail));
+                            self.pattern(fx, pats[1], inner, fail)
+                        }
+                        _ => {
+                            // payload is a tuple; destructure it element-wise
+                            let inner = fx.local(ValType::I32);
+                            fx.op(I::LocalGet(v));
+                            fx.op(I::I32Load(ma(8, 2)));
+                            fx.op(I::LocalTee(inner));
+                            fx.op(I::I32Eqz);
+                            fx.op(I::BrIf(fail));
+                            self.seq_pattern(fx, &pats[1..], inner, fail, TAG_TUP)
+                        }
+                    }
+                }
+                _ => self.seq_pattern(fx, &pats, v, fail, TAG_TUP),
+            },
             Node::Rec(fields) => {
                 fx.op(I::LocalGet(v));
                 fx.op(I::I32Load(ma(0, 2)));
@@ -1593,42 +1643,54 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Mirror of the interpreter's §4.2 payload-binding rule, at compile time.
-    fn bind_args(&self, payload: NodeId, params: &[String]) -> Result<Vec<NodeId>, String> {
-        if let Node::Rec(fields) = self.arena.node(payload) {
-            let mut keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
-            let mut want: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
-            keys.sort();
-            want.sort();
-            if keys == want {
-                let map: HashMap<&str, NodeId> =
-                    fields.iter().map(|(k, v)| (k.as_str(), *v)).collect();
-                return Ok(params.iter().map(|p| map[p.as_str()]).collect());
+    /// Mirror of the interpreter's §4.2 argument-binding rule, at compile time.
+    /// `args` are the call's argument forms (`Tup[head, …args]`).
+    fn bind_args(&self, args: &[NodeId], params: &[String]) -> Result<BoundArgs, String> {
+        // named: a single record arg whose keys are exactly the parameters
+        if let [only] = args {
+            if let Node::Rec(fields) = self.arena.node(*only) {
+                let mut keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+                let mut want: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
+                keys.sort();
+                want.sort();
+                if keys == want {
+                    let map: HashMap<&str, NodeId> =
+                        fields.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+                    return Ok(BoundArgs::PerParam(
+                        params.iter().map(|p| map[p.as_str()]).collect(),
+                    ));
+                }
             }
         }
+        // positional: one arg per parameter (covers the scalar 1/1 and 0/0 cases)
+        if args.len() == params.len() {
+            return Ok(BoundArgs::PerParam(args.to_vec()));
+        }
+        // a sole parameter receives the whole bundle as a tuple
         if params.len() == 1 {
-            return Ok(vec![payload]);
+            return Ok(BoundArgs::Bundle);
         }
-        match self.arena.node(payload) {
-            Node::Lst(xs) | Node::Tup(xs) if xs.len() == params.len() => Ok(xs.clone()),
-            _ => Err(format!(
-                "payload does not match parameters ({})",
-                params.join(", ")
-            )),
-        }
+        Err(format!(
+            "payload does not match parameters ({})",
+            params.join(", ")
+        ))
     }
 
     fn internal_call(
         &mut self,
         fx: &mut FnCtx,
         name: &str,
-        payload: NodeId,
+        args: &[NodeId],
         tail: bool,
     ) -> Result<(), String> {
         let (idx, params) = self.funcs[name].clone();
-        let args = self.bind_args(payload, &params)?;
-        for a in args {
-            self.expr(fx, a, false)?;
+        match self.bind_args(args, &params)? {
+            BoundArgs::PerParam(nodes) => {
+                for a in nodes {
+                    self.expr(fx, a, false)?;
+                }
+            }
+            BoundArgs::Bundle => self.seq_box(fx, args, TAG_TUP)?,
         }
         fx.op(if tail { I::ReturnCall(idx) } else { I::Call(idx) });
         Ok(())
@@ -1639,7 +1701,7 @@ impl<'a> Emitter<'a> {
         fx: &mut FnCtx,
         alias: &str,
         fname: &str,
-        payload: NodeId,
+        args: &[NodeId],
     ) -> Result<(), String> {
         let imp = self
             .info
@@ -1663,8 +1725,16 @@ impl<'a> Emitter<'a> {
         let fidx = self.import_idx(&module, &sig.name);
 
         let param_names: Vec<String> = sig.params.iter().map(|(n, _)| n.clone()).collect();
-        let args = self.bind_args(payload, &param_names)?;
-        for (a, (_, t)) in args.iter().zip(&sig.params) {
+        let arg_nodes = match self.bind_args(args, &param_names)? {
+            BoundArgs::PerParam(nodes) => nodes,
+            BoundArgs::Bundle => {
+                return Err(format!(
+                    "imported `{alias}/{fname}`: bundling multiple arguments into a single \
+                     tuple parameter is not supported by the wasm backend"
+                ));
+            }
+        };
+        for (a, (_, t)) in arg_nodes.iter().zip(&sig.params) {
             self.expr(fx, *a, false)?;
             let pty = wit_ty(t, &self.type_env)?;
             self.lower(fx, &pty)?;
@@ -2648,8 +2718,8 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    fn builtin(&mut self, fx: &mut FnCtx, name: &str, payload: NodeId) -> Result<(), String> {
-        let items = self.payload_items(payload);
+    fn builtin(&mut self, fx: &mut FnCtx, name: &str, args: &[NodeId]) -> Result<(), String> {
+        let items = args;
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
                 Ok(())
@@ -2754,9 +2824,9 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.case_h));
             }
             "some" | "ok" | "err" => {
-                // the single argument is the whole payload (which may itself be
-                // a list/tuple/record), exactly as the interpreter binds it
-                return self.var_box(fx, name, payload);
+                // the argument(s) bundle into the variant payload, exactly as
+                // the interpreter binds it
+                return self.var_box(fx, name, args);
             }
             other => return Err(format!("builtin `{other}` not supported by the wasm backend yet")),
         }
@@ -2927,13 +2997,13 @@ fn emit_core_module(
     // ---- assign internal function indices (file order)
     let mut internal_order: Vec<String> = Vec::new();
     for &root in roots {
-        if let Node::Call(h, p) = arena.node(root) {
-            if matches!(arena.node(*h), Node::Sym(s) if s == "def-MACRO") {
-                if let Node::Tup(items) = arena.node(*p) {
-                    if let Node::Sym(name) = arena.node(items[0]) {
-                        if info.defs.contains_key(name) && !internal_order.contains(name) {
-                            internal_order.push(name.clone());
-                        }
+        if let Node::Tup(items) = arena.node(root) {
+            if items.len() >= 2
+                && matches!(arena.node(items[0]), Node::Sym(s) if s == "def-MACRO")
+            {
+                if let Node::Sym(name) = arena.node(items[1]) {
+                    if info.defs.contains_key(name) && !internal_order.contains(name) {
+                        internal_order.push(name.clone());
                     }
                 }
             }
