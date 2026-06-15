@@ -293,8 +293,10 @@ pub fn document_symbols(text: &str, index: &LineIndex) -> Vec<DocumentSymbol> {
 fn definitions(arena: &Arena, roots: &[NodeId]) -> Vec<(String, SymbolKind, NodeId)> {
     let mut out = Vec::new();
     for &root in roots {
-        let Node::Call(head, _) = arena.node(root) else { continue };
-        let kind = match sym_name(arena, *head).as_deref() {
+        // Top-level forms are tuples `Tup[head, name, …]`; the head is items[0].
+        let Node::Tup(items) = arena.node(root) else { continue };
+        let Some(&head) = items.first() else { continue };
+        let kind = match sym_name(arena, head).as_deref() {
             Some("def-MACRO") => SymbolKind::FUNCTION,
             Some("def-type-MACRO") => SymbolKind::STRUCT,
             Some("def-macro-MACRO") => SymbolKind::OPERATOR,
@@ -307,18 +309,16 @@ fn definitions(arena: &Arena, roots: &[NodeId]) -> Vec<(String, SymbolKind, Node
     out
 }
 
-/// The node naming a definition: the first argument of its payload.
+/// The node naming a definition: `items[1]` of the top-level call tuple
+/// (`def-MACRO` / `def-type-MACRO` / `def-macro-MACRO` is items[0]).
 fn def_name_node(arena: &Arena, call_id: NodeId) -> Option<NodeId> {
-    let Node::Call(_, payload) = arena.node(call_id) else { return None };
-    Some(match arena.node(*payload) {
-        Node::Tup(items) => *items.first()?,
-        _ => *payload,
-    })
+    let Node::Tup(items) = arena.node(call_id) else { return None };
+    items.get(1).copied()
 }
 
 fn definition_doc(arena: &Arena, roots: &[NodeId], name: &str) -> Option<String> {
     for &root in roots {
-        if matches!(arena.node(root), Node::Call(..))
+        if matches!(arena.node(root), Node::Tup(..))
             && def_name_node(arena, root).and_then(|n| sym_name(arena, n)).as_deref()
                 == Some(name)
         {
