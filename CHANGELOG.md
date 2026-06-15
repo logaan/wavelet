@@ -13,6 +13,53 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+WASI decoupling: Wavelet no longer special-cases any WASI interface. The
+compiler vendors no WASI WIT and has no built-in `wasi:cli`/`wasi:http`
+knowledge; a component declares the host interfaces it imports and exports
+explicitly, and their WIT is fetched into the project by `wkg`. These are
+breaking changes.
+
+### Added
+- **`wkg` and `wac` are now runtime dependencies of `wavelet build`/`wavelet
+  new`.** `wkg` (the WebAssembly package tooling) fetches host WIT, and `wac`
+  (the WebAssembly composition tool) composes components. Both must be on
+  `PATH` (the Homebrew formula declares them; or `cargo install wkg wac-cli`).
+  The interpreter (`wavelet run`) and `cargo test` do not need them.
+- **Project layout with a `wit/` directory.** A project now carries its WIT
+  package and fetched dependencies on disk: `wit/` holds the synthesized world,
+  `wit/deps/` holds the host/dependency WIT that `wkg` fetched, and `wkg.lock`
+  pins the dependency versions. `wavelet new` scaffolds `wit/` and runs `wkg
+  wit fetch` to populate `wit/deps/` and write `wkg.lock`.
+- **`wavelet build` now composes into a single artifact.** It generates a
+  `.wac` describing how the project's components wire together and runs `wac
+  compose` to produce one composed `out/app.wasm`, with host (`wasi:*`) imports
+  left unsatisfied for the runtime to provide. `wavelet compose` remains as the
+  manual/explicit alternative.
+- **Output and arguments now go through explicitly-imported WASI interfaces.**
+  A program that wants stdout/args imports `wasi:cli/stdout`,
+  `wasi:cli/environment`, and `wasi:io/streams` (as ordinary `Import` forms)
+  and drives them through the generic canonical-ABI bridge, exactly as the
+  `http` template imports `wasi:http/types` + `wasi:io/streams`. The cli
+  template was migrated to this shape.
+- The generic canonical-ABI bridge now lowers/lifts every non-resource WIT
+  value kind and resource handles/methods/drop driven by a parsed WIT
+  signature, so an arbitrary host or third-party interface can be imported and
+  exported without compiler-side special-casing.
+
+### Removed
+- **The `Target` special form is gone.** A file no longer adopts a host world
+  with `Target "wasi:cli/command"`; instead it exports that world's interface
+  directly, e.g. `Export {iface: "wasi:cli/run" name: run result: result}`.
+  A source file using `Target` now fails to read.
+- **The `print`, `println`, `args`, `read-line`, and `env` builtins are gone.**
+  There is no built-in I/O path; output and argument access happen by importing
+  and calling the relevant WASI interfaces (see Added). `wavelet run`
+  interprets pure cross-component logic only and produces no program output.
+- The vendored WASI WIT (`src/wasi-http.wit`) and all the hand-coded WASI
+  magic (the `http/*` intrinsics, the `wasi:cli/command` target translation,
+  the forced `wasi:io/streams` import) were removed; host WIT now comes from
+  `wit/deps`.
+
 ## [0.5.0] - 2026-06-14
 
 ### Added
