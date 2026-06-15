@@ -96,7 +96,7 @@ fn eval_module(
             _ => "",
         };
         match head_name {
-            "package-MACRO" | "target-MACRO" | "def-type-MACRO" => {}
+            "package-MACRO" | "def-type-MACRO" => {}
             "export-MACRO" => {
                 let entry = export_entry(&arena, *payload)
                     .ok_or(format!("{path}: malformed Export"))?;
