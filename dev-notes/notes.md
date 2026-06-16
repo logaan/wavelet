@@ -11,6 +11,8 @@
       variant, and that both variants and tuples evaluate as calls.
 1. [ ] Update the readme.
    1. I think the composition is out of date. Can `wac` now.
+1. [ ] Should wavelet be able to express the wiring of a wac file internally?
+   1. Like we don't expect people to write wit files.
 
 ## 15 June
 
