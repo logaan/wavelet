@@ -211,10 +211,9 @@ fn wit_deps_dir(file: &Path) -> Option<PathBuf> {
     Some(root.join("wit").join("deps"))
 }
 
-/// Hover: explain special forms and builtins, and surface a definition's `///`
-/// doc comment when the cursor is on the name it defines.
+/// Hover: explain special forms and builtins.
 pub fn hover(text: &str, index: &LineIndex, offset: usize) -> Option<Hover> {
-    let (arena, roots) = wavelet::read_file(text).ok()?;
+    let (arena, _roots) = wavelet::read_file(text).ok()?;
     let node_id = smallest_node_at(&arena, offset)?;
     let name = match arena.node(node_id) {
         Node::Sym(s) | Node::Qsym(_, s) => s.clone(),
@@ -234,16 +233,6 @@ pub fn hover(text: &str, index: &LineIndex, offset: usize) -> Option<Hover> {
                 index,
             ));
         }
-    }
-
-    // A reference to a name defined in this file: show its doc comment.
-    if let Some(doc) = definition_doc(&arena, &roots, &name) {
-        return Some(markdown_hover(
-            format!("**{name}**\n\n{doc}"),
-            arena.span(node_id),
-            text,
-            index,
-        ));
     }
 
     // A builtin reference.
@@ -314,18 +303,6 @@ fn definitions(arena: &Arena, roots: &[NodeId]) -> Vec<(String, SymbolKind, Node
 fn def_name_node(arena: &Arena, call_id: NodeId) -> Option<NodeId> {
     let Node::Tup(items) = arena.node(call_id) else { return None };
     items.get(1).copied()
-}
-
-fn definition_doc(arena: &Arena, roots: &[NodeId], name: &str) -> Option<String> {
-    for &root in roots {
-        if matches!(arena.node(root), Node::Tup(..))
-            && def_name_node(arena, root).and_then(|n| sym_name(arena, n)).as_deref()
-                == Some(name)
-        {
-            return arena.doc(root).map(str::to_string);
-        }
-    }
-    None
 }
 
 fn sym_name(arena: &Arena, id: NodeId) -> Option<String> {
