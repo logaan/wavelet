@@ -9,6 +9,8 @@ pub enum Tok {
     LBrace,
     RBrace,
     Colon,
+    /// `.` joining a receiver to a chained call (`recv.name(...)`, §2.5)
+    Dot,
     Bool(bool),
     Int(i64),
     Dec(f64),
@@ -61,7 +63,7 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
                     i += 1;
                 }
             }
-            '(' | ')' | '[' | ']' | '{' | '}' | ':' => {
+            '(' | ')' | '[' | ']' | '{' | '}' | ':' | '.' => {
                 let tok = match c {
                     '(' => Tok::LParen,
                     ')' => Tok::RParen,
@@ -69,7 +71,8 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
                     ']' => Tok::RBracket,
                     '{' => Tok::LBrace,
                     '}' => Tok::RBrace,
-                    _ => Tok::Colon,
+                    ':' => Tok::Colon,
+                    _ => Tok::Dot,
                 };
                 out.push((tok, span(i, i + 1)));
                 i += 1;
@@ -216,7 +219,9 @@ fn lex_number(src: &str, start: usize) -> Result<(Tok, usize), ReadError> {
     while i < b.len() {
         match b[i] {
             b'0'..=b'9' => i += 1,
-            b'.' => {
+            // a `.` is a decimal point only when a digit follows; otherwise it
+            // ends the number and is lexed as a chain `.` (`1.increment()`, §2.5)
+            b'.' if b.get(i + 1).is_some_and(|d| d.is_ascii_digit()) => {
                 is_dec = true;
                 i += 1;
             }

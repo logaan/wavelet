@@ -21,7 +21,7 @@ Because commas are optional, Wavelet source is a *superset* of WAVE text: any va
 
 ## The attachment rule
 
-Wavelet has exactly **one** whitespace-sensitive rule. Only a `(` that *immediately* follows an identifier — with no intervening whitespace — forms a call: the identifier becomes the call's head and the parenthesized forms its arguments. A `[` or `{` no longer attaches (the list/record call sugar was removed); attaching either is a read error pointing at the new spelling. With whitespace in between, the bracketed expression is a separate, free-standing value.
+Wavelet's only whitespace-sensitive rules are about **attachment** — a token abutting the one before it; the other is call chaining (below). Only a `(` that *immediately* follows an identifier — with no intervening whitespace — forms a call: the identifier becomes the call's head and the parenthesized forms its arguments. A `[` or `{` no longer attaches (the list/record call sugar was removed); attaching either is a read error pointing at the new spelling. With whitespace in between, the bracketed expression is a separate, free-standing value.
 
 ```wavelet
 delete-file({path: "foo.md" force: true})  // a call: the head plus a record argument
@@ -42,6 +42,7 @@ Every surface form desugars to a canonical WAVE value. A call is a tuple whose f
 | `f({a: 1 b: 2})` | `(f, {a: 1, b: 2})` | call with a record argument — named arguments |
 | `f()` | `(f)` | zero-argument call |
 | `kv/get({...})` | qualified call | name `get` from the import aliased `kv` |
+| `x.f(y)` | `(f, x, y)` | call chaining — receiver becomes the first argument |
 | `(a b)` | `(a, b)` | a parenthesized form — a call in evaluation position, a tuple under `Quote` |
 | `(a)` | `(a)` | a zero-argument call of `a` (no transparent grouping) |
 | `[a b]` | `[a, b]` | list |
@@ -88,11 +89,24 @@ Variadic macros take a single list argument — arity stays fixed, the list flex
 
 <Playground id="syntax-if-arity" />
 
+## Call chaining
+
+A `.` immediately following a form, then a name with an attached `(`, is **call chaining**: `recv.name(args)` reads as `(name, recv, …args)` — the receiver becomes the call's first argument, and chains fold left-to-right. It is whitespace-sensitive like the attachment rule, and it is pure rewriting, not method dispatch: `1.increment()` *is* `increment(1)`.
+
+```console
+$ echo 'foo(1 2 3).bar(4 5 6).baz(7 8 9)' | wavelet read
+(baz, (bar, (foo, 1, 2, 3), 4, 5, 6), 7, 8, 9)
+```
+
+<Playground id="syntax-chain" />
+
 ## Grammar
 
 ```text
 file      := form*
-form      := atom | name | qname | call | tuple
+form      := chained
+chained   := primary ("." name payload)*      // call chaining: recv as first arg
+primary   := atom | name | qname | call | tuple
            | list | record | flags | macroform
 atom      := bool | int | float | char | string
 name      := kebab-label                      // WIT identifier, % escape allowed

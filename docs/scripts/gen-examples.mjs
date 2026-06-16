@@ -48,6 +48,9 @@ E['syntax-commas'] = `// commas optional — these are the same list
 E['syntax-quote-call'] = `Quote delete-file({path: "foo.md" force: true})`;
 E['syntax-if-arity'] = `// 'If' has arity 3; it reads the next three forms, no parens needed.
 If gt(10 3) "bigger" "smaller"`;
+E['syntax-chain'] = `// '.name(...)' makes the receiver the call's first argument.
+// This reads as str-cat(upper("hello") ", world!").
+"hello".upper().str-cat(", world!")`;
 
 E['values-atoms'] = `["a string" 42 -1.5 true 'x' {read write}]`;
 E['values-to-u8-ok'] = `to-u8(200)`;

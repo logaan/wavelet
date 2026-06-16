@@ -129,7 +129,16 @@ impl Parser {
         }
     }
 
+    /// Parse one form, then fold any attached call chain onto it (§2.5):
+    /// `recv.name(args)` reads as the call `(name, recv, …args)`, left-to-right.
     fn parse_form(&mut self) -> Result<NodeId, ReadError> {
+        let recv = self.parse_primary()?;
+        self.maybe_chain(recv)
+    }
+
+    /// Parse a single primary form (atom, name, call, parens, list, record,
+    /// macro form) — the chain receiver, before any `.name(...)` suffix.
+    fn parse_primary(&mut self) -> Result<NodeId, ReadError> {
         let (tok, span) = self.next()?;
         let sp = (span.start, span.end);
         match tok {
@@ -157,14 +166,54 @@ impl Parser {
             }
             Tok::LParen => self.parse_parens(span),
             Tok::LBracket => {
-                let items = self.parse_until_bracket()?;
-                Ok(self.arena.add(Node::Lst(items), sp))
+                let (items, end) = self.parse_until_bracket()?;
+                Ok(self.arena.add(Node::Lst(items), (span.start, end)))
             }
             Tok::LBrace => self.parse_braces(span),
             Tok::RParen | Tok::RBracket | Tok::RBrace => {
                 self.err("unexpected closing delimiter", span.start)
             }
             Tok::Colon => self.err("`:` is only valid inside a record", span.start),
+            Tok::Dot => self.err(
+                "`.` chains a call onto the form immediately before it (no leading space)",
+                span.start,
+            ),
+        }
+    }
+
+    /// §2.5: fold a chain of attached `.name(args)` calls onto `recv`, turning
+    /// the receiver into the call's first argument. `recv.name(a b)` reads as
+    /// `(name, recv, a, b)`; chains nest left-to-right. The `.`, the name, and
+    /// the `(` must each abut the preceding token with no whitespace — this is
+    /// pure reader rewriting, not method dispatch.
+    fn maybe_chain(&mut self, mut recv: NodeId) -> Result<NodeId, ReadError> {
+        loop {
+            let (recv_start, recv_end) = self.arena.span(recv);
+            match self.peek() {
+                Some((Tok::Dot, span)) if span.start == recv_end => {}
+                _ => return Ok(recv),
+            }
+            let (_, dot) = self.next()?; // the attached `.`
+            let (tok, name_span) = self.next()?;
+            if name_span.start != dot.end {
+                return self.err("a chained call name must immediately follow `.`", name_span.start);
+            }
+            let nsp = (name_span.start, name_span.end);
+            let head = match tok {
+                Tok::Ident(name) => self.arena.add(Node::Sym(name), nsp),
+                Tok::QIdent(alias, name, _) => self.arena.add(Node::Qsym(alias, name), nsp),
+                _ => return self.err("expected a call name after `.`", name_span.start),
+            };
+            if !self.attached_paren(name_span.end)? {
+                return self.err("a chained call needs `(...)` after the name", name_span.end);
+            }
+            let (items, end) = self.parse_paren_items()?;
+            // `(name, recv, …items)` — the receiver spliced in as the first arg.
+            let mut all = Vec::with_capacity(items.len() + 2);
+            all.push(head);
+            all.push(recv);
+            all.extend(items);
+            recv = self.arena.add(Node::Tup(all), (recv_start, end));
         }
     }
 
@@ -249,17 +298,16 @@ impl Parser {
         }
     }
 
-    fn parse_until_bracket(&mut self) -> Result<Vec<NodeId>, ReadError> {
-        self.parse_until(Tok::RBracket)
-    }
-
-    fn parse_until(&mut self, close: Tok) -> Result<Vec<NodeId>, ReadError> {
+    /// Parse list items up to `]`, returning the items and the `]`'s end offset
+    /// (so the `Lst` node spans the whole literal, e.g. for chain adjacency).
+    fn parse_until_bracket(&mut self) -> Result<(Vec<NodeId>, u32), ReadError> {
         let mut items = Vec::new();
         loop {
             match self.peek() {
-                Some((t, _)) if *t == close => {
+                Some((Tok::RBracket, span)) => {
+                    let end = span.end;
                     self.pos += 1;
-                    return Ok(items);
+                    return Ok((items, end));
                 }
                 Some(_) => items.push(self.parse_form()?),
                 None => return Err(self.eof_err()),
@@ -269,8 +317,9 @@ impl Parser {
 
     /// `{…}`: record if the first name is followed by `:`, otherwise flags.
     fn parse_braces(&mut self, span: Token) -> Result<NodeId, ReadError> {
-        let sp = (span.start, span.end);
-        if let Some((Tok::RBrace, _)) = self.peek() {
+        let start = span.start;
+        if let Some((Tok::RBrace, close)) = self.peek() {
+            let sp = (start, close.end);
             self.pos += 1;
             return Ok(self.arena.add(Node::Flg(vec![]), sp));
         }
@@ -279,7 +328,9 @@ impl Parser {
             let mut fields = Vec::new();
             loop {
                 match self.next()? {
-                    (Tok::RBrace, _) => return Ok(self.arena.add(Node::Rec(fields), sp)),
+                    (Tok::RBrace, close) => {
+                        return Ok(self.arena.add(Node::Rec(fields), (start, close.end)))
+                    }
                     (Tok::Ident(name), _) => {
                         match self.next()? {
                             (Tok::Colon, _) => {}
@@ -295,7 +346,9 @@ impl Parser {
             let mut names = Vec::new();
             loop {
                 match self.next()? {
-                    (Tok::RBrace, _) => return Ok(self.arena.add(Node::Flg(names), sp)),
+                    (Tok::RBrace, close) => {
+                        return Ok(self.arena.add(Node::Flg(names), (start, close.end)))
+                    }
                     (Tok::Ident(name), _) => names.push(name),
                     (_, s) => return self.err("expected a flag name", s.start),
                 }

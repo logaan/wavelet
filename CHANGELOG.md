@@ -13,6 +13,18 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- **Call chaining `recv.name(args)`.** A `.` attached to a form, then a name and
+  an attached `(`, rewrites the receiver into the call's first argument:
+  `1.increment()` reads as `(increment, 1)`, and
+  `foo(1 2 3).bar(4 5 6).baz(7 8 9)` as
+  `(baz, (bar, (foo, 1, 2, 3), 4, 5, 6), 7, 8, 9)`. Chains fold left-to-right.
+  This is pure reader rewriting, not method dispatch — `1.increment()` is
+  exactly `increment(1)`. Like the attachment rule it is whitespace-sensitive:
+  the `.`, name, and `(` must each abut the token before them. (`1.5` is still a
+  decimal — a `.` is only a chain dot when no digit follows.)
+
 ### Changed
 
 - **Function calls are now WAVE tuples with the head first.** `foo(1 "baz")`

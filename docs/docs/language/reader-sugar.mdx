@@ -37,7 +37,7 @@ This is the sugar that makes Wavelet a *superset* of WAVE rather than a differen
 
 ## 2. The attachment rule (call forms)
 
-Wavelet has exactly **one** whitespace-sensitive rule. A `(` that *immediately* follows an identifier — with no intervening whitespace — makes that identifier the **head** of a call, and the reader folds the head and the parenthesized forms into a single tuple. With whitespace in between, the parenthesized expression is a separate, free-standing value:
+Wavelet's only whitespace-sensitive rules are about **attachment** — a token abutting the one before it. The first is the call rule: a `(` that *immediately* follows an identifier — with no intervening whitespace — makes that identifier the **head** of a call, and the reader folds the head and the parenthesized forms into a single tuple. With whitespace in between, the parenthesized expression is a separate, free-standing value:
 
 ```wavelet
 delete-file({path: "foo.md" force: true})   // a call: the head plus a record argument
@@ -78,7 +78,28 @@ $ echo 'kv/get({bucket: b})' | wavelet read
 (kv/get, {bucket: b})
 ```
 
-## 4. TitleCase macro sugar
+## 4. Call chaining
+
+A `.` immediately following a form, then a name and an attached `(`, is **call chaining**: `recv.name(args)` reads as the call `(name, recv, …args)` — the receiver becomes the call's *first* argument. Chains fold left-to-right, so each `.name(...)` wraps everything to its left. Like the attachment rule, this is whitespace-sensitive: the `.`, the name, and the `(` must each abut the token before them.
+
+| You write | Canonical WAVE form | |
+|---|---|---|
+| `1.increment()` | `(increment, 1)` | receiver as the sole argument |
+| `x.foo(a b)` | `(foo, x, a, b)` | receiver, then the explicit arguments |
+| `foo(1 2 3).bar(4 5 6)` | `(bar, (foo, 1, 2, 3), 4, 5, 6)` | the call's result chains onward |
+
+```console
+$ echo '1.increment()' | wavelet read
+(increment, 1)
+$ echo 'foo(1 2 3).bar(4 5 6).baz(7 8 9)' | wavelet read
+(baz, (bar, (foo, 1, 2, 3), 4, 5, 6), 7, 8, 9)
+```
+
+This is **pure rewriting**, not method dispatch: there are no methods and nothing is attached to the receiver. `1.increment()` and `increment(1)` are the same call. It just lets a pipeline read left-to-right instead of inside-out — `"hello".upper().str-cat(", world!")` is exactly `str-cat(upper("hello") ", world!")`.
+
+<Playground id="syntax-chain" />
+
+## 5. TitleCase macro sugar
 
 A **TitleCase** identifier — mixed-case words, each starting with a capital (`If`, `DefMacro`, `TryLet`) — is reader sugar for a macro call. This can't collide with ordinary identifiers: WIT words are all-lower or all-UPPER, so TitleCase tokens are syntactically free. The token kebab-izes and gains a `-MACRO` suffix: `If` ↦ `if-MACRO`, `DefMacro` ↦ `def-macro-MACRO`.
 
@@ -112,6 +133,7 @@ Every reader-sugar form, in one table:
 | 1 | `[1 2 3]` | `[1, 2, 3]` | commas are whitespace |
 | 2 | `f(x y)` | `(f, x, y)` | attachment rule — calls are tuples |
 | 3 | `kv/get({...})` | `(kv/get, {...})` | qualified call |
-| 4 | `If c t e` | `(if-MACRO, c, t, e)` | TitleCase macro |
+| 4 | `x.f(y)` | `(f, x, y)` | call chaining — receiver first |
+| 5 | `If c t e` | `(if-MACRO, c, t, e)` | TitleCase macro |
 
 The [Syntax & reading](./syntax) page covers the same ground as prose, and [`wavelet read`](../cli#read) prints the canonical tree for any source so you can check the desugaring for yourself.

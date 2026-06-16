@@ -10,9 +10,11 @@
 //   - int / float / inf / nan numbers
 //   - true / false booleans; some / none / ok / err WAVE constructors
 //   - TitleCase macro heads (If, Def, Fn, DefMacro, ...)
-//   - call heads: a name attached (no space) to ( [ or { — the attachment rule
+//   - call heads: a name attached (no space) to ( — the attachment rule;
+//     this also covers the name in a chained call `recv.name(...)`
 //   - alias/name qualified references
 //   - record keys (name:)
+//   - the chain `.` joining a receiver to a call (`recv.name(...)`)
 
 export const waveletGrammar = {
   'comment': {
@@ -48,7 +50,9 @@ export const waveletGrammar = {
   'namespace': /%?[A-Za-z][\w-]*(?=\/)/,
   // Record keys: `name:`.
   'property': /%?[A-Za-z][\w-]*(?=\s*:)/,
-  'punctuation': /[(){}\[\],:/]/,
+  // `.` is the chain operator (`recv.name(...)`); numbers above already claimed
+  // any decimal point, so a bare `.` here is always a chain dot.
+  'punctuation': /[(){}\[\],:/.]/,
 };
 
 // Register the grammar on a Prism instance (the global one used for static code
