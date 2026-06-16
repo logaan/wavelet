@@ -1,36 +1,36 @@
 {
   "hello-shout": {
-    "code": "str-cat[upper(\"hello\") \", world!\"]",
+    "code": "str-cat(upper(\"hello\") \", world!\")",
     "value": "\"HELLO, world!\"",
     "output": ""
   },
   "map-square": {
-    "code": "map(Fn {x} mul[x x] [1 2 3 4 5])",
+    "code": "map(Fn {x} mul(x x) [1 2 3 4 5])",
     "value": "[1, 4, 9, 16, 25]",
     "output": ""
   },
   "match-result-inc": {
-    "code": "Match ok(42) [\n  (ok(n)   add[n 1])\n  (err(e)  0)\n]",
+    "code": "Match ok(42) [\n  (ok(n)   add(n 1))\n  (err(e)  0)\n]",
     "value": "43",
     "output": ""
   },
   "gs-hello": {
-    "code": "str-cat[upper(\"hello\") \" from wavelet\"]",
+    "code": "str-cat(upper(\"hello\") \" from wavelet\")",
     "value": "\"HELLO from wavelet\"",
     "output": ""
   },
   "noffi-shout": {
-    "code": "// 'sh/shout' (an import) and 'shout' (local) would be called identically.\n// Here we just call the local one — the point is there's no glue either way.\nDef shout Fn {phrase: string}\n  str-cat[upper(phrase) \"!\"]\nshout{phrase: \"no ffi\"}",
+    "code": "// 'sh/shout' (an import) and 'shout' (local) would be called identically.\n// Here we just call the local one — the point is there's no glue either way.\nDef shout Fn {phrase: string}\n  str-cat(upper(phrase) \"!\")\nshout({phrase: \"no ffi\"})",
     "value": "\"NO FFI!\"",
     "output": ""
   },
   "typed-byte-add-ok": {
-    "code": "// A typed parameter is checked at the call boundary.\nDef byte-add Fn {a: u8 b: u8}\n  add[a b]\nbyte-add{a: 100 b: 50}",
+    "code": "// A typed parameter is checked at the call boundary.\nDef byte-add Fn {a: u8 b: u8}\n  add(a b)\nbyte-add({a: 100 b: 50})",
     "value": "150",
     "output": ""
   },
   "typed-byte-add-bad": {
-    "code": "// The same function rejects an out-of-range value.\nDef byte-add Fn {a: u8 b: u8}\n  add[a b]\nbyte-add{a: 300 b: 1}",
+    "code": "// The same function rejects an out-of-range value.\nDef byte-add Fn {a: u8 b: u8}\n  add(a b)\nbyte-add({a: 300 b: 1})",
     "error": "eval error: parameter `a`: 300 does not conform to type `u8`"
   },
   "syntax-commas": {
@@ -39,12 +39,12 @@
     "output": ""
   },
   "syntax-quote-call": {
-    "code": "Quote delete-file{path: \"foo.md\" force: true}",
-    "value": "delete-file({path: \"foo.md\", force: true})",
+    "code": "Quote delete-file({path: \"foo.md\" force: true})",
+    "value": "(delete-file, {path: \"foo.md\", force: true})",
     "output": ""
   },
   "syntax-if-arity": {
-    "code": "// 'If' has arity 3; it reads the next three forms, no parens needed.\nIf gt[10 3] \"bigger\" \"smaller\"",
+    "code": "// 'If' has arity 3; it reads the next three forms, no parens needed.\nIf gt(10 3) \"bigger\" \"smaller\"",
     "value": "\"bigger\"",
     "output": ""
   },
@@ -79,11 +79,11 @@
   },
   "values-quote-days": {
     "code": "Quote days(30)",
-    "value": "days(30)",
+    "value": "(days, 30)",
     "output": ""
   },
   "values-eq": {
-    "code": "eq[{a: 1 b: [2 3]} {a: 1 b: [2 3]}]",
+    "code": "eq({a: 1 b: [2 3]} {a: 1 b: [2 3]})",
     "value": "true",
     "output": ""
   },
@@ -93,47 +93,47 @@
     "output": ""
   },
   "eval-fn-by-name": {
-    "code": "Def delete-file Fn {path force}\n  [path force]\n// by name…\ndelete-file{path: \"foo.md\" force: true}",
+    "code": "Def delete-file Fn {path force}\n  [path force]\n// by name…\ndelete-file({path: \"foo.md\" force: true})",
     "value": "[\"foo.md\", true]",
     "output": ""
   },
   "eval-fn-by-order": {
-    "code": "Def delete-file Fn {path force}\n  [path force]\n// …and by order\ndelete-file[\"foo.md\" true]",
+    "code": "Def delete-file Fn {path force}\n  [path force]\n// …and by order\ndelete-file(\"foo.md\" true)",
     "value": "[\"foo.md\", true]",
     "output": ""
   },
   "eval-fn-scalar": {
-    "code": "Def square Fn {n} mul[n n]\nsquare(9)",
+    "code": "Def square Fn {n} mul(n n)\nsquare(9)",
     "value": "81",
     "output": ""
   },
   "eval-twice": {
-    "code": "Def twice Fn {f x} f(f(x))\nDef inc Fn {n} add[n 1]\ntwice[inc 10]",
+    "code": "Def twice Fn {f x} f(f(x))\nDef inc Fn {n} add(n 1)\ntwice(inc 10)",
     "value": "12",
     "output": ""
   },
   "eval-apply-list": {
-    "code": "Def ops [Fn {n} add[n 1]  Fn {n} mul[n 2]]\napply[get[ops 1] 21]",
+    "code": "Def ops [Fn {n} add(n 1)  Fn {n} mul(n 2)]\napply(get(ops 1) 21)",
     "value": "42",
     "output": ""
   },
   "sf-def": {
-    "code": "Def pi-ish 3.14159\nmul[pi-ish 2]",
+    "code": "Def pi-ish 3.14159\nmul(pi-ish 2)",
     "value": "6.28318",
     "output": ""
   },
   "sf-fn-adder": {
-    "code": "Def adder Fn {by}\n  Fn {n} add[n by]\nDef add5 adder(5)\nadd5(10)",
+    "code": "Def adder Fn {by}\n  Fn {n} add(n by)\nDef add5 adder(5)\nadd5(10)",
     "value": "15",
     "output": ""
   },
   "sf-fn-shout": {
-    "code": "Def shout Fn {phrase: string}\n  str-cat[upper(phrase) \"!\"]\nshout(\"hi\")",
+    "code": "Def shout Fn {phrase: string}\n  str-cat(upper(phrase) \"!\")\nshout(\"hi\")",
     "value": "\"HI!\"",
     "output": ""
   },
   "sf-if": {
-    "code": "If lt[2 3] \"less\" \"not less\"",
+    "code": "If lt(2 3) \"less\" \"not less\"",
     "value": "\"less\"",
     "output": ""
   },
@@ -142,33 +142,33 @@
     "error": "eval error: If condition must be a bool, got 1"
   },
   "sf-let": {
-    "code": "Let {radius: 10\n     area: mul[pi mul[radius radius]]}\n  str-cat[\"area = \" to-string(area)]",
+    "code": "Let {radius: 10\n     area: mul(pi mul(radius radius))}\n  str-cat(\"area = \" to-string(area))",
     "value": "\"area = 314.1592653589793\"",
     "output": ""
   },
   "sf-do": {
-    "code": "Do [str-cat[\"first\"]\n    str-cat[\"second\"]\n    add[2 2]]",
+    "code": "Do [str-cat(\"first\")\n    str-cat(\"second\")\n    add(2 2)]",
     "value": "4",
     "output": ""
   },
   "sf-match": {
-    "code": "Match [1 2 3] [\n  ([]        \"empty\")\n  ([x]       str-cat[\"one: \" to-string(x)])\n  ([x y z]   str-cat[\"three, head \" to-string(x)])\n  (other     \"something else\")\n]",
+    "code": "Match [1 2 3] [\n  ([]        \"empty\")\n  ([x]       str-cat(\"one: \" to-string(x)))\n  ([x y z]   str-cat(\"three, head \" to-string(x)))\n  (other     \"something else\")\n]",
     "value": "\"three, head 1\"",
     "output": ""
   },
   "sf-quote": {
-    "code": "Quote add[1 mul[2 3]]",
-    "value": "add([1, mul([2, 3])])",
+    "code": "Quote add(1 mul(2 3))",
+    "value": "(add, 1, (mul, 2, 3))",
     "output": ""
   },
   "sf-quasi": {
-    "code": "Let {x: 41}\n  Quasi add[Unquote(x) 1]",
-    "value": "add([41, 1])",
+    "code": "Let {x: 41}\n  Quasi add(Unquote(x) 1)",
+    "value": "(add, 41, 1)",
     "output": ""
   },
   "sf-unquote": {
     "code": "Let {name: Quote(ada)}\n  Quasi greeting(Unquote(name))",
-    "value": "greeting(ada)",
+    "value": "(greeting, ada)",
     "output": ""
   },
   "sf-splice": {
@@ -177,7 +177,7 @@
     "output": ""
   },
   "sf-defmacro": {
-    "code": "DefMacro unless {cond body}\n  Quasi If Unquote(cond) {} Unquote(body)\nLet {x: 10}\n  Unless gt[x 100] \"x is not huge\"",
+    "code": "DefMacro unless {cond body}\n  Quasi If Unquote(cond) {} Unquote(body)\nLet {x: 10}\n  Unless gt(x 100) \"x is not huge\"",
     "value": "\"x is not huge\"",
     "output": ""
   },
@@ -191,12 +191,12 @@
     "error": "eval error: The: 9000 does not conform to type `s8`"
   },
   "pm-catch-all": {
-    "code": "Match 3 [\n  (1  \"one\")\n  (2  \"two\")\n  (n  str-cat[\"many: \" to-string(n)])\n]",
+    "code": "Match 3 [\n  (1  \"one\")\n  (2  \"two\")\n  (n  str-cat(\"many: \" to-string(n)))\n]",
     "value": "\"many: 3\"",
     "output": ""
   },
   "pm-describe": {
-    "code": "Def describe Fn {r}\n  Match r [\n    (ok(v)   str-cat[\"got \" to-string(v)])\n    (err(e)  str-cat[\"failed: \" e])\n  ]\ndescribe(ok(42))",
+    "code": "Def describe Fn {r}\n  Match r [\n    (ok(v)   str-cat(\"got \" to-string(v)))\n    (err(e)  str-cat(\"failed: \" e))\n  ]\ndescribe(ok(42))",
     "value": "\"got 42\"",
     "output": ""
   },
@@ -206,7 +206,7 @@
     "output": ""
   },
   "pm-record": {
-    "code": "Match {name: \"Ada\" born: 1815 field: \"maths\"} [\n  ({name: n born: y}  str-cat[n \" (\" to-string(y) \")\"])\n  (other              \"no match\")\n]",
+    "code": "Match {name: \"Ada\" born: 1815 field: \"maths\"} [\n  ({name: n born: y}  str-cat(n \" (\" to-string(y) \")\"))\n  (other              \"no match\")\n]",
     "value": "\"Ada (1815)\"",
     "output": ""
   },
@@ -225,106 +225,106 @@
     "output": ""
   },
   "macro-and": {
-    "code": "DefMacro and {a b}\n  Quasi If Unquote(a) Unquote(b) false\nLet {x: 5}\n  And lt[x 10] gt[x 0]",
+    "code": "DefMacro and {a b}\n  Quasi If Unquote(a) Unquote(b) false\nLet {x: 5}\n  And lt(x 10) gt(x 0)",
     "value": "true",
     "output": ""
   },
   "macro-expand": {
     "code": "DefMacro and {a b}\n  Quasi If Unquote(a) Unquote(b) false\nexpand(Quote And(p q))",
-    "value": "if-MACRO((p, q, false))",
+    "value": "(if-MACRO, p, q, false)",
     "output": ""
   },
   "macro-gensym-three": {
-    "code": "[gensym[] gensym[] gensym[]]",
+    "code": "[gensym() gensym() gensym()]",
     "value": "[g0-gen, g1-gen, g2-gen]",
     "output": ""
   },
   "macro-gensym": {
-    "code": "Def fresh-pair Fn {}\n  eq[gensym[] gensym[]]\nfresh-pair[]",
+    "code": "Def fresh-pair Fn {}\n  eq(gensym() gensym())\nfresh-pair()",
     "value": "false",
     "output": ""
   },
   "macro-trylet": {
-    "code": "DefMacro try-let {binding body}\n  Let {name: rec-key(binding) expr: rec-val(binding)}\n    Quasi Match Unquote(expr) [\n      (ok(Unquote(name))  Unquote(body))\n      (err(e)             err(e))\n    ]\nDef parse Fn {x}\n  TryLet {n: ok(x)}\n  ok(add[n 1])\nparse(41)",
+    "code": "DefMacro try-let {binding body}\n  Let {name: rec-key(binding) expr: rec-val(binding)}\n    Quasi Match Unquote(expr) [\n      (ok(Unquote(name))  Unquote(body))\n      (err(e)             err(e))\n    ]\nDef parse Fn {x}\n  TryLet {n: ok(x)}\n  ok(add(n 1))\nparse(41)",
     "value": "ok(42)",
     "output": ""
   },
   "tail-count-down": {
-    "code": "Def count-down Fn {n}\n  If eq[n 0]\n     \"liftoff\"\n     count-down(sub[n 1])     // tail position — constant stack\ncount-down(100000)",
+    "code": "Def count-down Fn {n}\n  If eq(n 0)\n     \"liftoff\"\n     count-down(sub(n 1))     // tail position — constant stack\ncount-down(100000)",
     "value": "\"liftoff\"",
     "output": ""
   },
   "tail-sum-to": {
-    "code": "Def sum-to Fn {n acc}\n  If eq[n 0]\n     acc\n     sum-to[sub[n 1] add[acc n]]\nsum-to[10000 0]",
+    "code": "Def sum-to Fn {n acc}\n  If eq(n 0)\n     acc\n     sum-to(sub(n 1) add(acc n))\nsum-to(10000 0)",
     "value": "50005000",
     "output": ""
   },
   "std-pi": {
-    "code": "mul[pi 2]",
+    "code": "mul(pi 2)",
     "value": "6.283185307179586",
     "output": ""
   },
   "std-predicates": {
-    "code": "[eq[[1 2] [1 2]]  lt[2 3]  ge[\"b\" \"a\"]  not(false)]",
+    "code": "[eq([1 2] [1 2])  lt(2 3)  ge(\"b\" \"a\")  not(false)]",
     "value": "[true, true, true, true]",
     "output": ""
   },
   "std-arith": {
-    "code": "[add[2 3]  sub[10 4]  mul[6 7]  div[17 5]  rem[17 5]  neg(8)  abs(-3)  min[4 9]  max[4 9]]",
+    "code": "[add(2 3)  sub(10 4)  mul(6 7)  div(17 5)  rem(17 5)  neg(8)  abs(-3)  min(4 9)  max(4 9)]",
     "value": "[5, 6, 42, 3, 2, -8, 3, 4, 9]",
     "output": ""
   },
   "std-div-zero": {
-    "code": "div[1 0]",
+    "code": "div(1 0)",
     "error": "eval error: `div`: integer overflow or division by zero"
   },
   "std-div-float": {
-    "code": "div[7.0 2]",
+    "code": "div(7.0 2)",
     "value": "3.5",
     "output": ""
   },
   "std-seq-basics": {
-    "code": "[len([1 2 3])  head([10 20 30])  tail([10 20 30])  reverse([1 2 3])  range[0 5]]",
+    "code": "[len([1 2 3])  head([10 20 30])  tail([10 20 30])  reverse([1 2 3])  range(0 5)]",
     "value": "[3, 10, [20, 30], [3, 2, 1], [0, 1, 2, 3, 4]]",
     "output": ""
   },
   "std-seq-mutate": {
-    "code": "Let {xs: [10 20 30]}\n  [get[xs 1]  put[xs 1 99]  push[xs 40]  concat[xs [40 50]]]",
+    "code": "Let {xs: [10 20 30]}\n  [get(xs 1)  put(xs 1 99)  push(xs 40)  concat(xs [40 50])]",
     "value": "[20, [10, 99, 30], [10, 20, 30, 40], [10, 20, 30, 40, 50]]",
     "output": ""
   },
   "std-map": {
-    "code": "map(Fn {x} mul[x x] range[1 6])",
+    "code": "map(Fn {x} mul(x x) range(1 6))",
     "value": "[1, 4, 9, 16, 25]",
     "output": ""
   },
   "std-filter": {
-    "code": "filter(Fn {x} gt[x 2] [1 2 3 4 1])",
+    "code": "filter(Fn {x} gt(x 2) [1 2 3 4 1])",
     "value": "[3, 4]",
     "output": ""
   },
   "std-fold": {
-    "code": "fold(Fn {acc x} add[acc x] 0 [1 2 3 4 5])",
+    "code": "fold(Fn {acc x} add(acc x) 0 [1 2 3 4 5])",
     "value": "15",
     "output": ""
   },
   "std-zip": {
-    "code": "zip[[\"a\" \"b\" \"c\"] [1 2 3]]",
+    "code": "zip([\"a\" \"b\" \"c\"] [1 2 3])",
     "value": "[(\"a\", 1), (\"b\", 2), (\"c\", 3)]",
     "output": ""
   },
   "std-strcat": {
-    "code": "str-cat[upper(\"ada\") \" \" \"Lovelace\"]",
+    "code": "str-cat(upper(\"ada\") \" \" \"Lovelace\")",
     "value": "\"ADA Lovelace\"",
     "output": ""
   },
   "std-strings": {
-    "code": "[split[\"a,b,c\" \",\"]  join[[\"x\" \"y\" \"z\"] \"-\"]  contains[\"hello\" \"ell\"]]",
+    "code": "[split(\"a,b,c\" \",\")  join([\"x\" \"y\" \"z\"] \"-\")  contains(\"hello\" \"ell\")]",
     "value": "[[\"a\", \"b\", \"c\"], \"x-y-z\", true]",
     "output": ""
   },
   "std-strcat-tostring": {
-    "code": "str-cat[\"count = \" to-string(42)]",
+    "code": "str-cat(\"count = \" to-string(42))",
     "value": "\"count = 42\"",
     "output": ""
   },
@@ -334,8 +334,8 @@
     "output": ""
   },
   "std-read": {
-    "code": "read(\"add[1 2]\")",
-    "value": "ok(add([1, 2]))",
+    "code": "read(\"add(1 2)\")",
+    "value": "ok((add, 1, 2))",
     "output": ""
   },
   "std-conv": {
@@ -348,13 +348,13 @@
     "error": "eval error: `to-u8`: 256 out of range"
   },
   "std-apply": {
-    "code": "apply[Fn {a b} add[a b] [20 22]]",
+    "code": "apply(Fn {a b} add(a b) [20 22])",
     "value": "42",
     "output": ""
   },
   "std-form-kind": {
-    "code": "[form-kind(42)  form-kind(\"hi\")  form-kind(Quote foo)  form-kind(Quote foo(1))  form-kind([1 2])]",
-    "value": "[\"int\", \"str\", \"sym\", \"call\", \"lst\"]",
+    "code": "[form-kind(42)  form-kind(\"hi\")  form-kind(Quote foo)  form-kind(Quote foo(1))  form-kind(ok(1))  form-kind([1 2])]",
+    "value": "[\"int\", \"str\", \"sym\", \"tup\", \"call\", \"lst\"]",
     "output": ""
   },
   "std-rec-key-val": {
@@ -368,7 +368,7 @@
     "output": ""
   },
   "std-cells": {
-    "code": "Let {c: cell-new(0)}\n  Do [cell-set[c 41]\n      cell-set[c add[cell-get(c) 1]]\n      cell-get(c)]",
+    "code": "Let {c: cell-new(0)}\n  Do [cell-set(c 41)\n      cell-set(c add(cell-get(c) 1))\n      cell-get(c)]",
     "value": "42",
     "output": ""
   }

@@ -18,7 +18,7 @@ Package "demo:shout@0.1.0"
 
 Export shout
 Def shout Fn {phrase: string}
-  str-cat[upper(phrase) "!"]
+  str-cat(upper(phrase) "!")
 ```
 
 The compiler synthesizes a WIT world from these forms. You can see it with [`wavelet wit`](./cli#wit):
@@ -94,7 +94,7 @@ The interface's WIT comes from `wit/deps/` (fetched by `wkg`, see [below](#proje
 
 ## Resources
 
-Resources come along for free in the design, because WIT canonicalizes methods as functions whose first parameter is the handle: `kv/open{name: "default"}` returns a handle, and `kv/get[bucket "greeting"]` calls a method on it. Owned handles are dropped when their binding scope ends; `drop(h)` forces it.
+Resources come along for free in the design, because WIT canonicalizes methods as functions whose first parameter is the handle: `kv/open({name: "default"})` returns a handle, and `kv/get(bucket "greeting")` calls a method on it. Owned handles are dropped when their binding scope ends; `drop(h)` forces it.
 
 :::info[Resources are partially implemented]
 The standard library ships one concrete resource — the mutable [`cell`](./stdlib#cells) (`cell-new`/`cell-get`/`cell-set`). **General resource handles** from imported interfaces — constructors, methods, and owned-handle drop semantics — are **not yet implemented**, and `drop` currently accepts any value and returns unit. See the [roadmap](./roadmap).
@@ -173,9 +173,9 @@ Import {pkg: "demo:caps/api"           as: caps}
 
 Export pick-word
 Def pick-word Fn {} -> string
-  Match words/pick{seed: 42} [
-    (ok(w)  caps/shout{phrase: w})
-    (err(e) str-cat["no word today: " e])
+  Match words/pick({seed: 42}) [
+    (ok(w)  caps/shout({phrase: w}))
+    (err(e) str-cat("no word today: " e))
   ]
 ```
 

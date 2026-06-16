@@ -15,10 +15,12 @@ Patterns are just **forms**, interpreted structurally:
 | a literal (`42`, `"hi"`, `true`, `'x'`, `{read}`) | a value equal to it |
 | a bare name (`x`) | anything — and **binds** the name |
 | a payload-less variant case in scope (`none`, an enum case) | that exact case, by equality |
-| a call shape (`ok(n)`, `point{x: a}`) | a variant case with that label, recursing into the payload |
+| a `(case …)` form whose head is a name (`ok(n)`, `point({x: a})`) | a variant case with that label, recursing into the payload |
 | a tuple `(a b)` | a tuple of the same length, element-wise |
 | a list `[a b c]` | a list of the same length, element-wise |
 | a record `{k: p}` | a record containing key `k` whose value matches `p` |
+
+A `(…)` pattern is both the variant-case shape and the tuple shape, so it is **disambiguated by the value** being matched: against a variant value, `(ok n)` reads as the case `ok` binding its payload to `n`; against a tuple value, the same parentheses destructure element-wise. (A literal tuple value comes from `Quote` or a builtin — see [evaluation](./evaluation).)
 
 ## Literals and the catch-all
 

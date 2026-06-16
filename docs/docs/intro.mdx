@@ -41,7 +41,7 @@ Package "demo:shout@0.1.0"
 
 Export shout
 Def shout Fn {phrase: string}
-  str-cat[upper(phrase) "!"]
+  str-cat(upper(phrase) "!")
 ```
 
 ```wavelet
@@ -58,7 +58,7 @@ Import {pkg: "wasi:io/streams@0.2.0" as: streams}
 Export {iface: "wasi:cli/run" name: run result: result}
 Def run Fn {}
   Let {out: stdout/get-stdout()}
-    Do [streams/blocking-write-and-flush[out sh/shout{phrase: "wasm"}]
+    Do [streams/blocking-write-and-flush(out sh/shout({phrase: "wasm"}))
         ok(0)]
 ```
 

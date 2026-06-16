@@ -85,25 +85,31 @@ fn eval_module(
     let path = modules[idx].path.clone();
 
     for root in roots {
-        let Node::Call(head, payload) = arena.node(root) else {
+        // Top-level forms are tuples `Tup[head, …args]`. The arity-1 special
+        // heads (Package/Target/Import/Export) take `items[1]` as their payload.
+        let Node::Tup(items) = arena.node(root) else {
             interp
                 .eval(&arena, root, &modules[idx].env)
                 .map_err(|e| format!("{path}: {e}"))?;
             continue;
         };
-        let head_name = match arena.node(*head) {
-            Node::Sym(s) => s.as_str(),
-            _ => "",
+        let head_name = match items.first() {
+            Some(&head) => match arena.node(head) {
+                Node::Sym(s) => s.as_str(),
+                _ => "",
+            },
+            None => "",
         };
-        match head_name {
-            "package-MACRO" | "def-type-MACRO" => {}
-            "export-MACRO" => {
-                let entry = export_entry(&arena, *payload)
+        let payload = items.get(1).copied();
+        match (head_name, payload) {
+            ("package-MACRO" | "target-MACRO" | "def-type-MACRO", _) => {}
+            ("export-MACRO", Some(payload)) => {
+                let entry = export_entry(&arena, payload)
                     .ok_or(format!("{path}: malformed Export"))?;
                 modules[idx].exports.push(entry);
             }
-            "import-MACRO" => {
-                let spec = parse_import(&arena, *payload)
+            ("import-MACRO", Some(payload)) => {
+                let spec = parse_import(&arena, payload)
                     .ok_or(format!("{path}: malformed Import"))?;
                 let dep = *by_package.get(&spec.package).ok_or(format!(
                     "{path}: unresolved import `{}` (no file provides package `{}`)",
@@ -151,9 +157,11 @@ fn eval_module(
 
 fn find_package(arena: &Arena, roots: &[NodeId]) -> Option<String> {
     for &root in roots {
-        if let Node::Call(head, payload) = arena.node(root) {
-            if matches!(arena.node(*head), Node::Sym(s) if s == "package-MACRO") {
-                if let Node::Str(s) = arena.node(*payload) {
+        if let Node::Tup(items) = arena.node(root) {
+            if items.len() >= 2
+                && matches!(arena.node(items[0]), Node::Sym(s) if s == "package-MACRO")
+            {
+                if let Node::Str(s) = arena.node(items[1]) {
                     return Some(strip_version(s));
                 }
             }

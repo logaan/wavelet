@@ -46,6 +46,18 @@ fn want_list(v: Value, name: &str) -> R<Vec<Value>> {
     }
 }
 
+/// The parts of a `str-cat`/sequence-style call, read from the bundled payload:
+/// ≥2 args bundle to a `Tup`, a single list arg stays a `Lst`, and a single
+/// scalar arg is one part on its own — so `str-cat(a b)`, `str-cat([a b])`, and
+/// `str-cat(x)` are all valid (matching the wasm backend, where each argument is
+/// one part).
+fn payload_parts(v: Value) -> Vec<Value> {
+    match v {
+        Value::Lst(items) | Value::Tup(items) => items,
+        other => vec![other],
+    }
+}
+
 fn want_str(v: Value, name: &str) -> R<String> {
     match v {
         Value::Str(s) => Ok(s),
@@ -262,7 +274,7 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             Ok(acc)
         }
         "str-cat" => {
-            let parts = want_list(arg, name)?;
+            let parts = payload_parts(arg);
             let mut out = String::new();
             for p in parts {
                 match p {
@@ -354,23 +366,27 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             let Some(env) = env else {
                 return err("`expand` needs an evaluation context (call it directly)");
             };
-            match &arg {
-                Value::Variant(head, payload) => match env.lookup(head) {
-                    Some(Value::Macro(mac)) => {
-                        let mut arena = crate::form::Arena::new();
-                        let pid = match payload {
-                            Some(p) => crate::value::value_to_form(p, &mut arena)
-                                .map_err(|msg| EvalError { msg })?,
-                            None => arena.add(crate::form::Node::Lst(vec![]), (0, 0)),
-                        };
-                        let arena = Rc::new(arena);
-                        let (out, root) = interp.expand_once(&mac, &arena, pid)?;
-                        Ok(form_to_value(&out, root))
-                    }
-                    _ => Ok(arg.clone()),
-                },
-                _ => Ok(arg.clone()),
+            // A quoted macro use is a tuple whose first element is the macro-name
+            // symbol, e.g. `Quote And(p q)` ⇒ `(and-MACRO, p, q)`. Anything else
+            // (an atom, a bare symbol, or an unknown head) is returned unchanged.
+            let Value::Tup(items) = &arg else {
+                return Ok(arg.clone());
+            };
+            let Some((Value::Variant(mac_name, None), rest)) = items.split_first() else {
+                return Ok(arg.clone());
+            };
+            let Some(Value::Macro(mac)) = env.lookup(mac_name) else {
+                return Ok(arg.clone());
+            };
+            let mut arena = crate::form::Arena::new();
+            let mut arg_nodes = Vec::with_capacity(rest.len());
+            for v in rest {
+                arg_nodes
+                    .push(crate::value::value_to_form(v, &mut arena).map_err(|msg| EvalError { msg })?);
             }
+            let arena = Rc::new(arena);
+            let (out, root) = interp.expand_once(&mac, &arena, &arg_nodes)?;
+            Ok(form_to_value(&out, root))
         }
         "form-kind" => {
             let kind = match &arg {
@@ -380,6 +396,8 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
                 Value::Char(_) => "char",
                 Value::Str(_) => "str",
                 Value::Variant(_, None) => "sym",
+                // A runtime variant carrying a payload (ok/err/some/…). Quoted
+                // calls are tuples now, so they report "tup", not "call".
                 Value::Variant(_, Some(_)) => "call",
                 Value::Tup(_) => "tup",
                 Value::Lst(_) => "lst",

@@ -70,7 +70,7 @@ fn external_wit_dep_matches_wavelet_dep_shape() {
         "Package \"acme:greet@0.1.0\"\n\n\
          Export greet\n\
          Def greet Fn {name: string}\n  \
-           str-cat[\"Hello, \" name \"!\"]\n",
+           str-cat(\"Hello, \" name \"!\")\n",
     );
 
     assert_same_dep(&from_wit, &from_wvl);

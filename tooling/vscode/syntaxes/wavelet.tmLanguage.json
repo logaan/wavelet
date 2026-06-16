@@ -61,9 +61,9 @@
       "match": "\\b[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*\\b"
     },
     "call-head": {
-      "comment": "Attachment rule: a (possibly %-escaped, possibly qualified) name immediately followed by ( [ or { is a call head.",
+      "comment": "Attachment rule: a (possibly %-escaped, possibly qualified) name immediately followed by ( is a call head. Only ( attaches now.",
       "name": "entity.name.function.wavelet",
-      "match": "%?[A-Za-z][\\w-]*(?:/%?[\\w-]+)?(?=[(\\[{])"
+      "match": "%?[A-Za-z][\\w-]*(?:/%?[\\w-]+)?(?=\\()"
     },
     "namespace": {
       "comment": "The alias side of a free-standing qualified reference (kv/get as a value).",

@@ -33,8 +33,10 @@ pub fn expand_file(arena: Arena, roots: &[NodeId]) -> Result<(Arena, Vec<NodeId>
 }
 
 fn is_def_macro(arena: &Arena, id: NodeId) -> bool {
-    if let Node::Call(head, _) = arena.node(id) {
-        return matches!(arena.node(*head), Node::Sym(s) if s == "def-macro-MACRO");
+    if let Node::Tup(items) = arena.node(id) {
+        if let Some(&head) = items.first() {
+            return matches!(arena.node(head), Node::Sym(s) if s == "def-macro-MACRO");
+        }
     }
     false
 }
@@ -46,17 +48,21 @@ fn expand_form(
     id: NodeId,
     out: &mut Arena,
 ) -> Result<NodeId, String> {
-    if let Node::Call(head, payload) = arena.node(id) {
-        if let Node::Sym(name) = arena.node(*head) {
-            // forms quoted at runtime are not expanded at compile time
-            if name == "quote-MACRO" || name == "quasi-MACRO" {
-                return Ok(copy_form(arena, id, out));
-            }
-            if let Some(Value::Macro(mac)) = env.lookup(name) {
-                let (expanded_arena, expanded) = interp
-                    .expand_once(&mac, arena, *payload)
-                    .map_err(|e| format!("expanding `{}`: {e}", name.trim_end_matches("-MACRO")))?;
-                return expand_form(interp, env, &expanded_arena, expanded, out);
+    if let Node::Tup(items) = arena.node(id) {
+        if let Some(&head) = items.first() {
+            if let Node::Sym(name) = arena.node(head) {
+                // forms quoted at runtime are not expanded at compile time
+                if name == "quote-MACRO" || name == "quasi-MACRO" {
+                    return Ok(copy_form(arena, id, out));
+                }
+                if let Some(Value::Macro(mac)) = env.lookup(name) {
+                    let (expanded_arena, expanded) = interp
+                        .expand_once(&mac, arena, &items[1..])
+                        .map_err(|e| {
+                            format!("expanding `{}`: {e}", name.trim_end_matches("-MACRO"))
+                        })?;
+                    return expand_form(interp, env, &expanded_arena, expanded, out);
+                }
             }
         }
     }
@@ -72,11 +78,8 @@ fn descend(
 ) -> Result<NodeId, String> {
     let span = arena.span(id);
     let node = match arena.node(id).clone() {
-        Node::Call(head, payload) => {
-            let h = expand_form(interp, env, arena, head, out)?;
-            let p = expand_form(interp, env, arena, payload, out)?;
-            Node::Call(h, p)
-        }
+        // A Tup's head is just its first element (macro heads are intercepted
+        // by `expand_form` before reaching here), so expand every element.
         Node::Tup(items) => Node::Tup(
             items
                 .iter()
@@ -104,11 +107,6 @@ fn descend(
 fn copy_form(arena: &Arena, id: NodeId, out: &mut Arena) -> NodeId {
     let span = arena.span(id);
     let node = match arena.node(id).clone() {
-        Node::Call(head, payload) => {
-            let h = copy_form(arena, head, out);
-            let p = copy_form(arena, payload, out);
-            Node::Call(h, p)
-        }
         Node::Tup(items) => Node::Tup(items.iter().map(|&x| copy_form(arena, x, out)).collect()),
         Node::Lst(items) => Node::Lst(items.iter().map(|&x| copy_form(arena, x, out)).collect()),
         Node::Rec(fields) => Node::Rec(

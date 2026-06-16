@@ -175,35 +175,36 @@ mod tests {
     #[test]
     fn desugar_table() {
         assert_eq!(read1("foo"), "foo");
-        assert_eq!(read1("f(x)"), "f(x)");
-        assert_eq!(read1("f(x y)"), "f((x, y))");
-        assert_eq!(read1("f[x y]"), "f([x, y])");
-        assert_eq!(read1("f{a: 1 b: 2}"), "f({a: 1, b: 2})");
-        assert_eq!(read1("f[]"), "f([])");
-        assert_eq!(read1("f()"), "f([])");
-        assert_eq!(read1("kv/get{bucket: b}"), "kv/get({bucket: b})");
+        assert_eq!(read1("f(x)"), "(f, x)");
+        assert_eq!(read1("f(x y)"), "(f, x, y)");
+        assert_eq!(read1("f([x y])"), "(f, [x, y])");
+        assert_eq!(read1("f({a: 1 b: 2})"), "(f, {a: 1, b: 2})");
+        assert_eq!(read1("f()"), "(f)");
+        assert_eq!(read1("kv/get({bucket: b})"), "(kv/get, {bucket: b})");
         assert_eq!(read1("(a b)"), "(a, b)");
-        assert_eq!(read1("(a)"), "a");
+        assert_eq!(read1("(a)"), "(a)");
         assert_eq!(read1("[a b]"), "[a, b]");
         assert_eq!(read1("{k: v}"), "{k: v}");
         assert_eq!(read1("{read write}"), "{read, write}");
         assert_eq!(read1("{}"), "{}");
-        assert_eq!(read1("If c t e"), "if-MACRO((c, t, e))");
-        assert_eq!(read1("Unquote(x)"), "unquote-MACRO(x)");
+        assert_eq!(read1("If c t e"), "(if-MACRO, c, t, e)");
+        assert_eq!(read1("Unquote(x)"), "(unquote-MACRO, x)");
+        // the list/record call sugar was removed — `[`/`{` no longer attach
+        assert!(read_file("f[x y]").is_err());
+        assert!(read_file("f{a: 1 b: 2}").is_err());
     }
 
     #[test]
     fn commas_are_whitespace() {
         assert_eq!(read1("[1, 2, 3]"), read1("[1 2 3]"));
-        assert_eq!(read1("f(x, y)"), "f((x, y))");
+        assert_eq!(read1("f(x, y)"), "(f, x, y)");
     }
 
     #[test]
     fn attachment_rule() {
-        assert_eq!(
-            read1(r#"delete-file{path: "foo.md" force: true}"#),
-            r#"delete-file({path: "foo.md", force: true})"#
-        );
+        // attaching `{` to a name is a read error now
+        assert!(read_file(r#"delete-file{path: "foo.md" force: true}"#).is_err());
+        // with whitespace, the name and the record are two separate forms
         assert_eq!(
             read_all(r#"delete-file {path: "foo.md" force: true}"#),
             vec!["delete-file".to_string(), r#"{path: "foo.md", force: true}"#.to_string()]
@@ -212,28 +213,28 @@ mod tests {
 
     #[test]
     fn macro_arity_reading() {
-        assert_eq!(read1("Quote foo"), "quote-MACRO(foo)");
+        assert_eq!(read1("Quote foo"), "(quote-MACRO, foo)");
         assert_eq!(
-            read1(r#"If eq[foo bar] say("match") say("nope")"#),
-            r#"if-MACRO((eq([foo, bar]), say("match"), say("nope")))"#
+            read1(r#"If eq(foo bar) say("match") say("nope")"#),
+            r#"(if-MACRO, (eq, foo, bar), (say, "match"), (say, "nope"))"#
         );
         // nested macro forms need no delimiters
         assert_eq!(
             read1("Def run Fn {} If c a b"),
-            "def-MACRO((run, fn-MACRO(({}, if-MACRO((c, a, b))))))"
+            "(def-MACRO, run, (fn-MACRO, {}, (if-MACRO, c, a, b)))"
         );
         // explicit payload overrides arity reading
-        assert_eq!(read1("If(c t e)"), "if-MACRO((c, t, e))");
+        assert_eq!(read1("If(c t e)"), "(if-MACRO, c, t, e)");
     }
 
     #[test]
     fn def_macro_registers_arity() {
         let forms = read_all(
             "DefMacro and {a b} Quasi If Unquote(a) Unquote(b) false\n\
-             And lt[x 10] gt[x 0]",
+             And lt(x 10) gt(x 0)",
         );
         assert_eq!(forms.len(), 2);
-        assert_eq!(forms[1], "and-MACRO((lt([x, 10]), gt([x, 0])))");
+        assert_eq!(forms[1], "(and-MACRO, (lt, x, 10), (gt, x, 0))");
     }
 
     #[test]
@@ -243,16 +244,16 @@ mod tests {
 
     #[test]
     fn title_case_does_not_collide_with_upper_words() {
-        assert_eq!(read1("parse-JSON(x)"), "parse-JSON(x)");
+        assert_eq!(read1("parse-JSON(x)"), "(parse-JSON, x)");
         // TryLet is not a core form, so it needs an explicit payload here
-        assert_eq!(read1("TryLet({a: b} c)"), "try-let-MACRO(({a: b}, c))");
+        assert_eq!(read1("TryLet({a: b} c)"), "(try-let-MACRO, {a: b}, c)");
     }
 
     #[test]
     fn comments_and_newlines() {
         assert_eq!(
             read1("// leading comment\nf(x) // trailing"),
-            "f(x)"
+            "(f, x)"
         );
     }
 
@@ -260,7 +261,7 @@ mod tests {
     fn match_clause_shape() {
         assert_eq!(
             read1("Match r [ (ok(text) process(text)) (err(e) handle(e)) ]"),
-            "match-MACRO((r, [(ok(text), process(text)), (err(e), handle(e))]))"
+            "(match-MACRO, r, [((ok, text), (process, text)), ((err, e), (handle, e))])"
         );
     }
 
@@ -282,9 +283,9 @@ mod tests {
     fn eval_expand_builtin() {
         let src = "DefMacro unless {c e} Quasi If Unquote(c) {} Unquote(e)\n\
                    expand(Quote Unless(false \"ran\"))";
-        assert_eq!(eval_str(src), "if-MACRO((false, {}, \"ran\"))");
+        assert_eq!(eval_str(src), "(if-MACRO, false, {}, \"ran\")");
         // non-macro forms pass through one step of expand unchanged
-        assert_eq!(eval_str("expand(Quote add[1 2])"), "add([1, 2])");
+        assert_eq!(eval_str("expand(Quote add(1 2))"), "(add, 1, 2)");
         assert_eq!(eval_str("expand(42)"), "42");
     }
 
@@ -293,26 +294,26 @@ mod tests {
         // a nested Quasi protects its Unquotes; Unquote(Unquote(x)) fires the
         // innermost one level down
         assert_eq!(
-            eval_str("Quasi [Unquote(add[1 2]) Quasi Unquote(add[1 2]) Quasi Unquote(Unquote(add[1 2]))]"),
-            "[3, quasi-MACRO(unquote-MACRO(add([1, 2]))), quasi-MACRO(unquote-MACRO(3))]"
+            eval_str("Quasi [Unquote(add(1 2)) Quasi Unquote(add(1 2)) Quasi Unquote(Unquote(add(1 2)))]"),
+            "[3, (quasi-MACRO, (unquote-MACRO, (add, 1, 2))), (quasi-MACRO, (unquote-MACRO, 3))]"
         );
     }
 
     #[test]
     fn eval_atoms_and_calls() {
-        assert_eq!(eval_str("add[1 2]"), "3");
-        assert_eq!(eval_str("str-cat[upper(\"wasm\") \"!\"]"), "\"WASM!\"");
-        assert_eq!(eval_str("eq[(1 2) (1 2)]"), "true");
-        assert_eq!(eval_str("If lt[1 2] \"yes\" \"no\""), "\"yes\"");
+        assert_eq!(eval_str("add(1 2)"), "3");
+        assert_eq!(eval_str("str-cat(upper(\"wasm\") \"!\")"), "\"WASM!\"");
+        assert_eq!(eval_str("eq(Quote (1 2) Quote (1 2))"), "true");
+        assert_eq!(eval_str("If lt(1 2) \"yes\" \"no\""), "\"yes\"");
     }
 
     #[test]
     fn eval_def_fn_and_payload_binding() {
-        // record payload binds by name, list payload by order (§4.2)
-        let src = "Def f Fn {path force} (path force)";
-        assert_eq!(eval_str(&format!("{src} f{{path: \"a\" force: true}}")), "(\"a\", true)");
-        assert_eq!(eval_str(&format!("{src} f[\"a\" true]")), "(\"a\", true)");
-        // a sole parameter receives the payload directly
+        // record payload binds by name, positional args by order (§4.2)
+        let src = "Def f Fn {path force} [path force]";
+        assert_eq!(eval_str(&format!("{src} f({{path: \"a\" force: true}})")), "[\"a\", true]");
+        assert_eq!(eval_str(&format!("{src} f(\"a\" true)")), "[\"a\", true]");
+        // a sole parameter receives the bundled payload directly
         assert_eq!(eval_str("Def id Fn {x} x id([1 2 3])"), "[1, 2, 3]");
         assert_eq!(eval_str("head([1 2 3])"), "1");
     }
@@ -337,10 +338,10 @@ mod tests {
 
     #[test]
     fn eval_let_do_match() {
-        assert_eq!(eval_str("Let {x: 2 y: mul[x 3]} add[x y]"), "8");
+        assert_eq!(eval_str("Let {x: 2 y: mul(x 3)} add(x y)"), "8");
         assert_eq!(eval_str("Do [drop(\"\") 7]"), "7");
         assert_eq!(
-            eval_str("Match ok(5) [ (ok(n) add[n 1]) (err(e) 0) ]"),
+            eval_str("Match ok(5) [ (ok(n) add(n 1)) (err(e) 0) ]"),
             "6"
         );
         assert_eq!(
@@ -355,7 +356,7 @@ mod tests {
     fn eval_tail_recursion_constant_stack() {
         assert_eq!(
             eval_str(
-                "Def count-down Fn {n} If eq[n 0] \"liftoff\" count-down(sub[n 1])\n\
+                "Def count-down Fn {n} If eq(n 0) \"liftoff\" count-down(sub(n 1))\n\
                  count-down(200000)"
             ),
             "\"liftoff\""
@@ -365,28 +366,28 @@ mod tests {
     #[test]
     fn eval_closures_capture() {
         assert_eq!(
-            eval_str("Def make Fn {n} Fn {m} add[n m] Def add5 make(5) add5(3)"),
+            eval_str("Def make Fn {n} Fn {m} add(n m) Def add5 make(5) add5(3)"),
             "8"
         );
-        assert_eq!(eval_str("map[Fn {x} mul[x x] [1 2 3]]"), "[1, 4, 9]");
+        assert_eq!(eval_str("map(Fn {x} mul(x x) [1 2 3])"), "[1, 4, 9]");
     }
 
     #[test]
     fn eval_quote_quasi_macro() {
-        assert_eq!(eval_str("Quote add[1 2]"), "add([1, 2])");
-        assert_eq!(eval_str("Let {x: 2} Quasi add[1 Unquote(x)]"), "add([1, 2])");
+        assert_eq!(eval_str("Quote add(1 2)"), "(add, 1, 2)");
+        assert_eq!(eval_str("Let {x: 2} Quasi add(1 Unquote(x))"), "(add, 1, 2)");
         assert_eq!(eval_str("Quasi [1 Splice([2 3]) 4]"), "[1, 2, 3, 4]");
         assert_eq!(
             eval_str(
                 "DefMacro and {a b} Quasi If Unquote(a) Unquote(b) false\n\
-                 And lt[1 2] lt[2 3]"
+                 And lt(1 2) lt(2 3)"
             ),
             "true"
         );
         assert_eq!(
             eval_str(
                 "DefMacro and {a b} Quasi If Unquote(a) Unquote(b) false\n\
-                 And lt[2 1] boom-unbound(1)"
+                 And lt(2 1) boom-unbound(1)"
             ),
             "false"
         );
@@ -402,21 +403,21 @@ DefMacro try-let {binding body}
       (ok(Unquote(name))  Unquote(body))
       (err(e)             err(e))
     ]
-Def half Fn {n} If eq[rem[n 2] 0] ok(div[n 2]) err(\"odd\")
+Def half Fn {n} If eq(rem(n 2) 0) ok(div(n 2)) err(\"odd\")
 Def quarter Fn {n}
   TryLet {h: half(n)}
   TryLet {q: half(h)}
   ok(q)
-(quarter(12) quarter(6))";
-        assert_eq!(eval_str(src), "(ok(3), err(\"odd\"))");
+[quarter(12) quarter(6)]";
+        assert_eq!(eval_str(src), "[ok(3), err(\"odd\")]");
     }
 
     #[test]
     fn eval_cells_and_misc() {
-        assert_eq!(eval_str("Let {c: cell-new(1)} Do [cell-set[c 5] cell-get(c)]"), "5");
-        assert_eq!(eval_str("fold[Fn {a b} add[a b] 0 range[1 5]]"), "10");
+        assert_eq!(eval_str("Let {c: cell-new(1)} Do [cell-set(c 5) cell-get(c)]"), "5");
+        assert_eq!(eval_str("fold(Fn {a b} add(a b) 0 range(1 5))"), "10");
         assert_eq!(eval_str("to-string({a: 1})"), "\"{a: 1}\"");
-        assert_eq!(eval_str("read(\"ok(5)\")"), "ok(ok(5))");
+        assert_eq!(eval_str("read(\"ok(5)\")"), "ok((ok, 5))");
     }
 
     #[test]
@@ -425,7 +426,7 @@ Def quarter Fn {n}
         let src = "Package \"demo:shout@0.1.0\"\n\
                    Export shout\n\
                    Def shout Fn {phrase: string}\n\
-                     str-cat[upper(phrase) \"!\"]";
+                     str-cat(upper(phrase) \"!\")";
         let (arena, roots) = read_file(src).unwrap();
         let got = wit::synthesize(&arena, &roots).unwrap();
         let want = "\
@@ -478,7 +479,7 @@ world shout {
                    Def run Fn {}\n\
                      Match [\"wasm\"] [\n\
                        ([\"wasm\"] \"WASM!\")\n\
-                       ([w] str-cat[\"got \" w])\n\
+                       ([w] str-cat(\"got \" w))\n\
                        (other \"usage\")]";
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
@@ -515,13 +516,13 @@ world shout {
     #[test]
     fn emit_value_defs_and_list_literals() {
         let src = "Package \"demo:vals@0.1.0\"\n\
-                   Def greeting str-cat[\"hello\" \", world\"]\n\
+                   Def greeting str-cat(\"hello\" \", world\")\n\
                    Export run\n\
                    Def run Fn {}\n\
                      Do [\n\
                        greeting\n\
                        Match [\"a\" \"b\"] [\n\
-                         ([\"a\" x] str-cat[x])\n\
+                         ([\"a\" x] str-cat(x))\n\
                          (other \"no\")]]";
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
@@ -540,7 +541,7 @@ world shout {
                    Def run Fn {}\n\
                      Let {p: {x: 3 y: 7 label: \"pt\"}}\n\
                        Match p [\n\
-                         ({x: a label: l} str-cat[l to-string(a)])\n\
+                         ({x: a label: l} str-cat(l to-string(a)))\n\
                          (other \"no\")]";
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
@@ -562,8 +563,9 @@ world shout {
 
     #[test]
     fn emit_variants_and_tuples_componentize() {
-        // variant constructors (some/ok/err/none), variant patterns, tuple
-        // literals + tuple patterns, all in the wasm backend
+        // variant constructors (some/ok/err/none) and variant patterns, plus a
+        // tuple-payload variant: `some(1 2)` bundles its two args into a tuple
+        // payload, exercising tuple construction in the wasm backend
         let src = "Package \"demo:var@0.1.0\"\n\
                    Def describe Fn {r}\n\
                      Match r [\n\
@@ -571,14 +573,12 @@ world shout {
                        (err(e) e)\n\
                        (none \"nothing\")\n\
                        (some(x) to-string(x))]\n\
-                   Def pair-sum Fn {p}\n\
-                     Match p [((a b) add(a b)) (other 0)]\n\
                    Export run\n\
                    Def run Fn {}\n\
                      Do [\n\
                        describe(ok(42))\n\
                        describe(none)\n\
-                       to-string(pair-sum((10 20)))]";
+                       to-string(some(1 2))]";
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
@@ -595,7 +595,8 @@ world shout {
             "42"
         );
         assert_eq!(eval_str("Match none [(none \"y\") (some(x) \"n\")]"), "\"y\"");
-        assert_eq!(eval_str("Match (10 20) [((a b) add(a b)) (other 0)]"), "30");
+        // a tuple value (from Quote) destructures element-wise
+        assert_eq!(eval_str("Match Quote (10 20) [((a b) add(a b)) (other 0)]"), "30");
     }
 
     #[test]
@@ -619,7 +620,7 @@ world shout {
     fn wit_grouped_exports() {
         let src = "Package \"demo:gfx@0.1.0\"\n\
                    Export {iface: \"render\" name: frame}\n\
-                   Def frame Fn {label: string} str-cat[\"<\" label \">\"]\n\
+                   Def frame Fn {label: string} str-cat(\"<\" label \">\")\n\
                    Export ping\n\
                    Def ping Fn {} \"pong\"";
         let (arena, roots) = read_file(src).unwrap();
@@ -635,7 +636,7 @@ world shout {
         let src = "Package \"demo:i@0.1.0\"\n\
                    Export double\n\
                    Def double Fn {n: s64} helper(n)\n\
-                   Def helper Fn {x: s64} mul[x x]\n\
+                   Def helper Fn {x: s64} mul(x x)\n\
                    Export greet\n\
                    Def greet Fn {name: string} shout(name)\n\
                    Def shout Fn {s: string} upper(s)\n\
@@ -649,9 +650,9 @@ world shout {
     #[test]
     fn round_trip_is_stable() {
         for src in [
-            "f((x, y))",
-            "if-MACRO((c, t, e))",
-            r#"delete-file({path: "foo.md", force: true})"#,
+            "(f, x, y)",
+            "(if-MACRO, c, t, e)",
+            r#"(delete-file, {path: "foo.md", force: true})"#,
             "[1, 2, [3, (a, b)], {f: {read, write}}]",
         ] {
             assert_eq!(read1(src), src, "canonical text must read back unchanged");
@@ -709,9 +710,9 @@ world shout {
                     Export run\n\
                     Def run Fn {}\n\
                       Do [\n\
-                        lst/first-up{words: [\"hello\"]}\n\
-                        head(lst/echo{words: [\"a\" \"b\"]})\n\
-                        to-string(lst/sum3{ns: [10 20 12]})]";
+                        lst/first-up({words: [\"hello\"]})\n\
+                        head(lst/echo({words: [\"a\" \"b\"]}))\n\
+                        to-string(lst/sum3({ns: [10 20 12]}))]";
         let (ma, mr) = read_file(msrc).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
@@ -752,8 +753,8 @@ world shout {
                      Import {pkg: \"demo:geo/api\" as: g}\n\
                     Export run\n\
                     Def run Fn {}\n\
-                      Let {p: g/make-point{x: 3 y: 39}}\n\
-                        to-string(g/sum-coords{p: p})";
+                      Let {p: g/make-point({x: 3 y: 39})}\n\
+                        to-string(g/sum-coords({p: p}))";
         let (ma, mr) = read_file(msrc).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
@@ -778,7 +779,7 @@ world shout {
         // differing arm flat shapes, exercising the in-memory variant path)
         let psrc = "Package \"demo:opt@0.1.0\"\n\
                     Export {name: lookup params: {k: s64} result: option(s64)}\n\
-                    Def lookup Fn {k} If gt(k 0) some(mul[k 10]) none\n\
+                    Def lookup Fn {k} If gt(k 0) some(mul(k 10)) none\n\
                     Export {name: checked params: {k: s64} result: result(s64 string)}\n\
                     Def checked Fn {k} If gt(k 0) ok(k) err(\"nonpositive\")";
         let (pa, pr) = read_file(psrc).unwrap();
@@ -792,8 +793,8 @@ world shout {
                     Export run\n\
                     Def run Fn {}\n\
                       Do [\n\
-                        Match o/lookup{k: 4} [(some(v) to-string(v)) (none \"none\")]\n\
-                        Match o/checked{k: 0} [(ok(v) to-string(v)) (err(e) str-cat[e])]]";
+                        Match o/lookup({k: 4}) [(some(v) to-string(v)) (none \"none\")]\n\
+                        Match o/checked({k: 0}) [(ok(v) to-string(v)) (err(e) str-cat(e))]]";
         let (ma, mr) = read_file(msrc).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
@@ -819,7 +820,7 @@ world shout {
         let psrc = "Package \"demo:lr2@0.1.0\"\n\
                     DefType pt {x: s64 y: s64}\n\
                     Export {name: pts params: {n: s64} result: list(pt)}\n\
-                    Def pts Fn {n} [{x: n y: mul[n 2]} {x: add(n 1) y: 0}]";
+                    Def pts Fn {n} [{x: n y: mul(n 2)} {x: add(n 1) y: 0}]";
         let (pa, pr) = read_file(psrc).unwrap();
         let pinfo = wit::collect(&pa, &pr).unwrap();
         let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
@@ -836,7 +837,7 @@ world shout {
                     Export {name: mk params: {tag: string items: list(s64)} result: bag}\n\
                     Def mk Fn {tag: string items: list(s64)} {tag: tag items: items}\n\
                     Export {name: maybe params: {k: s64} result: option(list(s64))}\n\
-                    Def maybe Fn {k} If gt(k 0) some([k mul[k 2]]) none";
+                    Def maybe Fn {k} If gt(k 0) some([k mul(k 2)]) none";
         let (pa, pr) = read_file(psrc).unwrap();
         let pinfo = wit::collect(&pa, &pr).unwrap();
         let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
@@ -848,7 +849,7 @@ world shout {
     fn aot_expansion_feeds_the_wasm_backend() {
         let src = r#"
             Package "demo:twice@0.1.0"
-            DefMacro twice {x} Quasi mul[2 Unquote(x)]
+            DefMacro twice {x} Quasi mul(2 Unquote(x))
             Export double
             Def double Fn {n: s64} Twice(n)
         "#;
@@ -857,7 +858,7 @@ world shout {
         // the DefMacro form is gone and the call site is rewritten
         let printed: Vec<String> = roots.iter().map(|&r| print(&arena, r)).collect();
         assert!(printed.iter().all(|s| !s.contains("def-macro")));
-        assert!(printed.iter().any(|s| s.contains("mul([2, n])")), "{printed:?}");
+        assert!(printed.iter().any(|s| s.contains("(mul, 2, n)")), "{printed:?}");
         // and the expanded tree compiles to a component
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes = emit::emit_component(&arena, &roots, &info, &Default::default())

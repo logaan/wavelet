@@ -88,10 +88,9 @@ impl Interp {
                     None => err(format!("unbound qualified name `{q}` (missing import?)")),
                 }
             }
-            Node::Tup(items) => {
-                let vals = self.eval_each(arena, items, env)?;
-                Ok(Step::Done(Value::Tup(vals)))
-            }
+            // A parenthesized form in evaluation position is a call (§4.1):
+            // take items[0] as the head and apply it to the bundled args.
+            Node::Tup(items) => self.step_call(arena, items, env),
             Node::Lst(items) => {
                 let vals = self.eval_each(arena, items, env)?;
                 Ok(Step::Done(Value::Lst(vals)))
@@ -103,7 +102,6 @@ impl Interp {
                 }
                 Ok(Step::Done(Value::Rec(out)))
             }
-            Node::Call(head, payload) => self.step_call(arena, *head, *payload, env),
         }
     }
 
@@ -111,13 +109,16 @@ impl Interp {
         items.iter().map(|&i| self.eval(arena, i, env)).collect()
     }
 
-    fn step_call(&self, arena: &Rc<Arena>, head: NodeId, payload: NodeId, env: &Env) -> R<Step> {
+    fn step_call(&self, arena: &Rc<Arena>, items: &[NodeId], env: &Env) -> R<Step> {
+        let Some((&head, args)) = items.split_first() else {
+            return err("cannot evaluate empty form ()");
+        };
         let name = match arena.node(head) {
             Node::Sym(s) => s.clone(),
             Node::Qsym(a, n) => format!("{a}/{n}"),
-            _ => return err("call head must be a name"),
+            _ => return err("call head must be a name (use apply for a computed function)"),
         };
-        if let Some(step) = self.special_form(&name, arena, payload, env)? {
+        if let Some(step) = self.special_form(&name, arena, args, env)? {
             return Ok(step);
         }
         let f = match env.lookup(&name) {
@@ -125,10 +126,21 @@ impl Interp {
             None => return err(format!("unbound name `{name}` in call position")),
         };
         if let Value::Macro(c) = &f {
-            return self.expand_macro(c, arena, payload, env);
+            return self.expand_macro(c, arena, args, env);
         }
-        let arg = self.eval(arena, payload, env)?;
+        let arg = self.bundle_args(arena, args, env)?;
         self.apply_step(&f, arg, Some(env))
+    }
+
+    /// §4.2 argument bundling at a call: 0 args ⇒ the empty tuple, 1 arg ⇒ that
+    /// value directly, ≥2 args ⇒ a tuple. This reproduces the old payload shape,
+    /// so `bind_params` is unchanged.
+    fn bundle_args(&self, arena: &Rc<Arena>, args: &[NodeId], env: &Env) -> R<Value> {
+        match args {
+            [] => Ok(Value::Tup(vec![])),
+            [one] => self.eval(arena, *one, env),
+            many => Ok(Value::Tup(self.eval_each(arena, many, env)?)),
+        }
     }
 
     /// `env` is the caller's environment, used only by builtins that need to
@@ -151,12 +163,12 @@ impl Interp {
         &self,
         name: &str,
         arena: &Rc<Arena>,
-        payload: NodeId,
+        args: &[NodeId],
         env: &Env,
     ) -> R<Option<Step>> {
         let step = match name {
             "def-MACRO" => {
-                let [name_id, expr] = tup2(arena, payload, "Def")?;
+                let [name_id, expr] = args2(args, "Def")?;
                 let Node::Sym(n) = arena.node(name_id) else {
                     return err("Def expects a name");
                 };
@@ -165,7 +177,7 @@ impl Interp {
                 Step::Done(unit())
             }
             "fn-MACRO" => {
-                let [params_id, body] = tup2(arena, payload, "Fn")?;
+                let [params_id, body] = args2(args, "Fn")?;
                 let params = parse_params(arena, params_id)?;
                 Step::Done(Value::Closure(Rc::new(Closure {
                     params,
@@ -175,7 +187,7 @@ impl Interp {
                 })))
             }
             "if-MACRO" => {
-                let [c, t, e] = tup3(arena, payload, "If")?;
+                let [c, t, e] = args3(args, "If")?;
                 match self.eval(arena, c, env)? {
                     Value::Bool(true) => Step::Jump(arena.clone(), t, env.clone()),
                     Value::Bool(false) => Step::Jump(arena.clone(), e, env.clone()),
@@ -186,7 +198,7 @@ impl Interp {
                 }
             }
             "let-MACRO" => {
-                let [bindings, body] = tup2(arena, payload, "Let")?;
+                let [bindings, body] = args2(args, "Let")?;
                 let child = env.child();
                 match arena.node(bindings) {
                     Node::Rec(fields) => {
@@ -201,7 +213,8 @@ impl Interp {
                 Step::Jump(arena.clone(), body, child)
             }
             "do-MACRO" => {
-                let Node::Lst(items) = arena.node(payload) else {
+                let [list] = args1(args, "Do")?;
+                let Node::Lst(items) = arena.node(list) else {
                     return err("Do expects a list of expressions");
                 };
                 match items.split_last() {
@@ -215,7 +228,7 @@ impl Interp {
                 }
             }
             "match-MACRO" => {
-                let [scrut, clauses] = tup2(arena, payload, "Match")?;
+                let [scrut, clauses] = args2(args, "Match")?;
                 let v = self.eval(arena, scrut, env)?;
                 let Node::Lst(items) = arena.node(clauses) else {
                     return err("Match expects a list of (pattern result) clauses");
@@ -237,13 +250,19 @@ impl Interp {
                     crate::value::print_value(&v)
                 ));
             }
-            "quote-MACRO" => Step::Done(form_to_value(arena, payload)),
-            "quasi-MACRO" => Step::Done(self.quasi(arena, payload, env, 1)?),
+            "quote-MACRO" => {
+                let [form] = args1(args, "Quote")?;
+                Step::Done(form_to_value(arena, form))
+            }
+            "quasi-MACRO" => {
+                let [form] = args1(args, "Quasi")?;
+                Step::Done(self.quasi(arena, form, env, 1)?)
+            }
             "unquote-MACRO" | "splice-MACRO" => {
                 return err("Unquote/Splice are only valid inside Quasi");
             }
             "def-macro-MACRO" => {
-                let [name_id, params_id, body] = tup3(arena, payload, "DefMacro")?;
+                let [name_id, params_id, body] = args3(args, "DefMacro")?;
                 let Node::Sym(n) = arena.node(name_id) else {
                     return err("DefMacro expects a name");
                 };
@@ -258,7 +277,7 @@ impl Interp {
                 Step::Done(unit())
             }
             "the-MACRO" => {
-                let [ty, expr] = tup2(arena, payload, "The")?;
+                let [ty, expr] = args2(args, "The")?;
                 let v = self.eval(arena, expr, env)?;
                 if let Node::Sym(t) = arena.node(ty) {
                     if !check_type(t, &v) {
@@ -287,32 +306,35 @@ impl Interp {
         &self,
         mac: &Rc<Closure>,
         arena: &Rc<Arena>,
-        payload: NodeId,
+        args: &[NodeId],
         use_env: &Env,
     ) -> R<Step> {
-        let (out, root) = self.expand_once(mac, arena, payload)?;
+        let (out, root) = self.expand_once(mac, arena, args)?;
         Ok(Step::Jump(out, root, use_env.clone()))
     }
 
-    /// One macro expansion step: bind argument forms, evaluate the body, and
-    /// return the resulting form in a fresh arena. Also used by the
-    /// ahead-of-time expander (`crate::expand`).
+    /// One macro expansion step: bind the argument *forms* to the macro's
+    /// parameters, evaluate the body, and return the resulting form in a fresh
+    /// arena. Also used by the ahead-of-time expander (`crate::expand`).
     pub fn expand_once(
         &self,
         mac: &Rc<Closure>,
         arena: &Rc<Arena>,
-        payload: NodeId,
+        args: &[NodeId],
     ) -> R<(Rc<Arena>, NodeId)> {
         let n = mac.params.len();
-        let args: Vec<NodeId> = match (n, arena.node(payload)) {
-            (0, _) => vec![],
-            (1, _) => vec![payload],
-            (_, Node::Tup(items)) if items.len() == n => items.clone(),
-            _ => return err(format!("macro expects {n} arguments")),
-        };
         let env = mac.env.child();
-        for (param, &arg) in mac.params.iter().zip(&args) {
-            env.define(param.name.clone(), form_to_value(arena, arg));
+        if n == args.len() {
+            for (param, &arg) in mac.params.iter().zip(args) {
+                env.define(param.name.clone(), form_to_value(arena, arg));
+            }
+        } else if n == 1 {
+            // A 1-param macro receiving several explicit args gets them as a
+            // tuple form (rare, but well-defined).
+            let tup = Value::Tup(args.iter().map(|&a| form_to_value(arena, a)).collect());
+            env.define(mac.params[0].name.clone(), tup);
+        } else {
+            return err(format!("macro expects {n} arguments"));
         }
         let result = self.eval(&mac.arena, mac.body, &env)?;
         let mut out = Arena::new();
@@ -327,37 +349,38 @@ impl Interp {
     /// is rebuilt with its contents processed one level deeper.
     fn quasi(&self, arena: &Rc<Arena>, id: NodeId, env: &Env, depth: u32) -> R<Value> {
         match arena.node(id) {
-            Node::Call(head, payload) => {
-                let name = match arena.node(*head) {
-                    Node::Sym(s) => s.clone(),
-                    Node::Qsym(a, n) => format!("{a}/{n}"),
-                    _ => return err("call head must be a name"),
-                };
-                match name.as_str() {
-                    "unquote-MACRO" if depth == 1 => self.eval(arena, *payload, env),
-                    "splice-MACRO" if depth == 1 => {
-                        err("Splice must appear inside a sequence")
-                    }
-                    _ => {
-                        let depth = match name.as_str() {
-                            "quasi-MACRO" => depth + 1,
-                            "unquote-MACRO" | "splice-MACRO" => depth - 1,
-                            _ => depth,
-                        };
-                        let pv = match arena.node(*payload) {
-                            Node::Tup(items) => {
-                                Value::Tup(self.quasi_seq(arena, items, env, depth)?)
+            // Calls are tuples now. Treat the Unquote/Splice/Quasi heads
+            // specially (all arity 1, so a 2-element tuple); every other tuple
+            // is rebuilt element-wise as a tuple value.
+            Node::Tup(items) => {
+                if items.len() == 2 {
+                    if let Node::Sym(name) = arena.node(items[0]) {
+                        let arg = items[1];
+                        match name.as_str() {
+                            "unquote-MACRO" if depth == 1 => return self.eval(arena, arg, env),
+                            "splice-MACRO" if depth == 1 => {
+                                return err("Splice must appear inside a sequence");
                             }
-                            Node::Lst(items) => {
-                                Value::Lst(self.quasi_seq(arena, items, env, depth)?)
+                            "unquote-MACRO" | "splice-MACRO" if depth > 1 => {
+                                let inner = self.quasi(arena, arg, env, depth - 1)?;
+                                return Ok(Value::Tup(vec![
+                                    Value::Variant(name.clone(), None),
+                                    inner,
+                                ]));
                             }
-                            _ => self.quasi(arena, *payload, env, depth)?,
-                        };
-                        Ok(Value::Variant(name, Some(Rc::new(pv))))
+                            "quasi-MACRO" => {
+                                let inner = self.quasi(arena, arg, env, depth + 1)?;
+                                return Ok(Value::Tup(vec![
+                                    Value::Variant(name.clone(), None),
+                                    inner,
+                                ]));
+                            }
+                            _ => {}
+                        }
                     }
                 }
+                Ok(Value::Tup(self.quasi_seq(arena, items, env, depth)?))
             }
-            Node::Tup(items) => Ok(Value::Tup(self.quasi_seq(arena, items, env, depth)?)),
             Node::Lst(items) => Ok(Value::Lst(self.quasi_seq(arena, items, env, depth)?)),
             Node::Rec(fields) => {
                 let mut out = Vec::with_capacity(fields.len());
@@ -380,19 +403,22 @@ impl Interp {
         let mut out = Vec::with_capacity(items.len());
         for &item in items {
             if depth == 1 {
-                if let Node::Call(head, payload) = arena.node(item) {
-                    if let Node::Sym(s) = arena.node(*head) {
-                        if s == "splice-MACRO" {
-                            match self.eval(arena, *payload, env)? {
-                                Value::Lst(vs) => out.extend(vs),
-                                v => {
-                                    return err(format!(
-                                        "Splice expects a list, got {}",
-                                        crate::value::print_value(&v)
-                                    ))
+                // A splice is `(Splice expr)` ⇒ the tuple `[splice-MACRO, expr]`.
+                if let Node::Tup(tup) = arena.node(item) {
+                    if tup.len() == 2 {
+                        if let Node::Sym(s) = arena.node(tup[0]) {
+                            if s == "splice-MACRO" {
+                                match self.eval(arena, tup[1], env)? {
+                                    Value::Lst(vs) => out.extend(vs),
+                                    v => {
+                                        return err(format!(
+                                            "Splice expects a list, got {}",
+                                            crate::value::print_value(&v)
+                                        ))
+                                    }
                                 }
+                                continue;
                             }
-                            continue;
                         }
                     }
                 }
@@ -527,18 +553,29 @@ fn match_pattern(
             Ok(true)
         }
         Node::Qsym(..) => err("qualified names cannot appear in patterns"),
-        Node::Call(head, payload) => {
-            let Node::Sym(case) = arena.node(*head) else {
-                return err("pattern call head must be a name");
-            };
-            match v {
-                Value::Variant(c, Some(p)) if c == case => {
-                    match_pattern(arena, *payload, p, binds, scope)
-                }
-                _ => Ok(false),
-            }
-        }
+        // A tuple pattern is disambiguated by the scrutinee value: against a
+        // variant it is a variant-case pattern `(case …rest)`; against a tuple
+        // value it destructures element-wise.
         Node::Tup(pats) => match v {
+            Value::Variant(cval, payload)
+                if !pats.is_empty()
+                    && matches!(arena.node(pats[0]), Node::Sym(c) if c == cval) =>
+            {
+                let rest = &pats[1..];
+                match (rest.len(), payload) {
+                    (0, None) => Ok(true),
+                    (0, _) => Ok(false),
+                    (1, Some(p)) => match_pattern(arena, rest[0], p, binds, scope),
+                    (1, None) => Ok(false),
+                    (_, Some(p)) => match &**p {
+                        Value::Tup(vs) if vs.len() == rest.len() => {
+                            match_all(arena, rest, vs, binds, scope)
+                        }
+                        _ => Ok(false),
+                    },
+                    (_, None) => Ok(false),
+                }
+            }
             Value::Tup(vs) if vs.len() == pats.len() => {
                 match_all(arena, pats, vs, binds, scope)
             }
@@ -584,16 +621,23 @@ fn match_all(
     Ok(true)
 }
 
-fn tup2(arena: &Arena, id: NodeId, what: &str) -> R<[NodeId; 2]> {
-    match arena.node(id) {
-        Node::Tup(items) if items.len() == 2 => Ok([items[0], items[1]]),
+fn args1(args: &[NodeId], what: &str) -> R<[NodeId; 1]> {
+    match args {
+        [a] => Ok([*a]),
+        _ => err(format!("{what} expects 1 argument")),
+    }
+}
+
+fn args2(args: &[NodeId], what: &str) -> R<[NodeId; 2]> {
+    match args {
+        [a, b] => Ok([*a, *b]),
         _ => err(format!("{what} expects 2 arguments")),
     }
 }
 
-fn tup3(arena: &Arena, id: NodeId, what: &str) -> R<[NodeId; 3]> {
-    match arena.node(id) {
-        Node::Tup(items) if items.len() == 3 => Ok([items[0], items[1], items[2]]),
+fn args3(args: &[NodeId], what: &str) -> R<[NodeId; 3]> {
+    match args {
+        [a, b, c] => Ok([*a, *b, *c]),
         _ => err(format!("{what} expects 3 arguments")),
     }
 }

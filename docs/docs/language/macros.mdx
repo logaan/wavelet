@@ -57,7 +57,7 @@ DefMacro try-let {binding body}        // binding is a one-field record form
     ]
 
 Def load-config Fn {path: string}
-  TryLet {text: read-file{path: path}}
+  TryLet {text: read-file({path: path})}
   TryLet {form: read(text)}
   ok(form)
 ```

@@ -30,12 +30,6 @@ fn write_form(arena: &Arena, id: NodeId, out: &mut String) {
             out.push('/');
             out.push_str(name);
         }
-        Node::Call(head, payload) => {
-            write_form(arena, *head, out);
-            out.push('(');
-            write_form(arena, *payload, out);
-            out.push(')');
-        }
         Node::Tup(items) => write_seq(arena, items, '(', ')', out),
         Node::Lst(items) => write_seq(arena, items, '[', ']', out),
         Node::Rec(fields) => {

@@ -21,41 +21,41 @@ Because commas are optional, Wavelet source is a *superset* of WAVE text: any va
 
 ## The attachment rule
 
-Wavelet has exactly **one** whitespace-sensitive rule. A `(`, `[`, or `{` that *immediately* follows an identifier — with no intervening whitespace — supplies that identifier's payload. This is a call form. With whitespace in between, the bracketed expression is a separate, free-standing value.
+Wavelet has exactly **one** whitespace-sensitive rule. Only a `(` that *immediately* follows an identifier — with no intervening whitespace — forms a call: the identifier becomes the call's head and the parenthesized forms its arguments. A `[` or `{` no longer attaches (the list/record call sugar was removed); attaching either is a read error pointing at the new spelling. With whitespace in between, the bracketed expression is a separate, free-standing value.
 
 ```wavelet
-delete-file{path: "foo.md" force: true}   // a call: payload is a record
-delete-file {path: "foo.md" force: true}  // two forms: a variable, then a record
+delete-file({path: "foo.md" force: true})  // a call: the head plus a record argument
+delete-file {path: "foo.md" force: true}   // two forms: a variable, then a record
 ```
 
 ## Desugaring
 
-Every surface form desugars to a canonical WAVE value:
+Every surface form desugars to a canonical WAVE value. A call is a tuple whose first element is the head:
 
 | You write | Canonical WAVE form | Meaning |
 |---|---|---|
 | `true` `42` `-1.5` `'x'` `"hi"` | (unchanged) | atom, self-evaluating |
-| `foo` | `foo` | variable reference — a bare, payload-less case |
-| `f(x)` | `f(x)` | call with a single payload value |
-| `f(x y)` | `f((x, y))` | call with a tuple payload — positional arguments |
-| `f[x y]` | `f([x, y])` | call with a list payload — positional arguments |
-| `f{a: 1 b: 2}` | `f({a: 1, b: 2})` | call with a record payload — named arguments |
-| `f[]` or `f()` | `f([])` | call with zero arguments |
-| `kv/get{...}` | qualified call | name `get` from the import aliased `kv` |
-| `(a b)` | `(a, b)` | tuple (two or more elements) |
-| `(a)` | `a` | grouping — parentheses around one form are transparent |
+| `foo` | `foo` | variable reference — a bare, payload-less case (a symbol) |
+| `f(x)` | `(f, x)` | call with one argument |
+| `f(x y)` | `(f, x, y)` | call with positional arguments |
+| `f([x y])` | `(f, [x, y])` | call with a list argument |
+| `f({a: 1 b: 2})` | `(f, {a: 1, b: 2})` | call with a record argument — named arguments |
+| `f()` | `(f)` | zero-argument call |
+| `kv/get({...})` | qualified call | name `get` from the import aliased `kv` |
+| `(a b)` | `(a, b)` | a parenthesized form — a call in evaluation position, a tuple under `Quote` |
+| `(a)` | `(a)` | a zero-argument call of `a` (no transparent grouping) |
 | `[a b]` | `[a, b]` | list |
 | `{k: v}` | `{k: v}` | record |
 | `{read write}` | `{read, write}` | flags |
-| `If c t e` | `if-MACRO((c, t, e))` | macro use (see below) |
+| `If c t e` | `(if-MACRO, c, t, e)` | macro use (see below) |
 
-Function calls are **variant cases**. `log("hi")` is, as data, the WAVE variant case `log` carrying a string; `delete-file{...}` is the case `delete-file` carrying a record. A bare identifier is a payload-less case, which Wavelet reads as a variable reference.
+Function calls are **tuples** whose first element is the head. `log("hi")` is, as data, the WAVE tuple `(log, "hi")`; `delete-file({...})` is `(delete-file, {…})`. A bare identifier is a payload-less variant case (a symbol), which Wavelet reads as a variable reference. In evaluation position a parenthesized form is always a call; a literal tuple **value** comes from `Quote` (or a builtin). The old `f[…]` / `f{…}` sugar is gone — write `f([…])` and `f({…})`.
 
 You can see the desugaring directly with `wavelet read`, which prints the canonical WAVE tree:
 
 ```console
 $ echo 'f(x y)' | wavelet read
-f((x, y))
+(f, x, y)
 ```
 
 Inside the playground, `Quote` shows you the same data shape:
@@ -69,19 +69,19 @@ A **TitleCase** identifier — mixed-case words, each starting with a capital (`
 A TitleCase head does **not** require parentheses. The reader looks up the macro's declared **arity** and consumes exactly that many following forms:
 
 ```wavelet
-If eq[foo bar] log("match") log("nope")
+If eq(foo bar) log("match") log("nope")
 ```
 
 desugars to
 
 ```wavelet
-if-MACRO((eq([foo, bar]), log("match"), log("nope")))
+(if-MACRO, (eq, foo, bar), (log, "match"), (log, "nope"))
 ```
 
 Three consequences:
 
 1. **Define before use.** A macro must be in scope before it's read — a core form, defined earlier in the file, or imported. The reader processes a file top to bottom and always knows every visible macro's arity.
-2. **Explicit payload overrides arity reading.** `Unquote(x)` and `If(c t e)` attach their payload directly. The fully explicit `if-MACRO((c, t, e))` is always available too, and is what macros emit.
+2. **Explicit payload reads identically to the arity form.** `Unquote(x)` and `If(c t e)` attach their arguments directly — `If(c t e)` and `If c t e` both read to `(if-MACRO, c, t, e)`. The fully explicit `(if-MACRO, c, t, e)` is always available too, and is what macros emit.
 3. **Nesting needs no delimiters** when the last argument is itself a macro: `Def run Fn {} If c a b` reads exactly as intended, since each TitleCase head consumes its own arity recursively.
 
 Variadic macros take a single list argument — arity stays fixed, the list flexes (`Do [a b c]`).
@@ -92,15 +92,14 @@ Variadic macros take a single list argument — arity stays fixed, the list flex
 
 ```text
 file      := form*
-form      := atom | name | qname | call | tuple | group
+form      := atom | name | qname | call | tuple
            | list | record | flags | macroform
 atom      := bool | int | float | char | string
 name      := kebab-label                      // WIT identifier, % escape allowed
 qname     := name "/" name
 call      := (name | qname | title) payload   // payload ATTACHED: no whitespace
-payload   := "(" form* ")" | "[" form* "]" | "{" recbody | flagbody "}"
-tuple     := "(" form form+ ")"
-group     := "(" form ")"                     // transparent
+payload   := "(" form* ")"                    // only `(` attaches now
+tuple     := "(" form* ")"                    // the call form; also a tuple value under Quote
 list      := "[" form* "]"
 record    := "{" (name ":" form)* "}"
 flags     := "{" name* "}"

@@ -58,21 +58,27 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     let mut docs = HashMap::new();
 
     for &root in roots {
-        let Node::Call(head, payload) = arena.node(root) else { continue };
-        let Node::Sym(head_name) = arena.node(*head) else { continue };
+        // Top-level forms are tuples `Tup[head, …args]`. The arity-1 special
+        // heads take their single payload from `items[1]`; Def/DefType take two.
+        let Node::Tup(items) = arena.node(root) else { continue };
+        let Some(&head) = items.first() else { continue };
+        let Node::Sym(head_name) = arena.node(head) else { continue };
         if let Some(d) = arena.doc(root) {
-            if let Some(name) = defined_name(arena, *payload) {
+            if let Some(name) = items.get(1).and_then(|&p| defined_name(arena, p)) {
                 docs.insert(name, d.to_string());
             }
         }
         match head_name.as_str() {
             "package-MACRO" => {
-                if let Node::Str(s) = arena.node(*payload) {
-                    package = Some(s.clone());
+                if let Some(&p) = items.get(1) {
+                    if let Node::Str(s) = arena.node(p) {
+                        package = Some(s.clone());
+                    }
                 }
             }
             "import-MACRO" => {
-                let spec = match arena.node(*payload) {
+                let Some(&p) = items.get(1) else { continue };
+                let spec = match arena.node(p) {
                     Node::Str(s) => Some((s.clone(), None)),
                     Node::Rec(fields) => {
                         let mut pkg = None;
@@ -96,44 +102,40 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                 });
                 imports.push(ImportInfo { path, package: pkg_part, alias });
             }
-            "export-MACRO" => match arena.node(*payload) {
-                Node::Sym(s) => export_decls.push((s.clone(), None)),
-                Node::Rec(fields) => {
-                    let sig = parse_explicit_sig(arena, fields).ok_or("malformed Export")?;
-                    export_decls.push((sig.name.clone(), Some(sig)));
+            "export-MACRO" => {
+                let Some(&p) = items.get(1) else { continue };
+                match arena.node(p) {
+                    Node::Sym(s) => export_decls.push((s.clone(), None)),
+                    Node::Rec(fields) => {
+                        let sig = parse_explicit_sig(arena, fields).ok_or("malformed Export")?;
+                        export_decls.push((sig.name.clone(), Some(sig)));
+                    }
+                    _ => return Err("malformed Export".into()),
                 }
-                _ => return Err("malformed Export".into()),
-            },
+            }
             "def-type-MACRO" => {
-                if let Node::Tup(items) = arena.node(*payload) {
-                    if items.len() == 2 {
-                        if let Node::Sym(name) = arena.node(items[0]) {
-                            types.push((name.clone(), items[1]));
-                        }
+                if items.len() >= 3 {
+                    if let Node::Sym(name) = arena.node(items[1]) {
+                        types.push((name.clone(), items[2]));
                     }
                 }
             }
             "def-MACRO" => {
-                if let Node::Tup(items) = arena.node(*payload) {
-                    if items.len() == 2 {
-                        if let Node::Sym(name) = arena.node(items[0]) {
-                            let mut is_fn = false;
-                            if let Node::Call(fh, fp) = arena.node(items[1]) {
-                                if matches!(arena.node(*fh), Node::Sym(s) if s == "fn-MACRO") {
-                                    if let Node::Tup(fn_parts) = arena.node(*fp) {
-                                        if fn_parts.len() == 2 {
-                                            defs.insert(
-                                                name.clone(),
-                                                (fn_parts[0], fn_parts[1]),
-                                            );
-                                            is_fn = true;
-                                        }
-                                    }
-                                }
+                if items.len() >= 3 {
+                    if let Node::Sym(name) = arena.node(items[1]) {
+                        // A function def binds an `Fn` form, which now reads as
+                        // `Tup[fn-MACRO, params, body]`.
+                        let mut is_fn = false;
+                        if let Node::Tup(fn_items) = arena.node(items[2]) {
+                            if fn_items.len() == 3
+                                && matches!(arena.node(fn_items[0]), Node::Sym(s) if s == "fn-MACRO")
+                            {
+                                defs.insert(name.clone(), (fn_items[1], fn_items[2]));
+                                is_fn = true;
                             }
-                            if !is_fn {
-                                value_defs.push((name.clone(), items[1]));
-                            }
+                        }
+                        if !is_fn {
+                            value_defs.push((name.clone(), items[2]));
                         }
                     }
                 }
@@ -398,11 +400,19 @@ pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String
             for &c in cases {
                 match arena.node(c) {
                     Node::Sym(s) => parts.push(s.clone()),
-                    Node::Call(h, p) => {
-                        let Node::Sym(case) = arena.node(*h) else {
+                    // A payloaded case like `days(30)` reads as `Tup[days, 30]`.
+                    Node::Tup(case_items) => {
+                        let Some((&h, payload)) = case_items.split_first() else {
                             return Err(format!("bad variant case in `{name}`"));
                         };
-                        parts.push(format!("{case}({})", type_text(arena, *p)?));
+                        let Node::Sym(case) = arena.node(h) else {
+                            return Err(format!("bad variant case in `{name}`"));
+                        };
+                        let payload_text: Vec<String> = payload
+                            .iter()
+                            .map(|&i| type_text(arena, i))
+                            .collect::<Result<_, _>>()?;
+                        parts.push(format!("{case}({})", payload_text.join(", ")));
                     }
                     _ => return Err(format!("bad variant case in `{name}`")),
                 }
@@ -414,21 +424,22 @@ pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String
 }
 
 /// A type form as WIT text: `string`, `list(u8)` -> `list<u8>`,
-/// `result(t e)` -> `result<t, e>`, `tuple[a b]` -> `tuple<a, b>`.
+/// `result(t e)` -> `result<t, e>`, `tuple(a b)` -> `tuple<a, b>`. A bare type
+/// name is a `Sym`; an applied constructor is a `Tup[ctor, arg…]`.
 pub fn type_text(arena: &Arena, id: NodeId) -> Result<String, String> {
     match arena.node(id) {
         Node::Sym(s) => Ok(s.clone()),
-        Node::Call(head, payload) => {
-            let Node::Sym(ctor) = arena.node(*head) else {
+        Node::Tup(items) => {
+            let Some((&head, args)) = items.split_first() else {
                 return Err("bad type form".into());
             };
-            let args = match arena.node(*payload) {
-                Node::Tup(items) | Node::Lst(items) => items
-                    .iter()
-                    .map(|&i| type_text(arena, i))
-                    .collect::<Result<Vec<_>, _>>()?,
-                _ => vec![type_text(arena, *payload)?],
+            let Node::Sym(ctor) = arena.node(head) else {
+                return Err("bad type form".into());
             };
+            let args: Vec<String> = args
+                .iter()
+                .map(|&i| type_text(arena, i))
+                .collect::<Result<_, _>>()?;
             Ok(format!("{ctor}<{}>", args.join(", ")))
         }
         _ => Err("bad type form".into()),
@@ -470,8 +481,11 @@ fn infer(
             Some(t) => Inferred::Known(t.clone()),
             None => Inferred::Unknown,
         },
-        Node::Call(head, payload) => {
-            let Node::Sym(name) = arena.node(*head) else {
+        Node::Tup(items) => {
+            let Some((&head, args)) = items.split_first() else {
+                return Inferred::Unknown;
+            };
+            let Node::Sym(name) = arena.node(head) else {
                 return Inferred::Unknown;
             };
             match name.as_str() {
@@ -483,76 +497,58 @@ fn infer(
                 }
                 "len" => Inferred::Known("s64".into()),
                 "add" | "sub" | "mul" | "div" | "rem" | "neg" | "min" | "max" | "abs" => {
-                    match arena.node(*payload) {
-                        Node::Lst(items) | Node::Tup(items) => {
-                            let any_dec = items.iter().any(|&i| {
-                                matches!(infer(arena, i, params, defs, visiting),
-                                         Inferred::Known(t) if t == "f64")
-                            });
-                            Inferred::Known(if any_dec { "f64" } else { "s64" }.into())
-                        }
-                        _ => Inferred::Known("s64".into()),
-                    }
+                    let any_dec = args.iter().any(|&i| {
+                        matches!(infer(arena, i, params, defs, visiting),
+                                 Inferred::Known(t) if t == "f64")
+                    });
+                    Inferred::Known(if any_dec { "f64" } else { "s64" }.into())
                 }
                 "drop" | "cell-set" => Inferred::Unit,
-                "if-MACRO" => match arena.node(*payload) {
-                    Node::Tup(items) if items.len() == 3 => unify(
-                        infer(arena, items[1], params, defs, visiting),
-                        infer(arena, items[2], params, defs, visiting),
-                    ),
-                    _ => Inferred::Unknown,
-                },
-                "do-MACRO" => match arena.node(*payload) {
+                "if-MACRO" if args.len() == 3 => unify(
+                    infer(arena, args[1], params, defs, visiting),
+                    infer(arena, args[2], params, defs, visiting),
+                ),
+                "do-MACRO" if args.len() == 1 => match arena.node(args[0]) {
                     Node::Lst(items) => match items.last() {
                         Some(&last) => infer(arena, last, params, defs, visiting),
                         None => Inferred::Unit,
                     },
                     _ => Inferred::Unknown,
                 },
-                "let-MACRO" => match arena.node(*payload) {
-                    Node::Tup(items) if items.len() == 2 => {
-                        let mut scope = params.clone();
-                        if let Node::Rec(fields) = arena.node(items[0]) {
-                            for (k, v) in fields {
-                                if let Inferred::Known(t) = infer(arena, *v, &scope, defs, visiting)
-                                {
-                                    scope.insert(k.clone(), t);
+                "let-MACRO" if args.len() == 2 => {
+                    let mut scope = params.clone();
+                    if let Node::Rec(fields) = arena.node(args[0]) {
+                        for (k, v) in fields {
+                            if let Inferred::Known(t) = infer(arena, *v, &scope, defs, visiting) {
+                                scope.insert(k.clone(), t);
+                            }
+                        }
+                    }
+                    infer(arena, args[1], &scope, defs, visiting)
+                }
+                // unify every clause's result type; pattern-bound names are
+                // left untyped (best effort, as elsewhere)
+                "match-MACRO" if args.len() == 2 => match arena.node(args[1]) {
+                    Node::Lst(clauses) => {
+                        let mut acc: Option<Inferred> = None;
+                        for &c in clauses {
+                            if let Node::Tup(pair) = arena.node(c) {
+                                if pair.len() == 2 {
+                                    let r = infer(arena, pair[1], params, defs, visiting);
+                                    acc = Some(match acc {
+                                        None => r,
+                                        Some(prev) => unify(prev, r),
+                                    });
                                 }
                             }
                         }
-                        infer(arena, items[1], &scope, defs, visiting)
+                        acc.unwrap_or(Inferred::Unknown)
                     }
                     _ => Inferred::Unknown,
                 },
-                "match-MACRO" => match arena.node(*payload) {
-                    // unify every clause's result type; pattern-bound names are
-                    // left untyped (best effort, as elsewhere)
-                    Node::Tup(items) if items.len() == 2 => match arena.node(items[1]) {
-                        Node::Lst(clauses) => {
-                            let mut acc: Option<Inferred> = None;
-                            for &c in clauses {
-                                if let Node::Tup(pair) = arena.node(c) {
-                                    if pair.len() == 2 {
-                                        let r = infer(arena, pair[1], params, defs, visiting);
-                                        acc = Some(match acc {
-                                            None => r,
-                                            Some(prev) => unify(prev, r),
-                                        });
-                                    }
-                                }
-                            }
-                            acc.unwrap_or(Inferred::Unknown)
-                        }
-                        _ => Inferred::Unknown,
-                    },
-                    _ => Inferred::Unknown,
-                },
-                "the-MACRO" => match arena.node(*payload) {
-                    Node::Tup(items) if items.len() == 2 => match type_text(arena, items[0]) {
-                        Ok(t) => Inferred::Known(t),
-                        Err(_) => Inferred::Unknown,
-                    },
-                    _ => Inferred::Unknown,
+                "the-MACRO" if args.len() == 2 => match type_text(arena, args[0]) {
+                    Ok(t) => Inferred::Known(t),
+                    Err(_) => Inferred::Unknown,
                 },
                 _ => match defs.get(name) {
                     // follow a call to another module-level def

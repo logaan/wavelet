@@ -176,7 +176,7 @@ fn multi_component_composes_to_one() {
         src.join("shout.wvl"),
         "Package \"demo:shout@0.1.0\"\n\n\
          Export shout\n\
-         Def shout Fn {phrase: string}\n  str-cat[upper(phrase) \"!\"]\n",
+         Def shout Fn {phrase: string}\n  str-cat(upper(phrase) \"!\")\n",
     )
     .unwrap();
     std::fs::write(
@@ -184,7 +184,7 @@ fn multi_component_composes_to_one() {
         "Package \"demo:main@0.1.0\"\n\n\
          Import {pkg: \"demo:shout/api\" as: sh}\n\n\
          Export {name: run params: {} result: string}\n\
-         Def run Fn {}\n  sh/shout{phrase: \"hello\"}\n",
+         Def run Fn {}\n  sh/shout({phrase: \"hello\"})\n",
     )
     .unwrap();
 

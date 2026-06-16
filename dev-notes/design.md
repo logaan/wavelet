@@ -22,7 +22,7 @@ Package "demo:shout@0.1.0"
 
 Export shout
 Def shout Fn {phrase: string}
-  str-cat[upper(phrase) "!"]
+  str-cat(upper(phrase) "!")
 ```
 
 ```
@@ -34,9 +34,9 @@ Import {pkg: "demo:shout/api" as: sh}
 
 Export run
 Def run Fn {}
-  If eq[len(args[]) 0]
+  If eq(len(args()) 0)
      println("usage: main <word>")
-     println(sh/shout{phrase: head(args[])})
+     println(sh/shout({phrase: head(args())}))
 ```
 
 ```console
@@ -62,11 +62,12 @@ Newlines are also just whitespace. Wavelet has exactly one whitespace-sensitive 
 
 ### 2.2 The attachment rule
 
-A `(`, `[`, or `{` that *immediately* follows an identifier, with no intervening whitespace, supplies that identifier's payload — this is a call form. With whitespace in between, the bracketed expression is a separate, free-standing value.
+Only a `(` that *immediately* follows an identifier, with no intervening whitespace, forms a call: the identifier becomes the call's head and the parenthesized forms its arguments. A `[` or `{` no longer attaches — the old list/record call sugar was removed, and attaching either is a read error pointing at the new spelling (`name([…])` / `name({…})`). With whitespace in between, the bracketed expression is a separate, free-standing value.
 
 ```
-delete-file{path: "foo.md" force: true}   // a call: payload is a record
-delete-file {path: "foo.md" force: true}  // two forms: a variable, then a record
+delete-file({path: "foo.md" force: true})  // a call: the head plus a record argument
+delete-file{path: "foo.md" force: true}    // read error — `{` no longer attaches
+delete-file {path: "foo.md" force: true}   // two forms: a variable, then a record
 ```
 
 ### 2.3 Desugaring
@@ -76,46 +77,47 @@ Every surface form desugars to a canonical WAVE value. The complete table:
 | You write | Canonical WAVE form | Meaning |
 |---|---|---|
 | `true` `42` `-1.5` `'x'` `"hi"` | (unchanged) | atom, self-evaluating |
-| `foo` | `foo` | variable reference — a bare, payload-less case |
-| `f(x)` | `f(x)` | call with a single payload value |
-| `f(x y)` | `f((x, y))` | call with a tuple payload — positional arguments |
-| `f[x y]` | `f([x, y])` | call with a list payload — positional arguments |
-| `f{a: 1 b: 2}` | `f({a: 1, b: 2})` | call with a record payload — named arguments |
-| `f[]` or `f()` | `f([])` | call with zero arguments |
-| `kv/get{...}` | qualified call | name `get` from the import aliased `kv` |
-| `(a b)` | `(a, b)` | tuple (two or more elements) |
-| `(a)` | `a` | grouping — parentheses around one form are transparent |
+| `foo` | `foo` | variable reference — a bare, payload-less case (a symbol) |
+| `f(x)` | `(f, x)` | call with one argument |
+| `f(x y)` | `(f, x, y)` | call with positional arguments |
+| `f([x y])` | `(f, [x, y])` | call with a list argument |
+| `f({a: 1 b: 2})` | `(f, {a: 1, b: 2})` | call with a record argument — named arguments |
+| `f()` | `(f)` | zero-argument call |
+| `kv/get({...})` | qualified call | name `get` from the import aliased `kv` |
+| `(a b)` | `(a, b)` | a parenthesized form — a call in evaluation position, a tuple under `Quote` |
+| `(a)` | `(a)` | a zero-argument call of `a` (no transparent grouping) |
+| `()` | `()` | the empty tuple (an error if evaluated) |
 | `[a b]` | `[a, b]` | list |
 | `{k: v}` | `{k: v}` | record |
 | `{read write}` | `{read, write}` | flags |
-| `If c t e` | `if-MACRO((c, t, e))` | macro use (see §2.4) |
-| `Unquote(x)` | `unquote-MACRO(x)` | macro use with explicit payload |
+| `If c t e` | `(if-MACRO, c, t, e)` | macro use (see §2.4) |
+| `Unquote(x)` | `(unquote-MACRO, x)` | macro use with explicit payload |
 
-Function calls are variant cases. `print("hi")` is, as data, the WAVE variant case `print` with a string payload; `delete-file{path: "foo.md" force: true}` is the case `delete-file` carrying a record. A bare identifier is a payload-less case, and Wavelet reads it as a variable reference. Evaluation gives these case-shaped values their meaning (§4); under `Quote`, they are simply data.
+Function calls are tuples whose first element is the head. `print("hi")` is, as data, the WAVE tuple `(print, "hi")`; `delete-file({path: "foo.md" force: true})` is the tuple `(delete-file, {…})`. A bare identifier is a payload-less variant case (a symbol), and Wavelet reads it as a variable reference. In evaluation position a parenthesized form is *always* a call — evaluating its head and applying it to the bundled arguments (§4); a literal tuple **value** is obtained only via `Quote`, a builtin, or pattern binding. The list/record call sugar (`f[…]`, `f{…}`) was removed; write `f([…])` and `f({…})`.
 
 ### 2.4 The macro sugar
 
 A TitleCase identifier — mixed-case words, each starting with a capital (`If`, `DefMacro`, `TryLet`) — is reader sugar for a macro call. Note this cannot collide with ordinary identifiers: WIT words are all-lower or all-UPPER, so TitleCase tokens are syntactically free real estate. The token kebab-izes and gains a `-MACRO` suffix (an all-caps word, which *is* a legal WIT identifier): `If` ↦ `if-MACRO`, `TryLet` ↦ `try-let-MACRO`.
 
-A TitleCase head does not require parentheses around its arguments. Instead, the reader looks up the macro's declared **arity** and consumes exactly that many following forms, collecting them into a tuple payload:
+A TitleCase head does not require parentheses around its arguments. Instead, the reader looks up the macro's declared **arity** and consumes exactly that many following forms, splicing them after the head into the call tuple:
 
 ```
-If eq[foo bar] print("match") print("nope")
+If eq(foo bar) print("match") print("nope")
 ```
 
 desugars to
 
 ```
-if-MACRO((eq([foo, bar]), print("match"), print("nope")))
+(if-MACRO, (eq, foo, bar), (print, "match"), (print, "nope"))
 ```
 
 Three consequences of arity-driven reading:
 
 A macro must be **in scope before use** — defined earlier in the file, a core form, or imported from a component that publishes a macro manifest (§6.3). The reader processes a file top to bottom and always knows every visible macro's arity.
 
-An **explicit payload overrides arity reading**: `Unquote(x)` and `If(c t e)` attach their payload directly, which is occasionally clearer inside dense templates. The fully explicit spelling `if-MACRO((c, t, e))` is also always available, and is what macros emit when generating code.
+An **explicit payload reads identically to the arity form**: `Unquote(x)` and `If(c t e)` attach their arguments directly, which is occasionally clearer inside dense templates — `If(c t e)` and `If c t e` both read to `(if-MACRO, c, t, e)`. The fully explicit spelling `(if-MACRO, c, t, e)` is also always available, and is what macros emit when generating code.
 
-**Nesting needs no delimiters** when the last argument is itself a macro form: `Def run Fn {} If c a b` reads exactly as intended, since each TitleCase head consumes its own arity's worth of forms, recursively. Sibling macro forms inside a list or payload are naturally bounded by the enclosing bracket; when two macro forms must sit side by side with nothing enclosing them, wrap one in grouping parens.
+**Nesting needs no delimiters** when the last argument is itself a macro form: `Def run Fn {} If c a b` reads exactly as intended, since each TitleCase head consumes its own arity's worth of forms, recursively. Sibling macro forms inside a list or argument are naturally bounded by the enclosing bracket; when two macro forms must sit side by side with nothing enclosing them, wrap one in a call (`(…)`).
 
 Variadic macros take a single list argument: arity stays fixed, the list flexes (`Do [a b c]`).
 
@@ -132,7 +134,7 @@ Wavelet has no value types beyond WIT's. The full inventory, with WAVE literals:
 | `f32`, `f64` | `3.14`, `6.022e+23`, `nan`, `-inf` | float literals are `f64` by default |
 | `char` | `'x'`, `'☃'`, `'\u{0}'` | Unicode scalar values |
 | `string` | `"abc\t123"` | |
-| `tuple<…>` | `("abc", 123)` | parens, two or more elements |
+| `tuple<…>` | `Quote ("abc", 123)` | a parenthesized form is a *call* in evaluation position, so a literal tuple value is written with `Quote` (or produced by a builtin) |
 | `list<t>` | `[1 2 3]` | |
 | `record` | `{field-a: 1 field-b: "two"}` | |
 | `variant` | `days(30)`, `forever` | case label, parenthesized payload if any |
@@ -158,7 +160,7 @@ There are four:
 
 1. **Atoms** — booleans, numbers, chars, strings, flags — evaluate to themselves.
 2. **A bare name** evaluates to its binding in the current lexical environment. Wavelet is a Lisp-1: one namespace for everything. Unbound names are compile-time errors. Enum cases, imported functions, and constructors are all just bindings.
-3. **A call form** `head(payload)` evaluates the payload, then applies the value bound to `head`. Heads are names or qualified names; to call a computed function value, use `apply[f payload]`.
+3. **A call form** — a tuple `(head arg…)` in evaluation position — evaluates its arguments, **bundles** them (0 ⇒ the empty tuple, 1 ⇒ that value, ≥2 ⇒ a tuple), and applies the value bound to `head`. Heads are names or qualified names; evaluating a tuple whose head is not a name is an error, and a literal tuple value comes from `Quote` or a builtin. To call a computed function value, use `apply(f payload)`.
 4. **Special forms and macros** are recognized by the expander before evaluation and follow their own rules.
 
 ### 4.2 The seventeen special forms
@@ -196,28 +198,28 @@ Fn {phrase}                  // one parameter
 Fn {}                        // zero parameters
 ```
 
-At a call site, a record payload binds parameters **by name**, a list or tuple payload binds them **by order**, and a scalar payload binds a sole parameter directly. So both of these reach the same function:
+At a call site, a record argument binds parameters **by name**, a list or tuple argument binds them **by order**, and a scalar argument binds a sole parameter directly. So both of these reach the same function:
 
 ```
-delete-file{path: "foo.md" force: true}
-delete-file["foo.md" true]
+delete-file({path: "foo.md" force: true})
+delete-file("foo.md" true)
 ```
 
 **`Let`** takes its bindings as a record form — homoiconicity doing the work of syntax — and binds sequentially, like `let*`:
 
 ```
 Let {radius: 10
-     area: mul[pi mul[radius radius]]}
-  str-cat["area = " to-string(area)]
+     area: mul(pi mul(radius radius))}
+  str-cat("area = " to-string(area))
 ```
 
-**`Match`** takes a scrutinee and a list of `(pattern result)` tuples. Patterns are just forms: literals match by equality, a bare name matches anything and binds it, call shapes destructure variant cases, and lists, tuples, and records destructure their counterparts.
+**`Match`** takes a scrutinee and a list of `(pattern result)` tuples. Patterns are just forms: literals match by equality, a bare name matches anything and binds it, a `(case …)` form whose head is a name destructures a variant case, and lists, tuples, and records destructure their counterparts (a tuple pattern is disambiguated against the scrutinee — a variant value takes the variant-case reading, a tuple value the element-wise one).
 
 ```
-Match read-file{path: "notes.md"} [
+Match read-file({path: "notes.md"}) [
   (ok(text)              process(text))
   (err(not-found)        println("no such file"))
-  (err(e)                println(str-cat["error: " to-string(e)]))
+  (err(e)                println(str-cat("error: " to-string(e))))
 ]
 ```
 
@@ -233,9 +235,9 @@ Wavelet guarantees tail-call elimination. Tail positions are: the body of a `Fn`
 
 ```
 Def count-down Fn {n}
-  If eq[n 0]
+  If eq(n 0)
      "liftoff"
-     count-down(sub[n 1])     // constant stack, any n
+     count-down(sub(n 1))     // constant stack, any n
 ```
 
 One honest caveat: the guarantee holds **within a component**. A call to an imported function passes through canonical-ABI adapters that the composer generates, and those frames are outside Wavelet's control; cross-component cycles therefore consume stack. The compiler warns when it can see an unbounded recursion routed through an import. (The `--fuse` optimization in §6.5 dissolves this boundary for all-Wavelet subgraphs.)
@@ -273,7 +275,7 @@ Import {pkg: "demo:text/api" open: true}            // splat names in unqualifie
 
 Imported names are used qualified, Clojure-style: `kv/open`, `kv/get`. Every file implicitly does `Import {pkg: "wavelet:std/core" open: true}` (disable with `Package {id: "..." std: false}`).
 
-Resources come along for free, because WIT canonicalizes methods as functions whose first parameter is the handle. `kv/open{name: "default"}` returns a handle; `kv/get[bucket "greeting"]` calls a method. Owned handles are dropped when their binding scope ends without the handle escaping; `drop(h)` forces it.
+Resources come along for free, because WIT canonicalizes methods as functions whose first parameter is the handle. `kv/open({name: "default"})` returns a handle; `kv/get(bucket "greeting")` calls a method. Owned handles are dropped when their binding scope ends without the handle escaping; `drop(h)` forces it.
 
 ### 6.2 Code as a WIT type
 
@@ -282,9 +284,10 @@ Homoiconicity has to survive the boundary, so "a form" is itself a WIT type, def
 ```
 form = bool | int | dec | char | str
      | sym(name) | qsym(alias name)
-     | call(head payload)
      | tup(forms) | lst(forms) | rec(fields) | flg(names)
 ```
+
+A call is just a `tup` whose first element is the head, so there is no separate `call` node.
 
 WIT has no recursive types, so the wire encoding is an arena — a flat node table plus a root index:
 
@@ -302,8 +305,7 @@ interface code {
     str-val(string),
     sym(string),
     qsym(tuple<string, string>),
-    call(tuple<node-id, node-id>),     // head, payload
-    tup(list<node-id>),
+    tup(list<node-id>),                // a call is a tup whose head is items[0]
     lst(list<node-id>),
     rec(list<tuple<string, node-id>>),
     flg(list<string>),
@@ -327,10 +329,10 @@ Inside Wavelet you never see the arena: `Quote` hands you a natural tree, and th
 DefMacro and {a b}
   Quasi If Unquote(a) Unquote(b) false
 
-And lt[x 10] gt[x 0]      // ⇒ If lt[x 10] gt[x 0] false
+And lt(x 10) gt(x 0)      // ⇒ If lt(x 10) gt(x 0) false
 ```
 
-`Quasi` builds templates; `Unquote` evaluates a hole; `Splice` evaluates a hole to a list and splices its elements into the surrounding list, tuple, or payload; `gensym[]` mints fresh names. Expansion is unhygienic in the Common Lisp/Clojure tradition — `gensym` is the discipline, hygiene is future work (§10).
+`Quasi` builds templates; `Unquote` evaluates a hole; `Splice` evaluates a hole to a list and splices its elements into the surrounding list, tuple, or call; `gensym()` mints fresh names. Expansion is unhygienic in the Common Lisp/Clojure tradition — `gensym` is the discipline, hygiene is future work (§10).
 
 Because macros are functions over a WIT type, they need not be written in Wavelet. A component exporting `wavelet:meta/macros` is a macro library:
 
@@ -357,7 +359,7 @@ resource fn-string-to-string {
 each: func(f: borrow<fn-string-to-string>, items: list<string>) -> list<string>;
 ```
 
-Inbound, the same duck-typing applies: any imported resource exposing a lone `call` method is invocable with ordinary call syntax. A Rust component can hand Wavelet a "closure" and vice versa; neither side writes glue. Declaring a callback parameter on an export uses the `func` type form: `{visit: func{params: {item: string} result: bool}}`.
+Inbound, the same duck-typing applies: any imported resource exposing a lone `call` method is invocable with ordinary call syntax. A Rust component can hand Wavelet a "closure" and vice versa; neither side writes glue. Declaring a callback parameter on an export uses the `func` type form: `{visit: func({params: {item: string} result: bool})}`.
 
 ### 6.5 Composition
 
@@ -379,7 +381,7 @@ Boundary calls copy data (canonical ABI). For graphs that are entirely Wavelet, 
 
 ## 7. Frictionless interop, itemized
 
-The headline claim — calling other components is frictionless — cashes out as a stack of small decisions already described, gathered here. Call syntax is identical for local and imported functions, including the record/list sugar, so `kv/set{bucket: b key: "k" value: bytes}` reads like any other call. There is no marshalling layer to think about because Wavelet values *are* canonical-ABI values; what you pass is what arrives. WAVE's flat `option`/`result` shorthands mean you write `"hello"` where `option<string>` is expected. Integer literals adapt to the target width with compile-time range checks. One `Import` line brings in an interface; `wavelet add wasi:keyvalue` fetches WIT from a registry, pins a version, and feeds editor completion. The toolchain consumes interfaces from `.wit` text or directly from a compiled `.wasm` binary, so "a library" is anything componentized, from any language. Exporting in the other direction is the single word `Export`. And macros imported from foreign-language components behave exactly like native ones.
+The headline claim — calling other components is frictionless — cashes out as a stack of small decisions already described, gathered here. Call syntax is identical for local and imported functions, so `kv/set({bucket: b key: "k" value: bytes})` reads like any other call. There is no marshalling layer to think about because Wavelet values *are* canonical-ABI values; what you pass is what arrives. WAVE's flat `option`/`result` shorthands mean you write `"hello"` where `option<string>` is expected. Integer literals adapt to the target width with compile-time range checks. One `Import` line brings in an interface; `wavelet add wasi:keyvalue` fetches WIT from a registry, pins a version, and feeds editor completion. The toolchain consumes interfaces from `.wit` text or directly from a compiled `.wasm` binary, so "a library" is anything componentized, from any language. Exporting in the other direction is the single word `Export`. And macros imported from foreign-language components behave exactly like native ones.
 
 ### 7.1 The standard library, briefly
 
@@ -400,7 +402,7 @@ DefMacro try-let {binding body}        // binding is a one-field record form
 
 ```
 Def load-config Fn {path: string}
-  TryLet {text: read-file{path: path}}
+  TryLet {text: read-file({path: path})}
   TryLet {form: read(text)}
   ok(form)
 ```
@@ -429,7 +431,7 @@ Package "demo:caps@0.1.0"
 
 Export shout
 Def shout Fn {phrase: string}
-  str-cat[upper(phrase) "!"]
+  str-cat(upper(phrase) "!")
 ```
 
 ```
@@ -442,9 +444,9 @@ Import {pkg: "demo:caps/api"           as: caps}
 
 Export run
 Def run Fn {}
-  Match words/pick{seed: 42} [
-    (ok(w)  println(caps/shout{phrase: w}))
-    (err(e) println(str-cat["no word today: " e]))
+  Match words/pick({seed: 42}) [
+    (ok(w)  println(caps/shout({phrase: w})))
+    (err(e) println(str-cat("no word today: " e)))
   ]
 ```
 
@@ -480,15 +482,14 @@ Hygiene is the largest: `gensym` suffices for now, but a syntax-object layer ove
 
 ```
 file      := form*
-form      := atom | name | qname | call | tuple | group
+form      := atom | name | qname | call | tuple
            | list | record | flags | macroform
 atom      := bool | int | float | char | string
 name      := kebab-label                      // WIT identifier, % escape allowed
 qname     := name "/" name
 call      := (name | qname | title) payload   // payload ATTACHED: no whitespace
-payload   := "(" form* ")" | "[" form* "]" | "{" recbody | flagbody "}"
-tuple     := "(" form form+ ")"
-group     := "(" form ")"                     // transparent
+payload   := "(" form* ")"                    // only `(` attaches now
+tuple     := "(" form* ")"                    // the call form; also a tuple value under Quote
 list      := "[" form* "]"
 record    := "{" (name ":" form)* "}"
 flags     := "{" name* "}"
@@ -496,6 +497,8 @@ macroform := title form{arity(title)}         // title := TitleCase token
 ws        := space | tab | newline | ","      // comments: "//" to eol
 ```
 
+(A parenthesized form is one node — the call/tuple node. `(a)` is a zero-argument call of `a`, not transparent grouping, and `[`/`{` no longer attach to a head.)
+
 ## Appendix B — design ledger
 
-Decisions with their costs, acknowledged: WIT identifiers preclude operator names, so arithmetic is spelled out (`add`, not `+`). Fixed macro arity buys paren-free macro syntax at the price of define-before-use and list-wrapped variadics. The arena encoding of code is uglier than a recursive type, but it is what WIT can express today, and Wavelet hides it everywhere except the wire. Dynamic typing in the core keeps the language small and the boundary types meaningful, at the cost of some errors surfacing at the edge rather than at the keystroke — annotations claw that back where it matters. And per-file components cost boundary copies, which `--fuse` recovers when the whole graph is yours.
+Decisions with their costs, acknowledged: calls are WAVE tuples with the head first (`(f, x, y)`), not variant cases — so a parenthesized form in evaluation position is always a call and a literal tuple value is written with `Quote`; the list/record call sugar (`f[…]`, `f{…}`) is gone in exchange for one uniform call node. WIT identifiers preclude operator names, so arithmetic is spelled out (`add`, not `+`). Fixed macro arity buys paren-free macro syntax at the price of define-before-use and list-wrapped variadics. The arena encoding of code is uglier than a recursive type, but it is what WIT can express today, and Wavelet hides it everywhere except the wire. Dynamic typing in the core keeps the language small and the boundary types meaningful, at the cost of some errors surfacing at the edge rather than at the keystroke — annotations claw that back where it matters. And per-file components cost boundary copies, which `--fuse` recovers when the whole graph is yours.

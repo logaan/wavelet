@@ -70,18 +70,18 @@ fn generic_bridge_lowers_primitives_records_tuples() {
         DefType point {x: s32 y: s32}\n\n\
         Export {name: do-scale params: {p: point by: s32} result: point}\n\
         Def do-scale Fn {p: point by: s32}\n  \
-          sh/scale[p by]\n\n\
+          sh/scale(p by)\n\n\
         Export {name: do-even params: {n: s32} result: bool}\n\
         Def do-even Fn {n: s32}\n  \
           sh/even(n)\n\n\
         Export {name: do-next params: {c: char} result: char}\n\
         Def do-next Fn {c: char}\n  \
           sh/next-char(c)\n\n\
-        Export {name: do-swap params: {pair: tuple[s32 string]} result: tuple[string s32]}\n\
-        Def do-swap Fn {pair: tuple[s32 string]}\n  \
+        Export {name: do-swap params: {pair: tuple(s32 string)} result: tuple(string s32)}\n\
+        Def do-swap Fn {pair: tuple(s32 string)}\n  \
           sh/swap(pair)\n\n\
-        Export {name: do-mid params: {seg: tuple[point point]} result: point}\n\
-        Def do-mid Fn {seg: tuple[point point]}\n  \
+        Export {name: do-mid params: {seg: tuple(point point)} result: point}\n\
+        Def do-mid Fn {seg: tuple(point point)}\n  \
           sh/midpoint(seg)\n";
 
     let bytes = build_against_wit("shapes", "acme-shapes.wit", wit, app);
@@ -106,9 +106,9 @@ fn generic_bridge_lifts_tuple_results_via_retptr() {
 
     let app = "Package \"demo:app@0.1.0\"\n\n\
         Import {pkg: \"acme:pairs/api\" as: p}\n\n\
-        Export {name: dm params: {a: s32 b: s32} result: tuple[s32 s32]}\n\
+        Export {name: dm params: {a: s32 b: s32} result: tuple(s32 s32)}\n\
         Def dm Fn {a: s32 b: s32}\n  \
-          p/divmod[a b]\n";
+          p/divmod(a b)\n";
 
     let bytes = build_against_wit("pairs", "acme-pairs.wit", wit, app);
     assert!(
@@ -285,28 +285,28 @@ fn generic_bridge_lowers_resource_methods_static_constructor_drop() {
         Import {pkg: \"acme:wire/api\" as: w}\n\n\
         Export {name: put-trip params: {n: s32} result: s32}\n\
         Def put-trip Fn {n: s32}\n  \
-          w/put[w/packet(w/new-bag[]) \"hi\"]\n\n\
+          w/put(w/packet(w/new-bag()) \"hi\")\n\n\
         Export {name: label-trip params: {n: s32} result: s32}\n\
         Def label-trip Fn {n: s32}\n  \
-          Match w/label(w/packet(w/new-bag[])) [\n    \
+          Match w/label(w/packet(w/new-bag())) [\n    \
             (some(s)  len(s))\n    \
             (none     n)\n  \
           ]\n\n\
         Export {name: open-trip params: {n: s32} result: s32}\n\
         Def open-trip Fn {n: s32}\n  \
-          Match w/open(w/packet(w/new-bag[])) [\n    \
+          Match w/open(w/packet(w/new-bag())) [\n    \
             (ok(b)   n)\n    \
             (err(e)  0)\n  \
           ]\n\n\
         Export {name: deliver-trip params: {n: s32} result: s32}\n\
         Def deliver-trip Fn {n: s32}\n  \
-          w/deliver(w/open(w/packet(w/new-bag[])))\n\n\
+          w/deliver(w/open(w/packet(w/new-bag())))\n\n\
         Export {name: seal-trip params: {n: s32} result: s32}\n\
         Def seal-trip Fn {n: s32}\n  \
-          w/seal(w/packet(w/new-bag[]))\n\n\
+          w/seal(w/packet(w/new-bag()))\n\n\
         Export {name: drop-trip params: {n: s32} result: s32}\n\
         Def drop-trip Fn {n: s32}\n  \
-          Do [w/drop-packet(w/packet(w/new-bag[]))\n      \
+          Do [w/drop-packet(w/packet(w/new-bag()))\n      \
               n]\n";
 
     let bytes = build_against_wit("wire", "acme-wire.wit", wit, app);
@@ -419,7 +419,7 @@ fn generic_bridge_widens_variant_arms_and_strings_as_byte_lists() {
         Import {pkg: \"acme:wire2/api\" as: w}\n\n\
         Export {name: put-trip params: {n: s32} result: s32}\n\
         Def put-trip Fn {n: s32}\n  \
-          w/put(ok(w/open[]))\n\n\
+          w/put(ok(w/open()))\n\n\
         Export {name: blast-trip params: {n: s32} result: s32}\n\
         Def blast-trip Fn {n: s32}\n  \
           w/blast(\"hello\")\n";
