@@ -57,7 +57,7 @@ Import {pkg: "wasi:keyvalue/store@0.2.0" as: kv}     // explicit alias
 Import {pkg: "demo:text/api" open: true}             // splat names in unqualified
 ```
 
-Imported names are used qualified, Clojure-style: `kv/open`, `kv/get`. With `open: true`, the names are also bound unqualified.
+Imported names are used qualified: `kv/open`, `kv/get`. With `open: true`, the names are also bound unqualified.
 
 When you run a set of files together with [`wavelet run`](./cli#run), imports are resolved **by package id** against the other files on the command line — an interpreter stand-in for the composer:
 

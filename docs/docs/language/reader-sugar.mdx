@@ -19,7 +19,7 @@ $ echo 'f(x y)' | wavelet read
 
 ## 1. Commas are whitespace
 
-As in Clojure, commas are whitespace. These read identically:
+Commas are whitespace. These read identically:
 
 ```wavelet
 [1 2 3]
@@ -40,8 +40,8 @@ This is the sugar that makes Wavelet a *superset* of WAVE rather than a differen
 Wavelet has exactly **one** whitespace-sensitive rule. A `(` that *immediately* follows an identifier — with no intervening whitespace — makes that identifier the **head** of a call, and the reader folds the head and the parenthesized forms into a single tuple. With whitespace in between, the parenthesized expression is a separate, free-standing value:
 
 ```wavelet
-delete-file({path: "foo.md" force: true})  // a call: the head plus a record argument
-delete-file {path: "foo.md" force: true}   // two forms: a variable, then a record
+delete-file({path: "foo.md" force: true})   // a call: the head plus a record argument
+delete-file ({path: "foo.md" force: true})  // two forms: a variable, then a record in a tuple
 ```
 
 A call desugars to a **tuple whose first element is the head**:
