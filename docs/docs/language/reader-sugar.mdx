@@ -101,7 +101,7 @@ This is **pure rewriting**, not method dispatch: there are no methods and nothin
 
 ## 5. TitleCase macro sugar
 
-A **TitleCase** identifier — mixed-case words, each starting with a capital (`If`, `DefMacro`, `TryLet`) — is reader sugar for a macro call. This can't collide with ordinary identifiers: WIT words are all-lower or all-UPPER, so TitleCase tokens are syntactically free. The token kebab-izes and gains a `-MACRO` suffix: `If` ↦ `if-MACRO`, `DefMacro` ↦ `def-macro-MACRO`.
+A **TitleCase** identifier — one that starts with a capital and contains at least one lower-case letter (`If`, `DefMacro`, `TryLet`) — is reader sugar for a macro call. This can't collide with ordinary identifiers: WIT words are all-lower or all-UPPER, so TitleCase tokens are syntactically free. The token is **lower-cased whole** — interior capitals are *not* split into hyphens — and gains a `-MACRO` suffix: `If` ↦ `if-MACRO`, `DefMacro` ↦ `defmacro-MACRO`, `TryLet` ↦ `trylet-MACRO`. A multi-word macro is therefore defined under the single lower-case word it is invoked as (`DefMacro trylet …`, invoked `TryLet …`).
 
 A TitleCase head does **not** require parentheses. The reader looks up the macro's declared **arity** and consumes exactly that many following forms, folding the head and those forms into a tuple:
 

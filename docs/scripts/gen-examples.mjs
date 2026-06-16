@@ -159,7 +159,7 @@ E['macro-gensym-three'] = `[gensym() gensym() gensym()]`;
 E['macro-gensym'] = `Def fresh-pair Fn {}
   eq(gensym() gensym())
 fresh-pair()`;
-E['macro-trylet'] = `DefMacro try-let {binding body}
+E['macro-trylet'] = `DefMacro trylet {binding body}
   Let {name: rec-key(binding) expr: rec-val(binding)}
     Quasi Match Unquote(expr) [
       (ok(Unquote(name))  Unquote(body))
