@@ -139,6 +139,7 @@
     1. eg: `{name: "Logan", greeting: Fn {name} str-cat("Hullo " name)}.greet("Joe") => "Hullo Joe"`
 1. [ ] Drop doc comments (`///`) from the language.
 1. [ ] Drop support for any kind of internal capitalisation. `DefMacro` should just become `defmacro-MACRO` in the same way that `If` becomes `if-MACRO`. Identifiers are detected as macro identifiers if they start with a capital letter and contain any non-capital letters.
+1. [ ] `Fn` arguments should be defined with tuples, not `{x y z}`. Tuples are heterogeneous and ordered, and it mirrors the call syntax.
 1. Grammar
     1. [x] What's an `atom`?
         1. bool, int, float, char, string
