@@ -13,6 +13,8 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-16
+
 ### Added
 
 - **Call chaining `recv.name(args)`.** A `.` attached to a form, then a name and
