@@ -16,7 +16,7 @@ impl MacroTable {
             ("package-MACRO", 1),
             ("import-MACRO", 1),
             ("export-MACRO", 1),
-            ("def-type-MACRO", 2),
+            ("deftype-MACRO", 2),
             ("def-MACRO", 2),
             ("fn-MACRO", 2),
             ("if-MACRO", 3),
@@ -27,7 +27,7 @@ impl MacroTable {
             ("quasi-MACRO", 1),
             ("unquote-MACRO", 1),
             ("splice-MACRO", 1),
-            ("def-macro-MACRO", 3),
+            ("defmacro-MACRO", 3),
             ("the-MACRO", 2),
         ] {
             map.insert(name.to_string(), arity);
@@ -360,13 +360,13 @@ impl Parser {
     /// arity so later TitleCase uses in this file can be read (§2.4).
     fn register_if_def_macro(&mut self, id: NodeId) {
         // A top-level `DefMacro name {params} body` reads as the 4-element
-        // tuple `Tup[def-macro-MACRO, name, params, body]`.
+        // tuple `Tup[defmacro-MACRO, name, params, body]`.
         let Node::Tup(items) = self.arena.node(id) else { return };
         if items.len() != 4 {
             return;
         }
         let Node::Sym(h) = self.arena.node(items[0]) else { return };
-        if h != "def-macro-MACRO" {
+        if h != "defmacro-MACRO" {
             return;
         }
         let Node::Sym(name) = self.arena.node(items[1]) else { return };

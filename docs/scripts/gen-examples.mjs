@@ -166,7 +166,7 @@ E['macro-trylet'] = `DefMacro try-let {binding body}
       (err(e)             err(e))
     ]
 Def parse Fn {x}
-  TryLet {n: ok(x)}
+  Try-let {n: ok(x)}
   ok(add(n 1))
 parse(41)`;
 

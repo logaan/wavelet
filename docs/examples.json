@@ -250,7 +250,7 @@
     "output": ""
   },
   "macro-trylet": {
-    "code": "DefMacro try-let {binding body}\n  Let {name: rec-key(binding) expr: rec-val(binding)}\n    Quasi Match Unquote(expr) [\n      (ok(Unquote(name))  Unquote(body))\n      (err(e)             err(e))\n    ]\nDef parse Fn {x}\n  TryLet {n: ok(x)}\n  ok(add(n 1))\nparse(41)",
+    "code": "DefMacro try-let {binding body}\n  Let {name: rec-key(binding) expr: rec-val(binding)}\n    Quasi Match Unquote(expr) [\n      (ok(Unquote(name))  Unquote(body))\n      (err(e)             err(e))\n    ]\nDef parse Fn {x}\n  Try-let {n: ok(x)}\n  ok(add(n 1))\nparse(41)",
     "value": "ok(42)",
     "output": ""
   },

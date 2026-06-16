@@ -27,6 +27,15 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- **TitleCase macro sugar no longer spreads internal capitals.** A TitleCase
+  head is now lower-cased *whole* before gaining its `-MACRO` suffix, instead of
+  inserting a hyphen at each interior capital: `DefMacro` ↦ `defmacro-MACRO` and
+  `DefType` ↦ `deftype-MACRO` (previously `def-macro-MACRO` / `def-type-MACRO`),
+  while single-word heads like `If` ↦ `if-MACRO` are unchanged. A multi-word
+  user macro must now be defined under the single lower-case word it is invoked
+  as — e.g. define `DefMacro trylet …` and invoke it as `TryLet …` (previously
+  `DefMacro try-let …`). Detection is unchanged: a token is a macro head when it
+  starts with a capital and contains at least one lower-case letter.
 - **Function calls are now WAVE tuples with the head first.** `foo(1 "baz")`
   reads and prints as `(foo, 1, "baz")` (previously the variant case `foo`
   carrying a payload). Special forms and macros share the shape: `If c t e` is

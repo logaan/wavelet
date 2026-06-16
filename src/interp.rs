@@ -261,7 +261,7 @@ impl Interp {
             "unquote-MACRO" | "splice-MACRO" => {
                 return err("Unquote/Splice are only valid inside Quasi");
             }
-            "def-macro-MACRO" => {
+            "defmacro-MACRO" => {
                 let [name_id, params_id, body] = args3(args, "DefMacro")?;
                 let Node::Sym(n) = arena.node(name_id) else {
                     return err("DefMacro expects a name");
@@ -289,7 +289,7 @@ impl Interp {
                 }
                 Step::Done(v)
             }
-            "package-MACRO" | "import-MACRO" | "export-MACRO" | "def-type-MACRO" => {
+            "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO" => {
                 return err(format!(
                     "`{}` is only allowed at the top level of a file",
                     name.trim_end_matches("-MACRO")

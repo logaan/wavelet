@@ -1,5 +1,10 @@
 # Notes
 
+## Tue 16 June
+
+1. [ ] Macros can now be in the form `Foo-bar-baz => foo-bar-baz-MACRO`.
+   1. Review existing docs, source, and tooling to make sure everything reflects that.
+
 ## 15 June
 
 1. [ ] Allow for alternatives to the standard library.
@@ -138,7 +143,7 @@
     1. eg: `{name: "Logan", age: 42}.age => 42`
     1. eg: `{name: "Logan", greeting: Fn {name} str-cat("Hullo " name)}.greet("Joe") => "Hullo Joe"`
 1. [ ] Drop doc comments (`///`) from the language.
-1. [ ] Drop support for any kind of internal capitalisation. `DefMacro` should just become `defmacro-MACRO` in the same way that `If` becomes `if-MACRO`. Identifiers are detected as macro identifiers if they start with a capital letter and contain any non-capital letters.
+1. [x] Drop support for any kind of internal capitalisation. `DefMacro` should just become `defmacro-MACRO` in the same way that `If` becomes `if-MACRO`. Identifiers are detected as macro identifiers if they start with a capital letter and contain any non-capital letters.
 1. [ ] `Fn` arguments should be defined with tuples, not `{x y z}`. Tuples are heterogeneous and ordered, and it mirrors the call syntax.
 1. Grammar
     1. [x] What's an `atom`?

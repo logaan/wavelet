@@ -35,7 +35,7 @@ pub fn expand_file(arena: Arena, roots: &[NodeId]) -> Result<(Arena, Vec<NodeId>
 fn is_def_macro(arena: &Arena, id: NodeId) -> bool {
     if let Node::Tup(items) = arena.node(id) {
         if let Some(&head) = items.first() {
-            return matches!(arena.node(head), Node::Sym(s) if s == "def-macro-MACRO");
+            return matches!(arena.node(head), Node::Sym(s) if s == "defmacro-MACRO");
         }
     }
     false

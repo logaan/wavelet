@@ -244,9 +244,14 @@ mod tests {
 
     #[test]
     fn title_case_does_not_collide_with_upper_words() {
+        // A lower-first or all-UPPER-first kebab word is an ordinary identifier,
+        // never a macro head — TitleCase needs a Title-case *leading* word.
         assert_eq!(read1("parse-JSON(x)"), "(parse-JSON, x)");
-        // TryLet is not a core form, so it needs an explicit payload here
-        assert_eq!(read1("TryLet({a: b} c)"), "(try-let-MACRO, {a: b}, c)");
+        assert_eq!(read1("HTTP-get(x)"), "(HTTP-get, x)");
+        // TitleCase heads (not core forms) need an explicit payload here. Both a
+        // single word and a hyphenated head lower-case whole onto a `-MACRO` name.
+        assert_eq!(read1("TryLet({a: b} c)"), "(trylet-MACRO, {a: b}, c)");
+        assert_eq!(read1("Try-let({a: b} c)"), "(try-let-MACRO, {a: b}, c)");
     }
 
     #[test]
@@ -428,8 +433,8 @@ DefMacro try-let {binding body}
     ]
 Def half Fn {n} If eq(rem(n 2) 0) ok(div(n 2)) err(\"odd\")
 Def quarter Fn {n}
-  TryLet {h: half(n)}
-  TryLet {q: half(h)}
+  Try-let {h: half(n)}
+  Try-let {q: half(h)}
   ok(q)
 [quarter(12) quarter(6)]";
         assert_eq!(eval_str(src), "[ok(3), err(\"odd\")]");

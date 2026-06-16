@@ -287,8 +287,8 @@ fn definitions(arena: &Arena, roots: &[NodeId]) -> Vec<(String, SymbolKind, Node
         let Some(&head) = items.first() else { continue };
         let kind = match sym_name(arena, head).as_deref() {
             Some("def-MACRO") => SymbolKind::FUNCTION,
-            Some("def-type-MACRO") => SymbolKind::STRUCT,
-            Some("def-macro-MACRO") => SymbolKind::OPERATOR,
+            Some("deftype-MACRO") => SymbolKind::STRUCT,
+            Some("defmacro-MACRO") => SymbolKind::OPERATOR,
             _ => continue,
         };
         if let Some(name) = def_name_node(arena, root).and_then(|n| sym_name(arena, n)) {
@@ -299,7 +299,7 @@ fn definitions(arena: &Arena, roots: &[NodeId]) -> Vec<(String, SymbolKind, Node
 }
 
 /// The node naming a definition: `items[1]` of the top-level call tuple
-/// (`def-MACRO` / `def-type-MACRO` / `def-macro-MACRO` is items[0]).
+/// (`def-MACRO` / `deftype-MACRO` / `defmacro-MACRO` is items[0]).
 fn def_name_node(arena: &Arena, call_id: NodeId) -> Option<NodeId> {
     let Node::Tup(items) = arena.node(call_id) else { return None };
     items.get(1).copied()

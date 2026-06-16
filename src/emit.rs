@@ -1389,7 +1389,7 @@ impl<'a> Emitter<'a> {
                 }
                 "match-MACRO" => self.match_form(fx, args, tail),
                 "fn-MACRO" => self.fn_form(fx, args),
-                "quote-MACRO" | "quasi-MACRO" | "def-MACRO" | "def-macro-MACRO" => {
+                "quote-MACRO" | "quasi-MACRO" | "def-MACRO" | "defmacro-MACRO" => {
                     Err(format!("`{name}` not supported by the wasm backend yet"))
                 }
                 _ if fx.lookup(&name).is_some() => self.closure_call(fx, head, args, tail),

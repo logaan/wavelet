@@ -18,7 +18,7 @@ pub enum Tok {
     Str(String),
     /// kebab-case identifier (WIT label); `%` escape already stripped
     Ident(String),
-    /// TitleCase macro head, already kebab-ized with `-MACRO` suffix
+    /// TitleCase macro head, already lowercased with `-MACRO` suffix
     Title(String),
     /// `alias/name`; bool = name part was TitleCase (already suffixed)
     QIdent(String, String, bool),
@@ -171,26 +171,27 @@ fn lex_name(src: &str, start: usize) -> Result<(Tok, usize), ReadError> {
     }
 }
 
-/// TitleCase: no hyphens, starts with a capital, contains at least one lowercase.
+/// TitleCase macro head: the **first** hyphen-separated word is Title-case —
+/// it starts with a capital and contains at least one lowercase letter
+/// (`If`, `DefMacro`, `Try-let`). A Title-case leading word can't be a WIT
+/// label word (those are all-lower or all-UPPER), so this never collides with
+/// an ordinary identifier such as `parse-JSON` or `HTTP-get`.
 fn is_title(text: &str) -> bool {
-    !text.contains('-')
-        && text.starts_with(|c: char| c.is_ascii_uppercase())
-        && text.contains(|c: char| c.is_ascii_lowercase())
+    let first = text.split('-').next().unwrap_or("");
+    first.starts_with(|c: char| c.is_ascii_uppercase())
+        && first.contains(|c: char| c.is_ascii_lowercase())
 }
 
-/// `TryLet` -> `try-let-MACRO`
+/// `TryLet` -> `trylet-MACRO`, `DefMacro` -> `defmacro-MACRO`,
+/// `Try-let` -> `try-let-MACRO`.
+///
+/// The token is lowercased wholesale; there is no internal capitalisation
+/// spreading (an interior capital does *not* introduce a hyphen). Existing
+/// hyphens are preserved, so a hyphenated head like `Try-let` maps onto the
+/// kebab-named macro `try-let`; a single TitleCase word like `TryLet` maps
+/// onto `trylet`.
 pub fn title_to_macro_name(text: &str) -> String {
-    let mut out = String::new();
-    for c in text.chars() {
-        if c.is_ascii_uppercase() {
-            if !out.is_empty() {
-                out.push('-');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
+    let mut out = text.to_ascii_lowercase();
     out.push_str("-MACRO");
     out
 }
