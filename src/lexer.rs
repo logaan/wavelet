@@ -18,7 +18,7 @@ pub enum Tok {
     Str(String),
     /// kebab-case identifier (WIT label); `%` escape already stripped
     Ident(String),
-    /// TitleCase macro head, already kebab-ized with `-MACRO` suffix
+    /// TitleCase macro head, already lowercased with `-MACRO` suffix
     Title(String),
     /// `alias/name`; bool = name part was TitleCase (already suffixed)
     QIdent(String, String, bool),
@@ -178,19 +178,14 @@ fn is_title(text: &str) -> bool {
         && text.contains(|c: char| c.is_ascii_lowercase())
 }
 
-/// `TryLet` -> `try-let-MACRO`
+/// `TryLet` -> `trylet-MACRO`, `DefMacro` -> `defmacro-MACRO`.
+///
+/// The token is lowercased wholesale; there is no internal capitalisation
+/// spreading (an interior capital does *not* introduce a hyphen). A macro
+/// must therefore be defined under the single lowercase word it is invoked
+/// as (`DefMacro trylet …` is invoked `TryLet …`).
 pub fn title_to_macro_name(text: &str) -> String {
-    let mut out = String::new();
-    for c in text.chars() {
-        if c.is_ascii_uppercase() {
-            if !out.is_empty() {
-                out.push('-');
-            }
-            out.push(c.to_ascii_lowercase());
-        } else {
-            out.push(c);
-        }
-    }
+    let mut out = text.to_ascii_lowercase();
     out.push_str("-MACRO");
     out
 }

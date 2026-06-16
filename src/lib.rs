@@ -246,7 +246,7 @@ mod tests {
     fn title_case_does_not_collide_with_upper_words() {
         assert_eq!(read1("parse-JSON(x)"), "(parse-JSON, x)");
         // TryLet is not a core form, so it needs an explicit payload here
-        assert_eq!(read1("TryLet({a: b} c)"), "(try-let-MACRO, {a: b}, c)");
+        assert_eq!(read1("TryLet({a: b} c)"), "(trylet-MACRO, {a: b}, c)");
     }
 
     #[test]
@@ -420,7 +420,7 @@ mod tests {
     fn eval_try_let_macro_from_spec() {
         // §7.2: error propagation as a binding form, in user space
         let src = "\
-DefMacro try-let {binding body}
+DefMacro trylet {binding body}
   Let {name: rec-key(binding) expr: rec-val(binding)}
     Quasi Match Unquote(expr) [
       (ok(Unquote(name))  Unquote(body))

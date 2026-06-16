@@ -105,7 +105,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                     _ => return Err("malformed Export".into()),
                 }
             }
-            "def-type-MACRO" => {
+            "deftype-MACRO" => {
                 if items.len() >= 3 {
                     if let Node::Sym(name) = arena.node(items[1]) {
                         types.push((name.clone(), items[2]));

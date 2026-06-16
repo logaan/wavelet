@@ -102,7 +102,7 @@ fn eval_module(
         };
         let payload = items.get(1).copied();
         match (head_name, payload) {
-            ("package-MACRO" | "target-MACRO" | "def-type-MACRO", _) => {}
+            ("package-MACRO" | "target-MACRO" | "deftype-MACRO", _) => {}
             ("export-MACRO", Some(payload)) => {
                 let entry = export_entry(&arena, payload)
                     .ok_or(format!("{path}: malformed Export"))?;
