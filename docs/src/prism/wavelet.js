@@ -5,7 +5,7 @@
 //   - the live <Playground> editor (src/components/Playground)
 //
 // Token classes mirror the lexer (src/lexer.rs):
-//   - `//` line comments and `///` doc comments
+//   - `//` line comments
 //   - "..." strings and '.' chars, both with \u{...}/\n/... escapes
 //   - int / float / inf / nan numbers
 //   - true / false booleans; some / none / ok / err WAVE constructors
@@ -15,13 +15,6 @@
 //   - record keys (name:)
 
 export const waveletGrammar = {
-  // `///` doc comments attach to the next form; style them like other comments
-  // but keep the class distinct in case the theme wants to.
-  'doc-comment': {
-    pattern: /\/\/\/(?!\/).*/,
-    alias: 'comment',
-    greedy: true,
-  },
   'comment': {
     pattern: /\/\/.*/,
     greedy: true,

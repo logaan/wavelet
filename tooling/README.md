@@ -34,7 +34,7 @@ grammar, and the docs' Prism grammar in `docs/src/prism/wavelet.js`) are derived
 from the same source of truth — the lexer in `src/lexer.rs` — and recognise the
 same token classes:
 
-- `//` line comments and `///` doc comments
+- `//` line comments
 - `"..."` strings and `'.'` chars, with `\n` / `\u{...}` escapes
 - `int` / `float` / `inf` / `nan` numbers
 - `true` / `false` booleans and `some` / `none` / `ok` / `err` constructors

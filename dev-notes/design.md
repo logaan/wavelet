@@ -54,7 +54,7 @@ Each file declared its own package, became its own component, and the composer w
 
 ### 2.1 Lexical ground rules
 
-Wavelet's tokens are WAVE's tokens. Identifiers are kebab-case labels following WIT identifier syntax: hyphen-separated words, each word either all-lowercase or all-UPPERCASE (`delete-file`, `parse-JSON`). The WAVE keywords `true false inf nan some none ok err` are reserved; an identifier that collides with one is written with WIT's `%` escape (`%ok`). Comments are `//` to end of line, as in WAVE and WIT. Doc comments `///` attach to the following form as metadata.
+Wavelet's tokens are WAVE's tokens. Identifiers are kebab-case labels following WIT identifier syntax: hyphen-separated words, each word either all-lowercase or all-UPPERCASE (`delete-file`, `parse-JSON`). The WAVE keywords `true false inf nan some none ok err` are reserved; an identifier that collides with one is written with WIT's `%` escape (`%ok`). Comments are `//` to end of line, as in WAVE and WIT.
 
 **Commas are whitespace.** As in Clojure, `[1, 2, 3]` and `[1 2 3]` read identically. Wavelet source is therefore a superset of WAVE text: any valid WAVE value is a valid Wavelet form. The canonical printer always emits strict WAVE (with commas), so printed code can be consumed by any existing WAVE tooling.
 

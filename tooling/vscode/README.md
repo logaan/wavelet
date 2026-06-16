@@ -5,7 +5,7 @@ Editor support for [Wavelet](../../README.md) source files (`.wvl`):
 - **Syntax highlighting** — the grammar in `syntaxes/wavelet.tmLanguage.json`
   mirrors the language's lexer (`src/lexer.rs`) and the shared Prism grammar used
   by the docs (`docs/src/prism/wavelet.js`). It highlights:
-  - `//` line comments and `///` doc comments
+  - `//` line comments
   - `"..."` strings and `'.'` chars, with `\n` / `\u{...}` escapes
   - `int` / `float` / `inf` / `nan` numbers
   - `true` / `false` booleans and `some` / `none` / `ok` / `err` constructors

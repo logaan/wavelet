@@ -11,7 +11,7 @@ the `wavelet` CLI never disagree about what parses.
 |---|---|
 | **Diagnostics** | Live syntax errors from the reader, on open and on every edit. |
 | **Completion** | Special forms (`Def`, `Fn`, `If`, …), the standard builtins (`map`, `str-cat`, …), and names defined in the current file. |
-| **Hover** | Blurbs for special forms and builtins, plus a definition's `///` doc comment when you hover the name it defines. |
+| **Hover** | Blurbs for special forms and builtins. |
 | **Document symbols** | Top-level `Def`, `DefType`, and `DefMacro` forms (outline / breadcrumbs). |
 
 Analysis stops at the *read* stage — no macro expansion, evaluation, or codegen
