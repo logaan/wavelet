@@ -132,6 +132,9 @@
     1. It should just be `Def-macro -> def-macro-MACRO`
     1. The only deviation we're making is if your symbol has the first letter capitalised and the rest of the first word lowercase then it's a macro identifier.
 1. [ ] "when the last argument is itself a macro" shouldn't it matter regardless of whether it's the last argument or not?
+1. [ ] Rethink qualified references (`kv/get`). There's probably a way to unify them with one or both of: record field access and/or call chaining (`foo().bar().baz()`).
+1. [ ] Drop doc comments (`///`) from the language.
+1. [ ] Drop support for any kind of internal capitalisation. `DefMacro` should just become `defmacro-MACRO` in the same way that `If` becomes `if-MACRO`. Identifiers are detected as macro identifiers if they start with a capital letter and contain any non-capital letters.
 1. Grammar
     1. [x] What's an `atom`?
         1. bool, int, float, char, string
