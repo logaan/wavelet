@@ -2,8 +2,15 @@
 
 ## Tue 16 June
 
-1. [ ] Macros can now be in the form `Foo-bar-baz => foo-bar-baz-MACRO`.
-   1. Review existing docs, source, and tooling to make sure everything reflects that.
+1. Macros can now be in the form `Foo-bar-baz => foo-bar-baz-MACRO`.
+   1. [ ] Review existing docs, source, and tooling to make sure everything reflects that.
+1. [ ] `wavelet repl` needs readline support
+1. [ ] The `foo(x) => (foo x)` de-sugaring means we can't express variants any more.
+   1. Not even with `Quote foo(x)` because it de-sugars before it evaluates.
+   1. Maybe the solution is just to say that single argument `foo(x)` reads as a
+      variant, and that both variants and tuples evaluate as calls.
+1. [ ] Update the readme.
+   1. I think the composition is out of date. Can `wac` now.
 
 ## 15 June
 
@@ -18,10 +25,13 @@
    1. For that matter do we even need `If` or `Match`?
    1. Yes. Because they aren't macros they're special forms. They couldn't be implemented as macros.
 1. [ ] Maybe drop the interpreter?
-1. [ ] I'd like a docs page that explicitly enumerates all of the sugar.
+1. [x] I'd like a docs page that explicitly enumerates all of the sugar.
    1. I'm not sure that we need "Clojure-style: `kv/open`, `kv/get`" as shown [in the docs].
    1. We could do automatic renaming? So people write `kv-open`.
    1. It would mean one less form of sugar.
+   1. **This was such a good exercise**.
+      - It gave me something to focus on for language design.
+      - Motivated me to clean things up, and triggered a old thoughts about `.` syntax that lead to a new piece of sugar.
 1. [ ] Make the compiler a bit more modular
    1. If it's just going off the AST then people can potentially put whatever sugar in front that they want.
    1. And because of our component boundaries you could even have language authors who're writing with a very different syntax to you.
