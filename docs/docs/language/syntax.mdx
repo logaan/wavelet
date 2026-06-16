@@ -82,7 +82,7 @@ Three consequences:
 
 1. **Define before use.** A macro must be in scope before it's read — a core form, defined earlier in the file, or imported. The reader processes a file top to bottom and always knows every visible macro's arity.
 2. **Explicit payload reads identically to the arity form.** `Unquote(x)` and `If(c t e)` attach their arguments directly — `If(c t e)` and `If c t e` both read to `(if-MACRO, c, t, e)`. The fully explicit `(if-MACRO, c, t, e)` is always available too, and is what macros emit.
-3. **Nesting needs no delimiters** when the last argument is itself a macro: `Def run Fn {} If c a b` reads exactly as intended, since each TitleCase head consumes its own arity recursively.
+3. **Nesting needs no delimiters, in any position.** A TitleCase head consumes its own arity recursively wherever it appears, not just as the final argument: both `If Quote c t e` and `Def run Fn {} If c a b` read exactly as intended.
 
 Variadic macros take a single list argument — arity stays fixed, the list flexes (`Do [a b c]`).
 

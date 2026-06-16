@@ -114,8 +114,8 @@ $ echo 'If eq([foo bar]) log("match") log("nope")' | wavelet read
 Three consequences:
 
 1. **Define before use.** A macro must be in scope before it's read — a core form, defined earlier in the file, or imported. The reader processes a file top to bottom and always knows every visible macro's arity.
-2. **Explicit payload overrides arity reading.** `Unquote(x)` and `If(c t e)` attach their arguments directly. The fully explicit `(if-MACRO, c, t, e)` is always available too, and is what macros emit.
-3. **Nesting needs no delimiters** when the last argument is itself a macro: `Def run Fn {} If c a b` reads exactly as intended, since each TitleCase head consumes its own arity recursively.
+2. **Explicit parentheses override arity reading.** `Unquote(x)` and `If(c t e)` attach their arguments directly instead of scanning ahead. The lowered call `if-MACRO(c t e)` — canonical `(if-MACRO, c, t, e)` — is always available too, and that tuple is what macros emit.
+3. **Nesting needs no delimiters, in any position.** A TitleCase head consumes its own arity recursively wherever it appears, not just as the final argument. Both `If Quote c t e` (nested in the first slot) and `Def run Fn {} If c a b` (nested in the last) read exactly as intended.
 
 Variadic macros take a single list argument — arity stays fixed, the list flexes (`Do([a b c])`).
 
