@@ -48,6 +48,11 @@
     "value": "\"bigger\"",
     "output": ""
   },
+  "syntax-chain": {
+    "code": "// '.name(...)' makes the receiver the call's first argument.\n// This reads as str-cat(upper(\"hello\") \", world!\").\n\"hello\".upper().str-cat(\", world!\")",
+    "value": "\"HELLO, world!\"",
+    "output": ""
+  },
   "values-atoms": {
     "code": "[\"a string\" 42 -1.5 true 'x' {read write}]",
     "value": "[\"a string\", 42, -1.5, true, 'x', {read, write}]",

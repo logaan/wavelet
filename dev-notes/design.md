@@ -58,7 +58,7 @@ Wavelet's tokens are WAVE's tokens. Identifiers are kebab-case labels following 
 
 **Commas are whitespace.** As in Clojure, `[1, 2, 3]` and `[1 2 3]` read identically. Wavelet source is therefore a superset of WAVE text: any valid WAVE value is a valid Wavelet form. The canonical printer always emits strict WAVE (with commas), so printed code can be consumed by any existing WAVE tooling.
 
-Newlines are also just whitespace. Wavelet has exactly one whitespace-sensitive rule, described next.
+Newlines are also just whitespace. Wavelet's only whitespace-sensitive rules are about *attachment* — a token abutting the one before it with no space between: the call attachment rule (§2.2) and call chaining (§2.5).
 
 ### 2.2 The attachment rule
 
@@ -84,6 +84,7 @@ Every surface form desugars to a canonical WAVE value. The complete table:
 | `f({a: 1 b: 2})` | `(f, {a: 1, b: 2})` | call with a record argument — named arguments |
 | `f()` | `(f)` | zero-argument call |
 | `kv/get({...})` | qualified call | name `get` from the import aliased `kv` |
+| `x.f(y)` | `(f, x, y)` | call chaining — receiver is the first argument (§2.5) |
 | `(a b)` | `(a, b)` | a parenthesized form — a call in evaluation position, a tuple under `Quote` |
 | `(a)` | `(a)` | a zero-argument call of `a` (no transparent grouping) |
 | `()` | `()` | the empty tuple (an error if evaluated) |
@@ -120,6 +121,19 @@ An **explicit payload reads identically to the arity form**: `Unquote(x)` and `I
 **Nesting needs no delimiters** when the last argument is itself a macro form: `Def run Fn {} If c a b` reads exactly as intended, since each TitleCase head consumes its own arity's worth of forms, recursively. Sibling macro forms inside a list or argument are naturally bounded by the enclosing bracket; when two macro forms must sit side by side with nothing enclosing them, wrap one in a call (`(…)`).
 
 Variadic macros take a single list argument: arity stays fixed, the list flexes (`Do [a b c]`).
+
+### 2.5 Call chaining
+
+A `.` immediately following a form, then a name and an attached `(`, is **call chaining**. The receiver is folded in as the call's *first* argument: `recv.name(args)` reads as `(name, recv, …args)`. Chains fold left-to-right, so each `.name(…)` wraps everything to its left:
+
+```
+1.increment()                       // (increment, 1)
+foo(1 2 3).bar(4 5 6).baz(7 8 9)    // (baz, (bar, (foo, 1, 2, 3), 4, 5, 6), 7, 8, 9)
+```
+
+Like the attachment rule (§2.2) this is whitespace-sensitive: the `.`, the name, and the `(` must each abut the token before them. The reader achieves this by lexing `.` as a decimal point only when a digit follows, so `1.increment` lexes as `1` then `.` then `increment`.
+
+This is **pure reader rewriting, not method dispatch** — nothing is attached to the receiver, and `1.increment()` is exactly `increment(1)`. The receiver and the parenthesized arguments are arbitrary forms, so the call name can be any function (`add`, an imported `kv/get`, …); the only purpose is letting a pipeline read left-to-right instead of inside-out.
 
 ---
 
@@ -482,7 +496,8 @@ Hygiene is the largest: `gensym` suffices for now, but a syntax-object layer ove
 
 ```
 file      := form*
-form      := atom | name | qname | call | tuple
+form      := primary ("." name payload)*      // call chaining: recv as first arg
+primary   := atom | name | qname | call | tuple
            | list | record | flags | macroform
 atom      := bool | int | float | char | string
 name      := kebab-label                      // WIT identifier, % escape allowed
