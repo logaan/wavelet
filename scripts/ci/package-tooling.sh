@@ -2,8 +2,8 @@
 # Package the editor tooling under tooling/ into one release zip per editor, and
 # collect/repackage the standalone binaries — all into dist/.
 #
-# Inputs: the per-platform binaries staged by scripts/build-cli.sh and
-# scripts/build-lsp.sh.
+# Inputs: the per-platform binaries staged by scripts/ci/build-cli.sh and
+# scripts/ci/build-lsp.sh.
 #   STAGED_BINS  Directory holding wavelet-<target> and wavelet-lsp-<target>
 #                binaries. Defaults to dist/. (CI downloads the build job's
 #                artifacts into a separate dir and points this at it.)
@@ -30,7 +30,7 @@
 #
 # Run from anywhere. Requires `node`/`npm`, `zip`, and `tar`.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 root="$(pwd)"
 
 staged="${STAGED_BINS:-dist}"

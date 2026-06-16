@@ -6,7 +6,7 @@ name: Deploy docs
 # Node — no Rust toolchain. Regenerate that artifact and docs/examples.json
 # locally (see scripts/regen-examples.sh) when the language changes.
 #
-# The build itself lives in scripts/build-docs.sh so it can be run identically
+# The build itself lives in scripts/ci/build-docs.sh so it can be run identically
 # from a local checkout.
 
 on:
@@ -34,7 +34,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: docs/package-lock.json
-      - run: scripts/build-docs.sh
+      - run: scripts/ci/build-docs.sh
       - uses: actions/upload-pages-artifact@v5
         with:
           path: docs/build

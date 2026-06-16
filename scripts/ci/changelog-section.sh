@@ -2,7 +2,7 @@
 # Print the CHANGELOG.md section for a single version, for use as a GitHub
 # release body.
 #
-# Usage: scripts/changelog-section.sh VERSION
+# Usage: scripts/ci/changelog-section.sh VERSION
 #   VERSION  Release version, with or without a leading `v` (e.g. 0.2.4 or
 #            v0.2.4). The matching `## [VERSION] - ...` section in CHANGELOG.md
 #            is printed to stdout, without its own heading.
@@ -13,11 +13,11 @@
 # Used by the `Release` GitHub workflow (scripts feed the body to
 # softprops/action-gh-release). Run from anywhere.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 version="${1:-}"
 if [ -z "$version" ]; then
-  echo "usage: scripts/changelog-section.sh VERSION" >&2
+  echo "usage: scripts/ci/changelog-section.sh VERSION" >&2
   exit 2
 fi
 version="${version#v}"
