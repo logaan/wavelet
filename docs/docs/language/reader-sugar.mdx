@@ -1,0 +1,129 @@
+---
+sidebar_position: 2
+title: Reader sugar
+description: Every reader-sugar form, enumerated — what you write and the canonical WAVE value it desugars to.
+---
+
+# Reader sugar
+
+Wavelet's tokens *are* [WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave)'s tokens, and the reader is where all sugar dies: every surface form desugars to a canonical WAVE value before anything is evaluated. This page enumerates each reader-sugar form, one per section, with the canonical value it produces.
+
+A form is **reader sugar** when it is *not already* a valid WAVE value, or when the reader **transforms** it into a different shape as it reads. That is the whole list below.
+
+You can confirm any desugaring yourself with `wavelet read`, which prints the canonical WAVE tree for a piece of source:
+
+```console
+$ echo 'f(x y)' | wavelet read
+(f, x, y)
+```
+
+## 1. Commas are whitespace
+
+Commas are whitespace. These read identically:
+
+```wavelet
+[1 2 3]
+[1, 2, 3]
+```
+
+```console
+$ echo '[1 2 3]' | wavelet read
+[1, 2, 3]
+```
+
+This is the sugar that makes Wavelet a *superset* of WAVE rather than a different language: drop the commas and a WAVE value is already Wavelet. The canonical printer always puts the commas back, so anything Wavelet reads prints as strict WAVE and can be handed to any WAVE tooling. Because every comma-free tuple, list, record, and flag set is just this rule applied, none of them needs its own entry here.
+
+<Playground id="syntax-commas" />
+
+## 2. The attachment rule (call forms)
+
+Wavelet has exactly **one** whitespace-sensitive rule. A `(` that *immediately* follows an identifier — with no intervening whitespace — makes that identifier the **head** of a call, and the reader folds the head and the parenthesized forms into a single tuple. With whitespace in between, the parenthesized expression is a separate, free-standing value:
+
+```wavelet
+delete-file({path: "foo.md" force: true})   // a call: the head plus a record argument
+delete-file ({path: "foo.md" force: true})  // two forms: a variable, then a record in a tuple
+```
+
+A call desugars to a **tuple whose first element is the head**:
+
+| You write | Canonical WAVE form | |
+|---|---|---|
+| `f(x)` | `(f, x)` | one argument |
+| `f(x y)` | `(f, x, y)` | positional arguments |
+| `f([x y])` | `(f, [x, y])` | a list argument |
+| `f({a: 1 b: 2})` | `(f, {a: 1, b: 2})` | a record argument — named arguments |
+| `f()` | `(f)` | zero arguments |
+
+```console
+$ echo 'f(x y)' | wavelet read
+(f, x, y)
+$ echo 'f()' | wavelet read
+(f)
+```
+
+As data, a call is just a tuple: `log("hi")` is the WAVE tuple `(log, "hi")`. In evaluation position a parenthesized form is always a call; the same tuple is plain data under `Quote`. A standalone `(a)` is therefore a one-element tuple — a zero-argument call of `a` — not a transparent grouping.
+
+<Playground id="syntax-quote-call" />
+
+## 3. Qualified calls
+
+A `/` between two names is a qualified reference: the name after the slash, taken from the import aliased by the name before it. WIT identifiers contain no slash, so this is a Wavelet-only token, and it heads a call exactly like an ordinary identifier:
+
+| You write | Canonical WAVE form | |
+|---|---|---|
+| `kv/get({...})` | `(kv/get, {...})` | name `get` from the import aliased `kv` |
+
+```console
+$ echo 'kv/get({bucket: b})' | wavelet read
+(kv/get, {bucket: b})
+```
+
+## 4. Doc comments
+
+`//` runs to the end of the line and is discarded — comments never reach the form tree. A *doc* comment — `///` — is the exception, and the sugar: instead of being thrown away, its text attaches to the following form as metadata, surfaced in `wavelet wit` output.
+
+```wavelet
+/// Delete a file from the working directory.
+Def delete-file Fn {path: string} ...
+```
+
+Plain `//` comments leave no trace in the read tree; `///` doc comments ride along on the form they precede.
+
+## 5. TitleCase macro sugar
+
+A **TitleCase** identifier — mixed-case words, each starting with a capital (`If`, `DefMacro`, `TryLet`) — is reader sugar for a macro call. This can't collide with ordinary identifiers: WIT words are all-lower or all-UPPER, so TitleCase tokens are syntactically free. The token kebab-izes and gains a `-MACRO` suffix: `If` ↦ `if-MACRO`, `DefMacro` ↦ `def-macro-MACRO`.
+
+A TitleCase head does **not** require parentheses. The reader looks up the macro's declared **arity** and consumes exactly that many following forms, folding the head and those forms into a tuple:
+
+```wavelet
+If eq([foo bar]) log("match") log("nope")
+```
+
+```console
+$ echo 'If eq([foo bar]) log("match") log("nope")' | wavelet read
+(if-MACRO, (eq, [foo, bar]), (log, "match"), (log, "nope"))
+```
+
+Three consequences:
+
+1. **Define before use.** A macro must be in scope before it's read — a core form, defined earlier in the file, or imported. The reader processes a file top to bottom and always knows every visible macro's arity.
+2. **Explicit parentheses override arity reading.** `Unquote(x)` and `If(c t e)` attach their arguments directly instead of scanning ahead. The lowered call `if-MACRO(c t e)` — canonical `(if-MACRO, c, t, e)` — is always available too, and that tuple is what macros emit.
+3. **Nesting needs no delimiters, in any position.** A TitleCase head consumes its own arity recursively wherever it appears, not just as the final argument. Both `If Quote c t e` (nested in the first slot) and `Def run Fn {} If c a b` (nested in the last) read exactly as intended.
+
+Variadic macros take a single list argument — arity stays fixed, the list flexes (`Do([a b c])`).
+
+<Playground id="syntax-if-arity" />
+
+## At a glance
+
+Every reader-sugar form, in one table:
+
+| # | You write | Canonical WAVE form | |
+|---|---|---|---|
+| 1 | `[1 2 3]` | `[1, 2, 3]` | commas are whitespace |
+| 2 | `f(x y)` | `(f, x, y)` | attachment rule — calls are tuples |
+| 3 | `kv/get({...})` | `(kv/get, {...})` | qualified call |
+| 4 | `/// text` | metadata on the following form | doc comment |
+| 5 | `If c t e` | `(if-MACRO, c, t, e)` | TitleCase macro |
+
+The [Syntax & reading](./syntax) page covers the same ground as prose, and [`wavelet read`](../cli#read) prints the canonical tree for any source so you can check the desugaring for yourself.

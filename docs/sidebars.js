@@ -12,6 +12,7 @@ const sidebars = {
       collapsed: false,
       items: [
         'language/syntax',
+        'language/reader-sugar',
         'language/values',
         'language/evaluation',
         'language/special-forms',

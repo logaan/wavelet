@@ -1,5 +1,5 @@
 ---
-sidebar_position: 6
+sidebar_position: 7
 title: Macros
 description: Compile-time functions from forms to forms — with quasiquote and gensym.
 ---
@@ -32,7 +32,7 @@ You can inspect what a macro produces with [`expand`](../stdlib#meta--reflection
 
 ## Hygiene and `gensym`
 
-Expansion is **unhygienic**, in the Common Lisp / Clojure tradition: names a macro introduces can capture or be captured. The discipline is [`gensym`](../stdlib#meta--reflection), which mints a fresh, collision-free name each call.
+Expansion is **unhygienic**, in the Common Lisp tradition: names a macro introduces can capture or be captured. The discipline is [`gensym`](../stdlib#meta--reflection), which mints a fresh, collision-free name each call.
 
 <Playground id="macro-gensym-three" />
 
