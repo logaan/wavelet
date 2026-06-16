@@ -171,19 +171,25 @@ fn lex_name(src: &str, start: usize) -> Result<(Tok, usize), ReadError> {
     }
 }
 
-/// TitleCase: no hyphens, starts with a capital, contains at least one lowercase.
+/// TitleCase macro head: the **first** hyphen-separated word is Title-case —
+/// it starts with a capital and contains at least one lowercase letter
+/// (`If`, `DefMacro`, `Try-let`). A Title-case leading word can't be a WIT
+/// label word (those are all-lower or all-UPPER), so this never collides with
+/// an ordinary identifier such as `parse-JSON` or `HTTP-get`.
 fn is_title(text: &str) -> bool {
-    !text.contains('-')
-        && text.starts_with(|c: char| c.is_ascii_uppercase())
-        && text.contains(|c: char| c.is_ascii_lowercase())
+    let first = text.split('-').next().unwrap_or("");
+    first.starts_with(|c: char| c.is_ascii_uppercase())
+        && first.contains(|c: char| c.is_ascii_lowercase())
 }
 
-/// `TryLet` -> `trylet-MACRO`, `DefMacro` -> `defmacro-MACRO`.
+/// `TryLet` -> `trylet-MACRO`, `DefMacro` -> `defmacro-MACRO`,
+/// `Try-let` -> `try-let-MACRO`.
 ///
 /// The token is lowercased wholesale; there is no internal capitalisation
-/// spreading (an interior capital does *not* introduce a hyphen). A macro
-/// must therefore be defined under the single lowercase word it is invoked
-/// as (`DefMacro trylet …` is invoked `TryLet …`).
+/// spreading (an interior capital does *not* introduce a hyphen). Existing
+/// hyphens are preserved, so a hyphenated head like `Try-let` maps onto the
+/// kebab-named macro `try-let`; a single TitleCase word like `TryLet` maps
+/// onto `trylet`.
 pub fn title_to_macro_name(text: &str) -> String {
     let mut out = text.to_ascii_lowercase();
     out.push_str("-MACRO");

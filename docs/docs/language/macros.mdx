@@ -46,10 +46,10 @@ The reader requires record keys — and therefore [`Let`](./special-forms#let) b
 
 ## Error propagation without early return
 
-The core has no early return, so error propagation is a *binding* macro: it wraps the rest of the computation rather than escaping it. This is the `TryLet` pattern — Rust's `?`, reconstructed in user space from `Match` and quasiquote. Note the macro is *defined* under its lower-case name `trylet` and *invoked* through the TitleCase sugar `TryLet` (just as the core `If` invokes `if-MACRO`):
+The core has no early return, so error propagation is a *binding* macro: it wraps the rest of the computation rather than escaping it. This is the `Try-let` pattern — Rust's `?`, reconstructed in user space from `Match` and quasiquote. Note the macro is *defined* under its lower-case name `try-let` and *invoked* through the TitleCase sugar `Try-let` (just as the core `If` invokes `if-MACRO`):
 
 ```wavelet
-DefMacro trylet {binding body}         // binding is a one-field record form
+DefMacro try-let {binding body}        // binding is a one-field record form
   Let {name: rec-key(binding) expr: rec-val(binding)}
     Quasi Match Unquote(expr) [
       (ok(Unquote(name))  Unquote(body))
@@ -57,8 +57,8 @@ DefMacro trylet {binding body}         // binding is a one-field record form
     ]
 
 Def load-config Fn {path: string}
-  TryLet {text: read-file({path: path})}
-  TryLet {form: read(text)}
+  Try-let {text: read-file({path: path})}
+  Try-let {form: read(text)}
   ok(form)
 ```
 
