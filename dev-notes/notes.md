@@ -1,5 +1,10 @@
 # Notes
 
+## Tue 16 June
+
+1. [ ] Macros can now be in the form `Foo-bar-baz => foo-bar-baz-MACRO`.
+   1. Review existing docs, source, and tooling to make sure everything reflects that.
+
 ## 15 June
 
 1. [ ] Allow for alternatives to the standard library.
