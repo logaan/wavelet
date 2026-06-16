@@ -10,39 +10,24 @@ Wavelet's tokens *are* [WAVE](https://github.com/bytecodealliance/wasm-tools/tre
 
 A form is **reader sugar** when it is *not already* a valid WAVE value, or when the reader **transforms** it into a different shape as it reads. That is the whole list below.
 
-The plain WAVE structures are **not** sugar — they read straight through, unchanged:
-
-| You write | Reads as | |
-|---|---|---|
-| `(a, b)` | `(a, b)` | tuple |
-| `[a, b]` | `[a, b]` | list |
-| `{k: v}` | `{k: v}` | record |
-| `{read, write}` | `{read, write}` | flags |
-| `foo`, `42`, `"hi"` | `foo`, `42`, `"hi"` | a bare case, an atom |
-
-These are WAVE values to begin with; the reader has nothing to do to them. (A bare identifier *evaluating* to a variable reference is a rule of [evaluation](./evaluation), not of reading — as data it is just a payload-less case.) The single liberty Wavelet takes with all of them is making commas optional, which is the first piece of sugar below.
-
 You can confirm any desugaring yourself with `wavelet read`, which prints the canonical WAVE tree for a piece of source:
 
 ```console
-$ echo 'f(x y)' | wavelet read /dev/stdin
+$ echo 'f(x y)' | wavelet read
 f((x, y))
 ```
 
-## 1. Commas and newlines are whitespace
+## 1. Commas are whitespace
 
-As in Clojure, commas are whitespace, and so are newlines. These all read identically:
+As in Clojure, commas are whitespace. These read identically:
 
 ```wavelet
 [1 2 3]
 [1, 2, 3]
-[1,
- 2,
- 3]
 ```
 
 ```console
-$ echo '[1 2 3]' | wavelet read /dev/stdin
+$ echo '[1 2 3]' | wavelet read
 [1, 2, 3]
 ```
 
@@ -59,7 +44,7 @@ Parentheses around a *single* form are transparent: the reader strips them and k
 | `(a)` | `a` |
 
 ```console
-$ echo '(a)' | wavelet read /dev/stdin
+$ echo '(a)' | wavelet read
 a
 ```
 
@@ -85,9 +70,9 @@ The bracket you attach chooses the payload shape, and most shapes are rewritten 
 | `f()` or `f[]` | `f([])` | zero arguments become an empty list |
 
 ```console
-$ echo 'f(x y)' | wavelet read /dev/stdin
+$ echo 'f(x y)' | wavelet read
 f((x, y))
-$ echo 'f[]' | wavelet read /dev/stdin
+$ echo 'f[]' | wavelet read
 f([])
 ```
 
@@ -104,7 +89,7 @@ A `/` between two names is a qualified reference: the name after the slash, take
 | `kv/get{...}` | `kv/get({...})` | name `get` from the import aliased `kv` |
 
 ```console
-$ echo 'kv/get{bucket: b}' | wavelet read /dev/stdin
+$ echo 'kv/get{bucket: b}' | wavelet read
 kv/get({bucket: b})
 ```
 
@@ -130,7 +115,7 @@ If eq[foo bar] log("match") log("nope")
 ```
 
 ```console
-$ echo 'If eq[foo bar] log("match") log("nope")' | wavelet read /dev/stdin
+$ echo 'If eq[foo bar] log("match") log("nope")' | wavelet read
 if-MACRO((eq([foo, bar]), log("match"), log("nope")))
 ```
 
@@ -150,7 +135,7 @@ Every reader-sugar form, in one table:
 
 | # | You write | Canonical WAVE form | |
 |---|---|---|---|
-| 1 | `[1 2 3]` | `[1, 2, 3]` | commas/newlines are whitespace |
+| 1 | `[1 2 3]` | `[1, 2, 3]` | commas are whitespace |
 | 2 | `(a)` | `a` | grouping parens, stripped |
 | 3 | `f(x y)` | `f((x, y))` | attachment rule, call payload shapes |
 | 4 | `kv/get{...}` | `kv/get({...})` | qualified call |
