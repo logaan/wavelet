@@ -55,7 +55,7 @@
       "match": "\\b[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*\\b"
     },
     "call-head": {
-      "comment": "Attachment rule: a (possibly %-escaped, possibly qualified) name immediately followed by ( is a call head. Only ( attaches now.",
+      "comment": "Attachment rule: a (possibly %-escaped, possibly qualified) name immediately followed by ( is a call head. Only ( attaches now. Also covers the name in a chained call (recv.name(...)), which abuts its own (.",
       "name": "entity.name.function.wavelet",
       "match": "%?[A-Za-z][\\w-]*(?:/%?[\\w-]+)?(?=\\()"
     },
@@ -70,8 +70,9 @@
       "match": "%?[A-Za-z][\\w-]*(?=\\s*:)"
     },
     "punctuation": {
+      "comment": ". is the chain operator (recv.name(...)); the number rule above already claims any decimal point, so a bare . is always a chain dot.",
       "name": "punctuation.wavelet",
-      "match": "[(){}\\[\\],:/]"
+      "match": "[(){}\\[\\],:/.]"
     }
   }
 }

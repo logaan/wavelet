@@ -250,6 +250,29 @@ mod tests {
     }
 
     #[test]
+    fn call_chaining() {
+        // a receiver becomes the first argument of the chained call (§2.5)
+        assert_eq!(read1("1.increment()"), "(increment, 1)");
+        assert_eq!(read1("x.foo(a b)"), "(foo, x, a, b)");
+        // chains nest left-to-right
+        assert_eq!(
+            read1("foo(1 2 3).bar(4 5 6).baz(7 8 9)"),
+            "(baz, (bar, (foo, 1, 2, 3), 4, 5, 6), 7, 8, 9)"
+        );
+        // the receiver can be any primary form
+        assert_eq!(read1("1.5.to-string()"), "(to-string, 1.5)");
+        assert_eq!(read1("[1 2].len()"), "(len, [1, 2])");
+        assert_eq!(read1(r#""hi".upper()"#), r#"(upper, "hi")"#);
+        // a qualified name works as the chained call head
+        assert_eq!(read1("b.kv/get(k)"), "(kv/get, b, k)");
+        // whitespace breaks attachment: `.` must abut the receiver and the name
+        assert!(read_file("1 .increment()").is_err());
+        assert!(read_file("1. increment()").is_err());
+        // a bare `.name` with no `(...)` is not (yet) field access
+        assert!(read_file("foo.bar").is_err());
+    }
+
+    #[test]
     fn comments_and_newlines() {
         assert_eq!(
             read1("// leading comment\nf(x) // trailing"),
