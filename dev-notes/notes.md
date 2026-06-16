@@ -125,8 +125,8 @@
     1. But we also need a full page with all of the rules for each type.
     1. Eg: What values can be keys in records?
     1. Eg: Wtf are flags?
-1. [ ] Macros should use `if-MACRO([c t e])` not tuples.
-1. [ ] asdf
+1. [x] Macros should use `if-MACRO([c t e])` not tuples.
+   1. No longer an issue as we're all on board with `(if-MACRO c t e)`
 1. [ ] Macros should have their own page with examples of how to write them and why they're so valuable.
 1. [ ] Macros shouldn't have special `DefMacro -> def-macro-MACRO` expansion.
     1. It should just be `Def-macro -> def-macro-MACRO`
@@ -145,9 +145,9 @@
         1. bool, int, float, char, string
         1. Is `atom` the right term?
            1. For everything except string we could use `scalar`
-    1. [ ] What's a `qname`?
+    1. [x] What's a `qname`?
         1. Qualified name (with `/`)
-    1. [ ] Can we skip the `:` in records?
+    1. [x] Can we skip the `:` in records?
        1. I don't think so because otherwise they'd look like flags.
     1. This grammar definition doesn't feel like it's totally correct.
         1. Like shouldn't comments be defined?
