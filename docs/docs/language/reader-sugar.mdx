@@ -61,13 +61,6 @@ $ echo 'f()' | wavelet read
 (f)
 ```
 
-Only `(` attaches. The older `f[…]` and `f{…}` call spellings have been removed — a `[` or `{` directly after an identifier is now a read error that points at the new spelling:
-
-```console
-$ echo 'f[x y]' | wavelet read
-<stdin>: read error at byte 1: list call sugar was removed: write `name([...])` instead of `name[...]`
-```
-
 As data, a call is just a tuple: `log("hi")` is the WAVE tuple `(log, "hi")`. In evaluation position a parenthesized form is always a call; the same tuple is plain data under `Quote`. A standalone `(a)` is therefore a one-element tuple — a zero-argument call of `a` — not a transparent grouping.
 
 <Playground id="syntax-quote-call" />

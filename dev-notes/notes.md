@@ -134,6 +134,9 @@
 1. [ ] "when the last argument is itself a macro" shouldn't it matter regardless of whether it's the last argument or not?
 1. [ ] Rethink qualified references (`kv/get`). There's probably a way to unify them with one or both of: record field access and/or call chaining (`foo().bar().baz()`).
 1. [ ] Add call-chaining sugar. `1.increment()` should de-sugar to `(increment 1)` (logically via `increment(1)`, though not necessarily in the implementation). `foo(1 2 3).bar(4 5 6).baz(7 8 9)` should desugar to `(baz (bar (foo 1 2 3) 4 5 6) 7 8 9)`. These are not methods — they're not attached to the object, it's just re-writing.
+1. [ ] Unify qualified references with record access via virtual accessors. If we also allow getting values out of records using virtual accessors, and treat qualified imports as actually returning a record containing that namespace, then `foo/bar` can be removed in favour of `foo.bar()`.
+    1. eg: `{name: "Logan", age: 42}.age => 42`
+    1. eg: `{name: "Logan", greeting: Fn {name} str-cat("Hullo " name)}.greet("Joe") => "Hullo Joe"`
 1. [ ] Drop doc comments (`///`) from the language.
 1. [ ] Drop support for any kind of internal capitalisation. `DefMacro` should just become `defmacro-MACRO` in the same way that `If` becomes `if-MACRO`. Identifiers are detected as macro identifiers if they start with a capital letter and contain any non-capital letters.
 1. Grammar
