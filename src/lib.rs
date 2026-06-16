@@ -600,7 +600,9 @@ world shout {
     }
 
     #[test]
-    fn doc_comments_attach_and_reach_wit() {
+    fn triple_slash_is_an_ordinary_comment() {
+        // `///` is no longer a doc comment: it is discarded like any `//`
+        // comment and never reaches the form tree or the synthesized WIT.
         let src = "Package \"demo:doc@0.1.0\"\n\
                    /// A pair.\n\
                    DefType point {x: s32 y: s32}\n\
@@ -609,11 +611,10 @@ world shout {
                    Export shout\n\
                    Def shout Fn {phrase: string} upper(phrase)";
         let (arena, roots) = read_file(src).unwrap();
-        assert_eq!(arena.doc(roots[1]), Some("A pair."));
-        assert_eq!(arena.doc(roots[2]), Some("Shouts.\nLoudly."));
+        // The comments leave no tokens, so the roots are exactly the four forms.
+        assert_eq!(roots.len(), 4);
         let got = wit::synthesize(&arena, &roots).unwrap();
-        assert!(got.contains("  /// A pair.\n  record point"), "{got}");
-        assert!(got.contains("  /// Shouts.\n  /// Loudly.\n  shout: func"), "{got}");
+        assert!(!got.contains("///"), "{got}");
     }
 
     #[test]

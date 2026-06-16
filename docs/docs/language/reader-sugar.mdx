@@ -78,18 +78,7 @@ $ echo 'kv/get({bucket: b})' | wavelet read
 (kv/get, {bucket: b})
 ```
 
-## 4. Doc comments
-
-`//` runs to the end of the line and is discarded — comments never reach the form tree. A *doc* comment — `///` — is the exception, and the sugar: instead of being thrown away, its text attaches to the following form as metadata, surfaced in `wavelet wit` output.
-
-```wavelet
-/// Delete a file from the working directory.
-Def delete-file Fn {path: string} ...
-```
-
-Plain `//` comments leave no trace in the read tree; `///` doc comments ride along on the form they precede.
-
-## 5. TitleCase macro sugar
+## 4. TitleCase macro sugar
 
 A **TitleCase** identifier — mixed-case words, each starting with a capital (`If`, `DefMacro`, `TryLet`) — is reader sugar for a macro call. This can't collide with ordinary identifiers: WIT words are all-lower or all-UPPER, so TitleCase tokens are syntactically free. The token kebab-izes and gains a `-MACRO` suffix: `If` ↦ `if-MACRO`, `DefMacro` ↦ `def-macro-MACRO`.
 
@@ -123,7 +112,6 @@ Every reader-sugar form, in one table:
 | 1 | `[1 2 3]` | `[1, 2, 3]` | commas are whitespace |
 | 2 | `f(x y)` | `(f, x, y)` | attachment rule — calls are tuples |
 | 3 | `kv/get({...})` | `(kv/get, {...})` | qualified call |
-| 4 | `/// text` | metadata on the following form | doc comment |
-| 5 | `If c t e` | `(if-MACRO, c, t, e)` | TitleCase macro |
+| 4 | `If c t e` | `(if-MACRO, c, t, e)` | TitleCase macro |
 
 The [Syntax & reading](./syntax) page covers the same ground as prose, and [`wavelet read`](../cli#read) prints the canonical tree for any source so you can check the desugaring for yourself.

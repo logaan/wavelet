@@ -130,26 +130,6 @@ impl Parser {
     }
 
     fn parse_form(&mut self) -> Result<NodeId, ReadError> {
-        // leading `///` lines attach to the form that follows (§2.1)
-        let mut doc: Option<String> = None;
-        while let Some((Tok::Doc(_), _)) = self.peek() {
-            let (Tok::Doc(text), _) = self.next()? else { unreachable!() };
-            match &mut doc {
-                Some(d) => {
-                    d.push('\n');
-                    d.push_str(&text);
-                }
-                None => doc = Some(text),
-            }
-        }
-        let id = self.parse_form_inner()?;
-        if let Some(d) = doc {
-            self.arena.set_doc(id, d);
-        }
-        Ok(id)
-    }
-
-    fn parse_form_inner(&mut self) -> Result<NodeId, ReadError> {
         let (tok, span) = self.next()?;
         let sp = (span.start, span.end);
         match tok {
@@ -185,7 +165,6 @@ impl Parser {
                 self.err("unexpected closing delimiter", span.start)
             }
             Tok::Colon => self.err("`:` is only valid inside a record", span.start),
-            Tok::Doc(_) => self.err("`///` doc comment must precede a form", span.start),
         }
     }
 

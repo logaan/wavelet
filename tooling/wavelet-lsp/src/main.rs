@@ -3,7 +3,7 @@
 //! It speaks LSP over stdio and provides, all driven by `wavelet::read_file`:
 //!   • live syntax diagnostics (publish on open/change),
 //!   • completion (special forms, builtins, names defined in the file),
-//!   • hover (special-form/builtin blurbs and `///` doc comments),
+//!   • hover (special-form/builtin blurbs),
 //!   • document symbols (top-level `Def`/`DefType`/`DefMacro`).
 //!
 //! See `README.md` in this directory for editor wiring.

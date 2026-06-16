@@ -220,7 +220,7 @@ fn greeting_wvl(slug: &str) -> String {
 // the same logic could back an HTTP front end, a test, or a library unchanged.
 Package \"{slug}:greeting@0.1.0\"
 
-/// A friendly greeting for `name`.
+// A friendly greeting for `name`.
 Export greet
 Def greet Fn {{name: string}}
   str-cat(\"Hello, \" name \"!\")

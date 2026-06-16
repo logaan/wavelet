@@ -35,6 +35,9 @@ you work, and rename it to the new version when you cut a release.
   and `foo({k: v})` instead. Only `(` attaches to a name now; attaching `[` or
   `{` to a name is a read error that points at the new spelling. (Free-standing
   `[…]` list and `{…}` record/flag values are unaffected.)
+- **`///` doc comments.** A `///` line is now an ordinary `//` comment: its text
+  is discarded by the reader instead of attaching to the following form, and it
+  no longer appears as a WIT doc comment in `wavelet wit` output or on LSP hover.
 
 ## [0.6.0] - 2026-06-15
 

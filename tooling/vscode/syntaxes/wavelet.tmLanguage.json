@@ -5,7 +5,6 @@
   "fileTypes": ["wvl"],
   "comment": "Token classes mirror the Wavelet lexer (src/lexer.rs) and the shared Prism grammar (docs/src/prism/wavelet.js). Keep the two in sync.",
   "patterns": [
-    { "include": "#doc-comment" },
     { "include": "#comment" },
     { "include": "#string" },
     { "include": "#char" },
@@ -19,11 +18,6 @@
     { "include": "#punctuation" }
   ],
   "repository": {
-    "doc-comment": {
-      "comment": "/// doc comments attach to the following form; //// is not a doc comment",
-      "name": "comment.line.documentation.wavelet",
-      "match": "///(?!/).*$"
-    },
     "comment": {
       "name": "comment.line.double-slash.wavelet",
       "match": "//.*$"
