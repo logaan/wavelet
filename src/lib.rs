@@ -3,6 +3,10 @@ pub mod expand;
 pub mod form;
 pub mod interp;
 pub mod lexer;
+// The guest-side semantics of a produced `wavelet:meta/macros` component
+// (Step 9, strategy A). Non-gated: it reuses the interpreter and is compiled
+// into the wasm32 macro guest as well as called by native producer tests.
+pub mod macrolib;
 pub mod printer;
 pub mod reader;
 pub mod value;
@@ -16,6 +20,8 @@ pub mod build;
 pub mod emit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod host;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod macrobuild;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod macrodep;
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,8 +41,13 @@ pub mod wit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod witdep;
 
-// Browser playground bindings (compiled only for wasm).
-#[cfg(target_arch = "wasm32")]
+// Browser playground bindings (compiled only for wasm, and only when the
+// `playground` feature is on — the default). The produced macro-guest
+// (`tools/macro-guest`) depends on `wavelet` with `default-features = false`, so
+// it links the interpreter for `wasm32` *without* `wasm-bindgen`: a macro
+// component must instantiate under the consumer's empty, capability-free linker
+// and so can carry no `__wbindgen_placeholder__` imports.
+#[cfg(all(target_arch = "wasm32", feature = "playground"))]
 pub mod wasm;
 
 pub use form::{Arena, Node, NodeId};

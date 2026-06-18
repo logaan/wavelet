@@ -13,6 +13,18 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- **Produce macro components from Wavelet (`wavelet build`).** A `.wvl` file
+  whose top level is a `Package` declaration plus `DefMacro`s only (no `Export`,
+  no runtime defs) now compiles into a component exporting `wavelet:meta/macros`,
+  so a macro library can be **written in Wavelet itself** and imported with
+  `Import {… macros: true}` like any other macro component (design.md §6.3). The
+  produced component bundles the Wavelet interpreter and runs the macros through
+  it, so its expansions match local expansion exactly. Built for
+  `wasm32-unknown-unknown` (no WASI), so it instantiates under the capability-free
+  macro linker.
+
 ## [0.7.0] - 2026-06-16
 
 ### Added
