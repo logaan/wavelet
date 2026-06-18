@@ -1,0 +1,34 @@
+package wavelet:meta@0.1.0;
+
+// Code as a WIT type (design.md §6.2).
+//
+// Homoiconicity has to survive the component boundary, so "a form" is itself a
+// WIT type. WIT has no recursive types, so a form tree is encoded as an arena:
+// a flat node table plus a root index. This mirrors `src/form.rs`
+// (`Arena`/`Node`/`NodeId`) exactly.
+//
+// A call is just a `tup` whose first element is the head — there is no separate
+// `call` node, matching `form::Node` (which has no `Call` variant).
+interface code {
+  type node-id = u32;
+
+  variant node {
+    bool-val(bool),
+    int-val(s64),
+    dec-val(f64),
+    char-val(char),
+    str-val(string),
+    sym(string),
+    qsym(tuple<string, string>),       // (alias, name)
+    tup(list<node-id>),                // a call is a tup whose head is items[0]
+    lst(list<node-id>),
+    rec(list<tuple<string, node-id>>),
+    flg(list<string>),
+  }
+
+  record tree {
+    nodes: list<node>,
+    root: node-id,
+    spans: list<tuple<u32, u32>>,      // source offsets, parallel to nodes
+  }
+}
