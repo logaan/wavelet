@@ -4011,6 +4011,14 @@ fn synthesize_world_wit(
 
     out.push_str(&format!("world {} {{\n", info.world));
     for imp in &info.imports {
+        // A pure macro import (§6.3) is compile-time only: it is resolved to a
+        // macro component and run during expansion, contributing no runtime
+        // import to the synthesized world. Skip it here (mirroring `build`'s
+        // dep-resolution skip) so a file that uses foreign macros but no runtime
+        // dependency from that package still synthesizes a valid world.
+        if crate::wit::is_macro_only(imp) {
+            continue;
+        }
         let iface = import_iface(&imp.path);
         let dep = deps
             .get(&imp.package)
