@@ -41,6 +41,11 @@ use std::path::Path;
 use wasmtime::component::{Component, Func, Instance, Linker};
 use wasmtime::{Engine, Store};
 
+/// Index of an export located by name, reused to look up nested exports (a
+/// function *inside* an exported interface instance). Re-exported so callers can
+/// hold one across `get_export`/`get_func` calls without naming `wasmtime`.
+pub use wasmtime::component::ComponentExportIndex;
+
 /// The dynamic component value type, re-exported so callers marshal arguments
 /// and results without naming `wasmtime` themselves.
 pub use wasmtime::component::Val;
@@ -128,6 +133,53 @@ impl HostComponent {
     /// the same instance can be called repeatedly.)
     pub fn call(&mut self, name: &str, args: &[Val]) -> Result<Vec<Val>, String> {
         let func = self.func(name)?;
+        self.invoke(func, name, args)
+    }
+
+    /// Look up a function exported *inside an exported interface instance*.
+    ///
+    /// Component-Model interface exports are nested: a component exporting an
+    /// interface like `wavelet:meta/macros@0.1.0` surfaces it as an instance
+    /// export, and the interface's functions (`manifest`, `expand`) live one
+    /// level down inside that instance — they are **not** top-level funcs, so
+    /// [`HostComponent::func`] can't reach them. This resolves the instance by
+    /// name, then the function within it. An actionable error names whichever of
+    /// the two is missing.
+    pub fn instance_func(&mut self, instance: &str, func: &str) -> Result<Func, String> {
+        let inst_idx = self
+            .instance
+            .get_export_index(&mut self.store, None, instance)
+            .ok_or_else(|| {
+                format!("component does not export the interface `{instance}`")
+            })?;
+        let func_idx = self
+            .instance
+            .get_export_index(&mut self.store, Some(&inst_idx), func)
+            .ok_or_else(|| {
+                format!("interface `{instance}` has no function `{func}`")
+            })?;
+        self.instance
+            .get_func(&mut self.store, &func_idx)
+            .ok_or_else(|| {
+                format!("export `{func}` of `{instance}` is not a function")
+            })
+    }
+
+    /// Call a function exported inside an exported interface instance (the
+    /// nested-export analogue of [`HostComponent::call`]).
+    pub fn call_instance(
+        &mut self,
+        instance: &str,
+        func: &str,
+        args: &[Val],
+    ) -> Result<Vec<Val>, String> {
+        let f = self.instance_func(instance, func)?;
+        self.invoke(f, &format!("{instance}#{func}"), args)
+    }
+
+    /// Shared invoke tail: size the result buffer to the export's declared
+    /// result count, call, and surface failures with `name` for context.
+    fn invoke(&mut self, func: Func, name: &str, args: &[Val]) -> Result<Vec<Val>, String> {
         // Size the result buffer to the export's declared result count so
         // `Func::call` can write directly into it.
         let result_count = func.ty(&self.store).results().len();
