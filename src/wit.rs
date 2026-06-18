@@ -25,6 +25,10 @@ pub struct ImportInfo {
     /// package part, e.g. `demo:shout`
     pub package: String,
     pub alias: String,
+    /// `Import {… macros: true}` — load this import's macro manifest at compile
+    /// time (§6.3). Plumbing only for now; consuming it is Steps 5–7. Defaults
+    /// to `false`, including for the bare-string import form.
+    pub macros: bool,
 }
 
 #[derive(Clone)]
@@ -71,28 +75,30 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
             "import-MACRO" => {
                 let Some(&p) = items.get(1) else { continue };
                 let spec = match arena.node(p) {
-                    Node::Str(s) => Some((s.clone(), None)),
+                    Node::Str(s) => Some((s.clone(), None, false)),
                     Node::Rec(fields) => {
                         let mut pkg = None;
                         let mut alias = None;
+                        let mut macros = false;
                         for (k, v) in fields {
                             match (k.as_str(), arena.node(*v)) {
                                 ("pkg", Node::Str(s)) => pkg = Some(s.clone()),
                                 ("as", Node::Sym(s)) => alias = Some(s.clone()),
+                                ("macros", Node::Bool(b)) => macros = *b,
                                 _ => {}
                             }
                         }
-                        pkg.map(|p| (p, alias))
+                        pkg.map(|p| (p, alias, macros))
                     }
                     _ => None,
                 };
-                let (pkg_str, alias) = spec.ok_or("malformed Import")?;
+                let (pkg_str, alias, macros) = spec.ok_or("malformed Import")?;
                 let path = strip_version(&pkg_str);
                 let pkg_part = path.split('/').next().unwrap_or(&path).to_string();
                 let alias = alias.unwrap_or_else(|| {
                     path.rsplit('/').next().unwrap_or(&path).to_string()
                 });
-                imports.push(ImportInfo { path, package: pkg_part, alias });
+                imports.push(ImportInfo { path, package: pkg_part, alias, macros });
             }
             "export-MACRO" => {
                 let Some(&p) = items.get(1) else { continue };
@@ -535,5 +541,65 @@ fn infer(
             }
         }
         _ => Inferred::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::reader::read_file;
+
+    fn collect_src(src: &str) -> FileInfo {
+        let (arena, roots) = read_file(src).expect("read");
+        collect(&arena, &roots).expect("collect")
+    }
+
+    fn import_named<'a>(info: &'a FileInfo, alias: &str) -> &'a ImportInfo {
+        info.imports
+            .iter()
+            .find(|i| i.alias == alias)
+            .unwrap_or_else(|| panic!("no import aliased `{alias}`"))
+    }
+
+    #[test]
+    fn import_macros_flag_true() {
+        let info = collect_src(
+            "Package \"demo:app@0.1.0\"\n\
+             Import {pkg: \"acme:html/dsl\" macros: true}\n",
+        );
+        let imp = import_named(&info, "dsl");
+        assert!(imp.macros, "`macros: true` should set ImportInfo.macros");
+    }
+
+    #[test]
+    fn import_macros_flag_defaults_false() {
+        // Record form without `macros:`.
+        let info = collect_src(
+            "Package \"demo:app@0.1.0\"\n\
+             Import {pkg: \"acme:html/dsl\" as: html}\n",
+        );
+        assert!(
+            !import_named(&info, "html").macros,
+            "omitting `macros:` should default to false"
+        );
+
+        // `macros: false` written explicitly.
+        let info = collect_src(
+            "Package \"demo:app@0.1.0\"\n\
+             Import {pkg: \"acme:html/dsl\" macros: false}\n",
+        );
+        assert!(!import_named(&info, "dsl").macros);
+    }
+
+    #[test]
+    fn import_bare_string_form_defaults_false() {
+        let info = collect_src(
+            "Package \"demo:app@0.1.0\"\n\
+             Import \"acme:html/dsl\"\n",
+        );
+        assert!(
+            !import_named(&info, "dsl").macros,
+            "bare-string Import should yield macros: false"
+        );
     }
 }
