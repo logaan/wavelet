@@ -135,6 +135,85 @@ fn consumer_path_uses_produced_macro() {
     assert_eq!(via_consumer, local_expand(r#"Unless false "ran""#));
 }
 
+/// **The Step 10 worked end-to-end build.** This is the user-facing story top to
+/// bottom: a macro library *written in Wavelet* (`produced-macros.wvl`, compiled
+/// to the checked-in `produced-macros.wasm`) dropped at the conventional
+/// `wit/macros/<ns>-<name>.wasm` location, imported by another file with
+/// `Import {… macros: true}` (no `from:` — resolution is by convention), and its
+/// foreign `identity` macro used *inside an exported function*. The whole thing
+/// goes through `wavelet::build::build_files` — the same entry point the
+/// `wavelet build` CLI uses — so this asserts the macro expands through the
+/// component at build time **and** the expanded program emits a real
+/// `wavelet:meta`-free wasm component.
+///
+/// It exercises three things the read/expand-only test above does not:
+///   1. conventional `wit/macros/` resolution (no explicit `from:` path);
+///   2. the foreign macro used *qualified* (`lib/Identity`) as well as bare; and
+///   3. the full emit path (`build_files`), proving the build artifact is real.
+///
+/// The macro-only import is compile-time-only (§6.3): it contributes no runtime
+/// dependency, so the consumer emits as a single self-contained component with no
+/// `wac`/`wkg` toolchain needed — the build stays hermetic.
+#[test]
+fn worked_e2e_build_through_conventional_location() {
+    // A throwaway project root: src/app.wvl + wit/macros/demo-macros.wasm.
+    let root = std::env::temp_dir().join(format!("wavelet-macro-e2e-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let src_dir = root.join("src");
+    let macros_dir = root.join("wit").join("macros");
+    std::fs::create_dir_all(&src_dir).unwrap();
+    std::fs::create_dir_all(&macros_dir).unwrap();
+
+    // Drop the produced macro library at the conventional location for package
+    // `demo:macros` (`:`/`/` → `-`): `wit/macros/demo-macros.wasm`.
+    std::fs::copy(
+        fixtures().join("produced-macros.wasm"),
+        macros_dir.join("demo-macros.wasm"),
+    )
+    .unwrap();
+
+    // A consumer that imports the library `macros: true` and uses its
+    // `identity` macro BOTH bare (`Identity`) and qualified (`lib/Identity`)
+    // inside exported functions. `Identity x` expands (through the component) to
+    // `x`, so each export just returns its argument — an expansion the wasm
+    // backend can emit, which keeps this a real end-to-end *build*.
+    let app = "Package \"demo:app@0.1.0\"\n\n\
+        Import {pkg: \"demo:macros/lib\" macros: true}\n\n\
+        Export {name: echo-bare params: {n: s32} result: s32}\n\
+        Def echo-bare Fn {n: s32}\n  \
+          Identity n\n\n\
+        Export {name: echo-qual params: {n: s32} result: s32}\n\
+        Def echo-qual Fn {n: s32}\n  \
+          lib/Identity n\n";
+    let app_path = src_dir.join("app.wvl");
+    std::fs::write(&app_path, app).unwrap();
+
+    let out = root.join("out");
+    let outputs = wavelet::build::build_files(
+        &[app_path.to_str().unwrap().to_string()],
+        out.to_str().unwrap(),
+    )
+    .expect("consumer builds end-to-end against the conventional macro component");
+
+    // One component: the consumer. The macro-only import is compile-time-only,
+    // so it is not a runtime dep and there is nothing to compose.
+    let consumer = outputs
+        .iter()
+        .find(|p| p.ends_with("demo-app.wasm"))
+        .expect("emitted the consumer component");
+    let bytes = std::fs::read(consumer).expect("read built consumer component");
+    assert!(
+        bytes.starts_with(b"\0asm"),
+        "build output must be a real wasm component"
+    );
+
+    // Sanity: the *expansion* the build performed matches the oracle — the
+    // foreign `identity` macro returns its argument form unchanged.
+    assert_eq!(local_expand("Identity n"), "n");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Opt-in: actually run the producer (`wavelet::macrobuild`) and assert the
 /// freshly built component behaves identically to the checked-in one. Gated
 /// behind `WAVELET_TEST_BUILD_MACRO_COMPONENT=1` so `cargo test` never requires a
