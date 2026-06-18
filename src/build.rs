@@ -45,6 +45,15 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
     for u in &units {
         let mut deps = HashMap::new();
         for imp in &u.info.imports {
+            // A pure macro import (§6.3) is resolved to a macro component and
+            // run during expand ([`crate::macrodep`]); it is *not* a runtime
+            // dependency of this component, so it contributes no `Dep` and is
+            // skipped here. (The common case is macro-only; an import that is
+            // both a runtime dep and a macro library is an unsupported edge
+            // case — see `wit::is_macro_only`.)
+            if wit::is_macro_only(imp) {
+                continue;
+            }
             // (a) A sibling Wavelet file in the build set satisfies the import.
             if let Some(&di) = index.get(&imp.package) {
                 let d = &units[di];
@@ -144,6 +153,11 @@ fn compose_units(
     let mut edges: Vec<(usize, &ImportInfo, usize)> = Vec::new(); // (importer, import, plug)
     for (ui, u) in units.iter().enumerate() {
         for imp in &u.info.imports {
+            // A pure macro import is a compile-time-only dependency, never a
+            // sibling runtime edge to wire — skip it (see `wit::is_macro_only`).
+            if wit::is_macro_only(imp) {
+                continue;
+            }
             if let Some(&plug) = index.get(&imp.package) {
                 if plug != ui {
                     edges.push((ui, imp, plug));
