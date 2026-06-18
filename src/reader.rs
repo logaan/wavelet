@@ -44,6 +44,22 @@ impl MacroTable {
     }
 }
 
+/// A hook the reader runs after each top-level form is parsed, given the form's
+/// node id, so a caller can register *foreign* macro arities into the table as
+/// the reader moves top-to-bottom — exactly when a local `DefMacro` would be
+/// registered. This is how `Import {… macros: true}` arities become known
+/// (§6.3): the native compiler supplies a hook that resolves the import's macro
+/// component and registers its `manifest()` pairs (see
+/// [`crate::macrodep::register_macro_imports`]).
+///
+/// The hook is a plain closure over reader/`form` types only, so `reader.rs`
+/// keeps compiling for the `wasm32` playground — where there is no component
+/// runtime and thus no hook is supplied, and foreign registration is simply
+/// absent. An `Err` returned by the hook aborts the read with that error (e.g.
+/// a macro component that fails to instantiate, tied to the import's span).
+pub type FormHook<'a> =
+    dyn FnMut(&Arena, NodeId, &mut MacroTable) -> Result<(), ReadError> + 'a;
+
 pub fn read_file(src: &str) -> Result<(Arena, Vec<NodeId>), ReadError> {
     let mut macros = MacroTable::core();
     read_with(src, &mut macros)
@@ -54,6 +70,21 @@ pub fn read_file(src: &str) -> Result<(Arena, Vec<NodeId>), ReadError> {
 pub fn read_with(
     src: &str,
     macros: &mut MacroTable,
+) -> Result<(Arena, Vec<NodeId>), ReadError> {
+    read_with_hook(src, macros, None)
+}
+
+/// The full read entry point: a caller-owned arity table plus an optional
+/// per-form [`FormHook`]. After each top-level form is parsed (and after the
+/// built-in local-`DefMacro` registration), the hook — if any — runs against
+/// that form, letting the native compiler register foreign macro arities from a
+/// `macros: true` import *before* later forms that use those macros are read.
+/// Passing `None` reproduces [`read_with`] exactly, so the wasm playground and
+/// the REPL are unchanged.
+pub fn read_with_hook(
+    src: &str,
+    macros: &mut MacroTable,
+    mut hook: Option<&mut FormHook<'_>>,
 ) -> Result<(Arena, Vec<NodeId>), ReadError> {
     let toks = lex(src)?;
     let mut p = Parser {
@@ -67,6 +98,9 @@ pub fn read_with(
         while !p.at_end() {
             let id = p.parse_form()?;
             p.register_if_def_macro(id);
+            if let Some(hook) = hook.as_deref_mut() {
+                hook(&p.arena, id, &mut p.macros)?;
+            }
             roots.push(id);
         }
         Ok(())

@@ -32,11 +32,15 @@ pub fn run_files(paths: &[String]) -> Result<(), String> {
     let std_env = Env::root();
     builtins::install(&std_env);
 
+    // Foreign macro arities (`Import {… macros: true}`) resolve against the
+    // project root — the parent of the `src/` the entry file lives in.
+    let root = project_root(paths);
     let mut modules = Vec::new();
     let mut by_package = HashMap::new();
     for path in paths {
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-        let (arena, roots) = crate::read_file(&src).map_err(|e| format!("{path}: {e}"))?;
+        let (arena, roots) = crate::macrodep::read_file_with_macros(&src, &root)
+            .map_err(|e| format!("{path}: {e}"))?;
         let arena = Rc::new(arena);
         let package = find_package(&arena, &roots);
         if let Some(pkg) = &package {
@@ -153,6 +157,21 @@ fn eval_module(
     }
     modules[idx].state = ModState::Done;
     Ok(())
+}
+
+/// The project root: the parent of the `src/` directory the entry file lives in
+/// (so foreign macro components under `wit/macros/` resolve beside `src/`).
+/// Mirrors `build::project_root`; defaults to `.` when there is no parent.
+fn project_root(paths: &[String]) -> std::path::PathBuf {
+    let Some(first) = paths.first() else {
+        return std::path::PathBuf::from(".");
+    };
+    let src_dir = std::path::Path::new(first).parent();
+    let root = src_dir.and_then(|d| d.parent()).or(src_dir);
+    match root {
+        Some(r) if !r.as_os_str().is_empty() => r.to_path_buf(),
+        _ => std::path::PathBuf::from("."),
+    }
 }
 
 fn find_package(arena: &Arena, roots: &[NodeId]) -> Option<String> {

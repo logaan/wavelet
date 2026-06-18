@@ -17,11 +17,14 @@ struct Unit {
 }
 
 pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, String> {
+    // Foreign macro arities (`Import {… macros: true}`) are registered as each
+    // file is read, so they must resolve against the project root.
+    let root = project_root(paths).unwrap_or_else(|| PathBuf::from("."));
     let mut units = Vec::new();
     for path in paths {
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-        let (arena, roots) =
-            crate::read_file(&src).map_err(|e| format!("{path}: {e}"))?;
+        let (arena, roots) = crate::macrodep::read_file_with_macros(&src, &root)
+            .map_err(|e| format!("{path}: {e}"))?;
         let (arena, roots) =
             crate::expand::expand_file(arena, &roots).map_err(|e| format!("{path}: {e}"))?;
         let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
@@ -291,7 +294,8 @@ pub fn populate_project_wit(root: &Path, src_paths: &[PathBuf]) -> Result<(), St
     for path in src_paths {
         let path_str = path.display().to_string();
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path_str}: {e}"))?;
-        let (arena, roots) = crate::read_file(&src).map_err(|e| format!("{path_str}: {e}"))?;
+        let (arena, roots) = crate::macrodep::read_file_with_macros(&src, root)
+            .map_err(|e| format!("{path_str}: {e}"))?;
         let (arena, roots) =
             crate::expand::expand_file(arena, &roots).map_err(|e| format!("{path_str}: {e}"))?;
         let info = wit::collect(&arena, &roots).map_err(|e| format!("{path_str}: {e}"))?;

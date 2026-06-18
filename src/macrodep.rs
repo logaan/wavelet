@@ -36,7 +36,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::form::{Arena, Node, NodeId};
+use crate::lexer::ReadError;
 use crate::macros::MacroComponent;
+use crate::reader::{FormHook, MacroTable};
 use crate::wit::ImportInfo;
 
 /// A per-build cache of instantiated macro components, keyed by the import's
@@ -143,6 +146,131 @@ impl MacroResolver {
             self.root.join(path)
         }
     }
+
+    /// Register the foreign macro arities for a single just-read top-level form,
+    /// if it is an `Import {… macros: true}` (§6.3). Used by the reader hook in
+    /// [`register_macro_imports`]: the import is resolved + instantiated, its
+    /// `manifest()` is called, and each `(name, arity)` pair is registered as
+    /// `<name>-MACRO` into `macros` — mirroring the reader's local-`DefMacro`
+    /// registration so later TitleCase uses in the same file read with the right
+    /// arity. Non-import forms and runtime (non-`macros`) imports are no-ops.
+    ///
+    /// Errors are surfaced as a [`ReadError`] tied to the import form's span, so
+    /// a failure to instantiate the component or a trapping `manifest()` reads
+    /// as an actionable read-time error rather than a generic reader failure.
+    fn register_form(
+        &mut self,
+        arena: &Arena,
+        id: NodeId,
+        macros: &mut MacroTable,
+    ) -> Result<(), ReadError> {
+        let Some(import) = parse_macro_import(arena, id) else {
+            return Ok(());
+        };
+        let span = arena.span(id);
+        let comp = self
+            .resolve(&import)
+            .map_err(|msg| read_err(msg, span.0))?;
+        let manifest = comp.manifest().map_err(|e| {
+            read_err(
+                format!("import `{}` (macros): manifest() failed: {e}", import.path),
+                span.0,
+            )
+        })?;
+        // Step 8 owns qualified references / aliasing / collision errors: here
+        // we register under the *unaliased* `<name>-MACRO`, matching the
+        // reader's local-`DefMacro` naming. The qualified `Alias/Name` arity
+        // lookup still ignores the alias (see `dev-notes/todo.md`); wiring the
+        // alias through is Step 8's job, and this is the hook it builds on.
+        for (name, arity) in manifest {
+            macros.register(format!("{name}-MACRO"), arity as usize);
+        }
+        Ok(())
+    }
+}
+
+/// Read `src` like [`crate::read_file`], but registering the `manifest()`
+/// arities of every `macros: true` import as the reader reads top-to-bottom, so
+/// foreign TitleCase macros read with the correct arity (Step 6). `root` is the
+/// project root used to resolve each import's macro component (the parent of
+/// `src/`; see [`MacroResolver::new`]).
+///
+/// This is the native compiler's read entry point: it threads a fresh
+/// [`MacroResolver`] into the reader's [`FormHook`]. The wasm playground keeps
+/// calling [`crate::read_file`] (no hook, no runtime), so it is unaffected. A
+/// file with no `macros: true` import resolves nothing and reads exactly as
+/// [`crate::read_file`] would.
+pub fn read_file_with_macros(
+    src: &str,
+    root: impl Into<PathBuf>,
+) -> Result<(Arena, Vec<NodeId>), ReadError> {
+    let mut resolver = MacroResolver::new(root);
+    let mut macros = MacroTable::core();
+    let mut hook = register_macro_imports(&mut resolver);
+    crate::reader::read_with_hook(src, &mut macros, Some(hook.as_mut()))
+}
+
+/// Build a reader [`FormHook`] backed by `resolver` that registers each
+/// `macros: true` import's `manifest()` arities as the reader reads top-to-bottom
+/// (Step 6). Pass the returned closure to
+/// [`crate::reader::read_with_hook`]; the native compiler uses this so foreign
+/// TitleCase macros read with the correct arity, exactly like local ones. The
+/// playground (wasm32) has no component runtime, supplies no hook, and so simply
+/// reads without foreign registration.
+///
+/// This is the *inline* shape (over a pre-scan): registration happens the moment
+/// the reader finishes an `Import` form, faithful to top-to-bottom semantics and
+/// analogous to the reader's own `register_if_def_macro`. Imports must precede
+/// their uses (§2.4/§6.1 already require this), so an inline hook always
+/// registers a foreign macro before any later form can consume it.
+pub fn register_macro_imports<'a>(resolver: &'a mut MacroResolver) -> Box<FormHook<'a>> {
+    Box::new(move |arena, id, macros| resolver.register_form(arena, id, macros))
+}
+
+/// Parse a single top-level form into an [`ImportInfo`] iff it is an
+/// `Import {… macros: true}` record form. Returns `None` for any other form —
+/// including a bare-string or non-`macros` import — so only macro imports drive
+/// foreign arity registration.
+///
+/// This mirrors the `import-MACRO` record branch of [`crate::wit::collect`]; it
+/// is duplicated rather than shared because `collect` runs over a *whole*
+/// already-read file, whereas the reader hook needs one form at a time, before
+/// the rest of the file is read.
+fn parse_macro_import(arena: &Arena, id: NodeId) -> Option<ImportInfo> {
+    let Node::Tup(items) = arena.node(id) else { return None };
+    let head = *items.first()?;
+    let Node::Sym(head_name) = arena.node(head) else { return None };
+    if head_name != "import-MACRO" {
+        return None;
+    }
+    let Node::Rec(fields) = arena.node(*items.get(1)?) else { return None };
+
+    let mut pkg = None;
+    let mut alias = None;
+    let mut macros = false;
+    let mut from = None;
+    for (k, v) in fields {
+        match (k.as_str(), arena.node(*v)) {
+            ("pkg", Node::Str(s)) => pkg = Some(s.clone()),
+            ("as", Node::Sym(s)) => alias = Some(s.clone()),
+            ("macros", Node::Bool(b)) => macros = *b,
+            ("from", Node::Str(s)) => from = Some(s.clone()),
+            _ => {}
+        }
+    }
+    if !macros {
+        return None;
+    }
+    let pkg_str = pkg?;
+    let path = pkg_str.split('@').next().unwrap_or(&pkg_str).to_string();
+    let package = path.split('/').next().unwrap_or(&path).to_string();
+    let alias = alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
+    Some(ImportInfo { path, package, alias, macros, from })
+}
+
+/// A read-time error tied to a source offset.
+fn read_err(msg: impl Into<String>, at: u32) -> ReadError {
+    ReadError { msg: msg.into(), at }
 }
 
 #[cfg(test)]
@@ -249,5 +377,102 @@ mod tests {
             err.contains("wavelet:meta/macros") || err.contains("does not export"),
             "unexpected error: {err}"
         );
+    }
+
+    // -- Step 6: foreign manifest() arities register with the reader -----------
+
+    /// A source file that imports the fixture macro component (by absolute
+    /// `from:` path so it resolves regardless of cwd) and then uses one of its
+    /// macros. `{tail}` is appended after the import line.
+    fn src_importing_fixture(tail: &str) -> String {
+        format!(
+            "Package \"demo:app@0.1.0\"\n\
+             Import {{pkg: \"acme:html/dsl\" macros: true from: \"{}\"}}\n\
+             {tail}\n",
+            fixture_path().to_str().unwrap()
+        )
+    }
+
+    /// Read with foreign-macro registration, rooted at the manifest dir (the
+    /// `from:` paths in these tests are absolute, so the root is irrelevant).
+    fn read(src: &str) -> Result<(Arena, Vec<NodeId>), ReadError> {
+        read_file_with_macros(src, env!("CARGO_MANIFEST_DIR"))
+    }
+
+    /// Without registration, a paren-free foreign TitleCase macro is "unknown".
+    #[test]
+    fn foreign_macro_is_unknown_without_registration() {
+        let src = "Package \"demo:app@0.1.0\"\nUnless false \"ran\"\n";
+        let err = crate::reader::read_file(src).expect_err("Unless is unknown");
+        assert!(
+            err.msg.contains("unknown macro") && err.msg.contains("unless-MACRO"),
+            "unexpected error: {}",
+            err.msg
+        );
+    }
+
+    /// A ≥2-arity foreign macro reads paren-free, consuming exactly arity forms.
+    #[test]
+    fn foreign_arity_two_macro_reads_paren_free() {
+        let src = src_importing_fixture("Unless false \"ran\"");
+        let (arena, roots) = read(&src).expect("reads with foreign arity");
+        // roots: [Package…, Import…, the Unless form].
+        let last = *roots.last().unwrap();
+        // `Unless false "ran"` -> `(unless-MACRO, false, "ran")` — the head plus
+        // exactly two consumed following forms.
+        assert_eq!(crate::printer::print(&arena, last), r#"(unless-MACRO, false, "ran")"#);
+    }
+
+    /// A 0-arity foreign macro reads paren-free, consuming nothing after it; the
+    /// following form stays a separate top-level root.
+    #[test]
+    fn foreign_arity_zero_macro_consumes_nothing() {
+        let src = src_importing_fixture("Boom\n42");
+        let (arena, roots) = read(&src).expect("reads zero-arity foreign macro");
+        // roots: [Package…, Import…, Boom, 42] — Boom did not swallow the 42.
+        assert_eq!(roots.len(), 4, "Boom must not consume the following form");
+        assert_eq!(crate::printer::print(&arena, roots[2]), "(boom-MACRO)");
+        assert_eq!(crate::printer::print(&arena, roots[3]), "42");
+    }
+
+    /// A 1-arity foreign macro reads paren-free too (sanity over the full set).
+    #[test]
+    fn foreign_arity_one_macro_reads_paren_free() {
+        let src = src_importing_fixture("Identity add(1 2)");
+        let (arena, roots) = read(&src).expect("reads one-arity foreign macro");
+        let last = *roots.last().unwrap();
+        assert_eq!(crate::printer::print(&arena, last), "(identity-MACRO, (add, 1, 2))");
+    }
+
+    /// An explicit-payload spelling reads identically (§2.4) once registered.
+    #[test]
+    fn foreign_macro_explicit_payload_reads() {
+        let src = src_importing_fixture(r#"Unless(false "ran")"#);
+        let (arena, roots) = read(&src).expect("reads explicit-payload foreign macro");
+        let last = *roots.last().unwrap();
+        assert_eq!(crate::printer::print(&arena, last), r#"(unless-MACRO, false, "ran")"#);
+    }
+
+    /// A failed resolve surfaces as a read-time error tied to the import, not a
+    /// generic reader failure.
+    #[test]
+    fn unresolvable_macro_import_errors_at_read_time() {
+        let src = "Package \"demo:app@0.1.0\"\n\
+                   Import {pkg: \"acme:html/dsl\" macros: true from: \"nope.wasm\"}\n";
+        let err = read_file_with_macros(src, "/no/such/project").expect_err("resolve fails");
+        assert!(err.msg.contains("macros: true"), "unexpected error: {}", err.msg);
+        assert!(err.msg.contains("nope.wasm"), "should name the from path: {}", err.msg);
+    }
+
+    /// A non-`macros` import registers nothing, so its package is not treated as
+    /// a macro library and a later TitleCase use is still "unknown".
+    #[test]
+    fn non_macro_import_registers_nothing() {
+        let src = "Package \"demo:app@0.1.0\"\n\
+                   Import \"acme:html/dsl\"\n\
+                   Unless false \"ran\"\n";
+        let err = read_file_with_macros(src, env!("CARGO_MANIFEST_DIR"))
+            .expect_err("non-macro import does not register Unless");
+        assert!(err.msg.contains("unknown macro"), "unexpected error: {}", err.msg);
     }
 }
