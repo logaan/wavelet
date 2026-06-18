@@ -166,6 +166,16 @@ pub fn completions(text: &str, path: Option<&Path>) -> Vec<CompletionItem> {
 /// LSP and the build therefore agree on which packages and functions exist.
 /// Silently yields nothing when the path is unknown, no `wit/deps` exists, or a
 /// package isn't present there — completion stays best-effort, never an error.
+///
+/// GAP (macro components): this surfaces *runtime* imports only. A
+/// `macros: true` import (a `wavelet:meta/macros` library) contributes
+/// compile-time TitleCase macros, not functions, so its names do not appear in
+/// completion here and hover doesn't know their arity. Surfacing them would mean
+/// instantiating the macro component (via `wasmtime`, the build-time runtime) and
+/// calling `manifest()` on a per-keystroke path — a non-trivial feature with its
+/// own toolchain/error-handling surface, deliberately deferred. Bare foreign
+/// macros still expand correctly at build time; only editor assistance for them
+/// is missing.
 fn imported_completions(
     arena: &Arena,
     roots: &[NodeId],
