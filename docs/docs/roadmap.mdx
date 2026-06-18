@@ -18,6 +18,7 @@ These are implemented and exercised — most of them power the [live playgrounds
 | **TitleCase macro sugar** — arity-driven reading, `DefMacro` arity registration top-to-bottom, explicit-payload override | ✅ |
 | **The sixteen [special forms](./language/special-forms)** | ✅ |
 | **[Macros](./language/macros)** — `DefMacro`, `Quote`/`Quasi`/`Unquote`/`Splice`, `gensym`, `expand` | ✅ |
+| **[Macro components](./language/macros#macros-as-components)** — `Import {… macros: true}`, the `wavelet:meta/macros` interface, compile-time instantiation, writing a macro library in Wavelet, qualified/aliased foreign macros | ✅ |
 | **Tree-walking interpreter** with [tail-call elimination](./language/tail-calls), [pattern matching](./language/pattern-matching), closures | ✅ |
 | **[Standard library](./stdlib)** builtins + `none`/`pi` | ✅ |
 | **`The` ascription** for scalar types | ✅ |
@@ -30,14 +31,6 @@ These are implemented and exercised — most of them power the [live playgrounds
 ## Not yet implemented
 
 Everything below is part of the [design](./philosophy) but **does not work yet**. Where it's mentioned in the docs, you'll find a callout linking back here.
-
-### Macro components — compile-time wasm instantiation
-
-The headline of the [supply-chain story](./supply-chain#how-it-helps-at-build-time--macros-as-sandboxed-components). Macros are designed to be deliverable as components exporting `wavelet:meta/macros`, instantiated *at compile time* in a wasm sandbox.
-
-- The **`macros: true`** import flag currently parses but is **ignored**.
-- There is no compile-time component instantiation, no manifest registration across components, and no routing of expansion through a foreign `expand`.
-- Today, macros are defined in-file with [`DefMacro`](./language/macros#defmacro) and run in the trusted compiler.
 
 ### Resources beyond `cell`
 
@@ -79,17 +72,13 @@ The headline of the [supply-chain story](./supply-chain#how-it-helps-at-build-ti
 
 - Inference of export signatures from use is **limited**; lean on typed `Fn` parameters and explicit `Export` records.
 
-### Qualified TitleCase macros
-
-- A qualified macro form like `Dsl/Element` parses, but arity lookup currently **ignores the alias**. This is tied to macro imports above.
-
 ### Async
 
 - Mapping `Fn` bodies that await onto the Component Model's `stream`/`future` types (with an `Await` macro) as WASI 0.3 lands is **undesigned and unimplemented**.
 
 ## A note on the convenience macros
 
-`And`, `Or`, and `TryLet` appear throughout the design as examples. They are **not shipped** — the standard library provides [builtins](./stdlib) but no pre-defined macros beyond the sixteen core forms. Define them yourself with [`DefMacro`](./language/macros), as shown in the docs, or import them once macro components land.
+`And`, `Or`, and `TryLet` appear throughout the design as examples. They are **not shipped** — the standard library provides [builtins](./stdlib) but no pre-defined macros beyond the sixteen core forms. Define them yourself with [`DefMacro`](./language/macros), as shown in the docs, or ship them as a [macro component](./language/macros#macros-as-components) and import them.
 
 ## Self-hosting
 

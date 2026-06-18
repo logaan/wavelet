@@ -9,7 +9,7 @@ description: How the Component Model and Wavelet's design narrow the dependency 
 Modern software is mostly other people's code. A typical application pulls in hundreds of transitive dependencies, and every one of them is a place an attacker can hide. The dominant language ecosystems make this worse in two specific ways, and Wavelet's commitment to the Component Model addresses both.
 
 :::info[A note on status]
-This page describes the security *model* Wavelet is built around. The capability-based runtime isolation comes from the WebAssembly Component Model and WASI Preview 2, which are real and shipping. **Sandboxed macro components** — the compile-time half of the story — are designed but **not yet implemented** in Wavelet; that gap is called out explicitly below and on the [roadmap](./roadmap).
+This page describes the security *model* Wavelet is built around. The capability-based runtime isolation comes from the WebAssembly Component Model and WASI Preview 2, which are real and shipping. **Sandboxed macro components** — the compile-time half of the story — are now implemented: a `macros: true` import is instantiated and run inside a wasm sandbox at build time (see [Macros as components](./language/macros#macros-as-components)).
 :::
 
 ## The two attack surfaces
@@ -46,7 +46,7 @@ Because [Wavelet has no FFI](./philosophy#there-is-no-ffi) and every dependency 
 
 ## How it helps at build time — macros as sandboxed components
 
-This is the part that is unusual, and the reason Wavelet's [macro design](./language/macros#macros-as-components--not-yet-implemented) matters for security.
+This is the part that is unusual, and the reason Wavelet's [macro design](./language/macros#macros-as-components) matters for security.
 
 In most languages, a macro (or build script) is code that runs **on the build machine with full privileges**. A compromised proc-macro crate, Babel plugin, or Gradle task can read your SSH keys during `cargo build` / `npm run build`. The compile step is a giant, under-examined attack surface.
 
@@ -60,8 +60,8 @@ The consequence: **an untrusted macro runs inside a wasm component with no capab
 
 You can still write a `Re` macro that compiles a regex to a DFA at build time, or an HTML DSL — but it can't phone home, because it was never given a socket.
 
-:::caution[Not yet implemented]
-Macro **components** — compile-time instantiation, the `macros: true` flag, and routing expansion through a sandboxed foreign component — are **designed but not yet built**. The flag currently parses and is ignored; today macros are defined in-file with [`DefMacro`](./language/macros#defmacro) and run in the trusted compiler. The sandboxing guarantee above describes the intended model, not current behaviour. Track it on the [roadmap](./roadmap).
+:::note[Status]
+Macro **components** — compile-time instantiation, the `macros: true` flag, and routing expansion through a foreign component — are implemented (see [Macros as components](./language/macros#macros-as-components)). One caveat: today the macro library runs inside the wasm sandbox but is **trusted with whatever the build runtime grants it**; the per-library *capability wiring* shown above (handing a macro a filesystem interface only when you choose to) is the next refinement. The isolation boundary is real — a macro can't reach beyond the component — but fine-grained grants are still coarse.
 :::
 
 ## Other surface reductions
