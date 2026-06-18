@@ -26,9 +26,20 @@ pub struct ImportInfo {
     pub package: String,
     pub alias: String,
     /// `Import {… macros: true}` — load this import's macro manifest at compile
-    /// time (§6.3). Plumbing only for now; consuming it is Steps 5–7. Defaults
-    /// to `false`, including for the bare-string import form.
+    /// time (§6.3). A `macros: true` import is resolved to a `.wasm` macro
+    /// component and instantiated at build time (Step 5,
+    /// [`crate::macrodep`]); Steps 6–7 register its arities and route
+    /// expansion. A pure `macros: true` import is *compile-time only* and does
+    /// not contribute a runtime import to the synthesized world. Defaults to
+    /// `false`, including for the bare-string import form.
     pub macros: bool,
+    /// `Import {… macros: true from: "path/to/macros.wasm"}` — an explicit
+    /// local path to the macro component to load for this import (Step 5). The
+    /// path is resolved relative to the project root when relative. `None`
+    /// falls back to the conventional `wit/macros/<ns>-<name>.wasm` location.
+    /// Ignored for non-`macros` imports. An ordinary record field, so it needs
+    /// no lexer/highlighting change.
+    pub from: Option<String>,
 }
 
 #[derive(Clone)]
@@ -75,30 +86,32 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
             "import-MACRO" => {
                 let Some(&p) = items.get(1) else { continue };
                 let spec = match arena.node(p) {
-                    Node::Str(s) => Some((s.clone(), None, false)),
+                    Node::Str(s) => Some((s.clone(), None, false, None)),
                     Node::Rec(fields) => {
                         let mut pkg = None;
                         let mut alias = None;
                         let mut macros = false;
+                        let mut from = None;
                         for (k, v) in fields {
                             match (k.as_str(), arena.node(*v)) {
                                 ("pkg", Node::Str(s)) => pkg = Some(s.clone()),
                                 ("as", Node::Sym(s)) => alias = Some(s.clone()),
                                 ("macros", Node::Bool(b)) => macros = *b,
+                                ("from", Node::Str(s)) => from = Some(s.clone()),
                                 _ => {}
                             }
                         }
-                        pkg.map(|p| (p, alias, macros))
+                        pkg.map(|p| (p, alias, macros, from))
                     }
                     _ => None,
                 };
-                let (pkg_str, alias, macros) = spec.ok_or("malformed Import")?;
+                let (pkg_str, alias, macros, from) = spec.ok_or("malformed Import")?;
                 let path = strip_version(&pkg_str);
                 let pkg_part = path.split('/').next().unwrap_or(&path).to_string();
                 let alias = alias.unwrap_or_else(|| {
                     path.rsplit('/').next().unwrap_or(&path).to_string()
                 });
-                imports.push(ImportInfo { path, package: pkg_part, alias, macros });
+                imports.push(ImportInfo { path, package: pkg_part, alias, macros, from });
             }
             "export-MACRO" => {
                 let Some(&p) = items.get(1) else { continue };
@@ -291,10 +304,28 @@ pub fn synthesize_fetch_world(arena: &Arena, roots: &[NodeId]) -> Result<String,
     synthesize_info(arena, &info, true)
 }
 
+/// Whether an import is a *pure macro* import: `macros: true`, used only at
+/// compile time (§6.3). Such an import is resolved to a macro component and run
+/// during expand ([`crate::macrodep`]); it contributes **no runtime import** to
+/// the consumer component, so it is excluded from world synthesis and from
+/// sibling-edge composition.
+///
+/// The common case is that `macros: true` means macro-only. An import that is
+/// *both* a runtime dependency and a macro library is an unsupported edge case
+/// for now: it would need two surfaces (a runtime import in the world plus a
+/// compile-time macro instance). That is noted as a follow-up; until then
+/// `macros: true` is treated as macro-only here.
+pub fn is_macro_only(imp: &ImportInfo) -> bool {
+    imp.macros
+}
+
 /// Whether a file's synthesized world references any host (`wasi:*`) package,
 /// i.e. whether it has anything for `wkg wit fetch` to pull into `wit/deps`.
+/// Pure macro imports never reach a registry, so they are not counted.
 pub fn has_host_deps(info: &FileInfo) -> bool {
-    info.imports.iter().any(|i| i.package.starts_with("wasi:"))
+    info.imports
+        .iter()
+        .any(|i| !is_macro_only(i) && i.package.starts_with("wasi:"))
         || iface_order(&info.exports, !info.types.is_empty())
             .iter()
             .any(|i| is_external_iface(i))
@@ -325,6 +356,12 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
 
     out.push_str(&format!("\nworld {} {{\n", info.world));
     for imp in &info.imports {
+        // A pure macro import (§6.3) is a compile-time-only dependency resolved
+        // during expand; it is not a runtime import of this component, so it
+        // never appears in the synthesized world.
+        if is_macro_only(imp) {
+            continue;
+        }
         // Host (wasi:*) imports name an external, versioned interface; a
         // build-set dependency is imported by its bare path.
         if imp.package.starts_with("wasi:") {
@@ -600,6 +637,53 @@ mod tests {
         assert!(
             !import_named(&info, "dsl").macros,
             "bare-string Import should yield macros: false"
+        );
+    }
+
+    #[test]
+    fn import_from_field_is_parsed() {
+        let info = collect_src(
+            "Package \"demo:app@0.1.0\"\n\
+             Import {pkg: \"acme:html/dsl\" macros: true from: \"build/dsl.wasm\"}\n",
+        );
+        let imp = import_named(&info, "dsl");
+        assert!(imp.macros);
+        assert_eq!(imp.from.as_deref(), Some("build/dsl.wasm"));
+    }
+
+    #[test]
+    fn import_from_defaults_none() {
+        let info = collect_src(
+            "Package \"demo:app@0.1.0\"\n\
+             Import {pkg: \"acme:html/dsl\" macros: true}\n",
+        );
+        assert_eq!(import_named(&info, "dsl").from, None);
+    }
+
+    #[test]
+    fn macro_only_import_absent_from_synthesized_world() {
+        // A file that imports a macro library but uses none of its runtime
+        // exports must synthesize a world with NO `import` for it.
+        let src = "Package \"demo:app@0.1.0\"\n\
+             Import {pkg: \"acme:html/dsl\" macros: true}\n\
+             Export greet\n\
+             Def greet Fn {} \"hi\"\n";
+        let (arena, roots) = read_file(src).expect("read");
+        let world = synthesize(&arena, &roots).expect("synthesize");
+        assert!(
+            !world.contains("import acme:html/dsl"),
+            "macro-only import leaked into the world:\n{world}"
+        );
+        // A non-macro import, by contrast, is still emitted.
+        let src2 = "Package \"demo:app@0.1.0\"\n\
+             Import \"acme:html/dsl\"\n\
+             Export greet\n\
+             Def greet Fn {} \"hi\"\n";
+        let (arena, roots) = read_file(src2).expect("read");
+        let world = synthesize(&arena, &roots).expect("synthesize");
+        assert!(
+            world.contains("import acme:html/dsl"),
+            "non-macro import should appear in the world:\n{world}"
         );
     }
 }
