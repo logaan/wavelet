@@ -46,17 +46,22 @@ use crate::value::{Env, Value};
 /// imposes no native-only types on `expand.rs`.
 pub trait ForeignExpander {
     /// Expand a macro call whose head is `name` (the head symbol **without** the
-    /// `-MACRO` suffix) and whose call form is `call_id` in `arena`.
+    /// `-MACRO` suffix) and whose call form is `call_id` in `arena`. `alias` is
+    /// `Some` for a qualified `Alias/Name` head — routing the call to the import
+    /// bound to that alias, even when the bare name is ambiguous — and `None` for
+    /// a bare head (resolved by scanning the imports).
     ///
     /// Returns:
-    /// - `None` if no foreign macro owns `name` — the caller falls through to
-    ///   local-macro lookup and ordinary descent;
+    /// - `None` if no foreign macro owns `name` (for a bare head) or no import
+    ///   aliased `alias` owns it (for a qualified head) — the caller falls
+    ///   through to local-macro lookup and ordinary descent;
     /// - `Some(Ok((arena, root)))` with the expansion in a fresh arena on
     ///   success;
     /// - `Some(Err(msg))` if a foreign macro owns `name` but expanding it
     ///   failed (the message is the macro author's, surfaced verbatim).
     fn expand_call(
         &mut self,
+        alias: Option<&str>,
         name: &str,
         arena: &Arena,
         call_id: NodeId,
@@ -136,15 +141,37 @@ fn expand_form(
                         })?;
                     return expand_form(interp, env, &expanded_arena, expanded, out, foreign);
                 }
-                // (2) Foreign macro: exported by an imported macro component.
-                // The whole call form (head + args) is shipped across the
-                // boundary; the component's `expand` rewrites it. Recurse so
+                // (2) Foreign macro (bare head): exported by an imported macro
+                // component. The whole call form (head + args) is shipped across
+                // the boundary; the component's `expand` rewrites it. Recurse so
                 // the expansion is itself expanded to fixpoint.
                 if let Some(fx) = foreign.as_deref_mut() {
                     let macro_name = name.trim_end_matches("-MACRO");
-                    if let Some(result) = fx.expand_call(macro_name, arena, id) {
+                    if let Some(result) = fx.expand_call(None, macro_name, arena, id) {
                         let (expanded_arena, expanded) = result.map_err(|e| {
                             format!("expanding `{macro_name}`: {e}")
+                        })?;
+                        let expanded_arena = Rc::new(expanded_arena);
+                        return expand_form(
+                            interp,
+                            env,
+                            &expanded_arena,
+                            expanded,
+                            out,
+                            foreign,
+                        );
+                    }
+                }
+            } else if let Node::Qsym(alias, name) = arena.node(head) {
+                // (3) Qualified foreign macro (`Alias/Name`): route to the import
+                // bound to `alias` specifically — this resolves even when the
+                // bare name is ambiguous across imports (§6.3). Qualified heads
+                // are never local (`DefMacro` registers a bare symbol).
+                if let Some(fx) = foreign.as_deref_mut() {
+                    let macro_name = name.trim_end_matches("-MACRO");
+                    if let Some(result) = fx.expand_call(Some(alias), macro_name, arena, id) {
+                        let (expanded_arena, expanded) = result.map_err(|e| {
+                            format!("expanding `{alias}/{macro_name}`: {e}")
                         })?;
                         let expanded_arena = Rc::new(expanded_arena);
                         return expand_form(

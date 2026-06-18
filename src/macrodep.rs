@@ -177,13 +177,14 @@ impl MacroResolver {
                 span.0,
             )
         })?;
-        // Step 8 owns qualified references / aliasing / collision errors: here
-        // we register under the *unaliased* `<name>-MACRO`, matching the
-        // reader's local-`DefMacro` naming. The qualified `Alias/Name` arity
-        // lookup still ignores the alias (see `dev-notes/todo.md`); wiring the
-        // alias through is Step 8's job, and this is the hook it builds on.
+        // Register each foreign macro under BOTH its qualified `Alias/Name` key
+        // (always resolvable, even under collisions) and its bare `<name>-MACRO`
+        // name (subject to collision detection in `MacroTable`). The import's
+        // `as:` alias (§4 / `ImportInfo`) keys the qualified entries, so a
+        // qualified TitleCase head `Dsl/Element` resolves to this import's macro
+        // even when the bare name is ambiguous (§6.3).
         for (name, arity) in manifest {
-            macros.register(format!("{name}-MACRO"), arity as usize);
+            macros.register_foreign(&import.alias, format!("{name}-MACRO"), arity as usize);
         }
         Ok(())
     }
@@ -274,18 +275,43 @@ impl FileExpander {
         self.owners.insert(name.to_string(), found);
         Ok(found)
     }
+
+    /// Find the import bound to `alias` that publishes `name`. Returns
+    /// `Ok(Some(i))` if import `i` is aliased `alias` and its component owns
+    /// `name`, `Ok(None)` otherwise. Used to route a qualified `Alias/Name`
+    /// head to one specific import (bypassing bare-name ambiguity).
+    fn owner_for_alias(&mut self, alias: &str, name: &str) -> Result<Option<usize>, String> {
+        for i in 0..self.imports.len() {
+            if self.imports[i].alias != alias {
+                continue;
+            }
+            let import = &self.imports[i];
+            let comp = self.resolver.resolve(import)?;
+            let manifest = comp.manifest()?;
+            if manifest.iter().any(|(n, _)| n == name) {
+                return Ok(Some(i));
+            }
+        }
+        Ok(None)
+    }
 }
 
 impl crate::expand::ForeignExpander for FileExpander {
     fn expand_call(
         &mut self,
+        alias: Option<&str>,
         name: &str,
         arena: &Arena,
         call_id: NodeId,
     ) -> Option<Result<(Arena, NodeId), String>> {
-        // Which imported component owns this macro? `None` => not foreign;
-        // fall through to local-macro handling in the expander.
-        let owner = match self.owner_of(name) {
+        // Which imported component owns this macro? For a qualified head, route
+        // strictly to the import bound to `alias`; for a bare head, scan all
+        // imports. `None` => not foreign; fall through to local-macro handling.
+        let lookup = match alias {
+            Some(a) => self.owner_for_alias(a, name),
+            None => self.owner_of(name),
+        };
+        let owner = match lookup {
             Ok(Some(i)) => i,
             Ok(None) => return None,
             Err(e) => return Some(Err(e)),
@@ -589,5 +615,125 @@ mod tests {
         let err = read_file_with_macros(src, env!("CARGO_MANIFEST_DIR"))
             .expect_err("non-macro import does not register Unless");
         assert!(err.msg.contains("unknown macro"), "unexpected error: {}", err.msg);
+    }
+
+    // -- Step 8: qualified references, aliasing, collisions ---------------------
+
+    /// Import the *same* fixture macro component under two distinct packages /
+    /// aliases (`dsl` and `web`), both pointing at the same `.wasm`. Both
+    /// publish `unless`/`identity`/`boom`, so every bare name collides while the
+    /// qualified `dsl/…` and `web/…` keys both resolve. `{tail}` follows.
+    fn src_two_aliases(tail: &str) -> String {
+        let p = fixture_path();
+        let p = p.to_str().unwrap();
+        format!(
+            "Package \"demo:app@0.1.0\"\n\
+             Import {{pkg: \"acme:html/dsl\" macros: true from: \"{p}\"}}\n\
+             Import {{pkg: \"other:html/web\" macros: true from: \"{p}\"}}\n\
+             {tail}\n"
+        )
+    }
+
+    /// Two imports exporting a same-named macro → a *bare* use is ambiguous and
+    /// errors actionably (names both aliases, suggests qualify/alias).
+    #[test]
+    fn colliding_bare_use_is_ambiguous_error() {
+        let src = src_two_aliases("Unless false \"ran\"");
+        let err = read(&src).expect_err("bare Unless is ambiguous across two imports");
+        assert!(err.msg.contains("ambiguous"), "unexpected error: {}", err.msg);
+        assert!(err.msg.contains("unless"), "should name the macro: {}", err.msg);
+        // Actionable: mentions both qualified spellings / aliasing.
+        assert!(
+            err.msg.contains("dsl/unless") && err.msg.contains("web/unless"),
+            "should suggest qualified spellings: {}",
+            err.msg
+        );
+    }
+
+    /// A collision makes only the bare name ambiguous — the qualified heads
+    /// `dsl/Unless` and `web/Unless` both still read with the right arity.
+    #[test]
+    fn qualified_use_resolves_despite_collision() {
+        let src = src_two_aliases("dsl/Unless false \"a\"\nweb/Unless true \"b\"");
+        let (arena, roots) = read(&src).expect("qualified uses resolve despite collision");
+        // roots: [Package, Import, Import, dsl/Unless…, web/Unless…]
+        assert_eq!(
+            crate::printer::print(&arena, roots[3]),
+            r#"(dsl/unless-MACRO, false, "a")"#
+        );
+        assert_eq!(
+            crate::printer::print(&arena, roots[4]),
+            r#"(web/unless-MACRO, true, "b")"#
+        );
+    }
+
+    /// A qualified head naming an alias that exists but does not publish the
+    /// macro (or an unknown alias) errors actionably rather than silently.
+    #[test]
+    fn unknown_qualified_macro_errors() {
+        let src = src_two_aliases("dsl/Nope 1");
+        let err = read(&src).expect_err("dsl/nope is unknown");
+        assert!(
+            err.msg.contains("unknown qualified macro") && err.msg.contains("dsl/nope"),
+            "unexpected error: {}",
+            err.msg
+        );
+    }
+
+    /// An aliased import (`as: dsl`) registers its macros under that alias even
+    /// when the package path's last segment differs, so `dsl/Unless` resolves.
+    #[test]
+    fn explicit_as_alias_resolves_qualified() {
+        let src = format!(
+            "Package \"demo:app@0.1.0\"\n\
+             Import {{pkg: \"acme:html/elements\" as: dsl macros: true from: \"{}\"}}\n\
+             dsl/Unless false \"ran\"\n",
+            fixture_path().to_str().unwrap()
+        );
+        let (arena, roots) = read(&src).expect("aliased import resolves qualified head");
+        let last = *roots.last().unwrap();
+        assert_eq!(
+            crate::printer::print(&arena, last),
+            r#"(dsl/unless-MACRO, false, "ran")"#
+        );
+        // The package's own last segment (`elements`) is NOT a valid alias.
+        let bad = format!(
+            "Package \"demo:app@0.1.0\"\n\
+             Import {{pkg: \"acme:html/elements\" as: dsl macros: true from: \"{}\"}}\n\
+             elements/Unless false \"ran\"\n",
+            fixture_path().to_str().unwrap()
+        );
+        let err = read(&bad).expect_err("elements is not the alias");
+        assert!(err.msg.contains("unknown qualified macro"), "unexpected: {}", err.msg);
+    }
+
+    /// Qualified expansion routes to the specific aliased component: a qualified
+    /// call expands through the import bound to that alias. (Uses `identity`,
+    /// which the fixture expands to its single argument.)
+    #[test]
+    fn qualified_call_expands_through_aliased_component() {
+        let src = src_two_aliases("web/Identity 99");
+        let (arena, roots) = read(&src).expect("reads qualified call");
+        let mut fx = FileExpander::for_file(env!("CARGO_MANIFEST_DIR"), &arena, &roots)
+            .expect("file imports macros");
+        let (out, new_roots) =
+            crate::expand::expand_file(arena, &roots, Some(&mut fx)).expect("expands");
+        // The qualified `web/Identity 99` expands to `99` via the web-aliased
+        // component (the fixture's identity returns arg 1 verbatim).
+        let last = *new_roots.last().unwrap();
+        assert_eq!(crate::printer::print(&out, last), "99");
+    }
+
+    /// Regression: a single unambiguous foreign macro still works by bare name
+    /// (Steps 6–7 behaviour preserved) — no collision, no ambiguity.
+    #[test]
+    fn single_import_bare_use_unchanged() {
+        let src = src_importing_fixture("Unless false \"ran\"");
+        let (arena, roots) = read(&src).expect("single-import bare use still reads");
+        let last = *roots.last().unwrap();
+        assert_eq!(
+            crate::printer::print(&arena, last),
+            r#"(unless-MACRO, false, "ran")"#
+        );
     }
 }
