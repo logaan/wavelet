@@ -17,6 +17,8 @@ pub mod emit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod host;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod macrodep;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod macros;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod meta;
