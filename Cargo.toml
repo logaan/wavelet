@@ -15,6 +15,18 @@ wasm-encoder = "0.251.0"
 wit-component = "0.251.0"
 wit-parser = "0.251.0"
 
+# Native-only: the compile-time component runtime (`src/host.rs`) that
+# instantiates and calls macro-library components. `wasmtime` is heavy and must
+# never reach the `wasm32` (`cdylib`) playground build, so it lives under a
+# `cfg(not(target_arch = "wasm32"))` target table alongside the gated module.
+# `component-model` enables the Component-Model + dynamic `component::Val` API;
+# default features are kept off to trim the build (no `cranelift`-driven extras
+# we don't use, no `wat`, no `parallel-compilation` heaviness beyond defaults
+# we need) — `cranelift` is re-enabled explicitly because component lifting
+# needs a compiler backend.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wasmtime = { version = "45", default-features = false, features = ["runtime", "cranelift", "component-model"] }
+
 # wasm-only: the browser playground bindings (see `src/wasm.rs`).
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"

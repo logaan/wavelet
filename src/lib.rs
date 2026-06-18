@@ -15,6 +15,8 @@ pub mod build;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod emit;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod host;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod meta;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
