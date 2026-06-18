@@ -891,7 +891,7 @@ world shout {
             Def double Fn {n: s64} Twice(n)
         "#;
         let (arena, roots) = read_file(src).unwrap();
-        let (arena, roots) = expand::expand_file(arena, &roots).unwrap();
+        let (arena, roots) = expand::expand_file(arena, &roots, None).unwrap();
         // the DefMacro form is gone and the call site is rewritten
         let printed: Vec<String> = roots.iter().map(|&r| print(&arena, r)).collect();
         assert!(printed.iter().all(|s| !s.contains("def-macro")));

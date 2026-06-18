@@ -25,8 +25,15 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
         let (arena, roots) = crate::macrodep::read_file_with_macros(&src, &root)
             .map_err(|e| format!("{path}: {e}"))?;
-        let (arena, roots) =
-            crate::expand::expand_file(arena, &roots).map_err(|e| format!("{path}: {e}"))?;
+        // Route foreign macros (`Import {… macros: true}`) through their
+        // components' `expand`; `None` when the file imports no macro library.
+        let mut foreign = crate::macrodep::FileExpander::for_file(&root, &arena, &roots);
+        let (arena, roots) = crate::expand::expand_file(
+            arena,
+            &roots,
+            foreign.as_mut().map(|f| f as &mut dyn crate::expand::ForeignExpander),
+        )
+        .map_err(|e| format!("{path}: {e}"))?;
         let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
         units.push(Unit { path: path.clone(), arena, roots, info });
     }
@@ -296,8 +303,13 @@ pub fn populate_project_wit(root: &Path, src_paths: &[PathBuf]) -> Result<(), St
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path_str}: {e}"))?;
         let (arena, roots) = crate::macrodep::read_file_with_macros(&src, root)
             .map_err(|e| format!("{path_str}: {e}"))?;
-        let (arena, roots) =
-            crate::expand::expand_file(arena, &roots).map_err(|e| format!("{path_str}: {e}"))?;
+        let mut foreign = crate::macrodep::FileExpander::for_file(root, &arena, &roots);
+        let (arena, roots) = crate::expand::expand_file(
+            arena,
+            &roots,
+            foreign.as_mut().map(|f| f as &mut dyn crate::expand::ForeignExpander),
+        )
+        .map_err(|e| format!("{path_str}: {e}"))?;
         let info = wit::collect(&arena, &roots).map_err(|e| format!("{path_str}: {e}"))?;
         units.push(Unit { path: path_str, arena, roots, info });
     }

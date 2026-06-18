@@ -189,6 +189,121 @@ impl MacroResolver {
     }
 }
 
+/// The foreign-macro half of the ahead-of-time expander (Step 7): given a macro
+/// head name and a call form, run the owning component's `expand` and lift the
+/// result back into a fresh arena.
+///
+/// This is the native implementation of [`crate::expand::ForeignExpander`], the
+/// wasm-safe seam `expand.rs` calls through. It owns a [`MacroResolver`] (the
+/// per-build cache of instantiated components) plus the file's `macros: true`
+/// imports, parsed once up front. Macro components are *not* carried forward
+/// from the read phase (the read-time resolver is local to `read_file_with_macros`
+/// and dropped after reading — see Step 6's handoff), so a fresh
+/// [`FileExpander`] re-resolves from the file's imports at expand time. Because
+/// the resolver caches per package, re-resolution instantiates each component at
+/// most once.
+///
+/// ## The args-tree contract (PINNED — shared with Steps 3/9)
+///
+/// `expand_call` ships the **whole call form** — a `tup` whose element 0 is the
+/// macro head (`<name>-MACRO`) and elements 1.. are the argument forms — across
+/// the boundary as the `args` `tree`. The guest reads `args.nodes[args.root]` as
+/// a `tup` and indexes its arguments from element 1 (the fixture in
+/// `tests/fixtures/macros/src/lib.rs` does exactly this). The head symbol still
+/// carries its `-MACRO` suffix in the shipped tree; the macro `name` passed
+/// alongside is the *unsuffixed* manifest name.
+pub struct FileExpander {
+    resolver: MacroResolver,
+    /// The file's `macros: true` imports, parsed once.
+    imports: Vec<ImportInfo>,
+    /// Lazily-built map from unsuffixed macro name to the index in `imports` of
+    /// the import whose component owns it. `None` for a name confirmed *not* to
+    /// be owned by any imported macro component (so the expander stops probing).
+    owners: HashMap<String, Option<usize>>,
+}
+
+impl FileExpander {
+    /// Build a [`FileExpander`] for a file, scanning `roots` for its
+    /// `macros: true` imports. `root` is the project root used to resolve each
+    /// import's `.wasm` (the parent of `src/`; see [`MacroResolver::new`]).
+    ///
+    /// Returns `None` when the file imports no macro libraries — the caller can
+    /// then expand with no foreign capability at all (the common, no-macro
+    /// path), so a file that uses no foreign macros never instantiates a runtime.
+    pub fn for_file(
+        root: impl Into<PathBuf>,
+        arena: &Arena,
+        roots: &[NodeId],
+    ) -> Option<FileExpander> {
+        let imports: Vec<ImportInfo> = roots
+            .iter()
+            .filter_map(|&id| parse_macro_import(arena, id))
+            .collect();
+        if imports.is_empty() {
+            return None;
+        }
+        Some(FileExpander {
+            resolver: MacroResolver::new(root),
+            imports,
+            owners: HashMap::new(),
+        })
+    }
+
+    /// Find the index of the import whose macro component publishes `name`,
+    /// resolving and querying `manifest()` on demand and memoising the answer.
+    ///
+    /// Returns `Ok(Some(i))` if import `i` owns `name`, `Ok(None)` if no
+    /// imported macro component publishes it, or `Err` if resolving/manifesting
+    /// a macro component failed.
+    fn owner_of(&mut self, name: &str) -> Result<Option<usize>, String> {
+        if let Some(found) = self.owners.get(name) {
+            return Ok(*found);
+        }
+        let mut found = None;
+        for i in 0..self.imports.len() {
+            // `resolve` is cached per package, so this re-instantiates nothing
+            // already loaded during read or an earlier lookup.
+            let import = &self.imports[i];
+            let comp = self.resolver.resolve(import)?;
+            let manifest = comp.manifest()?;
+            if manifest.iter().any(|(n, _)| n == name) {
+                found = Some(i);
+                break;
+            }
+        }
+        self.owners.insert(name.to_string(), found);
+        Ok(found)
+    }
+}
+
+impl crate::expand::ForeignExpander for FileExpander {
+    fn expand_call(
+        &mut self,
+        name: &str,
+        arena: &Arena,
+        call_id: NodeId,
+    ) -> Option<Result<(Arena, NodeId), String>> {
+        // Which imported component owns this macro? `None` => not foreign;
+        // fall through to local-macro handling in the expander.
+        let owner = match self.owner_of(name) {
+            Ok(Some(i)) => i,
+            Ok(None) => return None,
+            Err(e) => return Some(Err(e)),
+        };
+        // PINNED contract: ship the whole call form as the `args` tree.
+        let args = crate::meta::arena_to_tree(arena, call_id);
+        let import = &self.imports[owner];
+        let comp = match self.resolver.resolve(import) {
+            Ok(c) => c,
+            Err(e) => return Some(Err(e)),
+        };
+        Some(
+            comp.expand(name, &args)
+                .map(|tree| crate::meta::tree_to_arena(&tree)),
+        )
+    }
+}
+
 /// Read `src` like [`crate::read_file`], but registering the `manifest()`
 /// arities of every `macros: true` import as the reader reads top-to-bottom, so
 /// foreign TitleCase macros read with the correct arity (Step 6). `root` is the
