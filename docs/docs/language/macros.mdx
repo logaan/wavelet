@@ -67,17 +67,84 @@ You can build it live with [`rec-key`/`rec-val`](../stdlib#meta--reflection):
 <Playground id="macro-trylet" />
 
 :::caution[Convenience macros aren't built in]
-`And`, `Or`, and `TryLet` are **illustrations, not standard-library functions** — Wavelet's standard library ships [builtins](../stdlib) but no pre-defined macros beyond the sixteen core forms. Define the ones you want with `DefMacro` (as above), or import them once macro components land.
+`And`, `Or`, and `TryLet` are **illustrations, not standard-library functions** — Wavelet's standard library ships [builtins](../stdlib) but no pre-defined macros beyond the sixteen core forms. Define the ones you want with `DefMacro` (as above), or ship them as a [macro component](#macros-as-components) and import them.
 :::
 
-## Macros as components — not yet implemented
+## Macros as components
 
-The design intends macros to be deliverable as **components**: a component exporting `wavelet:meta/macros` is a macro library, instantiated *at compile time* and sandboxed by construction (an untrusted macro runs inside a wasm component with no capabilities the build doesn't grant). This is the basis of Wavelet's [supply-chain story](../supply-chain).
+Macros are **functions over a WIT type** (`tree → tree`), so they need not be written in Wavelet, nor live in the same file. A component exporting `wavelet:meta/macros` is a **macro library**: Wavelet instantiates it *at compile time*, asks it which macros it provides, and routes expansion through it. Because it runs inside a wasm component, an untrusted macro is **sandboxed by construction** — it gets no capabilities the build doesn't hand it. This is the basis of Wavelet's [supply-chain story](../supply-chain).
+
+### Importing a macro library
+
+`Import {pkg: "…" macros: true}` loads a macro library and makes its macros available, exactly like local `DefMacro`s — the imported names read paren-free at their published arity:
 
 ```wavelet
-Import {pkg: "acme:html/dsl" macros: true}   // load the macro manifest too
+Import {pkg: "acme:html/dsl" macros: true}   // load this component's macros
+
+Export {name: page params: {title: string} result: string}
+Def page Fn {title: string}
+  Element "h1" title                          // 'Element' is a foreign macro
 ```
 
-:::info[Status]
-Macro **components** — compile-time instantiation, the `macros: true` import flag, and routing expansion through a foreign component — are **not yet implemented**. The `macros: true` flag currently parses but is ignored. Macros today are defined in-file with `DefMacro`. See the [roadmap](../roadmap).
+A `macros: true` import is **compile-time-only**: the library is instantiated and run during the build, then discarded. It is *not* a runtime dependency of your component and contributes nothing to the synthesized world — your shipped component never imports `wavelet:meta/macros`.
+
+Wavelet resolves the library's `.wasm` two ways. Give an explicit path with `from:`, or drop the built component at the conventional location `wit/macros/<ns>-<name>.wasm` and let resolution find it:
+
+```wavelet
+Import {pkg: "acme:html/dsl" macros: true from: "vendor/dsl.wasm"}
+Import {pkg: "acme:html/dsl" macros: true}    // resolves wit/macros/acme-html.wasm
+```
+
+### The `wavelet:meta/macros` interface
+
+A macro library is any component that exports `wavelet:meta/macros@0.1.0`:
+
+```wit
+interface macros {
+  use code.{tree};
+  manifest: func() -> list<tuple<string, u32>>;          // (name, arity) pairs
+  expand: func(name: string, args: tree) -> result<tree, string>;
+}
+```
+
+`manifest()` tells the reader each macro's name and arity (so its TitleCase form reads at the right arity, top-to-bottom, like a local `DefMacro`). `expand(name, args)` does the work: Wavelet marshals the call's argument forms into a `tree` (a flat arena encoding of a form — `node`s and a root index, the wire form of homoiconic code), calls `expand`, and lifts the returned `tree` back into the form tree, recursing to a fixpoint. A macro that can't expand a call returns an `err` string, which surfaces as a build error.
+
+Because the contract is just this WIT interface, you can write a macro library in **any language** that compiles to a component — say a `Re` macro that builds a regex DFA at build time in Rust — and it behaves exactly like a native one.
+
+### Writing a macro library in Wavelet
+
+The simplest way to ship a macro library is to write it in Wavelet. A file whose top level is a `Package` plus only `DefMacro`s (no `Export`/`Def`s) **is** a macro library — `wavelet build` compiles it into a `wavelet:meta/macros` component:
+
+```wavelet
+Package "acme:html@0.1.0"
+
+DefMacro element {tag body}
+  Quasi html-node Unquote(tag) Unquote(body)
+
+DefMacro unless {cond body}
+  Quasi If Unquote(cond) {} Unquote(body)
+```
+
+```console
+$ wavelet build src/html.wvl -o out      # emits out/acme-html.wasm
+```
+
+Drop `out/acme-html.wasm` at `wit/macros/acme-html.wasm` (or point `from:` at it) and another file can `Import {pkg: "acme:html/dsl" macros: true}` and use `Element`/`Unless` as if they were local. The library bundles the Wavelet interpreter and runs your `DefMacro`s inside the sandbox at the consumer's build time.
+
+### Qualifying and aliasing
+
+Imported macros are available **bare** (`Element`) and **qualified** (`dsl/Element`, using the import's alias). When a bare TitleCase name is provided by two imports — or by an import *and* a local `DefMacro` — using it bare is an error that tells you to qualify or alias; the qualified spelling always resolves:
+
+```wavelet
+Import {pkg: "acme:html/dsl" as: dsl macros: true}
+Import {pkg: "acme:svg/dsl"  as: svg macros: true}
+
+dsl/Element "h1" title       // unambiguous — picks the acme:html macro
+svg/Element "circle" attrs   // unambiguous — picks the acme:svg macro
+```
+
+The ambiguity is only reported when the colliding bare name is actually **used**; a qualified use is never ambiguous.
+
+:::note[Browser playground]
+The live `<Playground>` here runs the wasm-compiled interpreter, which has **no component runtime** — it can't instantiate a foreign macro library. The examples on this page are therefore shown as static code; foreign-macro expansion is exercised by the native build (`wavelet build`) and the test suite. Local `DefMacro`s, above, run live.
 :::

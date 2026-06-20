@@ -13,6 +13,45 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- **Macro components — run macros defined in other components.** `Import {pkg:
+  "…" macros: true}` imports a *macro library*: a component exporting
+  `wavelet:meta/macros@0.1.0` (`manifest()` → `(name, arity)` pairs, `expand(name,
+  args)` → `result<tree, string>`). Wavelet instantiates it **at compile time**,
+  registers its macro arities with the reader (so foreign TitleCase macros read
+  paren-free, top-to-bottom, like local `DefMacro`s), and routes expansion
+  through the component's `expand` to a fixpoint (design.md §6.2–§6.3). The
+  library's `.wasm` is resolved from an explicit `from:` path or the conventional
+  `wit/macros/<ns>-<name>.wasm` location. A `macros: true` import is
+  compile-time-only: it is excluded from the synthesized runtime world, so the
+  shipped component never imports `wavelet:meta/macros`. Because a macro library
+  is an ordinary component, macros can be written in any language that compiles to
+  one, and they run **sandboxed by construction**.
+- **Qualified and aliased foreign macros.** Imported macros are available both
+  bare (`Element`) and qualified by the import alias (`dsl/Element`, with
+  `as:`). A bare TitleCase name provided by two imports — or by an import and a
+  local `DefMacro` — is ambiguous and errors **only when used bare**, with a
+  message suggesting you alias or qualify; the qualified spelling always
+  resolves.
+- **Build-time component runtime.** Running foreign macros at compile time needs
+  a wasm runtime, so the compiler now depends on `wasmtime` (native targets
+  only). It is gated out of the `wasm32` build: the browser-playground bindings
+  moved behind a new default-on `playground` cargo feature, so the
+  wasm-compiled interpreter (and the macro-library guest) build without
+  `wasmtime` or `wasm-bindgen`. The playground therefore has **no** component
+  runtime — foreign-macro examples run only in native `wavelet build`, not in
+  the browser.
+- **Produce macro components from Wavelet (`wavelet build`).** A `.wvl` file
+  whose top level is a `Package` declaration plus `DefMacro`s only (no `Export`,
+  no runtime defs) now compiles into a component exporting `wavelet:meta/macros`,
+  so a macro library can be **written in Wavelet itself** and imported with
+  `Import {… macros: true}` like any other macro component (design.md §6.3). The
+  produced component bundles the Wavelet interpreter and runs the macros through
+  it, so its expansions match local expansion exactly. Built for
+  `wasm32-unknown-unknown` (no WASI), so it instantiates under the capability-free
+  macro linker.
+
 ## [0.7.0] - 2026-06-16
 
 ### Added

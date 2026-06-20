@@ -1,6 +1,6 @@
 # Step 3 — The `wavelet:meta/macros` interface + a `manifest`/`expand` caller
 
-- [ ] Done
+- [x] Done
 
 > **Read first:** `dev-notes/macro-components.md` and `dev-notes/design.md` §6.3.
 > Base your worktree on the latest `origin/macro-components` (after Steps 1–2).
@@ -70,7 +70,104 @@ variant is covered by a marshalling round-trip test.
 
 ## Handoff notes
 
-_(fill in: the `MacroComponent` public surface, exactly how the `node` variant
-maps to `Val::Variant` cases, where the fixture macro component lives and what it
-exports, and any gotchas Step 7 should know when it wires `expand` into the
-expander.)_
+### What landed
+
+- **WIT.** Added `interface macros` to `wit/meta/code.wit` (same
+  `wavelet:meta@0.1.0` package as `code`): `use code.{tree}; manifest: func() ->
+  list<tuple<string, u32>>; expand: func(name: string, args: tree) ->
+  result<tree, string>;`. `meta::tests::meta_code_wit_parses` still guards it.
+
+- **Marshalling** lives in the new native-only `src/macros.rs`
+  (`pub mod macros`, gated `#[cfg(not(target_arch = "wasm32"))]` in `lib.rs`).
+  Public functions, all centralised so Step 7 only calls `MacroComponent::expand`:
+  - `node_to_val(&Node) -> Val`, `tree_to_val(&Tree) -> Val` (lowering)
+  - `val_to_node(&Val) -> Result<Node,String>`, `val_to_tree(&Val) ->
+    Result<Tree,String>`, `val_to_result_tree(&Val) -> Result<Tree,String>`
+    (lifting)
+
+- **`HostComponent` gained nested-export lookup** (`src/host.rs`):
+  `instance_func(instance, func) -> Result<Func,String>` and
+  `call_instance(instance, func, args) -> Result<Vec<Val>,String>`. Interface
+  exports are **not** top-level funcs — `manifest`/`expand` live inside the
+  exported instance `wavelet:meta/macros@0.1.0`, reached via
+  `Instance::get_export_index(&mut store, None, "wavelet:meta/macros@0.1.0")`
+  then `get_export_index(.., Some(&iface_idx), "manifest")` then `get_func`.
+  `ComponentExportIndex` is re-exported from `host`.
+
+### `MacroComponent` public surface (`src/macros.rs`)
+
+```rust
+MacroComponent::from_bytes(&[u8]) -> Result<MacroComponent, String>
+MacroComponent::from_file(&Path)  -> Result<MacroComponent, String>
+  // both verify the wavelet:meta/macros interface is present (fail fast)
+MacroComponent::manifest(&mut self) -> Result<Vec<(String, u32)>, String>
+MacroComponent::expand(&mut self, name: &str, args: &Tree) -> Result<Tree, String>
+```
+
+The interface instance name is the const `MACROS_INTERFACE =
+"wavelet:meta/macros@0.1.0"` — note the **`@0.1.0` version suffix is required**
+in the export path; a bare `wavelet:meta/macros` won't resolve.
+
+### Exactly how `node` ↔ `Val::Variant`
+
+Each node lowers to `Val::Variant(case_name, Some(Box::new(payload)))` with the
+**kebab-case WIT case name** (not the Rust PascalCase) and this payload shape:
+
+| `meta::Node`   | case        | payload `Val`                                       |
+|----------------|-------------|-----------------------------------------------------|
+| `BoolVal(b)`   | `bool-val`  | `Val::Bool(b)`                                      |
+| `IntVal(n)`    | `int-val`   | `Val::S64(n)`            (WIT `s64`)                 |
+| `DecVal(d)`    | `dec-val`   | `Val::Float64(d)`        (WIT `f64`)                 |
+| `CharVal(c)`   | `char-val`  | `Val::Char(c)`                                      |
+| `StrVal(s)`    | `str-val`   | `Val::String(s)`                                    |
+| `Sym(s)`       | `sym`       | `Val::String(s)`                                    |
+| `Qsym(a,n)`    | `qsym`      | `Val::Tuple([String(a), String(n)])`                |
+| `Tup(ids)`     | `tup`       | `Val::List([U32(id), …])`                           |
+| `Lst(ids)`     | `lst`       | `Val::List([U32(id), …])`                           |
+| `Rec(fields)`  | `rec`       | `Val::List([Tuple([String(k), U32(v)]), …])`        |
+| `Flg(names)`   | `flg`       | `Val::List([String(n), …])`                         |
+
+`tree` → `Val::Record([("nodes", list<node>), ("root", U32), ("spans",
+list<Tuple([U32,U32])>)])`. `result<tree,string>` lifts from `Val::Result`:
+`Ok(Some(tree_val))`→`Ok(Tree)`, `Err(Some(String))`→`Err(msg)`; missing payloads
+become marshalling errors. Every variant is covered by
+`every_node_variant_roundtrips_through_val` (incl. nullary `tup`/empty `flg`).
+
+### Fixture
+
+- `tests/fixtures/macros.wasm` — checked-in component exporting
+  `wavelet:meta/macros@0.1.0`. Source crate at `tests/fixtures/macros/`
+  (`src/lib.rs` + wit-bindgen-generated `src/macro_lib.rs`, WIT in `wit/` with a
+  vendored copy of `wit/meta/code.wit` under `wit/deps/wavelet-meta/`).
+- Exports three macros: `identity`/1 (returns its arg unchanged),
+  `unless`/2 (`unless(c body)` → `(if-MACRO c {} body)`), `boom`/0 (always
+  `result::err`). It treats the `args` tree as the **whole call form** — a `tup`
+  whose element 0 is the head and `1..` are the args.
+- **Build (not run by `cargo test`):** `wit-bindgen rust wit --world macro-lib
+  --generate-all --out-dir src`, then `cargo build --release --target
+  wasm32-unknown-unknown`, then `wasm-tools component new
+  target/.../wavelet_macros_fixture.wasm -o ../macros.wasm`. Full command +
+  rationale in `tests/fixtures/macros/README.md`. `cargo-component` was avoided
+  (it wouldn't merge the vendored dep package); plain wit-bindgen + wasm-tools is
+  robust.
+
+### Gotchas for Step 7 (wiring `expand` into the expander)
+
+1. **`args` shape is a convention, not enforced.** This step ships the *whole
+   call form* as `args` and the fixture indexes `args.root` (a `tup`) from
+   element 1. Step 7 must decide and document the contract — either keep
+   "args = the call tup, head at [0]" or build an args-only tup. Whatever you
+   pick, it must match what real macro producers (Step 9) emit.
+2. **Build for `wasm32-unknown-unknown`, never `wasm32-wasip1`.** The host uses
+   an empty, capability-free linker (Step 2); a WASI-importing component fails to
+   instantiate. The type-only `import wavelet:meta/code@0.1.0` is fine (no funcs).
+3. **Interface export path needs the `@0.1.0` version.** Use
+   `instance_func`/`call_instance` with `"wavelet:meta/macros@0.1.0"`, not the
+   top-level `func`/`call`.
+4. **`MacroComponent` is `&mut self`** (the wasmtime `Store` is mutable);
+   `manifest`/`expand` take `&mut self`. Each instantiation is single-threaded;
+   reuse one `MacroComponent` across many `expand` calls (post_return cleanup is
+   internal, like the `add` fixture in Step 2).
+5. The `tree` lifter ignores unexpected record fields and rejects unknown variant
+   cases / wrong payload shapes with actionable strings rather than panicking —
+   a misbehaving guest surfaces a readable expansion error.

@@ -1,6 +1,6 @@
 # Step 7 — Route expansion through the component's `expand`
 
-- [ ] Done
+- [x] Done
 
 > **Read first:** `dev-notes/macro-components.md`, `dev-notes/design.md` §6.3 and
 > §9 (the pipeline: "the expander runs macros to fixpoint, instantiating macro
@@ -87,6 +87,123 @@ local-macro behaviour and the `expand` builtin are unchanged.
 
 ## Handoff notes
 
-_(fill in: where the unified macro registry lives, exactly how `expand.rs`
-dispatches local vs foreign, what you decided for the `interp.rs`/`run` path, any
-fixpoint/depth handling, and the shape of the end-to-end test.)_
+### Where the unified macro registry/resolver lives
+
+There is no new central registry; the unification happens in two pieces wired
+together by a wasm-safe seam:
+
+- **`expand.rs` owns the dispatch.** A new trait `ForeignExpander` (wasm-safe,
+  defined unconditionally — it speaks only `Arena`/`NodeId`, never the
+  native-only `meta::Tree`) is the seam. `expand_file` gained a third parameter,
+  `foreign: Option<&mut dyn ForeignExpander>`. Pass `None` for a
+  local-macros-only expansion (the wasm playground; any file with no macro
+  imports).
+- **`macrodep.rs` owns the native implementation: `FileExpander`.** It is the
+  unified resolver — it holds a `MacroResolver` (the per-build cache of
+  instantiated components, from Step 5) plus the file's `macros: true` imports,
+  parsed once via `parse_macro_import`. It implements `ForeignExpander`.
+
+**Why re-resolve at expand time (Step 6's forward-note option (b)):** the
+read-phase `MacroResolver` is local to `read_file_with_macros` and dropped after
+reading, so instantiated components are not carried forward. `FileExpander::for_file`
+re-scans the expanded file's roots for `Import {… macros: true}` forms and builds
+a fresh `MacroResolver`. Because the resolver caches per *package*, re-resolution
+re-instantiates nothing redundantly within the expand pass.
+
+### Exactly how `expand.rs` dispatches local vs foreign
+
+In `expand_form`, when the head is a `Sym`:
+
+1. `quote-MACRO` / `quasi-MACRO` → copied verbatim, **not** expanded (opacity
+   holds for both local and foreign macros — a foreign call under `Quote` is
+   data).
+2. **Local** macro: `env.lookup(name)` yields a `Value::Macro` → `expand_once`,
+   then recurse via `expand_form` (unchanged behaviour).
+3. **Foreign** macro: only if `foreign` is `Some`. Call
+   `fx.expand_call(name_without_suffix, arena, call_id)`:
+   - `None` → no foreign macro owns this head → fall through to `descend`
+     (ordinary child recursion). This is also what happens for special-form
+     heads like `if-MACRO`, which are neither local nor foreign macros.
+   - `Some(Ok((arena, root)))` → lift into an `Rc<Arena>` and **recurse through
+     `expand_form`** so the expansion is itself expanded (fixpoint).
+   - `Some(Err(msg))` → wrap as
+     ``format!("expanding `{macro_name}`: {e}")`` and bail.
+
+`FileExpander::owner_of(name)` maps an unsuffixed macro name to the owning
+import by querying each `macros: true` import's cached `manifest()`; the
+name→owner answer (including "not owned by any") is memoised.
+
+A borrow-checker note: `expand_form`/`descend` thread `foreign` as
+`&mut Option<&mut dyn ForeignExpander>` (not by value) so each recursive call
+reborrows for a fresh, shorter lifetime — passing the inner `&mut dyn` by value
+ties every reborrow to the caller's full lifetime and the sequential per-child
+recursion is rejected.
+
+### PINNED args-tree contract passed to `expand` (matters for Steps 8/9)
+
+`expand_call` ships the **WHOLE call form** as the `args` tree: a `tup` whose
+element 0 is the macro head (still carrying its `-MACRO` suffix) and elements
+1.. are the argument forms, marshalled via `meta::arena_to_tree(arena, call_id)`.
+The guest reads `args.nodes[args.root]` as a `tup` and indexes its arguments from
+element 1. This matches the Step 3 fixture
+(`tests/fixtures/macros/src/lib.rs`, `arg_ids` = `Tup(items).skip(1)`). The
+`name` passed alongside the tree is the *unsuffixed* manifest name (e.g.
+`unless`, not `unless-MACRO`). **Step 9's producer must lower a Wavelet macro
+body to a guest that reads args this same way.**
+
+### interp.rs / `wavelet run` decision
+
+`interp.rs` (lazy expander, `wavelet run` + the `expand` builtin) was **left
+unchanged** — it degrades gracefully. The wasm playground has no component
+runtime, and `run` already errors on an unbound foreign head, so foreign macros
+are not routed through the interpreter. The ahead-of-time `expand.rs` path
+(which `build` uses) is fully wired, which is the keystone the rest of the
+feature needs. Wiring foreign expansion into native `run` is a possible later
+refinement, but is deliberately out of scope here so the existing
+`eval_expand_builtin` tests stay green (they do).
+
+### Fixpoint / depth handling
+
+No depth guard added — matches the existing local-macro recursion, which has
+none. Both local and foreign expansions recurse through `expand_form`, so a
+foreign result containing another (local or foreign) macro call is expanded to
+fixpoint (covered by `foreign_macro_expansion_is_re_expanded_to_fixpoint`).
+
+### Call-site threading
+
+`expand_file`'s new parameter is supplied via
+`FileExpander::for_file(root, &arena, &roots)` (returns `None` when the file
+imports no macro library, so no runtime is instantiated for ordinary files) in:
+`build.rs` (`build_files` and `populate_project_wit`) and the `wavelet expand`
+CLI (`main.rs`, now reading through `read_file_with_macros`). All other callers
+(`tests/wit_deps.rs`, `tests/wkg_populate.rs`, the `lib.rs` aot test) pass
+`None`. The `wasm` lib still builds (`cargo check --target
+wasm32-unknown-unknown --lib`).
+
+### One extra emit fix (needed for componentization)
+
+`emit::synthesize_world_wit` now skips `is_macro_only` imports when building the
+world's import list — a pure macro import is compile-time only and must
+contribute no runtime import. Without this, any file using a foreign macro (but
+no runtime dep from that package) failed to componentize with "dependency … is
+not in the build set". This mirrors `build`'s existing dep-resolution skip.
+
+### Shape of the end-to-end tests (in `src/lib.rs`)
+
+Against the checked-in `tests/fixtures/macros.wasm`, each via
+`read_file_with_macros` + `FileExpander::for_file` + `expand_file`:
+
+- `foreign_macro_expands_and_splices_to_fixpoint` — `Unless gt(n 0) 42` →
+  `(if-MACRO, (gt, n, 0), {}, 42)`; args spliced, head gone.
+- `foreign_macro_expansion_is_re_expanded_to_fixpoint` — `Unless gt(n 0)
+  Identity add(n 1)`: after `unless` expands, the nested `identity` in its body
+  is *also* expanded → `(if-MACRO, (gt, n, 0), {}, (add, n, 1))`. Proves the
+  loop re-expands a foreign result that itself contains a macro call.
+- `foreign_identity_macro_expands_and_componentizes` — `Identity add(n 1)` →
+  `(add, n, 1)`, and the expanded file **componentizes** (`\0asm`). (Used
+  `identity` not `unless` for the componentize check because `unless`'s `{}`
+  false-branch is a flag literal the wasm backend doesn't yet emit.)
+- `foreign_macro_error_surfaces_with_macro_name` — `Boom` →
+  ``expanding `boom`: boom: this macro always fails``.
+- `foreign_macro_under_quote_is_not_expanded` — `Quote Unless(false "ran")`
+  leaves `unless-MACRO` verbatim.

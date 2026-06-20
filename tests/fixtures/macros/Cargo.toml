@@ -1,0 +1,25 @@
+# Fixture macro-library component for `src/macros.rs` (Step 3).
+#
+# A TINY, standalone Rust component. It is NOT part of the `wavelet` workspace
+# and is never built by `cargo test` — the prebuilt `tests/fixtures/macros.wasm`
+# is checked in so the suite stays hermetic and needs no wasm toolchain. See
+# `README.md` beside this file for the exact regeneration command (wit-bindgen +
+# plain cargo build + `wasm-tools component new`).
+[package]
+name = "wavelet-macros-fixture"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The guest runtime the wit-bindgen-generated `src/macro_lib.rs` links against.
+wit-bindgen = "0.43.0"
+
+[profile.release]
+strip = true
+opt-level = "s"
+
+[workspace]

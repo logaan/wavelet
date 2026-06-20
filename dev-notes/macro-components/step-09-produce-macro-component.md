@@ -1,6 +1,6 @@
 # Step 9 — Produce a `wavelet:meta/macros` component from a Wavelet macro file
 
-- [ ] Done
+- [x] Done
 
 > **Read first:** `dev-notes/macro-components.md`, `dev-notes/design.md` §6.2–§6.3
 > and §9 (pipeline / self-hosting). Base your worktree on the latest
@@ -95,6 +95,94 @@ expansion.
 
 ## Handoff notes
 
-_(fill in: strategy A vs B and why, how a file declares it's a macro library, the
-build invocation, how `manifest`/`expand` are implemented, the gensym/hygiene
-state, and what was deferred — e.g. strategy B, registry publishing.)_
+**Strategy: A (interpreter-in-a-component).** The produced component bundles the
+Wavelet interpreter (the `wavelet` crate, which already compiles to `wasm32` for
+the docs playground) plus the macro file's source as embedded data, and runs the
+macros through the interpreter at the consumer's build time. Chosen because it
+reuses `interp.rs`/`expand_once` — the semantics oracle (`CLAUDE.md`) — so a
+macro means *exactly* the same thing expanded locally (`expand::expand_file`) or
+through a produced component, with the least divergence risk. **Strategy B
+(compiling macro bodies to wasm functions) is deferred** as the
+performance/cleanliness follow-up; it needs a large `emit.rs` extension to
+compile `Quasi`/`Unquote`/`Splice`/`gensym` over `tree`.
+
+**How a file declares it's a macro library:** a `.wvl` whose top level is a
+`Package` declaration plus `DefMacro`s *only* — no `Export`, no runtime
+`Def`/`DefType`/`Import`, no bare expressions (`macrobuild::is_macro_library`).
+This is the step's "a file that only defines macros and exports none of its own
+runtime funcs" trigger; it needs **no new syntax or lexer/highlighting token**.
+`wavelet build` detects such a file and routes it to the producer instead of the
+ordinary emit path (the file is neither macro-expanded nor WIT-synthesised — its
+`DefMacro`s are the component's payload).
+
+**Build invocation:** `wavelet build src/macros.wvl -o out` — same command as any
+component. It emits `out/<package-path>.wasm` (`:`→`-`), exporting
+`wavelet:meta/macros@0.1.0`. No new flag. A consumer then points an `Import {…
+macros: true from: "…/<package-path>.wasm"}` at it (or drops it at the
+conventional `wit/macros/<ns>-<name>.wasm`).
+
+**Mechanics:** a checked-in guest crate `tools/macro-guest/` depends on the
+`wavelet` crate (so the interpreter is *in* the guest) and exports
+`wavelet:meta/macros` via `wit-bindgen`. The producer
+(`macrobuild::build_macro_component`): (1) writes the macro source to a temp file
+and sets `WAVELET_MACRO_SRC`; (2) runs `cargo build --release --target
+wasm32-unknown-unknown` in the guest (its `build.rs` `include_str!`s the source
+from `OUT_DIR`); (3) componentizes the core module **in-process** with
+`wit_component::ComponentEncoder` (the metadata wit-bindgen embeds is enough — no
+`wasm-tools` shell-out). Built for **`wasm32-unknown-unknown` (no WASI)** so it
+instantiates under the consumer's empty, capability-free linker (Step 2).
+
+To keep the guest free of `wasm-bindgen`'s `__wbindgen_placeholder__` imports (a
+component can't carry them), the `wavelet` crate's playground bindings
+(`src/wasm.rs` + `wasm-bindgen`) moved behind a **default-on `playground`
+feature**; the guest depends on `wavelet` with `default-features = false`. The
+docs `wasm-pack` build is unchanged (default features), and both `cargo check
+--target wasm32 --lib` and `--no-default-features` pass.
+
+**`manifest`/`expand`:** thin guest wrappers over a new **non-gated** shared
+module `src/macrolib.rs` (called by both the wasm guest and native tests):
+- `manifest(src)` reads the source and reports each top-level `DefMacro`'s
+  `(unsuffixed-name, arity)` — the same `{params}`-count arity
+  `reader::register_if_def_macro` computes.
+- `expand_one(src, name, call_arena, call_id)` seeds an env with the builtins +
+  the file's `DefMacro`s (exactly as `expand_file` does), looks up
+  `<name>-MACRO`, and runs **one** `expand_once` over the call form's `items[1..]`
+  (honouring the PINNED args-tree contract: `args` is the whole call tup). One
+  step, because the *consumer* recurses to fixpoint (`macrodep::expand_call`).
+The guest marshals the canonical-ABI `tree` ↔ `form::Arena` itself (the native
+`meta` module is wasm-gated), mirroring `meta.rs` against the wit-bindgen types.
+
+**gensym/hygiene:** `gensym` **works** inside the component — a fresh `Interp`
+per `expand` call, so multiple gensyms within one expansion get distinct names
+(`[g0-gen, g1-gen]`, matching local expansion, verified). **Known limitation:**
+the counter resets to 0 per `expand` call, whereas local `expand_file` shares one
+`Interp` across a whole file, so gensym is monotonic across *all* calls there. So
+gensym names are unique *within* an expansion (the hygiene that matters per §6.3)
+but may repeat *across* separate component calls. Tightening this (threading a
+gensym seed across calls) is future work and aligns with §10's "hygiene is future
+work".
+
+**Tests:** `tests/produced_macros.rs` is the dogfood test. It consumes a
+**prebuilt, checked-in** component `tests/fixtures/produced-macros.wasm` (built
+from `tests/fixtures/produced-macros.wvl`) through the full Step 1–8 consumer
+path — `MacroComponent` `manifest`/`expand`, plus the reader/`FileExpander` route
+with a `macros: true` import — and asserts every expansion equals local
+`expand_file` of the same macro. Hermetic: no wasm toolchain needed for `cargo
+test`. The producer itself (which needs the `wasm32` target + `cargo`) is
+exercised by an **opt-in** test gated behind
+`WAVELET_TEST_BUILD_MACRO_COMPONENT=1` (`reproduce_component_from_source`), so the
+suite never hard-depends on a toolchain that may be absent in CI — exactly like
+the Step 3 fixture. `src/macrolib.rs` and `src/macrobuild.rs` also carry unit
+tests.
+
+**Deferred:** strategy B; registry publishing (`wkg` push of produced
+components); docs/highlighting/CHANGELOG-beyond-Unreleased and the end-to-end
+example (Step 10). Tightening cross-call gensym hygiene.
+
+**For Step 10:** the end-to-end example can now prefer a *Wavelet-authored* macro
+library — `wavelet build`-ed via the producer here — over the hand-built Rust
+fixture. `tests/fixtures/produced-macros.wvl` is a minimal working library
+(`identity`/1, `unless`/2); the e2e example should write its own `.wvl` macro
+library, build it, and consume it. Regeneration of the checked-in `.wasm` is
+documented in `tests/fixtures/produced-macros.README.md` and
+`tools/macro-guest/README.md`.

@@ -1,0 +1,8 @@
+// The world the fixture macro-library component targets: it exports the
+// `wavelet:meta/macros` interface (and nothing else), making it a minimal macro
+// library for `src/macros.rs`'s `MacroComponent` tests.
+package wavelet:macros-fixture@0.1.0;
+
+world macro-lib {
+  export wavelet:meta/macros@0.1.0;
+}

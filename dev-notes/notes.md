@@ -59,8 +59,14 @@
 
 ## From todo.md
 
-- [ ] Qualified TitleCase macros `Dsl/Element` arity reading (parses, but arity
-      lookup ignores the alias; revisit with macro imports in Phase 2)
+- [x] Qualified TitleCase macros `alias/Element` arity reading — resolved in
+      macro-components Step 8. A qualified head `dsl/Unless` (kebab alias /
+      TitleCase name) now looks up arity under the import's `as:` alias in
+      `MacroTable::arity_qualified`, and expansion routes to that aliased
+      component. Bare-name collisions across imports make the bare name
+      ambiguous (qualified uses still work). (design.md writes `Dsl/Element`
+      illustratively, but the lexer requires the alias part to be kebab-case, so
+      the real spelling is `dsl/Element`.)
 - [ ] Macro components: instantiate wasm at compile time, `manifest`/`expand`
       interface, `Import {… macros: true}`
 - [ ] Resource handles beyond `cell`; owned-handle drop semantics

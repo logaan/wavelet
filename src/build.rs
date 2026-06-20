@@ -17,13 +17,35 @@ struct Unit {
 }
 
 pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, String> {
+    // Foreign macro arities (`Import {… macros: true}`) are registered as each
+    // file is read, so they must resolve against the project root.
+    let root = project_root(paths).unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("{out_dir}: {e}"))?;
     let mut units = Vec::new();
+    let mut macro_outputs = Vec::new();
     for path in paths {
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-        let (arena, roots) =
-            crate::read_file(&src).map_err(|e| format!("{path}: {e}"))?;
-        let (arena, roots) =
-            crate::expand::expand_file(arena, &roots).map_err(|e| format!("{path}: {e}"))?;
+        let (arena, roots) = crate::macrodep::read_file_with_macros(&src, &root)
+            .map_err(|e| format!("{path}: {e}"))?;
+        // A pure macro-library file (Package + DefMacros only, no Export) is
+        // compiled into a `wavelet:meta/macros` component via the bundled
+        // interpreter (§6.3, Step 9), NOT through the ordinary emit path: its
+        // `DefMacro`s are the component's payload, so it is neither macro-expanded
+        // nor WIT-synthesised here.
+        if crate::macrobuild::is_macro_library(&arena, &roots) {
+            let out = build_macro_library(path, &src, out_dir)?;
+            macro_outputs.push(out);
+            continue;
+        }
+        // Route foreign macros (`Import {… macros: true}`) through their
+        // components' `expand`; `None` when the file imports no macro library.
+        let mut foreign = crate::macrodep::FileExpander::for_file(&root, &arena, &roots);
+        let (arena, roots) = crate::expand::expand_file(
+            arena,
+            &roots,
+            foreign.as_mut().map(|f| f as &mut dyn crate::expand::ForeignExpander),
+        )
+        .map_err(|e| format!("{path}: {e}"))?;
         let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
         units.push(Unit { path: path.clone(), arena, roots, info });
     }
@@ -34,17 +56,25 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
         .map(|(i, u)| (u.info.package_path.clone(), i))
         .collect();
 
-    std::fs::create_dir_all(out_dir).map_err(|e| format!("{out_dir}: {e}"))?;
-
     // Project-level WIT vendored by `wkg` lives in `wit/deps`, a sibling of the
     // `src/` directory the sources come from. Used as a fallback source of
     // dependency interfaces after sibling-`.wvl` resolution.
     let wit_deps_dir = wit_deps_dir(paths);
 
-    let mut outputs = Vec::new();
+    // Macro-library components produced above are part of the build's outputs.
+    let mut outputs = macro_outputs;
     for u in &units {
         let mut deps = HashMap::new();
         for imp in &u.info.imports {
+            // A pure macro import (§6.3) is resolved to a macro component and
+            // run during expand ([`crate::macrodep`]); it is *not* a runtime
+            // dependency of this component, so it contributes no `Dep` and is
+            // skipped here. (The common case is macro-only; an import that is
+            // both a runtime dep and a macro library is an unsupported edge
+            // case — see `wit::is_macro_only`.)
+            if wit::is_macro_only(imp) {
+                continue;
+            }
             // (a) A sibling Wavelet file in the build set satisfies the import.
             if let Some(&di) = index.get(&imp.package) {
                 let d = &units[di];
@@ -127,6 +157,31 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
     Ok(outputs)
 }
 
+/// Compile a pure macro-library `.wvl` file into a `wavelet:meta/macros`
+/// component (§6.3, Step 9), writing it to `<out_dir>/<package-path>.wasm` and
+/// returning that path.
+///
+/// The component is produced via the bundled-interpreter guest
+/// ([`crate::macrobuild`]); the output is named after the file's own `Package`
+/// path (`:` → `-`) so it sits alongside ordinary components and a consumer can
+/// drop it at the conventional `wit/macros/<ns>-<name>.wasm` location.
+fn build_macro_library(path: &str, src: &str, out_dir: &str) -> Result<String, String> {
+    // Derive the package path for the output file name from the file's own
+    // `Package` declaration (the same name a consumer imports it under).
+    let (arena, roots) = crate::read_file(src).map_err(|e| format!("{path}: {e}"))?;
+    let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
+
+    let bytes = crate::macrobuild::build_macro_component(
+        src,
+        &crate::macrobuild::default_guest_crate(),
+    )
+    .map_err(|e| format!("{path}: {e}"))?;
+
+    let out = format!("{out_dir}/{}.wasm", info.package_path.replace(':', "-"));
+    std::fs::write(&out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+    Ok(out)
+}
+
 /// Wire the build's components into one composed `<out_dir>/app.wasm`.
 ///
 /// Returns `Ok(Some(path))` when a composed artifact was written, `Ok(None)`
@@ -144,6 +199,11 @@ fn compose_units(
     let mut edges: Vec<(usize, &ImportInfo, usize)> = Vec::new(); // (importer, import, plug)
     for (ui, u) in units.iter().enumerate() {
         for imp in &u.info.imports {
+            // A pure macro import is a compile-time-only dependency, never a
+            // sibling runtime edge to wire — skip it (see `wit::is_macro_only`).
+            if wit::is_macro_only(imp) {
+                continue;
+            }
             if let Some(&plug) = index.get(&imp.package) {
                 if plug != ui {
                     edges.push((ui, imp, plug));
@@ -277,9 +337,15 @@ pub fn populate_project_wit(root: &Path, src_paths: &[PathBuf]) -> Result<(), St
     for path in src_paths {
         let path_str = path.display().to_string();
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path_str}: {e}"))?;
-        let (arena, roots) = crate::read_file(&src).map_err(|e| format!("{path_str}: {e}"))?;
-        let (arena, roots) =
-            crate::expand::expand_file(arena, &roots).map_err(|e| format!("{path_str}: {e}"))?;
+        let (arena, roots) = crate::macrodep::read_file_with_macros(&src, root)
+            .map_err(|e| format!("{path_str}: {e}"))?;
+        let mut foreign = crate::macrodep::FileExpander::for_file(root, &arena, &roots);
+        let (arena, roots) = crate::expand::expand_file(
+            arena,
+            &roots,
+            foreign.as_mut().map(|f| f as &mut dyn crate::expand::ForeignExpander),
+        )
+        .map_err(|e| format!("{path_str}: {e}"))?;
         let info = wit::collect(&arena, &roots).map_err(|e| format!("{path_str}: {e}"))?;
         units.push(Unit { path: path_str, arena, roots, info });
     }

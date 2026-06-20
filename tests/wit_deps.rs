@@ -19,7 +19,7 @@ fn scratch(tag: &str) -> std::path::PathBuf {
 /// dependency — the existing, known-good shape we compare the WIT path against.
 fn dep_from_wavelet(src: &str) -> Dep {
     let (arena, roots) = read_file(src).expect("read");
-    let (arena, roots) = expand::expand_file(arena, &roots).expect("expand");
+    let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expand");
     let info = wit::collect(&arena, &roots).expect("collect");
     Dep {
         package: info.package.clone(),

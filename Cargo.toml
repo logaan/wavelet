@@ -9,16 +9,41 @@ license = "MIT"
 # `rlib` so the native `wavelet` binary can still link against it.
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# The browser-playground bindings (`src/wasm.rs` + `wasm-bindgen`). ON by
+# default so `wasm-pack build` and the docs pipeline are unchanged. A *produced*
+# macro component (`tools/macro-guest`) depends on `wavelet` with
+# `default-features = false`, turning this OFF so the interpreter links for
+# `wasm32` with NO `wasm-bindgen` imports — a macro component must instantiate
+# under the consumer's empty, capability-free linker and so can carry no
+# `__wbindgen_placeholder__` imports.
+default = ["playground"]
+playground = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
+
 [dependencies]
 wac-graph = "0.10.0"
 wasm-encoder = "0.251.0"
 wit-component = "0.251.0"
 wit-parser = "0.251.0"
 
-# wasm-only: the browser playground bindings (see `src/wasm.rs`).
+# Native-only: the compile-time component runtime (`src/host.rs`) that
+# instantiates and calls macro-library components. `wasmtime` is heavy and must
+# never reach the `wasm32` (`cdylib`) playground build, so it lives under a
+# `cfg(not(target_arch = "wasm32"))` target table alongside the gated module.
+# `component-model` enables the Component-Model + dynamic `component::Val` API;
+# default features are kept off to trim the build (no `cranelift`-driven extras
+# we don't use, no `wat`, no `parallel-compilation` heaviness beyond defaults
+# we need) — `cranelift` is re-enabled explicitly because component lifting
+# needs a compiler backend.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wasmtime = { version = "45", default-features = false, features = ["runtime", "cranelift", "component-model"] }
+
+# wasm-only: the browser playground bindings (see `src/wasm.rs`). Optional and
+# gated behind the `playground` feature, so the macro-guest's `wasm32` build
+# (`default-features = false`) omits `wasm-bindgen` entirely.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2"
-console_error_panic_hook = "0.1"
+wasm-bindgen = { version = "0.2", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
 
 [dev-dependencies]
 # parses docs/examples.json for the documentation-example test suite

@@ -211,10 +211,28 @@ fn expand_cmd(path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match wavelet::read_file(&src)
+    // Project root = parent of the `src/` dir the file lives in, so foreign
+    // macro imports (`Import {… macros: true}`) resolve their `.wasm` the same
+    // way `wavelet build` does. Default to `.` when there is no parent.
+    let root = std::path::Path::new(path)
+        .parent()
+        .and_then(|d| d.parent())
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let result = wavelet::macrodep::read_file_with_macros(&src, &root)
         .map_err(|e| e.to_string())
-        .and_then(|(arena, roots)| wavelet::expand::expand_file(arena, &roots))
-    {
+        .and_then(|(arena, roots)| {
+            let mut foreign = wavelet::macrodep::FileExpander::for_file(&root, &arena, &roots);
+            wavelet::expand::expand_file(
+                arena,
+                &roots,
+                foreign
+                    .as_mut()
+                    .map(|f| f as &mut dyn wavelet::expand::ForeignExpander),
+            )
+        });
+    match result {
         Ok((arena, roots)) => {
             for root in roots {
                 println!("{}", wavelet::print(&arena, root));

@@ -3,10 +3,40 @@ use std::collections::HashMap;
 use crate::form::{Arena, Node, NodeId};
 use crate::lexer::{lex, ReadError, Tok, Token};
 
-/// Arity table for TitleCase heads: core special forms plus macros
-/// registered by `DefMacro` as the reader moves top to bottom (§2.4).
+/// Where a macro arity registration came from, so the table can tell a benign
+/// re-registration (same origin) from a genuine *collision* (two different
+/// origins claiming one bare name). Core special forms and file-local
+/// `DefMacro`s share the [`Origin::Local`] namespace; each `macros: true` import
+/// is its own [`Origin::Import`] keyed by the import's `as:` alias (§6.3).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Origin {
+    /// A core special form or a file-local `DefMacro`.
+    Local,
+    /// A macro exported by the import bound to this alias.
+    Import(String),
+}
+
+/// Arity table for TitleCase heads: core special forms plus macros registered by
+/// `DefMacro` or by `macros: true` imports as the reader moves top to bottom
+/// (§2.4, §6.3).
+///
+/// Bare `Name` lookups consult [`MacroTable::arity`]; qualified `Alias/Name`
+/// lookups consult [`MacroTable::arity_qualified`]. When two different origins
+/// register the same bare name the bare name becomes *ambiguous* — bare use is a
+/// read-time error pointing the author at aliasing/qualifying — while each
+/// origin's qualified key keeps resolving (collision policy (a), see the Step 8
+/// notes).
 pub struct MacroTable {
-    map: HashMap<String, usize>,
+    /// Bare name → (arity, the single origin that owns it). A name present here
+    /// resolves unambiguously by its bare spelling.
+    map: HashMap<String, (usize, Origin)>,
+    /// `(alias, name)` → arity for every import-provided macro, registered
+    /// regardless of collisions so a qualified `Alias/Name` head always resolves.
+    qualified: HashMap<(String, String), usize>,
+    /// Bare name → the set of import aliases that provide it, recorded once a
+    /// bare name has been claimed by more than one origin. A name in this map is
+    /// dropped from `map`, so bare use errors actionably.
+    ambiguous: HashMap<String, Vec<String>>,
 }
 
 impl MacroTable {
@@ -30,19 +60,106 @@ impl MacroTable {
             ("defmacro-MACRO", 3),
             ("the-MACRO", 2),
         ] {
-            map.insert(name.to_string(), arity);
+            map.insert(name.to_string(), (arity, Origin::Local));
         }
-        Self { map }
+        Self { map, qualified: HashMap::new(), ambiguous: HashMap::new() }
     }
 
+    /// Arity of an unambiguous bare TitleCase head. Returns `None` for an unknown
+    /// name *and* for an ambiguous one — the read path tells the two apart via
+    /// [`MacroTable::is_ambiguous`] to produce the right error.
     pub fn arity(&self, name: &str) -> Option<usize> {
-        self.map.get(name).copied()
+        self.map.get(name).map(|(a, _)| *a)
     }
 
+    /// Arity of a qualified `Alias/Name` head, looked up by the import alias and
+    /// the (already `-MACRO`-suffixed) name. Independent of bare-name collisions.
+    pub fn arity_qualified(&self, alias: &str, name: &str) -> Option<usize> {
+        self.qualified
+            .get(&(alias.to_string(), name.to_string()))
+            .copied()
+    }
+
+    /// Whether a bare name has been claimed by more than one origin (so a bare
+    /// use is an error). If so, returns the aliases that provide it.
+    pub fn is_ambiguous(&self, name: &str) -> Option<&[String]> {
+        self.ambiguous.get(name).map(|v| v.as_slice())
+    }
+
+    /// Register a core special form or file-local `DefMacro` under its bare name
+    /// (origin [`Origin::Local`]). A local `DefMacro` that collides with an
+    /// already-registered macro of a *different* origin makes the bare name
+    /// ambiguous, exactly like two imports colliding.
     pub fn register(&mut self, name: String, arity: usize) {
-        self.map.insert(name, arity);
+        self.register_with_origin(name, arity, Origin::Local);
+    }
+
+    /// Register an import-provided macro: always under its qualified `(alias,
+    /// name)` key, and — subject to collision detection — under its bare name.
+    pub fn register_foreign(&mut self, alias: &str, name: String, arity: usize) {
+        self.qualified
+            .insert((alias.to_string(), name.clone()), arity);
+        self.register_with_origin(name, arity, Origin::Import(alias.to_string()));
+    }
+
+    /// Shared bare-name registration with collision tracking. Re-registering a
+    /// name under the *same* origin (e.g. the same package resolved twice) is a
+    /// harmless update; a *different* origin makes the bare name ambiguous.
+    fn register_with_origin(&mut self, name: String, arity: usize, origin: Origin) {
+        // Already ambiguous: just record this origin's alias (if an import) and
+        // keep the bare name out of `map`.
+        if let Some(aliases) = self.ambiguous.get_mut(&name) {
+            if let Origin::Import(alias) = &origin {
+                if !aliases.contains(alias) {
+                    aliases.push(alias.clone());
+                }
+            }
+            return;
+        }
+        match self.map.get(&name) {
+            Some((_, existing)) if *existing == origin => {
+                // Same origin re-registering — update the arity in place.
+                self.map.insert(name, (arity, origin));
+            }
+            Some((_, existing)) => {
+                // Genuine collision: drop the bare name and mark it ambiguous,
+                // collecting both contributing import aliases (a local origin
+                // contributes no alias but still makes the name ambiguous).
+                let existing = existing.clone();
+                self.map.remove(&name);
+                let mut aliases = Vec::new();
+                if let Origin::Import(a) = &existing {
+                    aliases.push(a.clone());
+                }
+                if let Origin::Import(a) = &origin {
+                    if !aliases.contains(a) {
+                        aliases.push(a.clone());
+                    }
+                }
+                self.ambiguous.insert(name, aliases);
+            }
+            None => {
+                self.map.insert(name, (arity, origin));
+            }
+        }
     }
 }
+
+/// A hook the reader runs after each top-level form is parsed, given the form's
+/// node id, so a caller can register *foreign* macro arities into the table as
+/// the reader moves top-to-bottom — exactly when a local `DefMacro` would be
+/// registered. This is how `Import {… macros: true}` arities become known
+/// (§6.3): the native compiler supplies a hook that resolves the import's macro
+/// component and registers its `manifest()` pairs (see
+/// [`crate::macrodep::register_macro_imports`]).
+///
+/// The hook is a plain closure over reader/`form` types only, so `reader.rs`
+/// keeps compiling for the `wasm32` playground — where there is no component
+/// runtime and thus no hook is supplied, and foreign registration is simply
+/// absent. An `Err` returned by the hook aborts the read with that error (e.g.
+/// a macro component that fails to instantiate, tied to the import's span).
+pub type FormHook<'a> =
+    dyn FnMut(&Arena, NodeId, &mut MacroTable) -> Result<(), ReadError> + 'a;
 
 pub fn read_file(src: &str) -> Result<(Arena, Vec<NodeId>), ReadError> {
     let mut macros = MacroTable::core();
@@ -54,6 +171,21 @@ pub fn read_file(src: &str) -> Result<(Arena, Vec<NodeId>), ReadError> {
 pub fn read_with(
     src: &str,
     macros: &mut MacroTable,
+) -> Result<(Arena, Vec<NodeId>), ReadError> {
+    read_with_hook(src, macros, None)
+}
+
+/// The full read entry point: a caller-owned arity table plus an optional
+/// per-form [`FormHook`]. After each top-level form is parsed (and after the
+/// built-in local-`DefMacro` registration), the hook — if any — runs against
+/// that form, letting the native compiler register foreign macro arities from a
+/// `macros: true` import *before* later forms that use those macros are read.
+/// Passing `None` reproduces [`read_with`] exactly, so the wasm playground and
+/// the REPL are unchanged.
+pub fn read_with_hook(
+    src: &str,
+    macros: &mut MacroTable,
+    mut hook: Option<&mut FormHook<'_>>,
 ) -> Result<(Arena, Vec<NodeId>), ReadError> {
     let toks = lex(src)?;
     let mut p = Parser {
@@ -67,6 +199,9 @@ pub fn read_with(
         while !p.at_end() {
             let id = p.parse_form()?;
             p.register_if_def_macro(id);
+            if let Some(hook) = hook.as_deref_mut() {
+                hook(&p.arena, id, &mut p.macros)?;
+            }
             roots.push(id);
         }
         Ok(())
@@ -235,18 +370,54 @@ impl Parser {
             let (items, end) = self.parse_paren_items()?;
             return Ok(self.call_tup(head, items, span.start, end));
         }
-        let name = match self.arena.node(head) {
-            Node::Sym(s) | Node::Qsym(_, s) => s.clone(),
-            _ => unreachable!(),
-        };
-        let arity = match self.macros.arity(&name) {
-            Some(a) => a,
-            None => {
-                return self.err(
-                    format!("unknown macro `{name}` (macros must be in scope before use)"),
-                    span.start,
-                )
+        // A qualified head (`Alias/Name`) resolves arity via the import bound to
+        // its alias; a bare head resolves via the unambiguous bare table (§2.4,
+        // §6.3). An ambiguous bare name is a distinct, actionable error.
+        let arity = match self.arena.node(head).clone() {
+            Node::Qsym(alias, name) => match self.macros.arity_qualified(&alias, &name) {
+                Some(a) => a,
+                None => {
+                    let pretty = name.trim_end_matches("-MACRO");
+                    return self.err(
+                        format!(
+                            "unknown qualified macro `{alias}/{pretty}` \
+                             (no `macros: true` import aliased `{alias}` provides `{pretty}`)"
+                        ),
+                        span.start,
+                    );
+                }
+            },
+            Node::Sym(name) => {
+                if let Some(aliases) = self.macros.is_ambiguous(&name) {
+                    let pretty = name.trim_end_matches("-MACRO");
+                    let hint = if aliases.is_empty() {
+                        format!("qualify it or alias the conflicting import")
+                    } else {
+                        let qualified: Vec<String> =
+                            aliases.iter().map(|a| format!("`{a}/{pretty}`")).collect();
+                        format!(
+                            "qualify the use ({}) or alias the imports with `as:`",
+                            qualified.join(" / ")
+                        )
+                    };
+                    return self.err(
+                        format!("ambiguous macro `{pretty}` is provided by more than one import — {hint}"),
+                        span.start,
+                    );
+                }
+                match self.macros.arity(&name) {
+                    Some(a) => a,
+                    None => {
+                        return self.err(
+                            format!(
+                                "unknown macro `{name}` (macros must be in scope before use)"
+                            ),
+                            span.start,
+                        );
+                    }
+                }
             }
+            _ => unreachable!(),
         };
         let mut items = Vec::with_capacity(arity);
         for _ in 0..arity {
@@ -376,5 +547,65 @@ impl Parser {
             _ => return,
         };
         self.macros.register(format!("{name}-MACRO"), arity);
+    }
+}
+
+#[cfg(test)]
+mod macro_table_tests {
+    use super::*;
+
+    #[test]
+    fn single_foreign_macro_resolves_bare_and_qualified() {
+        let mut t = MacroTable::core();
+        t.register_foreign("dsl", "unless-MACRO".into(), 2);
+        assert_eq!(t.arity("unless-MACRO"), Some(2));
+        assert_eq!(t.arity_qualified("dsl", "unless-MACRO"), Some(2));
+        assert!(t.is_ambiguous("unless-MACRO").is_none());
+    }
+
+    #[test]
+    fn two_imports_same_name_make_bare_ambiguous_qualified_ok() {
+        let mut t = MacroTable::core();
+        t.register_foreign("dsl", "unless-MACRO".into(), 2);
+        t.register_foreign("web", "unless-MACRO".into(), 2);
+        // Bare name now ambiguous, both qualified keys resolve.
+        assert_eq!(t.arity("unless-MACRO"), None);
+        let aliases = t.is_ambiguous("unless-MACRO").expect("ambiguous");
+        assert!(aliases.contains(&"dsl".to_string()));
+        assert!(aliases.contains(&"web".to_string()));
+        assert_eq!(t.arity_qualified("dsl", "unless-MACRO"), Some(2));
+        assert_eq!(t.arity_qualified("web", "unless-MACRO"), Some(2));
+    }
+
+    #[test]
+    fn local_defmacro_collides_with_import() {
+        let mut t = MacroTable::core();
+        t.register_foreign("dsl", "thing-MACRO".into(), 1);
+        // A local DefMacro of the same bare name collides → ambiguous.
+        t.register("thing-MACRO".into(), 1);
+        assert_eq!(t.arity("thing-MACRO"), None);
+        assert!(t.is_ambiguous("thing-MACRO").is_some());
+        // The import's qualified key still resolves.
+        assert_eq!(t.arity_qualified("dsl", "thing-MACRO"), Some(1));
+    }
+
+    #[test]
+    fn same_package_two_aliases_via_repeated_register_is_collision() {
+        // The resolver registers the same package's macros under each alias;
+        // the second alias collides on the bare name.
+        let mut t = MacroTable::core();
+        t.register_foreign("dsl", "identity-MACRO".into(), 1);
+        t.register_foreign("html", "identity-MACRO".into(), 1);
+        assert!(t.is_ambiguous("identity-MACRO").is_some());
+        assert_eq!(t.arity_qualified("html", "identity-MACRO"), Some(1));
+    }
+
+    #[test]
+    fn core_special_forms_unaffected_by_foreign_macros() {
+        let mut t = MacroTable::core();
+        t.register_foreign("dsl", "unless-MACRO".into(), 2);
+        // Core forms stay unambiguous and resolvable by their bare names.
+        assert_eq!(t.arity("if-MACRO"), Some(3));
+        assert!(t.is_ambiguous("if-MACRO").is_none());
     }
 }

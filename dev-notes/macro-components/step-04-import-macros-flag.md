@@ -1,6 +1,6 @@
 # Step 4 — Parse `Import {… macros: true}` and thread the flag through
 
-- [ ] Done
+- [x] Done
 
 > **Read first:** `dev-notes/macro-components.md` and `dev-notes/design.md` §6.3
 > (the `Import {pkg: "acme:html/dsl" macros: true}` line) and §6.1/§6.2 for how
@@ -72,6 +72,51 @@ unchanged.
 
 ## Handoff notes
 
-_(fill in: the final `ImportInfo` shape, every site touched, and whether a
-`macros: true` import currently still flows into WIT synthesis or not — Step 5
-needs to know.)_
+Pure plumbing landed; no behaviour change beyond carrying the flag.
+
+**Final `ImportInfo` shape** (`src/wit.rs:22`):
+
+```rust
+pub struct ImportInfo {
+    pub path: String,    // interface path, version stripped, e.g. `demo:shout/api`
+    pub package: String, // package part, e.g. `demo:shout`
+    pub alias: String,
+    pub macros: bool,    // NEW — `Import {… macros: true}`; default false
+}
+```
+
+**Every site touched:**
+
+- `src/wit.rs:22` — added `pub macros: bool` to `ImportInfo` (with doc comment).
+- `src/wit.rs` `import-MACRO` arm — the record-form `spec` tuple grew a third
+  element; a new match arm `("macros", Node::Bool(b)) => macros = *b` reads the
+  flag. The bare-string import form (`Node::Str`) supplies `false`. The
+  construction site `imports.push(ImportInfo { …, macros })` populates it.
+- `src/wit.rs` `#[cfg(test)] mod tests` — new tests: `import_macros_flag_true`,
+  `import_macros_flag_defaults_false` (record without `macros:`, and explicit
+  `macros: false`), `import_bare_string_form_defaults_false`.
+
+**`ImportInfo` constructors / readers audited:** the struct is constructed in
+exactly one place (`src/wit.rs`, the `import-MACRO` arm). It is only ever
+*field-read* elsewhere — `src/build.rs` touches `.path`, `.package`, `.alias`
+(never destructures the struct), so adding a field required no `build.rs`
+change. No other file constructs or pattern-matches `ImportInfo`.
+
+**Does a `macros: true` import still flow into WIT synthesis? YES — unchanged.**
+`synthesize_info` (`src/wit.rs`) iterates `info.imports` with no reference to the
+`macros` flag, so a `macros: true` import is still emitted into the synthesized
+`world` exactly as before (host `wasi:*` → versioned `import`; sibling → bare
+`import` unless `host_only`). This was the deliberate behaviour-preserving choice
+for this step. **Step 5/6 decision point:** whether a `macros: true` import is a
+*compile-time-only* dependency that should be **excluded** from the runtime world
+(i.e. filtered out of `synthesize_info`'s import loop and/or `has_host_deps` /
+build-graph edges in `src/build.rs`) is left to those steps. Today it is treated
+as an ordinary world import.
+
+**Lexer / syntax-highlighting:** no change needed. `macros: true` is an ordinary
+record field (`Sym` key `:` `Bool` value) — it introduces no new token class, so
+`src/lexer.rs` and the three grammars (Prism / Neovim / VS Code) are unaffected.
+
+**Examples / docs:** no language behaviour changed and no documented example was
+touched (`git status` showed only `src/wit.rs` + this step file), so
+`./scripts/regen-examples.sh` was not required. `cargo test` is green.

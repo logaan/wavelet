@@ -21,13 +21,13 @@ fn scratch(tag: &str) -> PathBuf {
 
 fn fetch_world(src: &str) -> String {
     let (arena, roots) = read_file(src).expect("read");
-    let (arena, roots) = expand::expand_file(arena, &roots).expect("expand");
+    let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expand");
     wit::synthesize_fetch_world(&arena, &roots).expect("synthesize_fetch_world")
 }
 
 fn collect(src: &str) -> wit::FileInfo {
     let (arena, roots) = read_file(src).expect("read");
-    let (arena, roots) = expand::expand_file(arena, &roots).expect("expand");
+    let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expand");
     wit::collect(&arena, &roots).expect("collect")
 }
 
