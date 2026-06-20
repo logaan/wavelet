@@ -1156,6 +1156,355 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// Build the box for a *quoted* form — the compile-time analogue of
+    /// `value::form_to_value` (`value.rs:104`). Used by `Quote` and at the leaves
+    /// of `Quasi`. Unlike `seq_box`/`rec_box`, the children are themselves quoted
+    /// (built as data), never evaluated. A `Sym` becomes a payload-less `TAG_VAR`
+    /// (`Sym → Variant(name, none)`), a `Qsym` the same over `"alias/name"`.
+    fn quote_box(&mut self, fx: &mut FnCtx, id: NodeId) -> Result<(), String> {
+        match self.arena.node(id).clone() {
+            Node::Bool(b) => {
+                let a = if b { self.true_addr } else { self.false_addr };
+                fx.op(I::I32Const(a as i32));
+            }
+            Node::Int(n) => {
+                fx.op(I::I64Const(n));
+                fx.op(I::Call(self.h.box_int));
+            }
+            Node::Dec(d) => {
+                fx.op(I::F64Const(d.into()));
+                fx.op(I::Call(self.h.box_dec));
+            }
+            Node::Str(s) => {
+                let a = self.intern_str(&s);
+                fx.op(I::I32Const(a as i32));
+            }
+            Node::Sym(s) => {
+                let a = self.none_like_box(&s);
+                fx.op(I::I32Const(a as i32));
+            }
+            Node::Qsym(alias, name) => {
+                let a = self.none_like_box(&format!("{alias}/{name}"));
+                fx.op(I::I32Const(a as i32));
+            }
+            Node::Tup(items) => return self.quote_seq(fx, &items, TAG_TUP),
+            Node::Lst(items) => return self.quote_seq(fx, &items, TAG_LIST),
+            Node::Rec(fields) => return self.quote_rec(fx, &fields),
+            Node::Char(_) => {
+                return Err("quoted char values not supported by the wasm backend yet".into());
+            }
+            Node::Flg(_) => {
+                return Err("quoted flag literals not supported by the wasm backend yet".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// `quote_box` analogue of `seq_box`: a `[tag, len, quoted-elem ptrs…]` box
+    /// whose elements are quoted, not evaluated.
+    fn quote_seq(&mut self, fx: &mut FnCtx, items: &[NodeId], tag: i32) -> Result<(), String> {
+        let n = items.len();
+        let p = fx.local(ValType::I32);
+        fx.op(I::I32Const(8 + 4 * n as i32));
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(p));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(tag));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(n as i32));
+        fx.op(I::I32Store(ma(4, 2)));
+        for (i, &item) in items.iter().enumerate() {
+            fx.op(I::LocalGet(p));
+            self.quote_box(fx, item)?;
+            fx.op(I::I32Store(ma(8 + 4 * i as u64, 2)));
+        }
+        fx.op(I::LocalGet(p));
+        Ok(())
+    }
+
+    /// `quote_box` analogue of `rec_box`: a record box whose values are quoted.
+    fn quote_rec(&mut self, fx: &mut FnCtx, fields: &[(String, NodeId)]) -> Result<(), String> {
+        let n = fields.len();
+        let p = fx.local(ValType::I32);
+        fx.op(I::I32Const(8 + 8 * n as i32));
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(p));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(TAG_REC));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(n as i32));
+        fx.op(I::I32Store(ma(4, 2)));
+        for (i, (k, v)) in fields.iter().enumerate() {
+            let kaddr = self.intern_str(k);
+            fx.op(I::LocalGet(p));
+            fx.op(I::I32Const(kaddr as i32));
+            fx.op(I::I32Store(ma(8 + 8 * i as u64, 2)));
+            fx.op(I::LocalGet(p));
+            self.quote_box(fx, *v)?;
+            fx.op(I::I32Store(ma(12 + 8 * i as u64, 2)));
+        }
+        fx.op(I::LocalGet(p));
+        Ok(())
+    }
+
+    /// Compile a `Quasi` template into a box, mirroring `Interp::quasi`
+    /// (`interp.rs:350`) exactly. `depth` counts enclosing `Quasi`s: `Unquote`
+    /// /`Splice` fire at depth 1 (the hole is the compiled expression) and are
+    /// rebuilt as data one level shallower at greater depths; a nested `Quasi`
+    /// recurses at `depth + 1`. Leaves are quoted (`quote_box`).
+    fn quasi_box(&mut self, fx: &mut FnCtx, id: NodeId, depth: u32) -> Result<(), String> {
+        match self.arena.node(id).clone() {
+            Node::Tup(items) => {
+                // The arity-1 special heads read as 2-element tuples
+                // `[head-MACRO, arg]`; everything else is a sequence.
+                if items.len() == 2 {
+                    if let Node::Sym(name) = self.arena.node(items[0]).clone() {
+                        let arg = items[1];
+                        match name.as_str() {
+                            "unquote-MACRO" if depth == 1 => return self.expr(fx, arg, false),
+                            "splice-MACRO" if depth == 1 => {
+                                return Err("Splice must appear inside a sequence".into());
+                            }
+                            "unquote-MACRO" | "splice-MACRO" if depth > 1 => {
+                                return self.quasi_rebuild_head(fx, &name, arg, depth - 1);
+                            }
+                            "quasi-MACRO" => {
+                                return self.quasi_rebuild_head(fx, &name, arg, depth + 1);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                self.quasi_seq(fx, &items, TAG_TUP, depth)
+            }
+            Node::Lst(items) => self.quasi_seq(fx, &items, TAG_LIST, depth),
+            Node::Rec(fields) => {
+                let n = fields.len();
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8 + 8 * n as i32));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_REC));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(n as i32));
+                fx.op(I::I32Store(ma(4, 2)));
+                for (i, (k, v)) in fields.iter().enumerate() {
+                    let kaddr = self.intern_str(k);
+                    fx.op(I::LocalGet(p));
+                    fx.op(I::I32Const(kaddr as i32));
+                    fx.op(I::I32Store(ma(8 + 8 * i as u64, 2)));
+                    fx.op(I::LocalGet(p));
+                    self.quasi_box(fx, *v, depth)?;
+                    fx.op(I::I32Store(ma(12 + 8 * i as u64, 2)));
+                }
+                fx.op(I::LocalGet(p));
+                Ok(())
+            }
+            _ => self.quote_box(fx, id),
+        }
+    }
+
+    /// Rebuild a deeper-level `Unquote`/`Splice`/`Quasi` head as a 2-element
+    /// `TAG_TUP` `[Variant(name, none), <recursed arg>]`, exactly as
+    /// `Interp::quasi` does when `depth != 1`.
+    fn quasi_rebuild_head(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        arg: NodeId,
+        depth: u32,
+    ) -> Result<(), String> {
+        let head = self.none_like_box(name);
+        let p = fx.local(ValType::I32);
+        fx.op(I::I32Const(16));
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(p));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(TAG_TUP));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Store(ma(4, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(head as i32));
+        fx.op(I::I32Store(ma(8, 2)));
+        fx.op(I::LocalGet(p));
+        self.quasi_box(fx, arg, depth)?;
+        fx.op(I::I32Store(ma(12, 2)));
+        fx.op(I::LocalGet(p));
+        Ok(())
+    }
+
+    /// Build a `Quasi` sequence box (`TAG_TUP`/`TAG_LIST`). Mirrors
+    /// `Interp::quasi_seq` (`interp.rs:396`): at `depth == 1` a child
+    /// `(Splice expr)` evaluates to a list whose elements are spliced into the
+    /// surrounding sequence; every other child is built via `quasi_box`. When no
+    /// splice is present the length is static; otherwise it is computed at
+    /// runtime.
+    fn quasi_seq(
+        &mut self,
+        fx: &mut FnCtx,
+        items: &[NodeId],
+        tag: i32,
+        depth: u32,
+    ) -> Result<(), String> {
+        // Classify each child as `(is_splice, expr/item)`. A splice is only
+        // recognised at depth 1, matching the interpreter.
+        let mut segs: Vec<(bool, NodeId)> = Vec::with_capacity(items.len());
+        for &item in items {
+            if depth == 1 {
+                if let Node::Tup(t) = self.arena.node(item).clone() {
+                    if t.len() == 2 {
+                        if let Node::Sym(s) = self.arena.node(t[0]).clone() {
+                            if s == "splice-MACRO" {
+                                segs.push((true, t[1]));
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+            segs.push((false, item));
+        }
+
+        // Static fast path: no splices ⇒ fixed length, like `quote_seq`.
+        if segs.iter().all(|(sp, _)| !sp) {
+            let n = segs.len();
+            let p = fx.local(ValType::I32);
+            fx.op(I::I32Const(8 + 4 * n as i32));
+            fx.op(I::Call(self.h.alloc));
+            fx.op(I::LocalSet(p));
+            fx.op(I::LocalGet(p));
+            fx.op(I::I32Const(tag));
+            fx.op(I::I32Store(ma(0, 2)));
+            fx.op(I::LocalGet(p));
+            fx.op(I::I32Const(n as i32));
+            fx.op(I::I32Store(ma(4, 2)));
+            for (i, (_, item)) in segs.iter().enumerate() {
+                fx.op(I::LocalGet(p));
+                self.quasi_box(fx, *item, depth)?;
+                fx.op(I::I32Store(ma(8 + 4 * i as u64, 2)));
+            }
+            fx.op(I::LocalGet(p));
+            return Ok(());
+        }
+
+        // Dynamic path: evaluate each segment into a local, summing the total
+        // element count (1 per ordinary child, the list length per splice).
+        let total = fx.local(ValType::I32);
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(total));
+        let mut seg_locals: Vec<(bool, u32)> = Vec::with_capacity(segs.len());
+        for (is_splice, node) in &segs {
+            let l = fx.local(ValType::I32);
+            if *is_splice {
+                self.expr(fx, *node, false)?;
+                fx.op(I::LocalSet(l));
+                // Splice expects a list (`interp.rs:411`); trap otherwise.
+                fx.op(I::LocalGet(l));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(total));
+                fx.op(I::LocalGet(l));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(total));
+            } else {
+                self.quasi_box(fx, *node, depth)?;
+                fx.op(I::LocalSet(l));
+                fx.op(I::LocalGet(total));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(total));
+            }
+            seg_locals.push((*is_splice, l));
+        }
+
+        // Allocate the final box (`8 + 4*total` bytes) and fill it, copying each
+        // splice's elements element-by-element.
+        let p = fx.local(ValType::I32);
+        fx.op(I::LocalGet(total));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(p));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(tag));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::LocalGet(total));
+        fx.op(I::I32Store(ma(4, 2)));
+        let w = fx.local(ValType::I32);
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(w));
+        for (is_splice, l) in seg_locals {
+            if is_splice {
+                let i = fx.local(ValType::I32);
+                let len = fx.local(ValType::I32);
+                fx.op(I::LocalGet(l));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(len));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(len));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                // dst = p + 8 + 4*w
+                fx.op(I::LocalGet(p));
+                fx.op(I::LocalGet(w));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                // src value = load [l + 8 + 4*i]
+                fx.op(I::LocalGet(l));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(8, 2)));
+                fx.op(I::I32Store(ma(8, 2)));
+                fx.op(I::LocalGet(w));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(w));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+            } else {
+                fx.op(I::LocalGet(p));
+                fx.op(I::LocalGet(w));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(l));
+                fx.op(I::I32Store(ma(8, 2)));
+                fx.op(I::LocalGet(w));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(w));
+            }
+        }
+        fx.op(I::LocalGet(p));
+        Ok(())
+    }
+
     /// Address of a static payload-less variant box `[TAG_VAR, case, 0]`
     /// (e.g. `none`); interned once per case name.
     fn none_like_box(&mut self, case: &str) -> u32 {
@@ -1389,7 +1738,19 @@ impl<'a> Emitter<'a> {
                 }
                 "match-MACRO" => self.match_form(fx, args, tail),
                 "fn-MACRO" => self.fn_form(fx, args),
-                "quote-MACRO" | "quasi-MACRO" | "def-MACRO" | "defmacro-MACRO" => {
+                "quote-MACRO" => {
+                    let [form] = args else {
+                        return Err("malformed Quote".into());
+                    };
+                    self.quote_box(fx, *form)
+                }
+                "quasi-MACRO" => {
+                    let [form] = args else {
+                        return Err("malformed Quasi".into());
+                    };
+                    self.quasi_box(fx, *form, 1)
+                }
+                "def-MACRO" | "defmacro-MACRO" => {
                     Err(format!("`{name}` not supported by the wasm backend yet"))
                 }
                 _ if fx.lookup(&name).is_some() => self.closure_call(fx, head, args, tail),
