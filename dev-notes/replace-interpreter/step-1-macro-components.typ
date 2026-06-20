@@ -1,7 +1,7 @@
-// step-2-macro-components.typ — compile macros to components; no interpreting.
-// Render: `typst compile dev-notes/replace-interpreter/step-2-macro-components.typ`
+// step-1-macro-components.typ — compile macros to components; no interpreting.
+// Render: `typst compile dev-notes/replace-interpreter/step-1-macro-components.typ`
 
-#set document(title: "Step 2 — Compiled macro components", author: "Claude (Opus 4.8)")
+#set document(title: "Step 1 — Compiled macro components", author: "Claude (Opus 4.8)")
 #set page(paper: "a4", margin: (x: 2.1cm, y: 2.0cm), numbering: "1")
 #set par(justify: true, leading: 0.62em)
 #set text(size: 10pt)
@@ -20,7 +20,7 @@
   above: 0.8em, below: 0.8em, body)
 
 #block(fill: luma(96%), width: 100%, inset: 12pt, radius: 5pt, [
-  #text(size: 16pt, weight: "bold")[Step 2 — Compile macro definitions into macro components]
+  #text(size: 16pt, weight: "bold")[Step 1 — Compile macro definitions into macro components]
   #v(2pt)
   #text(size: 9pt, fill: luma(35%))[No interpreting at expand time. Strategy A (embed interpreter) → strategy B (compile the body). See `index.typ`.]
 ])
@@ -131,7 +131,7 @@ form machinery the bodies use.
 #risk[*Build-time cost.* Compiling + instantiating a `wasmtime` component to expand
   local macros is far heavier than in-process interpretation. Cache per file/package
   (the foreign resolver already caches per package, #at("macrodep.rs:82")); skip
-  entirely for macro-free files. This cost lands hardest in the REPL — see Step 3.]
+  entirely for macro-free files. This cost lands hardest in the REPL — see Step 2.]
 
 #risk[*`gensym` hygiene.* Counter scoping must stay deterministic and collision-free
   across separately compiled macro invocations within one build.]
