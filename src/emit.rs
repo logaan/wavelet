@@ -3079,6 +3079,122 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// `form-kind`: a string box naming the form's kind by box tag (mirrors
+    /// `builtins.rs:391`). A payloaded `TAG_VAR` is a quoted call ("call"), a
+    /// payload-less one a symbol ("sym"). A non-form (e.g. a closure) traps,
+    /// matching the interpreter's `form-kind expects a form` error.
+    fn form_kind(&mut self, fx: &mut FnCtx, arg: NodeId) -> Result<(), String> {
+        let v = fx.local(ValType::I32);
+        self.expr(fx, arg, false)?;
+        fx.op(I::LocalSet(v));
+        let t = fx.local(ValType::I32);
+        fx.op(I::LocalGet(v));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::LocalSet(t));
+        let r = fx.local(ValType::I32);
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(r));
+        for (tag, kind) in [
+            (TAG_BOOL, "bool"),
+            (TAG_INT, "int"),
+            (TAG_STR, "str"),
+            (TAG_LIST, "lst"),
+            (TAG_DEC, "dec"),
+            (TAG_REC, "rec"),
+            (TAG_TUP, "tup"),
+        ] {
+            let s = self.intern_str(kind) as i32;
+            fx.op(I::LocalGet(t));
+            fx.op(I::I32Const(tag));
+            fx.op(I::I32Eq);
+            fx.op(I::If(BlockType::Empty));
+            fx.op(I::I32Const(s));
+            fx.op(I::LocalSet(r));
+            fx.op(I::End);
+        }
+        let sym = self.intern_str("sym") as i32;
+        let call = self.intern_str("call") as i32;
+        fx.op(I::LocalGet(t));
+        fx.op(I::I32Const(TAG_VAR));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(v));
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(call));
+        fx.op(I::LocalSet(r));
+        fx.op(I::Else);
+        fx.op(I::I32Const(sym));
+        fx.op(I::LocalSet(r));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::LocalGet(r));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(r));
+        Ok(())
+    }
+
+    /// Trap unless `rp` holds a non-empty record box, matching the
+    /// interpreter's `rec-key`/`rec-val` "expects a non-empty record" error.
+    fn rec_guard(&mut self, fx: &mut FnCtx, rp: u32) {
+        fx.op(I::LocalGet(rp));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_REC));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(rp));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+    }
+
+    /// `gensym`: a fresh payload-less variant `g{n}-gen`, `n` from the
+    /// per-instance i64 counter global (mirrors `builtins.rs:360`).
+    /// Deterministic and collision-free across every expansion in one
+    /// component instance.
+    fn gensym(&mut self, fx: &mut FnCtx) -> Result<(), String> {
+        let g = 1 + self.info.value_defs.len() as u32;
+        let n = fx.local(ValType::I64);
+        fx.op(I::GlobalGet(g));
+        fx.op(I::LocalTee(n));
+        fx.op(I::I64Const(1));
+        fx.op(I::I64Add);
+        fx.op(I::GlobalSet(g));
+        let gpfx = self.intern_str("g") as i32;
+        let gsfx = self.intern_str("-gen") as i32;
+        fx.op(I::I32Const(gpfx));
+        fx.op(I::LocalGet(n));
+        fx.op(I::Call(self.h.box_int));
+        fx.op(I::Call(self.h.to_str));
+        fx.op(I::Call(self.h.strcat2));
+        fx.op(I::I32Const(gsfx));
+        fx.op(I::Call(self.h.strcat2));
+        let casebox = fx.local(ValType::I32);
+        fx.op(I::LocalSet(casebox));
+        let p = fx.local(ValType::I32);
+        fx.op(I::I32Const(12));
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(p));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(TAG_VAR));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::LocalGet(casebox));
+        fx.op(I::I32Store(ma(4, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::I32Const(0));
+        fx.op(I::I32Store(ma(8, 2)));
+        fx.op(I::LocalGet(p));
+        Ok(())
+    }
+
     fn builtin(&mut self, fx: &mut FnCtx, name: &str, args: &[NodeId]) -> Result<(), String> {
         let items = args;
         let nargs = |want: usize| -> Result<(), String> {
@@ -3189,6 +3305,56 @@ impl<'a> Emitter<'a> {
                 // the interpreter binds it
                 return self.var_box(fx, name, args);
             }
+            "form-kind" => {
+                nargs(1)?;
+                return self.form_kind(fx, items[0]);
+            }
+            "rec-key" => {
+                // First field's key as a payload-less variant: build
+                // `[TAG_VAR, key-str-box, 0]` over the key box at rec offset 8.
+                nargs(1)?;
+                let rp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(rp));
+                self.rec_guard(fx, rp);
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(12));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_VAR));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::LocalGet(rp));
+                fx.op(I::I32Load(ma(8, 2)));
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(0));
+                fx.op(I::I32Store(ma(8, 2)));
+                fx.op(I::LocalGet(p));
+            }
+            "rec-val" => {
+                // First field's value box, at rec offset 12.
+                nargs(1)?;
+                let rp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(rp));
+                self.rec_guard(fx, rp);
+                fx.op(I::LocalGet(rp));
+                fx.op(I::I32Load(ma(12, 2)));
+            }
+            "gensym" => {
+                nargs(0)?;
+                return self.gensym(fx);
+            }
+            "expand" => {
+                return Err(
+                    "`expand` inside a compiled macro body is not supported yet \
+                     (the wasm backend cannot recurse into the expander); \
+                     restructure the macro to avoid it"
+                        .into(),
+                );
+            }
             other => return Err(format!("builtin `{other}` not supported by the wasm backend yet")),
         }
         Ok(())
@@ -3199,6 +3365,8 @@ const BUILTINS: &[&str] = &[
     "eq", "not", "lt", "le", "gt", "ge", "add", "sub", "mul", "div", "rem", "neg", "len",
     "head", "tail", "str-cat", "upper", "lower", "to-string",
     "some", "ok", "err",
+    // compile-time form machinery (macro bodies)
+    "form-kind", "rec-key", "rec-val", "gensym", "expand",
 ];
 
 // --------------------------------------------------------- helper bodies
@@ -3550,6 +3718,14 @@ fn emit_core_module(
             &ConstExpr::i32_const(0),
         );
     }
+    // The `gensym` counter (always present): an i64 incremented once per
+    // `gensym` call, so fresh symbols are unique and deterministic across every
+    // expansion in one component instance. Index = 1 + value_defs.len() (global
+    // 0 is the heap pointer, then one i32 per value def).
+    gs.global(
+        GlobalType { val_type: ValType::I64, mutable: true, shared: false },
+        &ConstExpr::i64_const(0),
+    );
     module.section(&gs);
 
     let mut es = ExportSection::new();
