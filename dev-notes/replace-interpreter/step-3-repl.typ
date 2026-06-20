@@ -22,14 +22,16 @@
 #block(fill: luma(96%), width: 100%, inset: 12pt, radius: 5pt, [
   #text(size: 16pt, weight: "bold")[Step 3 — Replace the interpreter with the compiler in the REPL]
   #v(2pt)
-  #text(size: 9pt, fill: luma(35%))[Depends on F1 (parity), F2 (value reader), F4 (diff tests), and Step 2 (compiled macros). See `index.typ`.]
+  #text(size: 9pt, fill: luma(35%))[Depends on F1 (core + default stdlib), F2 (value reader), F4 (diff tests), F5 (diagnostics), and Step 2 (compiled macros). See `index.typ`.]
 ])
 
 = 1 · Goal
 
 `wavelet repl` evaluates each entry by *compiling* the running program and executing
 it, with no `Interp`. After this step (plus Steps 1–2 and the `run` rider),
-`interp.rs`/`builtins.rs`'s eval role has no callers and can be deleted.
+`interp.rs`/`builtins.rs`'s eval role has no *production* callers — it is retired
+from the execution path but *kept in the tree* as the differential-testing oracle
+(`CLAUDE.md`). It is not deleted.
 
 = 2 · Current state
 
@@ -88,17 +90,24 @@ result type, which inference cannot always supply for an arbitrary expression.
   compiled into the program's macro set on each recompile (Step 2). Verify a macro
   defined on one line expands on a later line.]
 
-#task[*Error mapping.* Surface `emit`/`wit` compile errors verbatim (they are already
-  actionable `Result<_, String>`). Map runtime traps to a message; where the backend
-  can, emit distinguishable trap codes (div-by-zero, type mismatch) for better text.]
+#task[*F5 — Error mapping.* Surface `emit`/`wit` compile errors verbatim (they are
+  already actionable `Result<_, String>`). For runtime traps, emit *distinguishable
+  trap codes per failure class* (div-by-zero, type mismatch, out-of-bounds) and
+  resolve them through a *form→source-span table* so the REPL prints source
+  context comparable to the interpreter's `eval error: …`. Share the trap-code
+  scheme and span table with Step 1's mapping (F5).]
 
 #task[*`wavelet run` rider.* Re-point `runner.rs` (#at("runner.rs")) at `build` +
   the core-module/component runner so the interpreter loses its last non-REPL caller.
   Multi-file import resolution already exists in `build`; reuse it.]
 
-#task[*Delete the interpreter.* Once playground (Step 1), macros (Step 2), REPL, and
-  `run` no longer call it, remove `Interp`'s eval surface and the eval-only parts of
-  `builtins.rs`/`value.rs`. Keep `form`/`reader`/`printer`. Update `lib.rs` exports.]
+#task[*Retire the interpreter from the execution path — but keep it as the oracle.*
+  Once playground (Step 1), macros (Step 2), REPL, and `run` no longer call it,
+  remove `Interp` from every *production* code path and update `lib.rs` exports so
+  nothing user-facing reaches it. *Do not delete `interp.rs`/`builtins.rs`/
+  `value.rs`.* They remain compiled and exercised by the F4 differential harness,
+  which is the whole point of keeping the interpreter. Confirm the only remaining
+  callers are tests.]
 
 = 5 · Risks
 
@@ -107,10 +116,12 @@ result type, which inference cannot always supply for an arbitrary expression.
   caching the compiled definition prefix. Note that Step 2's macro compilation adds a
   `wasmtime` instantiate per line that defines/uses macros.]
 
-#risk[*Error fidelity.* Compile-time errors stay good (`emit` returns readable
+#risk[*Error fidelity (F5).* Compile-time errors stay good (`emit` returns readable
   strings), but a runtime *trap* (e.g. `div(1 0)`, a type mismatch) is far less
-  informative than the interpreter's `eval error: …`. The REPL UX regresses on
-  runtime errors unless trap codes are mapped (Task 7).]
+  informative than the interpreter's `eval error: …`. Closing this is planned work
+  (F5), not a hope: map distinguishable trap codes per failure class through a
+  form→source-span table so the REPL prints source context, sharing the scheme
+  with Step 1. The REPL UX regresses on runtime errors until that lands.]
 
 #risk[*Inference for bare expressions.* Returning a box pointer avoids needing the
   result's WIT type — but if any intermediate needs a synthesized signature and
@@ -126,5 +137,7 @@ result type, which inference cannot always supply for an arbitrary expression.
 - `repl.rs` and `runner.rs` contain no `Interp` use; `cargo test` green.
 - A scripted REPL session (Defs, a DefMacro defined then used, expressions, an error
   line) produces output matching today's interpreter REPL, modulo the documented
-  state-model and error-text differences (F4 covers the value equality).
-- `interp.rs` eval surface is deleted with no remaining callers.
+  state-model difference; F4 covers value equality and F5 keeps error text at
+  interpreter quality (source-context messages, not bare traps).
+- `interp.rs`'s eval surface has no *production* callers; it is *retained* and
+  exercised only by the F4 differential harness (the oracle), not deleted.

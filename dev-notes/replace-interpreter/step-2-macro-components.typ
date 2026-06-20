@@ -112,9 +112,11 @@ form machinery the bodies use.
   machinery. Initially *reject* it inside compiled macros (rare; the shipped examples
   don't use it) or route it back to the host expander. Document the limitation.]
 
-#task[*F4 differential tests for macros.* Expand a corpus of macros through both the
-  interpreter and the compiled component; assert identical output forms (the existing
-  foreign-macro tests in `lib.rs` are the seed).]
+#task[*F4 differential tests for macros (permanent).* Expand a corpus of macros
+  through both the interpreter and the compiled component; assert identical output
+  forms (the existing foreign-macro tests in `lib.rs` are the seed). The
+  interpreter's `expand_once`/`quasi` stay in the tree as the oracle for this
+  comparison even after `expand.rs` stops calling them in production.]
 
 = 5 · Risks
 
@@ -136,8 +138,10 @@ form machinery the bodies use.
 
 = 6 · Exit criteria
 
-- `expand.rs` contains no `Interp`/`expand_once` call; the macro guest links no
-  interpreter (`macrolib`'s eval role is gone).
+- `expand.rs` contains no `Interp`/`expand_once` call in production, and the macro
+  *guest* links no interpreter (`macrolib`'s eval role is gone). `interp.rs`'s
+  `expand_once`/`quasi` remain in the tree as the F4 oracle — retired from the
+  expand path, not deleted.
 - Local and foreign macros expand identically to the interpreter across the macro
   corpus (F4), including the `try-let` and nested-quasi cases.
 - `cargo test` green; macro-free builds incur no macro-component cost.

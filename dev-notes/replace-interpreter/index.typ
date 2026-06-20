@@ -26,9 +26,13 @@
   ]
 ])
 
-*Objective.* Make the wasm compiler the single execution engine and retire the
-tree-walking interpreter (`interp.rs`, `builtins.rs`, plus `value.rs`'s eval role)
-from the three surfaces it currently powers:
+*Objective.* Make the wasm compiler the single *execution engine* for every
+user-facing surface, so the tree-walking interpreter no longer *runs user
+programs* in production. The interpreter is *not* deleted. It is retained as the
+differential-testing oracle (`CLAUDE.md`) — the reference the compiler is
+validated against — and the differential harness stays for the life of the
+project. "Replace the interpreter" therefore means *replace it as an execution
+path*, not remove it from the tree. The surfaces to move off the interpreter:
 
 #table(
   columns: (auto, 1fr, auto),
@@ -44,8 +48,9 @@ from the three surfaces it currently powers:
   *Scope note.* `wavelet run` (#at("runner.rs")) is the interpreter's fourth caller.
   It is *out of the three requested steps* but shares Step 3's machinery (synthesize
   an entry, compile, run via `wasmtime`). Fold it into Step 3 or drop it for
-  `build` + `wasmtime`. Either way the interpreter cannot be deleted until `run`
-  is addressed too — track it as a Step 3 rider.
+  `build` + `wasmtime`. Either way the interpreter cannot be retired as an
+  *execution path* until `run` is addressed too — it survives as the oracle
+  regardless. Track it as a Step 3 rider.
 ]
 
 = 1 · The three steps
@@ -76,60 +81,112 @@ start a step before its foundations are in place.
   columns: (auto, 1fr, auto),
   inset: 6pt, stroke: 0.4pt + luma(80%),
   [*ID*], [*Foundation*], [*Needed by*],
-  [F1], [*Backend parity.* The interpreter supports far more than the backend:
+  [F1], [*Core vs. standard library — not "backend special-cases".* The
+    interpreter exposes far more than the backend:
     `map/filter/fold/min/max/abs/range/zip/split/join/contains/apply/cell-*` and
     the `to-*` conversions are absent from the backend's `BUILTINS` (#at("emit.rs:2837")),
-    and `add/lt/...` are int-only (no `f64`/`char`). The playground runs the
-    *docs corpus*, so every example's surface must compile, or the corpus shrinks.],
+    and `add/lt/...` are int-only (no `f64`/`char`). *The compiler must not grow a
+    special case for each.* Split the surface in two: a *small core* the backend
+    implements directly (arithmetic over `int`/`f64`/`char`, comparisons, the box
+    constructors, the irreducible string/list primitives) and a *standard library
+    written in Wavelet itself* (`map`/`filter`/`fold`/`range`/`zip`/… — everything
+    expressible over the core) that compiles like any other program. The stdlib is
+    *imported by default* into every file, with a *per-file opt-out*. Rule of
+    thumb: if it can be written in Wavelet over the core primitives, it lives in
+    the stdlib, not in `emit.rs`. The playground runs the *docs corpus*, so the
+    corpus must compile against *core + default stdlib*, or the corpus shrinks.
+    Open decision: whether the oracle interpreter also loads the stdlib or keeps
+    its native builtins (default: keep native; the differential harness then
+    cross-checks compiled-stdlib `map` against interpreter-native `map`).],
     [1, 3],
   [F2], [*Value marshalling + printing.* A reader that walks a result box in linear
     memory (tags at #at("emit.rs:44-54")) and renders it like `print_value` (#at("value.rs:168")).
     Needed in JS for Step 1 and natively for Step 3.],
     [1, 3],
   [F3], [*Compile `emit`+`wit` for `wasm32`.* Both are `cfg(not(wasm32))` today
-    (#at("lib.rs:16-42")). Gate `emit`/`wit` behind a `playground-compiler` feature that
-    builds for `wasm32`; keep `build`/`host`/`tools`/`runner`/`macros*` native-only.],
+    (#at("lib.rs:16-42")) because they pull native-only crates, so the compiler
+    cannot yet run *inside* the browser. Gate `emit`/`wit` behind a
+    `playground-compiler` feature that builds for `wasm32`; keep
+    `build`/`host`/`tools`/`runner`/`macros*` native-only. *Only Step 1 needs
+    this* — it is the prerequisite that puts the compiler in the browser.],
     [1],
-  [F4], [*Differential test harness.* Run every example through the interpreter
-    *and* the compiled artifact and assert equality. This is the oracle you are
-    deleting — replace it before, not after, so regressions surface in CI.],
+  [F4], [*Differential test harness — the oracle, kept permanently.* Run every
+    example through the interpreter *and* the compiled artifact and assert
+    equality. This is *not* being deleted: the interpreter is retained precisely
+    so this comparison keeps running. Land it *before* backend changes begin, so
+    every later change is checked against the interpreter, and keep it for the
+    life of the project.],
     [1, 2, 3],
+  [F5], [*Diagnostic quality — keep errors as good as the interpreter's.* The
+    interpreter returns rich `eval error: …` messages with source context; a raw
+    compiled run yields a `wasm trap`/`unreachable` with none. To avoid a UX
+    regression the compiled path must map failures back to source: emit
+    *distinguishable trap codes per failure class* (div-by-zero, type mismatch,
+    out-of-bounds), carry a *form→source-span table* so a trap points at the
+    offending form, and keep compile errors as actionable `Result<_, String>`
+    strings (they already are). F4 can then assert the error *class*, not only the
+    value. Treat this as first-class work, not a post-hoc mitigation.],
+    [1, 3],
 )
 
 = 3 · Dependency order
 
 #block(inset: (left: 0.5em), [
-  `F1 parity` ──┬──▶ `F2 value reader` ──┬──▶ *Step 1* (also needs `F3`) \
-  #h(7.2em) └──▶ *Step 2* (quote/quasi codegen) ──▶ *Step 3* (also needs `F2`, `F4`) \
-  `F4 differential tests` ──▶ guards every step
+  `F1 core+stdlib` ──┬──▶ `F2 value reader` ──┬──▶ `F3 emit@wasm32` ──▶ *Step 1* \
+  #h(8.6em) └──▶ *Step 2* (quote/quasi codegen) ──▶ *Step 3* (also needs `F2`, `F4`) \
+  `F4 differential tests` ──▶ guards every step (permanent) \
+  `F5 diagnostics` ──▶ guards every error-facing surface (Steps 1, 3)
 ])
 
-Recommended sequence: *F4 → F1 → F2 → Step 2 → Step 1 → Step 3*. F4 first so every
-later change is checked against the interpreter while it still exists. F1/F2 next
+Recommended sequence: *F4 → F1 → F2 → Step 2 → F3 → Step 1 → Step 3*. F4 first so
+every later change is checked against the interpreter (which stays). F1/F2 next
 because both consuming steps need them. Step 2 before Step 1/3 because compiled
-macros are required for the playground and REPL to drop the interpreter entirely
-(a snippet or REPL line may define and use a macro).
+macros are required for the playground and REPL to drop the interpreter from the
+execution path entirely (a snippet or REPL line may define and use a macro). *F3
+sits immediately before Step 1* — it is the Step-1-only prerequisite that compiles
+the compiler for `wasm32`. *F5 runs alongside Steps 1 and 3*, wherever errors reach
+a human; do not treat it as cleanup.
 
 = 4 · Risk register (the load-bearing tradeoffs)
 
-#risk[*Parity is the whole game.* The backend is a strict subset of the interpreter.
-  Until F1 closes, "replace the interpreter" silently means "support fewer
-  programs." Budget the bulk of the effort here, not in the plumbing.]
+#risk[*Coverage is the whole game.* The backend is a strict subset of the
+  interpreter. Until F1 closes, "replace the interpreter" silently means "support
+  fewer programs." Budget the bulk of the effort here, not in the plumbing — but
+  spend it building the *standard library* (in Wavelet) over a small core, not on
+  per-builtin special cases in `emit.rs`.]
 
-#risk[*You are removing your correctness oracle.* Today the interpreter is the
-  reference the backend is validated against (`CLAUDE.md`). The `emit_*` tests only
-  assert the module *encodes* (`bytes.starts_with(b"\0asm")`), never that it
-  *runs* or *agrees*. Land F4 first or the safety net is gone exactly when the
-  backend is changing most.]
+#risk[*Drawing the core/stdlib line.* Some surface is genuinely irreducible and
+  must be core (arithmetic, comparisons, the box constructors, base string/list
+  ops); the rest should be stdlib. Misclassify downward and `emit.rs` bloats with
+  special cases; misclassify upward and the stdlib can't be expressed. Settle the
+  boundary explicitly in F1, and decide whether the oracle interpreter consumes
+  the same stdlib or keeps native builtins (it stays the oracle either way).]
 
-#risk[*Playground footprint.* Shipping `wit-component`/`wit-parser` to `wasm32`
-  inflates the playground bundle and may not build cleanly. Mitigation: run the
-  *core module* directly in-browser and skip componentization for import-free
-  snippets (see Step 1) — `emit_core_module` needs only `wasm-encoder`.]
+#risk[*Keep the correctness oracle wired up.* The interpreter is *retained* as the
+  reference the backend is validated against (`CLAUDE.md`); it is not being
+  removed. The hazard is *changing the backend before the comparison is
+  automated*: the `emit_*` tests only assert the module *encodes*
+  (`bytes.starts_with(b"\0asm")`), never that it *runs* or *agrees*. Land F4
+  first, and keep it running, or the safety net is absent exactly when the backend
+  is changing most.]
 
-#risk[*REPL error fidelity.* The interpreter returns rich `eval error: …` strings;
-  a compiled run yields a `wasm trap`/`unreachable` with no source context. The
-  REPL UX regresses on errors unless mapped back (Step 3).]
+#risk[*Playground footprint.* To produce a *component* the compiler needs
+  `wit-component`/`wit-parser`; those are large crates. Compiling them to `wasm32`
+  and shipping them in the playground (a) bloats the `.wasm` bundle every visitor
+  downloads and (b) may not even build for `wasm32-unknown-unknown` (they can
+  reach for native facilities) — which would sink the in-browser-compiler approach
+  if Step 1 depended on them. Mitigation: the playground doesn't need a component,
+  only a runnable result, so instantiate the *core module* directly with
+  `WebAssembly.instantiate` and skip componentization for import-free snippets
+  (see Step 1) — `emit_core_module` needs only `wasm-encoder` (pure Rust, small,
+  near-certain to build). Keep the `jco` component path as a deferred, heavier
+  option.]
+
+#risk[*Error fidelity is a planned workstream, not a hope (F5).* The interpreter
+  returns rich `eval error: …` strings; a raw compiled run yields a `wasm
+  trap`/`unreachable` with no source context. The playground and REPL UX regress
+  on errors unless failures are mapped back to source via F5 (trap codes per
+  failure class + a form→span table). Steps 1 and 3 carry the concrete tasks.]
 
 #risk[*Macro `expand`/quasi at compile time.* Strategy B requires codegen for
   `Quote`/`Quasi` and the `expand` builtin (which is itself recursive expansion).

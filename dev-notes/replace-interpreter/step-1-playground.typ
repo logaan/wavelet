@@ -22,7 +22,7 @@
 #block(fill: luma(96%), width: 100%, inset: 12pt, radius: 5pt, [
   #text(size: 16pt, weight: "bold")[Step 1 — Compile the compiler to wasm, run it in the playground]
   #v(2pt)
-  #text(size: 9pt, fill: luma(35%))[Depends on foundations F1 (parity), F2 (value reader), F3 (emit\@wasm32). See `index.typ`.]
+  #text(size: 9pt, fill: luma(35%))[Depends on foundations F1 (core + default stdlib), F2 (value reader), F3 (emit\@wasm32), F5 (diagnostics). See `index.typ`.]
 ])
 
 = 1 · Goal
@@ -100,14 +100,22 @@ returns its *box pointer*. JS then walks the box (F2) to reproduce `EvalOutcome.
   Docusaurus `<Playground>` is unchanged. Map compile errors and traps to
   `ok: false` + `error`.]
 
-#task[*Trap → message mapping.* A backend `Unreachable` (e.g. a type mismatch) is an
-  opaque trap. Catch it and emit an actionable `error` string; where feasible, have
-  the backend emit a distinguishable trap/return-code per failure class.]
+#task[*F5 — Trap → message mapping.* A backend `Unreachable` (e.g. a type mismatch)
+  is an opaque trap. Catch it and emit an actionable `error` string; have the
+  backend emit a *distinguishable trap/return-code per failure class*
+  (div-by-zero, type mismatch, out-of-bounds) and carry a *form→source-span table*
+  so the message points at the offending form, matching the interpreter's
+  `eval error: …` quality rather than a bare "wasm trap". This is the Step-1 half
+  of F5; share the trap-code scheme and span table with Step 3.]
 
-#task[*F1 parity gate (see index).* Audit every `docs/examples.json` entry for
-  builtins/features the backend lacks (`map`/`fold`/float math/`char`/…). Each gap is
-  either backend work or an example rewrite. The playground cannot ship until the
-  corpus compiles. *This is the bulk of Step 1.*]
+#task[*F1 — corpus compiles against core + default stdlib (see index).* Audit every
+  `docs/examples.json` entry for surface the backend lacks
+  (`map`/`fold`/float math/`char`/…). For each gap decide *core vs. stdlib*:
+  irreducible primitives (float/char arithmetic, comparisons) are backend work;
+  everything expressible in Wavelet (`map`/`filter`/`fold`/`range`/…) goes into the
+  *default-imported standard library*, compiled like any other code — *not* a
+  special case in `emit.rs`. The playground cannot ship until the corpus compiles
+  against core + the default stdlib. *This is the bulk of Step 1.*]
 
 #task[*Wire F4 differential tests.* Extend `tests/examples.rs` to run each example
   through `eval_snippet` *and* the compiled core module, asserting equal
@@ -119,9 +127,10 @@ returns its *box pointer*. JS then walks the box (F2) to reproduce `EvalOutcome.
   core-module path; confirm early (Task 2) so the architecture choice is settled
   before downstream work.]
 
-#risk[*Parity gap.* The corpus exercises interpreter-only builtins and float/char.
-  Until F1 lands, swapping the playground regresses it. Do not swap before the
-  corpus is green under the compiled path.]
+#risk[*Coverage gap.* The corpus exercises interpreter-only functions and
+  float/char. Until F1 lands (small core + default-imported stdlib), swapping the
+  playground regresses it. Do not swap before the corpus is green under the
+  compiled path — and close the gap with stdlib code, not `emit.rs` special cases.]
 
 #risk[*JS marshalling drift.* The JS value reader (F2) duplicates `print_value`; they
   can diverge. The golden test (Task 4) and F4 differential tests are the guard.]
