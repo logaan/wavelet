@@ -97,6 +97,17 @@ fn gensym_agrees() {
 }
 
 #[test]
+fn char_forms_agree() {
+    // A char arrives as an argument (lifted from a wire `char-val`), is unquoted,
+    // and a char literal is quoted — all must round-trip as chars, not ints.
+    assert_agree(
+        "Package \"demo:m@0.1.0\"\n\
+         DefMacro chars {x} Quasi [Unquote(x) 'z']\n\
+         Chars 'a'\n",
+    );
+}
+
+#[test]
 fn try_let_from_spec_agrees() {
     // §7.2 try-let: exercises rec-key/rec-val, a Let in the macro body, and a
     // quasi Match with nested unquotes.

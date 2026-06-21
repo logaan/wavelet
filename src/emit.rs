@@ -53,6 +53,7 @@ const TAG_REC: i32 = 6; // n-fields i32 @4, then (key str box, value box) pairs 
 const TAG_VAR: i32 = 7; // case-name str box @4, payload box (0 if none) @8
 const TAG_TUP: i32 = 8; // n i32 @4, then element boxes @8+4i (list layout, distinct tag)
 const TAG_FLG: i32 = 9; // a flags *form* (Node::Flg): n i32 @4, name str boxes @8+4i
+const TAG_CHAR: i32 = 10; // a char value/form: i64 Unicode scalar @8 (TAG_INT layout)
 
 fn ma(offset: u64, align: u32) -> MemArg {
     MemArg { offset, align, memory_index: 0 }
@@ -1128,7 +1129,10 @@ impl<'a> Emitter<'a> {
                 let a = self.intern_str(&s);
                 fx.op(I::I32Const(a as i32));
             }
-            Node::Char(_) => return Err("char values not supported by the wasm backend yet".into()),
+            Node::Char(c) => {
+                fx.op(I::I64Const(c as u32 as i64));
+                self.box_char(fx);
+            }
             Node::Sym(name) => match fx.lookup(&name) {
                 Some(idx) => fx.op(I::LocalGet(idx)),
                 None => return self.value_def_ref(fx, &name),
@@ -1313,8 +1317,9 @@ impl<'a> Emitter<'a> {
             Node::Lst(items) => return self.quote_seq(fx, &items, TAG_LIST),
             Node::Rec(fields) => return self.quote_rec(fx, &fields),
             Node::Flg(names) => return Ok(self.flg_box(fx, &names)),
-            Node::Char(_) => {
-                return Err("quoted char values not supported by the wasm backend yet".into());
+            Node::Char(c) => {
+                fx.op(I::I64Const(c as u32 as i64));
+                self.box_char(fx);
             }
         }
         Ok(())
@@ -1340,6 +1345,24 @@ impl<'a> Emitter<'a> {
             fx.op(I::I32Const(kaddr as i32));
             fx.op(I::I32Store(ma(8 + 4 * i as u64, 2)));
         }
+        fx.op(I::LocalGet(p));
+    }
+
+    /// Stack `[i64 codepoint]` → `[char box]`: a `[TAG_CHAR, _, i64 @8]` box
+    /// (the `TAG_INT` layout under a distinct tag, so `form-kind` and the wire
+    /// `char-val` node stay distinct from plain ints).
+    fn box_char(&mut self, fx: &mut FnCtx) {
+        let cp = fx.local(ValType::I64);
+        fx.op(I::LocalSet(cp));
+        let p = fx.local(ValType::I32);
+        fx.op(I::I32Const(16));
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalTee(p));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(p));
+        fx.op(I::LocalGet(cp));
+        fx.op(I::I64Store(ma(8, 3)));
         fx.op(I::LocalGet(p));
     }
 
@@ -3246,6 +3269,7 @@ impl<'a> Emitter<'a> {
             (TAG_REC, "rec"),
             (TAG_TUP, "tup"),
             (TAG_FLG, "flg"),
+            (TAG_CHAR, "char"),
         ] {
             let s = self.intern_str(kind) as i32;
             fx.op(I::LocalGet(t));
@@ -4242,13 +4266,27 @@ fn mc_tree_to_form(em: &mut Emitter) -> Result<(u32, Function), String> {
 
     // scalar cases pass the payload box straight through (a bool/int/dec/str
     // wire payload is already exactly the form box).
-    for c in ["bool-val", "int-val", "dec-val", "char-val", "str-val"] {
+    for c in ["bool-val", "int-val", "dec-val", "str-val"] {
         let s = em.intern_str(c) as i32;
         fx.op(I::LocalGet(case));
         fx.op(I::I32Const(s));
         fx.op(I::Call(em.h.eq_raw));
         fx.op(I::If(BlockType::Empty));
         fx.op(I::LocalGet(payload));
+        fx.op(I::LocalSet(formbox));
+        fx.op(I::End);
+    }
+    // char-val: the wire payload is a `char` lifted as an int box; rebuild it as
+    // a distinct TAG_CHAR form box so it round-trips as a char (not an int).
+    {
+        let s = em.intern_str("char-val") as i32;
+        fx.op(I::LocalGet(case));
+        fx.op(I::I32Const(s));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(payload));
+        fx.op(I::I64Load(ma(8, 3)));
+        em.box_char(&mut fx);
         fx.op(I::LocalSet(formbox));
         fx.op(I::End);
     }
@@ -4701,6 +4739,34 @@ fn mc_fill(em: &mut Emitter, fill_idx: u32) -> Result<(u32, Function), String> {
         fx.op(I::I32Store(ma(4, 2)));
         fx.op(I::LocalGet(node));
         fx.op(I::LocalGet(form));
+        fx.op(I::I32Store(ma(8, 2)));
+        store_node(&mut fx, nodes, id, node);
+        fx.op(I::LocalGet(id));
+        fx.op(I::Return);
+        fx.op(I::End);
+    }
+    // char (TAG_CHAR): wire `char-val`, payload = the codepoint as an int box so
+    // the boundary's `lower(char)` (= unbox_int) reads it.
+    {
+        let caddr = em.intern_str("char-val") as i32;
+        fx.op(I::LocalGet(tag));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        bump(&mut fx);
+        fx.op(I::I32Const(12));
+        fx.op(I::Call(em.h.alloc));
+        fx.op(I::LocalSet(node));
+        fx.op(I::LocalGet(node));
+        fx.op(I::I32Const(TAG_VAR));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(node));
+        fx.op(I::I32Const(caddr));
+        fx.op(I::I32Store(ma(4, 2)));
+        fx.op(I::LocalGet(node));
+        fx.op(I::LocalGet(form));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::Call(em.h.box_int));
         fx.op(I::I32Store(ma(8, 2)));
         store_node(&mut fx, nodes, id, node);
         fx.op(I::LocalGet(id));
