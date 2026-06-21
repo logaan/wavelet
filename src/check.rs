@@ -292,6 +292,13 @@ impl<'a> Checker<'a> {
 ///    overloaded `name` the unique internal symbol `name$k`, and re-point every
 ///    resolved call head to its chosen member. The result has no overloaded
 ///    names left, so the interpreter's ordinary by-name dispatch is correct.
+///
+/// Only overloaded names *in call position* are re-pointed; using an overloaded
+/// name as a first-class value (passing the unapplied function) has no single
+/// meaning under overloading and is out of scope here — it would survive
+/// unrenamed and fail at runtime as an unbound name. No current program does
+/// this; Phase D should revisit it if derived/functor ops are ever passed by
+/// value.
 pub fn resolve_overloads(
     arena: Arena,
     roots: &[NodeId],
