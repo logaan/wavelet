@@ -1,4 +1,5 @@
 pub mod builtins;
+pub mod check;
 pub mod expand;
 pub mod form;
 pub mod interp;
@@ -125,6 +126,16 @@ pub fn eval_snippet(src: &str) -> EvalOutcome {
             };
         }
     };
+    // Static type checking runs before evaluation: an ill-typed program is a
+    // compile error even when the bad code is never reached at runtime.
+    if let Err(msg) = check::check_program(&arena, &roots) {
+        return EvalOutcome {
+            ok: false,
+            value: String::new(),
+            output: String::new(),
+            error: msg,
+        };
+    }
     let arena = Rc::new(arena);
 
     let interp = interp::Interp::new();
