@@ -690,6 +690,10 @@ struct Helpers {
     case_h: u32,
     to_str: u32,
     rec_get: u32,
+    as_f64: u32,
+    arith_raw: u32,
+    cmp_raw: u32,
+    neg_raw: u32,
 }
 
 // ---------------------------------------------------------------- emitter
@@ -2743,45 +2747,40 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.box_bool));
             }
             "lt" | "le" | "gt" | "ge" => {
+                // cmp_raw yields -1/0/1 over ints, decs and strings (chars ride
+                // in int boxes), matching the interpreter's `compare`.
                 nargs(2)?;
                 self.expr(fx, items[0], false)?;
-                fx.op(I::Call(self.h.unbox_int));
                 self.expr(fx, items[1], false)?;
-                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::Call(self.h.cmp_raw));
+                fx.op(I::I32Const(0));
                 fx.op(match name {
-                    "lt" => I::I64LtS,
-                    "le" => I::I64LeS,
-                    "gt" => I::I64GtS,
-                    _ => I::I64GeS,
+                    "lt" => I::I32LtS,
+                    "le" => I::I32LeS,
+                    "gt" => I::I32GtS,
+                    _ => I::I32GeS,
                 });
                 fx.op(I::Call(self.h.box_bool));
             }
             "add" | "sub" | "mul" | "div" | "rem" => {
-                if items.is_empty() {
-                    return Err(format!("`{name}` needs at least one argument"));
-                }
+                // strictly binary, like the interpreter's `args_n(arg, 2)`;
+                // arith_raw dispatches int (checked) vs float at runtime.
+                nargs(2)?;
                 self.expr(fx, items[0], false)?;
-                fx.op(I::Call(self.h.unbox_int));
-                for &x in &items[1..] {
-                    self.expr(fx, x, false)?;
-                    fx.op(I::Call(self.h.unbox_int));
-                    fx.op(match name {
-                        "add" => I::I64Add,
-                        "sub" => I::I64Sub,
-                        "mul" => I::I64Mul,
-                        "div" => I::I64DivS,
-                        _ => I::I64RemS,
-                    });
-                }
-                fx.op(I::Call(self.h.box_int));
+                self.expr(fx, items[1], false)?;
+                fx.op(I::I32Const(match name {
+                    "add" => 0,
+                    "sub" => 1,
+                    "mul" => 2,
+                    "div" => 3,
+                    _ => 4,
+                }));
+                fx.op(I::Call(self.h.arith_raw));
             }
             "neg" => {
                 nargs(1)?;
-                fx.op(I::I64Const(0));
                 self.expr(fx, items[0], false)?;
-                fx.op(I::Call(self.h.unbox_int));
-                fx.op(I::I64Sub);
-                fx.op(I::Call(self.h.box_int));
+                fx.op(I::Call(self.h.neg_raw));
             }
             "len" => {
                 nargs(1)?;
@@ -2900,6 +2899,10 @@ fn emit_core_module(
             case_h: 0,
             to_str: 0,
             rec_get: 0,
+            as_f64: 0,
+            arith_raw: 0,
+            cmp_raw: 0,
+            neg_raw: 0,
         },
         funcs: HashMap::new(),
         value_globals: HashMap::new(),
@@ -2993,6 +2996,10 @@ fn emit_core_module(
     em.h.case_h = take();
     em.h.to_str = take();
     em.h.rec_get = take();
+    em.h.as_f64 = take();
+    em.h.arith_raw = take();
+    em.h.cmp_raw = take();
+    em.h.neg_raw = take();
 
     // ---- assign internal function indices (file order)
     let mut internal_order: Vec<String> = Vec::new();
@@ -3958,6 +3965,419 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::End);
         fx.op(I::I32Const(0));
         let t = em.ty_idx(vec![I32, I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // as_f64(box) -> f64   coerces an int or dec box to f64; traps otherwise.
+    // Mirrors the interpreter's `want_num` widening of ints in mixed arithmetic.
+    {
+        let mut fx = FnCtx::new(1);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_INT));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::F64ConvertI64S);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_DEC));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::F64Load(ma(8, 3)));
+        fx.op(I::End);
+        let t = em.ty_idx(vec![I32], vec![F64]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // arith_raw(a, b, op) -> box   op: 0=add 1=sub 2=mul 3=div 4=rem.
+    // Matches the interpreter `arith`: both ints → checked i64 (trap on
+    // overflow / div-0 / INT_MIN÷-1); otherwise both widened to f64.
+    // [locals: ia=3, ib=4, r=5 (i64); xf=6, yf=7 (f64)]
+    {
+        let mut fx = FnCtx::new(3);
+        let ia = fx.local(I64);
+        let ib = fx.local(I64);
+        let r = fx.local(I64);
+        let xf = fx.local(F64);
+        let yf = fx.local(F64);
+        // both int?
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_INT));
+        fx.op(I::I32Eq);
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_INT));
+        fx.op(I::I32Eq);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Result(I32)));
+        // ---- int path
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalSet(ia));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalSet(ib));
+        // op == 0 : add
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(0));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(I64)));
+        fx.op(I::LocalGet(ia));
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Add);
+        fx.op(I::LocalSet(r));
+        // overflow: ((r^ia) & (r^ib)) <s 0
+        fx.op(I::LocalGet(r));
+        fx.op(I::LocalGet(ia));
+        fx.op(I::I64Xor);
+        fx.op(I::LocalGet(r));
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Xor);
+        fx.op(I::I64And);
+        fx.op(I::I64Const(0));
+        fx.op(I::I64LtS);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(r));
+        fx.op(I::Else);
+        // op == 1 : sub
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(I64)));
+        fx.op(I::LocalGet(ia));
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Sub);
+        fx.op(I::LocalSet(r));
+        // overflow: ((ia^ib) & (ia^r)) <s 0
+        fx.op(I::LocalGet(ia));
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Xor);
+        fx.op(I::LocalGet(ia));
+        fx.op(I::LocalGet(r));
+        fx.op(I::I64Xor);
+        fx.op(I::I64And);
+        fx.op(I::I64Const(0));
+        fx.op(I::I64LtS);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(r));
+        fx.op(I::Else);
+        // op == 2 : mul
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(I64)));
+        fx.op(I::LocalGet(ia));
+        fx.op(I::I64Eqz);
+        fx.op(I::If(BlockType::Result(I64)));
+        fx.op(I::I64Const(0));
+        fx.op(I::Else);
+        // trap on ia==-1 && ib==INT_MIN (the one case r/ia would itself trap)
+        fx.op(I::LocalGet(ia));
+        fx.op(I::I64Const(-1));
+        fx.op(I::I64Eq);
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Const(i64::MIN));
+        fx.op(I::I64Eq);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(ia));
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Mul);
+        fx.op(I::LocalSet(r));
+        // overflow if r / ia != ib
+        fx.op(I::LocalGet(r));
+        fx.op(I::LocalGet(ia));
+        fx.op(I::I64DivS);
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(r));
+        fx.op(I::End);
+        fx.op(I::Else);
+        // op == 3 : div
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(3));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(I64)));
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(ia));
+        fx.op(I::I64Const(i64::MIN));
+        fx.op(I::I64Eq);
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Const(-1));
+        fx.op(I::I64Eq);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(ia));
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64DivS);
+        fx.op(I::Else);
+        // op == 4 : rem
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(ia));
+        fx.op(I::I64Const(i64::MIN));
+        fx.op(I::I64Eq);
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64Const(-1));
+        fx.op(I::I64Eq);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(ia));
+        fx.op(I::LocalGet(ib));
+        fx.op(I::I64RemS);
+        fx.op(I::End); // op == 3
+        fx.op(I::End); // op == 2
+        fx.op(I::End); // op == 1
+        fx.op(I::End); // op == 0
+        fx.op(I::Call(em.h.box_int));
+        fx.op(I::Else);
+        // ---- float path
+        fx.op(I::LocalGet(0));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::LocalSet(xf));
+        fx.op(I::LocalGet(1));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::LocalSet(yf));
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(0));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Add);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Sub);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Mul);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(3));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Div);
+        fx.op(I::Else);
+        // rem: xf - trunc(xf/yf)*yf  (matches Rust f64 `%`)
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Div);
+        fx.op(I::F64Trunc);
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Mul);
+        fx.op(I::F64Sub);
+        fx.op(I::End); // op == 3
+        fx.op(I::End); // op == 2
+        fx.op(I::End); // op == 1
+        fx.op(I::End); // op == 0
+        fx.op(I::Call(em.h.box_dec));
+        fx.op(I::End); // int vs float
+        let t = em.ty_idx(vec![I32, I32, I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // cmp_raw(a, b) -> i32 in {-1, 0, 1}   total order over strings (byte
+    // lexicographic) and numbers (widened to f64); traps on NaN/non-comparable,
+    // matching the interpreter's `compare`. Chars ride in int boxes, so the
+    // numeric path already orders them by codepoint.
+    // [locals: xf=2, yf=3 (f64); la=4, lb=5, n=6, i=7, ca=8, cb=9 (i32)]
+    {
+        let mut fx = FnCtx::new(2);
+        let xf = fx.local(F64);
+        let yf = fx.local(F64);
+        let la = fx.local(I32);
+        let lb = fx.local(I32);
+        let n = fx.local(I32);
+        let i = fx.local(I32);
+        let ca = fx.local(I32);
+        let cb = fx.local(I32);
+        // both str?
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_STR));
+        fx.op(I::I32Eq);
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_STR));
+        fx.op(I::I32Eq);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Result(I32)));
+        // ---- string lexicographic compare
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(la));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(lb));
+        // n = min(la, lb)
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(lb));
+        fx.op(I::I32LtU);
+        fx.op(I::If(BlockType::Result(I32)));
+        fx.op(I::LocalGet(la));
+        fx.op(I::Else);
+        fx.op(I::LocalGet(lb));
+        fx.op(I::End);
+        fx.op(I::LocalSet(n));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(n));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(8, 0)));
+        fx.op(I::LocalSet(ca));
+        fx.op(I::LocalGet(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(8, 0)));
+        fx.op(I::LocalSet(cb));
+        fx.op(I::LocalGet(ca));
+        fx.op(I::LocalGet(cb));
+        fx.op(I::I32LtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(-1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(ca));
+        fx.op(I::LocalGet(cb));
+        fx.op(I::I32GtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End); // loop
+        fx.op(I::End); // block
+        // equal prefix: shorter string is less
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(lb));
+        fx.op(I::I32LtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(-1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(lb));
+        fx.op(I::I32GtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        fx.op(I::Else);
+        // ---- numeric compare (widened to f64)
+        fx.op(I::LocalGet(0));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::LocalSet(xf));
+        fx.op(I::LocalGet(1));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::LocalSet(yf));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Lt);
+        fx.op(I::If(BlockType::Result(I32)));
+        fx.op(I::I32Const(-1));
+        fx.op(I::Else);
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Gt);
+        fx.op(I::If(BlockType::Result(I32)));
+        fx.op(I::I32Const(1));
+        fx.op(I::Else);
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Eq);
+        fx.op(I::If(BlockType::Result(I32)));
+        fx.op(I::I32Const(0));
+        fx.op(I::Else);
+        // unordered (NaN) — not comparable
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::End); // str vs numeric
+        let t = em.ty_idx(vec![I32, I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // neg_raw(box) -> box   negates an int (wrapping, as the interpreter's `-n`)
+    // or a dec; traps on anything else.
+    {
+        let mut fx = FnCtx::new(1);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_INT));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(I32)));
+        fx.op(I::I64Const(0));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64Sub);
+        fx.op(I::Call(em.h.box_int));
+        fx.op(I::Else);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_DEC));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::F64Load(ma(8, 3)));
+        fx.op(I::F64Neg);
+        fx.op(I::Call(em.h.box_dec));
+        fx.op(I::End);
+        let t = em.ty_idx(vec![I32], vec![I32]);
         em.bodies.push((t, fx.finish()));
     }
 
