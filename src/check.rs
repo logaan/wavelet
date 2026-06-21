@@ -791,20 +791,19 @@ impl<'a> Checker<'a> {
 
         // Step 2 — return-type-directed filtering, only when arguments leave
         // more than one candidate and the context supplies an expected type.
+        // Keep the narrowed set whenever it is non-empty; if nothing matches the
+        // expected type, fall back to the argument-filtered set so the error
+        // below reports the (still-ambiguous) call rather than a spurious
+        // no-match.
         if candidates.len() > 1
             && let Some(exp) = expected
         {
             let by_result: Vec<usize> = candidates
                 .iter()
                 .copied()
-                .filter(|&i| {
-                    let rt = self.infer_sig_result(&sigs[i]);
-                    compatible(exp, &rt)
-                })
+                .filter(|&i| compatible(exp, &self.infer_sig_result(&sigs[i])))
                 .collect();
-            if by_result.len() == 1 {
-                candidates = by_result;
-            } else if !by_result.is_empty() {
+            if !by_result.is_empty() {
                 candidates = by_result;
             }
         }

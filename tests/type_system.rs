@@ -264,7 +264,6 @@ make()"#);
 // --- Step 8: name-mangling at the boundary for exported overload sets ---------
 
 #[test]
-#[ignore = "pending type system"]
 // Step 8 — WIT has no overloading, so an exported overload set lowers to
 // distinctly-named functions. Exporting `eq` for `point` yields `eq-point`.
 fn exported_overload_set_is_name_mangled() {
@@ -281,7 +280,6 @@ Export eq"#,
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 8 — the mangled, monomorphic signatures are concrete WIT functions (no
 // generic parameter survives to the boundary).
 fn mangled_overload_signature_is_concrete() {

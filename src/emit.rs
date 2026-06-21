@@ -4008,6 +4008,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         exports: Vec::new(),
         types: Vec::new(),
         defs: HashMap::new(),
+        fn_defs: HashMap::new(),
         value_defs: Vec::new(),
     };
     let deps: HashMap<String, Dep> = HashMap::new();

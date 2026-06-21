@@ -13,8 +13,15 @@ pub struct FileInfo {
     pub imports: Vec<ImportInfo>,
     pub exports: Vec<FuncSig>,
     pub types: Vec<(String, NodeId)>,
-    /// all module-level `Def name Fn …` definitions: name -> (params, body)
+    /// all module-level `Def name Fn …` definitions: name -> (params, body).
+    /// Same-named defs collapse here (last wins); this map is what the emitter
+    /// consumes. Use [`FileInfo::fn_defs`] to see every member of an overload
+    /// set.
     pub defs: HashMap<String, (NodeId, NodeId)>,
+    /// every module-level `Def name Fn …`, gathered per name in file order:
+    /// name -> [(params, body), …]. A name with ≥2 entries is an overload set
+    /// (Phase C); exported overload sets are name-mangled at the boundary.
+    pub fn_defs: HashMap<String, Vec<(NodeId, NodeId)>>,
     /// non-function module-level defs, in file order: (name, expr)
     pub value_defs: Vec<(String, NodeId)>,
 }
@@ -67,6 +74,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     let mut export_decls: Vec<(String, Option<FuncSig>)> = Vec::new();
     let mut types = Vec::new();
     let mut defs = HashMap::new();
+    let mut fn_defs: HashMap<String, Vec<(NodeId, NodeId)>> = HashMap::new();
     let mut value_defs = Vec::new();
 
     for &root in roots {
@@ -142,6 +150,10 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                                 && matches!(arena.node(fn_items[0]), Node::Sym(s) if s == "fn-MACRO")
                             {
                                 defs.insert(name.clone(), (fn_items[1], fn_items[2]));
+                                fn_defs
+                                    .entry(name.clone())
+                                    .or_default()
+                                    .push((fn_items[1], fn_items[2]));
                                 is_fn = true;
                             }
                         }
@@ -165,6 +177,26 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
 
     let mut exports = Vec::new();
     for (name, explicit) in export_decls {
+        // An exported *overload set* (≥2 same-named Fn defs, or a name that
+        // collides with a builtin operation) has no single WIT signature: WIT
+        // does not overload. Lower each member to its own concrete, mangled
+        // function `name-<first-param-type>` (Phase C, Step 8). This applies
+        // only when the Export does not supply an explicit signature override.
+        let explicit_overrides = matches!(&explicit, Some(s) if !s.params.is_empty() || s.result.is_some());
+        if !explicit_overrides && is_overload_export(&name, &fn_defs) {
+            let members = fn_defs
+                .get(&name)
+                .ok_or(format!("Export `{name}` has no definition"))?;
+            let iface = explicit.map(|s| s.iface).unwrap_or_else(|| "api".to_string());
+            for &(params_id, body) in members {
+                let mangled = mangle_name(arena, &name, params_id)?;
+                let mut sig = infer_sig(arena, &mangled, params_id, body, &defs)?;
+                sig.iface = iface.clone();
+                exports.push(sig);
+            }
+            continue;
+        }
+
         let sig = match explicit {
             // a record form that only names/groups still gets an inferred sig
             Some(sig) if sig.params.is_empty() && sig.result.is_none() && defs.contains_key(&name) => {
@@ -192,6 +224,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
         exports,
         types,
         defs,
+        fn_defs,
         value_defs,
     })
 }
@@ -214,6 +247,36 @@ pub fn iface_order(exports: &[FuncSig], has_types: bool) -> Vec<String> {
 /// `"demo:shout@0.1.0"` -> `"demo:shout"`
 fn strip_version(s: &str) -> String {
     s.split('@').next().unwrap_or(s).to_string()
+}
+
+/// Whether an exported `name` denotes an overload set that must be name-mangled
+/// at the boundary (Step 8). The trigger is either ≥2 module-level Fn defs of
+/// `name`, **or** `name` colliding with a builtin operation (`builtins::NAMES`)
+/// — a single `Def eq …` is still mangled because `eq` is an overloadable
+/// operation name.
+fn is_overload_export(name: &str, fn_defs: &HashMap<String, Vec<(NodeId, NodeId)>>) -> bool {
+    let count = fn_defs.get(name).map(|v| v.len()).unwrap_or(0);
+    count >= 2 || crate::builtins::NAMES.contains(&name)
+}
+
+/// The mangled WIT name for one overload-set member: `name-<type>` where
+/// `<type>` is the WIT type name of the member's distinguishing (first)
+/// parameter. `eq` with a `point` first parameter → `eq-point`.
+fn mangle_name(arena: &Arena, name: &str, params_id: NodeId) -> Result<String, String> {
+    let Node::Rec(fields) = arena.node(params_id) else {
+        return Err(format!(
+            "cannot mangle overloaded export `{name}`: its parameters must be \
+             typed (a `{{a: t …}}` record) to distinguish overloads"
+        ));
+    };
+    let Some((_k, ty)) = fields.first() else {
+        return Err(format!(
+            "cannot mangle overloaded export `{name}`: it takes no parameters, \
+             so its overloads cannot be distinguished by argument type"
+        ));
+    };
+    let ty_text = type_text(arena, *ty)?;
+    Ok(format!("{name}-{ty_text}"))
 }
 
 fn parse_explicit_sig(arena: &Arena, fields: &[(String, NodeId)]) -> Option<FuncSig> {

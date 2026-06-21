@@ -59,7 +59,7 @@ defs is standard library._
 
 == Phase C — overloading (core: needs static types, so cannot be a library)
 
-6. ☐ *Overload sets + argument-directed resolution.* Same-named monomorphic defs
+6. ☑ *Overload sets + argument-directed resolution.* Same-named monomorphic defs
   union into one overload set; resolve per call site by static argument types;
   equal applicability is a compile error (fixable by qualifying); imported sets
   union rather than conflict. \
@@ -67,12 +67,12 @@ defs is standard library._
   `overload_resolves_by_argument_type_second_definition`,
   `ambiguous_overloaded_call_is_a_compile_error`
 
-7. ☐ *Return-type-directed resolution.* When arguments don't decide, the expected
+7. ☑ *Return-type-directed resolution.* When arguments don't decide, the expected
   type from `The` / surrounding context selects; no context ⇒ ambiguity error. \
   _tests:_ `return_type_directed_resolution_via_the`,
   `return_type_overload_without_context_is_a_compile_error`
 
-8. ☐ *Boundary name-mangling for exported overload sets.* An exported overload
+8. ☑ *Boundary name-mangling for exported overload sets.* An exported overload
   set lowers to distinctly-named, concrete WIT functions (`eq-point`,
   `eq-string`); nothing generic reaches the boundary. \
   _tests:_ `exported_overload_set_is_name_mangled`,
