@@ -17,6 +17,7 @@
 //! Later phases (WIT synthesis from inference, overload resolution, derivers,
 //! functors) build on the [`Type`] lattice and the per-form checking here.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::form::{Arena, Node, NodeId};
@@ -168,10 +169,27 @@ fn compatible(expected: &Type, actual: &Type) -> bool {
     unify(expected, actual).is_some()
 }
 
+/// Whether an overload candidate with parameters `params` is applicable to a
+/// positional call whose static argument types are `arg_tys`: the arity must
+/// match and each parameter type must be compatible with its argument. (The
+/// single-bundled-payload form `f(x)` to a one-parameter `f` also matches.)
+fn args_match(params: &[(String, Type)], arg_tys: &[Type]) -> bool {
+    if params.len() != arg_tys.len() {
+        return false;
+    }
+    params
+        .iter()
+        .zip(arg_tys)
+        .all(|((_n, pt), at)| compatible(pt, at))
+}
+
 /// The static signature of a module-level `Def name Fn {params} body`.
 struct Sig {
     /// Parameters in order: their name and declared type (`Unknown` if untyped).
     params: Vec<(String, Type)>,
+    /// The Fn body, for return-type-directed overload resolution. `None` for a
+    /// definition whose body we did not capture (it never happens for Fn defs).
+    body: Option<NodeId>,
 }
 
 /// A lexical scope mapping bound names to their static types. It is a flat
@@ -181,51 +199,204 @@ type Scope = Vec<(String, Type)>;
 
 struct Checker<'a> {
     arena: &'a Arena,
-    /// Module-level `Def name Fn {…} …` signatures, by name.
-    sigs: HashMap<String, Sig>,
+    /// Module-level `Def name Fn {…} …` signatures, by name. A name with more
+    /// than one signature is an *overload set* (Phase C): calls to it resolve
+    /// per call site by static argument and expected types.
+    sigs: HashMap<String, Vec<Sig>>,
     /// Module-level `Def` names (functions and values both bind a name).
     defs: std::collections::HashSet<String>,
+    /// For each *overloaded* call site (keyed by the call `Tup`'s `NodeId`), the
+    /// index of the chosen candidate within its overload set. Filled in while
+    /// checking; read back by [`resolve_overloads`] to rewrite the program.
+    resolved: RefCell<HashMap<NodeId, usize>>,
 }
 
 /// Check a whole program (the top-level roots). Returns `Err(msg)` on the first
 /// type error, where `msg` is already in the `eval error: …` surface form so it
 /// can be returned directly as [`crate::EvalOutcome::error`].
 pub fn check_program(arena: &Arena, roots: &[NodeId]) -> Result<(), String> {
-    // First pass: collect every module-level Def name and Fn signature so
-    // forward and mutual references resolve.
-    let mut sigs = HashMap::new();
-    let mut defs = std::collections::HashSet::new();
-    for &root in roots {
-        if let Some((name, expr)) = as_def(arena, root) {
-            defs.insert(name.to_string());
-            if let Some(params) = fn_params(arena, expr) {
-                sigs.insert(name.to_string(), Sig { params });
+    let checker = Checker::collect(arena, roots);
+    checker.check_roots(roots)
+}
+
+impl<'a> Checker<'a> {
+    /// First pass: collect every module-level Def name and Fn signature so
+    /// forward and mutual references resolve. Same-named Fn defs accumulate into
+    /// an overload set (a `Vec<Sig>`), in file order.
+    fn collect(arena: &'a Arena, roots: &[NodeId]) -> Self {
+        let mut sigs: HashMap<String, Vec<Sig>> = HashMap::new();
+        let mut defs = std::collections::HashSet::new();
+        for &root in roots {
+            if let Some((name, expr)) = as_def(arena, root) {
+                defs.insert(name.to_string());
+                if let Some(params) = fn_params(arena, expr) {
+                    let body = fn_body(arena, expr);
+                    sigs.entry(name.to_string())
+                        .or_default()
+                        .push(Sig { params, body });
+                }
             }
         }
+        Checker { arena, sigs, defs, resolved: RefCell::new(HashMap::new()) }
     }
 
-    let checker = Checker { arena, sigs, defs };
-
-    // Second pass: check every top-level form's body.
-    for &root in roots {
-        if let Some((_name, expr)) = as_def(arena, root) {
-            // Check the bound expression. For an `Fn`, check its body with the
-            // parameters in scope; otherwise check the value expression.
-            if let Some(params) = fn_params(arena, expr) {
-                let mut scope: Scope = params.clone();
-                let body = fn_body(arena, expr).expect("fn with params has a body");
-                checker.check(body, None, &mut scope)?;
+    /// Second pass: check every top-level form's body.
+    fn check_roots(&self, roots: &[NodeId]) -> Result<(), String> {
+        let arena = self.arena;
+        for &root in roots {
+            if let Some((_name, expr)) = as_def(arena, root) {
+                // Check the bound expression. For an `Fn`, check its body with
+                // the parameters in scope; otherwise check the value expression.
+                if let Some(params) = fn_params(arena, expr) {
+                    let mut scope: Scope = params.clone();
+                    let body = fn_body(arena, expr).expect("fn with params has a body");
+                    self.check(body, None, &mut scope)?;
+                } else {
+                    let mut scope: Scope = Vec::new();
+                    self.check(expr, None, &mut scope)?;
+                }
             } else {
+                // A bare top-level expression (the playground evaluates these).
                 let mut scope: Scope = Vec::new();
-                checker.check(expr, None, &mut scope)?;
+                self.check(root, None, &mut scope)?;
             }
-        } else {
-            // A bare top-level expression (the playground evaluates these too).
-            let mut scope: Scope = Vec::new();
-            checker.check(root, None, &mut scope)?;
+        }
+        Ok(())
+    }
+
+    /// The names that form an overload set: module-level Fn names with ≥2 defs.
+    fn overload_names(&self) -> std::collections::HashSet<String> {
+        self.sigs
+            .iter()
+            .filter(|(_n, v)| v.len() > 1)
+            .map(|(n, _v)| n.clone())
+            .collect()
+    }
+}
+
+/// Type-check a program and resolve its overload sets, returning a possibly
+/// rewritten `(Arena, roots)` the interpreter can evaluate with **no** overload
+/// awareness of its own.
+///
+/// This is the run-path overload mechanism (Phase C, Steps 6–7). It runs after
+/// reading and is the single place static argument-directed and return-type-
+/// directed resolution happens:
+///
+/// 1. Build the checker (collecting overload sets) and check every body — an
+///    ill-typed program is an `Err` exactly as [`check_program`] reports.
+/// 2. While checking, each overloaded call site records which member it
+///    resolves to (or the check fails with an ambiguity/no-match error).
+/// 3. If the program has **no** overload set, return the input arena unchanged —
+///    the pass is an exact identity, so non-overloaded programs are untouched.
+/// 4. Otherwise rewrite into a fresh arena: give the k-th `Def name …` of an
+///    overloaded `name` the unique internal symbol `name$k`, and re-point every
+///    resolved call head to its chosen member. The result has no overloaded
+///    names left, so the interpreter's ordinary by-name dispatch is correct.
+pub fn resolve_overloads(
+    arena: Arena,
+    roots: &[NodeId],
+) -> Result<(Arena, Vec<NodeId>), String> {
+    let checker = Checker::collect(&arena, roots);
+    checker.check_roots(roots)?;
+
+    let overloads = checker.overload_names();
+    if overloads.is_empty() {
+        // Identity: nothing to rewrite, hand the program back as-is.
+        return Ok((arena, roots.to_vec()));
+    }
+
+    let resolved = checker.resolved.into_inner();
+    let mut rw = Rewriter {
+        arena: &arena,
+        overloads: &overloads,
+        resolved: &resolved,
+        out: Arena::new(),
+        def_counts: HashMap::new(),
+    };
+    let new_roots: Vec<NodeId> = roots.iter().map(|&r| rw.rewrite_root(r)).collect();
+    Ok((rw.out, new_roots))
+}
+
+/// The unique internal name for the k-th `Def name …` of an overloaded `name`.
+fn mangled_def_name(name: &str, k: usize) -> String {
+    format!("{name}${k}")
+}
+
+/// Rewrites a program so each overload-set member has a unique name and every
+/// resolved call head points at its chosen member. Mirrors the copy/descend
+/// style of [`crate::expand`].
+struct Rewriter<'a> {
+    arena: &'a Arena,
+    overloads: &'a std::collections::HashSet<String>,
+    resolved: &'a HashMap<NodeId, usize>,
+    out: Arena,
+    /// Running count of `Def`s seen per overloaded name, to assign `name$k`.
+    def_counts: HashMap<String, usize>,
+}
+
+impl<'a> Rewriter<'a> {
+    /// Rewrite a top-level form. A `Def name Fn …` whose `name` is overloaded is
+    /// renamed to `name$k` (k counting in file order); everything else descends.
+    fn rewrite_root(&mut self, id: NodeId) -> NodeId {
+        if let Some((name, _expr)) = as_def(self.arena, id)
+            && self.overloads.contains(name)
+        {
+            let name = name.to_string();
+            let Node::Tup(items) = self.arena.node(id) else {
+                unreachable!("as_def matched a Tup")
+            };
+            let items = items.clone();
+            let k = self.def_counts.entry(name.clone()).or_insert(0);
+            let unique = mangled_def_name(&name, *k);
+            *k += 1;
+            let span = self.arena.span(id);
+            // items = [def-MACRO, name_sym, expr]; replace name_sym, rewrite expr.
+            let head = self.rewrite(items[0]);
+            let new_name = self.out.add(Node::Sym(unique), self.arena.span(items[1]));
+            let expr = self.rewrite(items[2]);
+            return self.out.add(Node::Tup(vec![head, new_name, expr]), span);
+        }
+        self.rewrite(id)
+    }
+
+    /// Copy `id` into the output arena, re-pointing a resolved overloaded call
+    /// head to its chosen member.
+    fn rewrite(&mut self, id: NodeId) -> NodeId {
+        let span = self.arena.span(id);
+        match self.arena.node(id).clone() {
+            Node::Tup(items) => {
+                // A call whose head is an overloaded name resolved at this site:
+                // rewrite the head symbol to the chosen `name$k`.
+                if let Some(&chosen) = self.resolved.get(&id)
+                    && let Some(&head) = items.first()
+                    && let Node::Sym(name) = self.arena.node(head)
+                {
+                    let unique = mangled_def_name(name, chosen);
+                    let new_head = self.out.add(Node::Sym(unique), self.arena.span(head));
+                    let mut kids = Vec::with_capacity(items.len());
+                    kids.push(new_head);
+                    for &x in &items[1..] {
+                        kids.push(self.rewrite(x));
+                    }
+                    return self.out.add(Node::Tup(kids), span);
+                }
+                let kids: Vec<NodeId> = items.iter().map(|&x| self.rewrite(x)).collect();
+                self.out.add(Node::Tup(kids), span)
+            }
+            Node::Lst(items) => {
+                let kids: Vec<NodeId> = items.iter().map(|&x| self.rewrite(x)).collect();
+                self.out.add(Node::Lst(kids), span)
+            }
+            Node::Rec(fields) => {
+                let nf: Vec<(String, NodeId)> = fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), self.rewrite(*v)))
+                    .collect();
+                self.out.add(Node::Rec(nf), span)
+            }
+            leaf => self.out.add(leaf, span),
         }
     }
-    Ok(())
 }
 
 /// If `id` is `Def name expr`, return `(name, expr)`.
@@ -405,7 +576,7 @@ impl<'a> Checker<'a> {
                 return self.infer_special(h, args, expected, scope);
             }
             // A call to a known builtin or module-level def.
-            return self.infer_call(id, h, args, scope);
+            return self.infer_call(id, h, args, expected, scope);
         }
         // Head is not a plain symbol (e.g. a Qsym, or a computed head): check
         // the arguments and yield Unknown.
@@ -570,18 +741,100 @@ impl<'a> Checker<'a> {
     /// Check a call `name(args…)` to a builtin or a module-level def.
     fn infer_call(
         &self,
-        _id: NodeId,
+        id: NodeId,
         name: &str,
         args: &[NodeId],
+        expected: Option<&Type>,
         scope: &mut Scope,
     ) -> Result<Type, String> {
-        // A call to a module-level def with a known signature: check arity and
-        // argument types against the parameters.
-        if let Some(sig) = self.sigs.get(name) {
-            return self.check_def_call(name, sig, args, scope);
+        if let Some(sigs) = self.sigs.get(name) {
+            // An overload set (≥2 same-named Fn defs): resolve per call site by
+            // static argument types, then by the expected (return) type.
+            if sigs.len() > 1 {
+                return self.resolve_overload(id, name, sigs, args, expected, scope);
+            }
+            // A single module-level def with a known signature: check arity and
+            // argument types against the parameters (Phase A behaviour).
+            return self.check_def_call(name, &sigs[0], args, scope);
         }
         // A builtin we model, or one we don't (Unknown).
         self.check_builtin_call(name, args, scope)
+    }
+
+    /// Resolve an overloaded call `name(args…)` to exactly one member of its
+    /// overload set, recording the chosen index for [`resolve_overloads`].
+    ///
+    /// Step 1: keep every candidate whose arity matches and whose parameter
+    /// types are each compatible with the corresponding static argument type.
+    /// Step 2: if more than one survives, filter by the expected result type
+    /// from context (an enclosing `The`, or any propagated expected type). A
+    /// unique survivor resolves; zero or several is an ambiguity/no-match error.
+    fn resolve_overload(
+        &self,
+        id: NodeId,
+        name: &str,
+        sigs: &[Sig],
+        args: &[NodeId],
+        expected: Option<&Type>,
+        scope: &mut Scope,
+    ) -> Result<Type, String> {
+        // Infer the argument types once (also checks their subexpressions).
+        let arg_tys: Vec<Type> = args
+            .iter()
+            .map(|&a| self.check(a, None, scope))
+            .collect::<Result<_, _>>()?;
+
+        // Step 1 — argument-directed filtering.
+        let mut candidates: Vec<usize> = (0..sigs.len())
+            .filter(|&i| args_match(&sigs[i].params, &arg_tys))
+            .collect();
+
+        // Step 2 — return-type-directed filtering, only when arguments leave
+        // more than one candidate and the context supplies an expected type.
+        if candidates.len() > 1
+            && let Some(exp) = expected
+        {
+            let by_result: Vec<usize> = candidates
+                .iter()
+                .copied()
+                .filter(|&i| {
+                    let rt = self.infer_sig_result(&sigs[i]);
+                    compatible(exp, &rt)
+                })
+                .collect();
+            if by_result.len() == 1 {
+                candidates = by_result;
+            } else if !by_result.is_empty() {
+                candidates = by_result;
+            }
+        }
+
+        match candidates.as_slice() {
+            [chosen] => {
+                self.resolved.borrow_mut().insert(id, *chosen);
+                Ok(self.infer_sig_result(&sigs[*chosen]))
+            }
+            [] => Err(format!(
+                "eval error: no overload of `{name}` matches the call"
+            )),
+            _ => Err(format!(
+                "eval error: ambiguous call to overloaded `{name}`; \
+                 qualify it to choose an overload"
+            )),
+        }
+    }
+
+    /// Infer the result type of an overload candidate by checking its Fn body
+    /// with its parameters in scope. Used for return-type-directed resolution.
+    fn infer_sig_result(&self, sig: &Sig) -> Type {
+        let Some(body) = sig.body else {
+            return Type::Unknown;
+        };
+        let mut scope: Scope = sig.params.clone();
+        // Inference errors inside a candidate body don't disqualify it here (the
+        // body is checked properly when its own Def is checked); treat them as
+        // an unconstrained result so resolution stays gradual.
+        self.infer(body, None, &mut scope).unwrap_or(Type::Unknown)
     }
 
     fn check_def_call(

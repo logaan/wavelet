@@ -126,16 +126,22 @@ pub fn eval_snippet(src: &str) -> EvalOutcome {
             };
         }
     };
-    // Static type checking runs before evaluation: an ill-typed program is a
-    // compile error even when the bad code is never reached at runtime.
-    if let Err(msg) = check::check_program(&arena, &roots) {
-        return EvalOutcome {
-            ok: false,
-            value: String::new(),
-            output: String::new(),
-            error: msg,
-        };
-    }
+    // Static type checking + overload resolution run before evaluation: an
+    // ill-typed (or ambiguously-overloaded) program is a compile error even
+    // when the bad code is never reached at runtime. `resolve_overloads` checks
+    // the program, then rewrites overload sets to uniquely-named defs so the
+    // interpreter sees no overloading. With no overload set it is an identity.
+    let (arena, roots) = match check::resolve_overloads(arena, &roots) {
+        Ok(pair) => pair,
+        Err(msg) => {
+            return EvalOutcome {
+                ok: false,
+                value: String::new(),
+                output: String::new(),
+                error: msg,
+            };
+        }
+    };
     let arena = Rc::new(arena);
 
     let interp = interp::Interp::new();

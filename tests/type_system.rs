@@ -206,7 +206,6 @@ Def rev Fn {xs: list(s32)} reverse(xs)"#,
 // --- Step 6: overload sets + argument-directed resolution --------------------
 
 #[test]
-#[ignore = "pending type system"]
 // Step 6 — same-named monomorphic defs form one overload set; a call resolves to
 // the member matching its static argument type. Today the second `Def` shadows
 // the first, so `show(5)` hits the `string` body and fails.
@@ -219,7 +218,6 @@ show(5)"#);
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 6 — resolution works regardless of definition order; the shadowed-first
 // member must still be reachable.
 fn overload_resolves_by_argument_type_second_definition() {
@@ -231,7 +229,6 @@ show("hi")"#);
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 6 — an argument that fits two overloads equally is ambiguous: a compile
 // error at the call site (fixable by qualifying). `0` fits both `u8` and `s32`.
 fn ambiguous_overloaded_call_is_a_compile_error() {
@@ -244,7 +241,6 @@ f(0)"#);
 // --- Step 7: return-type-directed resolution via `The` / context -------------
 
 #[test]
-#[ignore = "pending type system"]
 // Step 7 — when arguments don't disambiguate (here two zero-arg `make`s), the
 // expected type from a `The` ascription selects the overload.
 fn return_type_directed_resolution_via_the() {
@@ -256,7 +252,6 @@ The s64 make()"#);
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 7 — with neither arguments nor an expected type to decide, the call is
 // ambiguous and must be a compile error.
 fn return_type_overload_without_context_is_a_compile_error() {
