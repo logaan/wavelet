@@ -60,11 +60,24 @@ pub fn run_files(paths: &[String]) -> Result<(), String> {
     eval_module(&interp, &mut modules, &by_package, 0)?;
 
     let entry = &modules[0];
-    if let Some(run) = entry.env.lookup("run") {
-        if matches!(run, Value::Closure(_)) {
+    match entry.env.lookup("run") {
+        Some(run @ Value::Closure(_)) => {
             interp
                 .apply(&run, Value::Lst(vec![]))
                 .map_err(|e| format!("{}: {e}", entry.path))?;
+        }
+        Some(_) => {
+            return Err(format!(
+                "{}: `run` is defined but is not a closure to execute",
+                entry.path
+            ));
+        }
+        None => {
+            return Err(format!(
+                "{}: nothing to run — define a no-argument closure named `run` \
+                 (e.g. `Def run Fn {{}} …`) as the entry point",
+                entry.path
+            ));
         }
     }
     Ok(())

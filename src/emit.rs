@@ -1225,6 +1225,23 @@ impl<'a> Emitter<'a> {
             0 => {}
             1 => fx.op(I::LocalGet(1)),
             n => {
+                // payload must be a list box of exactly n elements, same guard
+                // `fn_form` emits, so a malformed indirect call traps rather
+                // than reading garbage past the box.
+                fx.op(I::LocalGet(1));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(1));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::I32Const(n as i32));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
                 for i in 0..n {
                     fx.op(I::LocalGet(1));
                     fx.op(I::I32Load(ma(8 + 4 * i as u64, 2)));

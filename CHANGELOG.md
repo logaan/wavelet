@@ -52,6 +52,34 @@ you work, and rename it to the new version when you cut a release.
   `wasm32-unknown-unknown` (no WASI), so it instantiates under the capability-free
   macro linker.
 
+### Fixed
+
+- **Compiled `add`/`sub`/`mul`/`div`/`rem`/`neg` and `lt`/`le`/`gt`/`ge` now
+  match the interpreter on floats and strings.** The wasm backend previously
+  unboxed every operand as an integer, so a compiled component that did `f64`
+  arithmetic or compared `string`s built cleanly but trapped at runtime. These
+  builtins now dispatch on the operand at runtime: arithmetic does `f64` math
+  when an operand is a decimal (widening integers in mixed operands), and the
+  comparisons order strings lexicographically and numbers as `f64` — the same
+  results the interpreter (the semantics oracle) produces.
+- **Compiled arithmetic is strictly binary.** `add`/`sub`/`mul`/`div`/`rem` in a
+  compiled component now require exactly two arguments, as the interpreter
+  already did, instead of silently folding three or more.
+- **Compiled integer overflow is checked.** `add`/`sub`/`mul` overflow and the
+  `div`/`rem` edge cases (divide-by-zero, `INT_MIN / -1`, `INT_MIN % -1`) now
+  trap in a compiled component, matching the interpreter's checked-arithmetic
+  errors instead of wrapping.
+- **`-inf` is matched as a whole word.** The lexer no longer splits a longer
+  token beginning with `-inf` (e.g. `-info`, `-infinity`) into `-inf` plus a
+  trailing fragment, mirroring the whole-word match the positive `inf`/`nan`
+  literals already used.
+- **`wavelet run` reports a missing entry point.** Running a file with no
+  no-argument `run` closure now prints an actionable error instead of silently
+  doing nothing.
+- **`u64` parameters reject negatives.** The interpreter's dynamic type check for
+  a `u64` parameter now rejects negative integers, consistent with the `to-u64`
+  builtin.
+
 ## [0.7.0] - 2026-06-16
 
 ### Added
