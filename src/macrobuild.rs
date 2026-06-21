@@ -1,5 +1,5 @@
 //! Produce a `wavelet:meta/macros` component from a Wavelet macro file
-//! (design.md §6.3; Step 9, **strategy A: interpreter-in-a-component**).
+//! (design.md §6.3; **strategy B: compile the bodies**).
 //!
 //! The payoff of the macro-component feature is that a macro library can be
 //! *written in Wavelet itself*: a `.wvl` file whose top level is `DefMacro`s is
@@ -7,25 +7,16 @@
 //! consumer then imports with `macros: true` and uses exactly like a hand-built
 //! macro component. Wavelet thereby dogfoods its own macro system.
 //!
-//! ## Strategy A: bundle the interpreter, carry the macros as data
+//! ## Strategy B: compile each macro body to wasm
 //!
-//! Rather than compile each macro *body* to a wasm function (strategy B, a large
-//! `emit.rs` extension — deferred), the produced component bundles the Wavelet
-//! interpreter — the semantics oracle (`CLAUDE.md`) — plus the macro file's
-//! source as embedded data. Its `manifest`/`expand` exports run
-//! [`crate::macrolib`] over that source. Because the *same* interpreter and the
-//! *same* `expand_once` drive both this component and the local ahead-of-time
-//! expander ([`crate::expand::expand_file`]), a macro means exactly the same
-//! thing whether expanded locally or through the component.
-//!
-//! The mechanics: a small, checked-in guest crate (`tools/macro-guest`) depends
-//! on the `wavelet` crate (so the interpreter is *in* the guest) and exports
-//! `wavelet:meta/macros`. We point it at the macro file via the
-//! `WAVELET_MACRO_SRC` env var (its `build.rs` embeds the source), build it for
-//! `wasm32-unknown-unknown` (**no WASI** — the component must instantiate under
-//! the consumer's empty, capability-free linker, Step 2), and componentize the
-//! core module in-process with [`wit_component`] (the metadata wit-bindgen
-//! embeds is enough — no `wasm-tools` shell-out).
+//! The produced component carries **no interpreter**: each `DefMacro` body is
+//! compiled to a wasm function by [`crate::emit::emit_macro_component`], and the
+//! component's `manifest`/`expand` exports are themselves compiled (with
+//! compiled `tree`⇄form adapters at the boundary). This is a pure in-process
+//! emit + componentize — no `cargo`, no `wasm32` target, and no sibling guest
+//! crate. The interpreter (`interp.rs`/`macrolib.rs`) stays the differential
+//! oracle the compiled output is validated against (`CLAUDE.md`), not part of
+//! the produced artifact.
 //!
 //! ## How a file declares it is a macro library
 //!
@@ -36,12 +27,8 @@
 //! funcs" (the step's suggested trigger). `wavelet build` routes such a file
 //! here instead of through the ordinary [`crate::emit`] path.
 //!
-//! This module is native-only (it shells out to `cargo` and builds a sibling
-//! crate), gated `#[cfg(not(target_arch = "wasm32"))]` in `lib.rs` alongside the
-//! rest of the producer/consumer build machinery.
-
-use std::path::{Path, PathBuf};
-use std::process::Command;
+//! This module is native-only, gated `#[cfg(not(target_arch = "wasm32"))]` in
+//! `lib.rs` alongside the rest of the producer/consumer build machinery.
 
 use crate::form::{Arena, Node, NodeId};
 
@@ -71,100 +58,20 @@ pub fn is_macro_library(arena: &Arena, roots: &[NodeId]) -> bool {
     saw_package && saw_macro
 }
 
-/// Build a macro-library `.wvl` source into a `wavelet:meta/macros` component,
+/// Build a macro-library file's forms into a `wavelet:meta/macros` component,
 /// returning the component bytes.
 ///
-/// `src` is the macro file's text; `guest_crate` is the path to the
-/// `tools/macro-guest` crate (see [`default_guest_crate`]). This:
+/// **Strategy B: compile the bodies.** Each `DefMacro` body is compiled to wasm
+/// by [`crate::emit::emit_macro_component`], so the produced component carries no
+/// interpreter — its `manifest`/`expand` are compiled functions. This needs no
+/// `cargo`, no `wasm32` target, and no sibling guest crate; it is a pure
+/// in-process emit + componentize, like an ordinary `wavelet build`.
 ///
-/// 1. writes `src` to a temp file and points the guest at it via
-///    `WAVELET_MACRO_SRC`;
-/// 2. runs `cargo build --release --target wasm32-unknown-unknown` in the guest
-///    crate (no WASI, capability-free);
-/// 3. componentizes the resulting core module in-process.
-///
-/// Errors are actionable strings: a missing `wasm32` target, a `cargo` failure
-/// (with its stderr), or a componentization failure.
-pub fn build_macro_component(src: &str, guest_crate: &Path) -> Result<Vec<u8>, String> {
-    // 1. Stage the macro source where the guest's build.rs can read it.
-    let src_file = stage_source(src)?;
-
-    // 2. Build the guest core module for wasm32 (no WASI).
-    let core = build_guest_core(guest_crate, &src_file)?;
-
-    // 3. Componentize in-process (wit-bindgen already embedded the metadata).
-    componentize(&core)
-}
-
-/// The default location of the bundled guest crate: `tools/macro-guest` beside
-/// the `wavelet` crate's manifest. `wavelet build` uses this so a user never has
-/// to know the guest exists.
-pub fn default_guest_crate() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tools")
-        .join("macro-guest")
-}
-
-/// Write `src` to a uniquely-named temp file and return its path. The guest's
-/// `build.rs` reads `WAVELET_MACRO_SRC` (set to this path) and embeds the
-/// contents.
-fn stage_source(src: &str) -> Result<PathBuf, String> {
-    let dir = std::env::temp_dir();
-    let file = dir.join(format!(
-        "wavelet-macro-src-{}-{}.wvl",
-        std::process::id(),
-        // A monotonic-ish suffix so concurrent builds don't collide.
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    ));
-    std::fs::write(&file, src).map_err(|e| format!("staging macro source: {e}"))?;
-    Ok(file)
-}
-
-/// Run `cargo build --release --target wasm32-unknown-unknown` in the guest
-/// crate with `WAVELET_MACRO_SRC` set, and return the built core-module bytes.
-fn build_guest_core(guest_crate: &Path, src_file: &Path) -> Result<Vec<u8>, String> {
-    let status = Command::new("cargo")
-        .current_dir(guest_crate)
-        .env("WAVELET_MACRO_SRC", src_file)
-        .args([
-            "build",
-            "--release",
-            "--target",
-            "wasm32-unknown-unknown",
-        ])
-        .output()
-        .map_err(|e| format!("running cargo for the macro guest: {e}"))?;
-    if !status.status.success() {
-        let stderr = String::from_utf8_lossy(&status.stderr);
-        return Err(format!(
-            "building the macro-library component failed.\n\
-             (the `wasm32-unknown-unknown` target must be installed: \
-             `rustup target add wasm32-unknown-unknown`)\n--- cargo ---\n{}",
-            stderr.trim()
-        ));
-    }
-    let wasm = guest_crate
-        .join("target")
-        .join("wasm32-unknown-unknown")
-        .join("release")
-        .join("wavelet_macro_guest.wasm");
-    std::fs::read(&wasm).map_err(|e| format!("reading guest core module {}: {e}", wasm.display()))
-}
-
-/// Wrap a core wasm module (already carrying wit-bindgen's embedded
-/// component-type metadata) into a component, in-process, with
-/// [`wit_component::ComponentEncoder`] — the same encoder [`crate::emit`] uses,
-/// so no `wasm-tools` binary is required.
-fn componentize(core: &[u8]) -> Result<Vec<u8>, String> {
-    wit_component::ComponentEncoder::default()
-        .validate(true)
-        .module(core)
-        .map_err(|e| format!("componentizing the macro library failed: {e:#}"))?
-        .encode()
-        .map_err(|e| format!("encoding the macro-library component failed: {e:#}"))
+/// `arena`/`roots` are the read form tree of the macro file (its top level is a
+/// `Package` plus `DefMacro`s — see [`is_macro_library`]). Errors are actionable
+/// strings from the emitter.
+pub fn build_macro_component(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, String> {
+    crate::emit::emit_macro_component(arena, roots)
 }
 
 #[cfg(test)]
