@@ -1,13 +1,15 @@
 #set document(title: "Wavelet type system: monomorphic to the bone")
 #set page(
   paper: "a4",
-  margin: (x: 2.2cm, y: 2.4cm),
+  columns: 2,
+  margin: (x: 1.7cm, y: 2cm),
   numbering: "1",
 )
-#set text(font: "New Computer Modern", size: 10.5pt)
-#set par(justify: true, leading: 0.62em)
-#show heading: set block(above: 1.2em, below: 0.7em)
+#set text(font: "New Computer Modern", size: 9.5pt)
+#set par(justify: true, leading: 0.6em)
+#show heading: set block(above: 1.1em, below: 0.6em)
 #set heading(numbering: "1.1  ")
+
 #show raw.where(block: false): box.with(
   fill: luma(240),
   inset: (x: 3pt, y: 0pt),
@@ -16,36 +18,59 @@
 )
 #show raw.where(block: true): block.with(
   fill: luma(245),
-  inset: 10pt,
+  inset: 8pt,
   radius: 4pt,
   width: 100%,
 )
+
 #let note(body) = block(
   fill: rgb("#eef3fb"),
-  inset: 11pt,
+  inset: 9pt,
   radius: 4pt,
   width: 100%,
   body,
 )
 
-#align(center)[
-  #text(17pt, weight: "bold")[Wavelet's type system: monomorphic to the bone]
-  #v(0.3em)
-  #text(10pt, style: "italic")[Design doc — draft 1]
-]
+// Figures (code + tables) are numbered per-section as "Figure 2.2", span both
+// columns, and float. Code and tables share one counter so the sequence is
+// unified under the "Figure" supplement.
+#show heading.where(level: 1): it => {
+  counter(figure.where(kind: "figure")).update(0)
+  it
+}
+#show figure.where(kind: "figure"): set figure.caption(position: bottom)
+// Section number is passed explicitly (known at authoring time) so a floating
+// figure can't pick up the wrong "N.x" prefix from its destination page. The
+// within-section index resets at each level-1 heading (above).
+#let fig(sect, body, caption) = figure(
+  body,
+  caption: caption,
+  kind: "figure",
+  supplement: [Figure],
+  numbering: n => numbering("1.1", sect, n),
+  placement: auto,
+  scope: "parent",
+)
 
-#v(0.4em)
-
-#note[
-  *Thesis.* Every Wavelet function has a type expressible as a WIT function, and
-  every Wavelet expression has a type expressible in WIT. The language therefore
-  has *no polymorphism* — not at runtime, and not even inside the compiler's type
-  language. Generic operations like `map` and `eq` do not disappear; they are
-  *monomorphized*, existing once per concrete type. Reuse comes not from
-  polymorphism but from three compile-time affordances — *deriving*,
-  *functors*, and *overload resolution* — that generate and select among those
-  monomorphic definitions for you.
-]
+// Full-width title + thesis, spanning both columns at the top of page 1.
+#place(top, scope: "parent", float: true, clearance: 1.4em, [
+  #align(center)[
+    #text(17pt, weight: "bold")[Wavelet's type system: monomorphic to the bone]
+    #v(0.3em)
+    #text(10pt, style: "italic")[Design doc — draft 1]
+  ]
+  #v(0.4em)
+  #note[
+    *Thesis.* Every Wavelet function has a type expressible as a WIT function, and
+    every Wavelet expression has a type expressible in WIT. The language therefore
+    has *no polymorphism* — not at runtime, and not even inside the compiler's
+    type language. Generic operations like `map` and `eq` do not disappear; they
+    are *monomorphized*, existing once per concrete type. Reuse comes not from
+    polymorphism but from three compile-time affordances — *deriving*,
+    *functors*, and *overload resolution* — that generate and select among those
+    monomorphic definitions for you.
+  ]
+])
 
 = Context
 
@@ -122,21 +147,33 @@ Wavelet: no generic functions, no generic types, no recursive types
 
 = The one distinction that makes it ergonomic
 
-The design lives or dies on keeping two ideas apart that are easily conflated:
+The design lives or dies on keeping two ideas apart that are easily conflated
+(@fig-distinction): _parametric_ polymorphism, which it rejects, and _ad-hoc_
+overloading, which it embraces.
 
-#table(
-  columns: (1fr, 1fr),
-  inset: 8pt,
-  align: left,
-  table.header([*Parametric polymorphism* — rejected], [*Ad-hoc overloading* — embraced]),
-  [_One_ function, _all_ types: `∀a. (a,a)→bool`.], [_Many_ monomorphic functions, _one_ name.],
-  [Not a WIT type. Would smuggle a non-WIT type into the compiler.], [Each function is a plain WIT function. The name is resolved away at compile time.],
-  [`eq` is a single generic definition.], [`eq` is an _overload set_: `eq-u32`, `eq-string`, `eq-point`, …],
-  [Resolved by _instantiation at runtime_ (boxing / dictionaries).], [Resolved by _the checker at each call site_ from static argument types.],
-)
+#fig(3,
+  table(
+    columns: (1fr, 1fr),
+    inset: 7pt,
+    align: left,
+    table.header(
+      [*Parametric polymorphism* — rejected],
+      [*Ad-hoc overloading* — embraced],
+    ),
+    [_One_ function, _all_ types: `∀a. (a,a)→bool`.],
+    [_Many_ monomorphic functions, _one_ name.],
+    [Not a WIT type. Would smuggle a non-WIT type into the compiler.],
+    [Each function is a plain WIT function. The name is resolved away at compile time.],
+    [`eq` is a single generic definition.],
+    [`eq` is an _overload set_: `eq-u32`, `eq-string`, `eq-point`, …],
+    [Resolved by _instantiation at runtime_ (boxing / dictionaries).],
+    [Resolved by _the checker at each call site_ from static argument types.],
+  ),
+  [Parametric polymorphism (rejected) versus ad-hoc overloading (embraced).],
+) <fig-distinction>
 
-Everything below is two motions on the right-hand column: _generate the many
-functions cheaply_, and _let one name select among them_.
+Everything below is two motions on the right-hand column of @fig-distinction:
+_generate the many functions cheaply_, and _let one name select among them_.
 
 = Reuse without polymorphism: three affordances
 
@@ -146,16 +183,20 @@ The operations that "should be generic" — equality, ordering, hashing,
 stringification — are _structural_: their bodies follow the shape of the type.
 Because in Wavelet a type _is_ ordinary WAVE data (`DefType` is just a form), a
 *derive macro* is literally a compile-time function from a type-form to a list of
-definition-forms. It walks the type and emits the monomorphic operations.
+definition-forms. It walks the type and emits the monomorphic operations
+(@fig-derive).
 
-```
-DefType point {x: s32 y: s32}
+#fig(4,
+  ```
+  DefType point {x: s32 y: s32}
 
-Derive {Eq Ord Show} point      // proposed syntax: emits, for `point`,
-                                //   eq-point, compare-point, show-point
-Def same Fn {a: point b: point}
-  eq(a b)                       // overload-resolves to the derived eq-point
-```
+  Derive {Eq Ord Show} point      // proposed syntax: emits, for `point`,
+                                  //   eq-point, compare-point, show-point
+  Def same Fn {a: point b: point}
+    eq(a b)                       // overload-resolves to the derived eq-point
+  ```,
+  [Deriving the structural operations for a record type.],
+) <fig-derive>
 
 This is Rust's `#[derive(Eq, Ord)]` and Haskell's `deriving (Eq, Show)` — with
 one difference that matters here. Haskell's derived `==` has type
@@ -172,32 +213,40 @@ _instantiated once per element type at compile time_. After instantiation,
 everything is concrete and monomorphic.
 
 This is the ML module system's central idea, and it maps onto the Component
-Model with no slack:
+Model with no slack (@fig-ml).
 
-#table(
-  columns: (1fr, 1fr),
-  inset: 8pt,
-  table.header([*ML module system*], [*Wavelet / Component Model*]),
-  [signature (module type)], [WIT _interface_],
-  [structure (module)], [_component_],
-  [functor `Make(M: ORDERED): SET`], [compile-time function from component to component],
-  [`module StringSet = Make(String)`], [parameterized `Import` (below)],
-)
+#fig(4,
+  table(
+    columns: (1fr, 1fr),
+    inset: 7pt,
+    align: left,
+    table.header([*ML module system*], [*Wavelet / Component Model*]),
+    [signature (module type)], [WIT _interface_],
+    [structure (module)], [_component_],
+    [functor `Make(M: ORDERED): SET`], [compile-time function from component to component],
+    [`module StringSet = Make(String)`], [parameterized `Import` (@fig-functor)],
+  ),
+  [The ML module system, transcribed into the Component Model.],
+) <fig-ml>
 
 Crucially, Wavelet _already has the machinery_: its macro system instantiates
 components at compile time. A functor is just a component you import _with a type
-argument_, producing qualified names the way every other import does:
+argument_, producing qualified names the way every other import does
+(@fig-functor).
 
-```
-// proposed syntax: instantiate the Set functor at two element types
-Import {pkg: "wavelet:coll/set" elem: string as: strs}
-Import {pkg: "wavelet:coll/set" elem: point  as: pts}
+#fig(4,
+  ```
+  // proposed syntax: instantiate the Set functor at two element types
+  Import {pkg: "wavelet:coll/set" elem: string as: strs}
+  Import {pkg: "wavelet:coll/set" elem: point  as: pts}
 
-Def demo Fn {}
-  Let {s: strs/new()}
-    Do [ strs/add(s "hello")
-         strs/contains(s "hello") ]   // → true, fully statically typed
-```
+  Def demo Fn {}
+    Let {s: strs/new()}
+      Do [ strs/add(s "hello")
+           strs/contains(s "hello") ]   // → true, fully statically typed
+  ```,
+  [A generic `Set`, instantiated per element type via parameterized `Import`.],
+) <fig-functor>
 
 Each `Import` stamps out a monomorphic `Set` specialized to its `elem`, with its
 own concrete WIT interface (§7). The element type's required operations (e.g.
@@ -257,27 +306,30 @@ machinery.
 The dividing line has a sharp test: *anything that must run during type
 checking is core; anything that can be expressed as a macro (a compile-time
 `tree → tree` component) or as a family of ordinary monomorphic definitions is
-standard library.*
+standard library* (@fig-core-stdlib).
 
-#table(
-  columns: (2.1fr, 0.7fr, 2.4fr),
-  inset: 7pt,
-  align: (left, center, left),
-  table.header([*Mechanism*], [*Layer*], [*Why*]),
-  [The two typing rules + total checking], [core], [The definition of the language's static semantics.],
-  [Bidirectional monomorphic inference], [core], [Part of the checker; nothing to delegate it to.],
-  [*Overload resolution* — selecting among same-named monomorphic functions by static argument/expected type], [core], [Inherently a type-checker activity: it needs the static types, which macros (running before checking) do not have. This is the one piece that _cannot_ be a library.],
-  [Literal context-resolution + defaulting (`s64`/`f64`)], [core], [Decided during checking from expected types.],
-  [`The` ascription, `DefType`], [core], [Already special forms; they feed the checker.],
-  [Macro system + compile-time component instantiation (the expander)], [core], [The substrate every affordance is built on.],
-  [WIT-world synthesis + export name-mangling], [core], [The compiler owns the boundary it emits.],
-  [`Derive` and the derivers `Eq`/`Ord`/`Show`/`Hash`], [stdlib], [Each is a macro — a `tree → tree` component. Users can ship their own.],
-  [Functor components (`Set`, `Map`, `sort`, …) and the instantiation convention], [stdlib], [Ordinary components, specialized via the core macro/instantiation substrate.],
-  [Overload sets `eq`, `compare`, `show`, `add`, `map`, `fold`, `each`, …], [stdlib], [Families of monomorphic definitions — usually _emitted_ by derive/functor macros.],
-  [User-authored derivers and functors], [user], [Just more macros and components; no privileged status.],
-)
+#fig(6,
+  table(
+    columns: (2.1fr, 0.7fr, 2.4fr),
+    inset: 6pt,
+    align: (left, center, left),
+    table.header([*Mechanism*], [*Layer*], [*Why*]),
+    [The two typing rules + total checking], [core], [The definition of the language's static semantics.],
+    [Bidirectional monomorphic inference], [core], [Part of the checker; nothing to delegate it to.],
+    [*Overload resolution* — selecting among same-named monomorphic functions by static argument/expected type], [core], [Inherently a type-checker activity: it needs static types, which macros (running before checking) lack. The one piece that _cannot_ be a library.],
+    [Literal context-resolution + defaulting (`s64`/`f64`)], [core], [Decided during checking from expected types.],
+    [`The` ascription, `DefType`], [core], [Already special forms; they feed the checker.],
+    [Macro system + compile-time component instantiation (the expander)], [core], [The substrate every affordance is built on.],
+    [WIT-world synthesis + export name-mangling], [core], [The compiler owns the boundary it emits.],
+    [`Derive` and the derivers `Eq`/`Ord`/`Show`/`Hash`], [stdlib], [Each is a macro — a `tree → tree` component. Users can ship their own.],
+    [Functor components (`Set`, `Map`, `sort`, …) and the instantiation convention], [stdlib], [Ordinary components, specialized via the core macro/instantiation substrate.],
+    [Overload sets `eq`, `compare`, `show`, `add`, `map`, `fold`, `each`, …], [stdlib], [Families of monomorphic definitions — usually _emitted_ by derive/functor macros.],
+    [User-authored derivers and functors], [user], [Just more macros and components; no privileged status.],
+  ),
+  [The core / standard-library / user-space split for every mechanism.],
+) <fig-core-stdlib>
 
-Two clarifications this table compresses:
+Two clarifications @fig-core-stdlib compresses:
 
 - *Overloading is core, but no overloaded name is.* The _rule_ that a name may
   stand for several monomorphic functions and be resolved by the checker lives in
@@ -301,65 +353,68 @@ components, exactly like the macros and standard library that already do.
 
 = Worked example, with the WIT it produces
 
-A `point`, equality derived for it, and a `Set` of points — and the `.wit` the
-compiler synthesizes. The headline is that *nothing in the WIT is generic*: every
-synthesized signature is a concrete, ordinary WIT function or type.
+A `point`, equality derived for it, and a `Set` of points (@fig-source) — and the
+`.wit` the compiler synthesizes (@fig-wit). The headline is that _nothing in the
+WIT is generic_: every synthesized signature is a concrete, ordinary WIT function
+or type.
 
-== Source
+#fig(7,
+  ```
+  Package "demo:geo@0.1.0"
 
-```
-Package "demo:geo@0.1.0"
+  DefType point {x: s32 y: s32}
+  Derive {Eq Ord Show} point
 
-DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
+  Import {pkg: "wavelet:coll/set" elem: point as: pts}
 
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
-
-Export nearest-set
-Def nearest-set Fn {ps: list<point>}
-  Let {s: pts/new()}
-    Do [ each(ps Fn {p} pts/add(s p))   // each is itself monomorphic here
-         s ]
-```
-
-== Synthesized WIT
+  Export nearest-set
+  Def nearest-set Fn {ps: list<point>}
+    Let {s: pts/new()}
+      Do [ each(ps Fn {p} pts/add(s p))   // each is itself monomorphic here
+           s ]
+  ```,
+  [Source: a derived record type and an instantiated `Set` of it.],
+) <fig-source>
 
 A derived, _exported_ `eq`/`show` and the instantiated `Set` become concrete
-interfaces. Note the name-mangling: WIT has no overloading, so the overload set
-`eq` lowers to distinctly named functions.
+interfaces (@fig-wit). Note the name-mangling: WIT has no overloading, so the
+overload set `eq` lowers to distinctly named functions.
 
-```wit
-package demo:geo@0.1.0;
+#fig(7,
+  ```wit
+  package demo:geo@0.1.0;
 
-interface types {
-  record point { x: s32, y: s32 }
-}
-
-interface compare {
-  use types.{point};
-  eq-point: func(a: point, b: point) -> bool;
-  compare-point: func(a: point, b: point) -> s32;
-  show-point: func(v: point) -> string;
-}
-
-// the Set functor, instantiated at `point`: a monomorphic resource interface
-interface point-set {
-  use types.{point};
-  resource set {
-    constructor();
-    add: func(value: point);
-    contains: func(value: point) -> bool;
-    size: func() -> u32;
+  interface types {
+    record point { x: s32, y: s32 }
   }
-}
 
-world geo {
-  export types;
-  export compare;
-  export point-set;
-  export nearest-set: func(ps: list<point>) -> point-set.set;
-}
-```
+  interface compare {
+    use types.{point};
+    eq-point: func(a: point, b: point) -> bool;
+    compare-point: func(a: point, b: point) -> s32;
+    show-point: func(v: point) -> string;
+  }
+
+  // the Set functor, instantiated at `point`: a monomorphic resource interface
+  interface point-set {
+    use types.{point};
+    resource set {
+      constructor();
+      add: func(value: point);
+      contains: func(value: point) -> bool;
+      size: func() -> u32;
+    }
+  }
+
+  world geo {
+    export types;
+    export compare;
+    export point-set;
+    export nearest-set: func(ps: list<point>) -> point-set.set;
+  }
+  ```,
+  [The synthesized WIT — entirely monomorphic and concrete.],
+) <fig-wit>
 
 Compare what a _generic_ set would have wanted — `resource set<t>` with
 `add: func(value: t)` — which WIT simply cannot write. The functor produces
@@ -372,18 +427,21 @@ a separate, concrete interface.
 
 Go shipped for a decade as a first-order, monomorphic language with _no_
 generation or overloading affordances. To reuse a container you had two bad
-options:
+options (@fig-go).
 
-```go
-// Option A: hand-write (or code-gen) one type per element type.
-type StringSet map[string]struct{}
-func (s StringSet) Add(v string)           { s[v] = struct{}{} }
-func (s StringSet) Contains(v string) bool { _, ok := s[v]; return ok }
-// ... now write IntSet, PointSet, ... all over again.
+#fig(8,
+  ```go
+  // Option A: hand-write (or code-gen) one type per element type.
+  type StringSet map[string]struct{}
+  func (s StringSet) Add(v string)           { s[v] = struct{}{} }
+  func (s StringSet) Contains(v string) bool { _, ok := s[v]; return ok }
+  // ... now write IntSet, PointSet, ... all over again.
 
-// Option B: erase the type with interface{} — and lose static safety.
-type Set map[interface{}]struct{}   // boxes every element; runtime assertions
-```
+  // Option B: erase the type with interface{} — and lose static safety.
+  type Set map[interface{}]struct{}   // boxes every element; runtime assertions
+  ```,
+  [Pre-generics Go: hand/codegen duplication, or untyped `interface{}`.],
+) <fig-go>
 
 Option A meant copy-paste or an _out-of-band_ code generator (`go generate`,
 genny) whose output drifted from your types and whose call sites were verbose.
@@ -394,17 +452,22 @@ added parametric generics in 1.18.
 Wavelet inhabits the _same monomorphic world_ as pre-1.18 Go — and explicitly
 keeps Option B off the table (there is no `interface{}`; the nearest thing,
 the `tree` arena type, is itself a perfectly ordinary WIT type, not an untyped
-escape hatch). What Wavelet adds is precisely the two layers Go lacked:
+escape hatch). What Wavelet adds is precisely the two layers Go lacked
+(@fig-go-table).
 
-#table(
-  columns: (1fr, 1fr),
-  inset: 8pt,
-  table.header([*Go ≤ 1.17 friction*], [*Wavelet's answer*]),
-  [Code-gen is out-of-band (`go generate`); output drifts.], [Generation is _in-language_: derive macros + functor `Import`, run by the compiler.],
-  [`interface{}` boxes and defeats the type checker.], [No `any`; every expression keeps a concrete WIT type.],
-  [Call sites verbose (`StringSet`, `IntSet`, distinct names).], [Overload sets: write `add(s x)` / `eq(a b)`, resolved statically.],
-  [`sort.Interface` boilerplate per type.], [`Derive {Ord} t` emits it; `sort` is a functor instantiated at `t`.],
-)
+#fig(8,
+  table(
+    columns: (1fr, 1fr),
+    inset: 7pt,
+    align: left,
+    table.header([*Go ≤ 1.17 friction*], [*Wavelet's answer*]),
+    [Code-gen is out-of-band (`go generate`); output drifts.], [Generation is _in-language_: derive macros + functor `Import`, run by the compiler.],
+    [`interface{}` boxes and defeats the type checker.], [No `any`; every expression keeps a concrete WIT type.],
+    [Call sites verbose (`StringSet`, `IntSet`, distinct names).], [Overload sets: write `add(s x)` / `eq(a b)`, resolved statically.],
+    [`sort.Interface` boilerplate per type.], [`Derive {Ord} t` emits it; `sort` is a functor instantiated at `t`.],
+  ),
+  [Go's pre-generics friction, point by point, against Wavelet's answer.],
+) <fig-go-table>
 
 The wager is that derive + functors + overloading make the monomorphic world
 _comfortable enough_ that Wavelet never feels Go's pull toward generics — a pull
