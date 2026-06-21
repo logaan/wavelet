@@ -129,6 +129,18 @@ fn qualified_symbol_output_agrees() {
 }
 
 #[test]
+fn expand_inside_macro_agrees() {
+    // `both` builds an `and`-macro call form and `expand`s it one step from
+    // inside its own body — exercising the in-macro `expand` builtin.
+    assert_agree(
+        "Package \"demo:m@0.1.0\"\n\
+         DefMacro and {a b} Quasi If Unquote(a) Unquote(b) false\n\
+         DefMacro both {x} expand(Quasi And Unquote(x) Unquote(x))\n\
+         Both p\n",
+    );
+}
+
+#[test]
 fn try_let_from_spec_agrees() {
     // §7.2 try-let: exercises rec-key/rec-val, a Let in the macro body, and a
     // quasi Match with nested unquotes.

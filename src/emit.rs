@@ -1065,6 +1065,10 @@ struct Emitter<'a> {
     var_box_cache: HashMap<String, u32>, // payload-less variant case → static box addr
     false_addr: u32,
     true_addr: u32,
+    /// In a macro component, the function index of the guest-internal one-step
+    /// expander, so the `expand` builtin (used *inside* a macro body) can call
+    /// it. `None` in an ordinary module, where `expand` is unsupported.
+    macro_expand_idx: Option<u32>,
 }
 
 impl<'a> Emitter<'a> {
@@ -3516,12 +3520,22 @@ impl<'a> Emitter<'a> {
                 return self.gensym(fx);
             }
             "expand" => {
-                return Err(
-                    "`expand` inside a compiled macro body is not supported yet \
-                     (the wasm backend cannot recurse into the expander); \
-                     restructure the macro to avoid it"
-                        .into(),
-                );
+                nargs(1)?;
+                match self.macro_expand_idx {
+                    // Inside a macro component: one expansion step over the
+                    // library's own macros (mirrors `builtins.rs` `expand`).
+                    Some(idx) => {
+                        self.expr(fx, items[0], false)?;
+                        fx.op(I::Call(idx));
+                    }
+                    None => {
+                        return Err(
+                            "`expand` is only available inside a macro library \
+                             (a file whose top level is DefMacros)"
+                                .into(),
+                        );
+                    }
+                }
             }
             other => return Err(format!("builtin `{other}` not supported by the wasm backend yet")),
         }
@@ -3608,6 +3622,7 @@ fn emit_core_module(
         var_box_cache: HashMap::new(),
         false_addr: 0,
         true_addr: 0,
+        macro_expand_idx: None,
     };
 
     // static boxes: false @16, true @24
@@ -4012,6 +4027,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         var_box_cache: HashMap::new(),
         false_addr: 0,
         true_addr: 0,
+        macro_expand_idx: None,
     };
 
     // static boxes: false @16, true @24
@@ -4060,6 +4076,9 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     let form_to_tree_idx = take();
     let manifest_idx = take();
     let expand_idx = take();
+    let expand_step_idx = take();
+    // Make the in-macro `expand` builtin available while compiling the bodies.
+    em.macro_expand_idx = Some(expand_step_idx);
 
     // bodies, in the same order their indices were assigned
     for m in &macros {
@@ -4079,6 +4098,8 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     let b = mc_manifest(&mut em, &macros)?;
     em.bodies.push(b);
     let b = mc_expand(&mut em, &macros, tree_to_form_idx, form_to_tree_idx)?;
+    em.bodies.push(b);
+    let b = mc_expand_step(&mut em, &macros)?;
     em.bodies.push(b);
 
     let exports: Vec<(String, u32)> = vec![
@@ -5649,6 +5670,145 @@ fn mc_expand(
     em.store_to_mem(&mut fx, &result_ty, res, area, 0)?;
     fx.op(I::LocalGet(area));
     let t = em.ty_idx(fparams, vec![I32]);
+    Ok((t, fx.finish()))
+}
+
+/// The guest-internal one-step expander behind the in-macro `expand` builtin
+/// (mirrors `builtins.rs` `expand`): given a form, if it is a call `(name-MACRO
+/// …)` to one of this library's macros, run that macro's compiled body **once**
+/// over the call's argument forms and return the result; otherwise return the
+/// form unchanged. Signature `(form) -> form`.
+fn mc_expand_step(em: &mut Emitter, macros: &[MacroDef]) -> Result<(u32, Function), String> {
+    use ValType::I32;
+    let mut fx = FnCtx::new(1);
+    let form = 0u32;
+    let head = fx.local(I32);
+    let nargs = fx.local(I32);
+    let tupb = fx.local(I32);
+    let e = fx.local(I32);
+
+    // Not a call tuple → unchanged.
+    fx.op(I::LocalGet(form));
+    fx.op(I::I32Load(ma(0, 2)));
+    fx.op(I::I32Const(TAG_TUP));
+    fx.op(I::I32Ne);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(form));
+    fx.op(I::Return);
+    fx.op(I::End);
+    // Empty tuple → unchanged.
+    fx.op(I::LocalGet(form));
+    fx.op(I::I32Load(ma(4, 2)));
+    fx.op(I::I32Eqz);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(form));
+    fx.op(I::Return);
+    fx.op(I::End);
+    // head = element 0; must be a payload-less symbol (TAG_VAR, payload 0).
+    fx.op(I::LocalGet(form));
+    fx.op(I::I32Load(ma(8, 2)));
+    fx.op(I::LocalSet(head));
+    fx.op(I::LocalGet(head));
+    fx.op(I::I32Load(ma(0, 2)));
+    fx.op(I::I32Const(TAG_VAR));
+    fx.op(I::I32Ne);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(form));
+    fx.op(I::Return);
+    fx.op(I::End);
+    fx.op(I::LocalGet(head));
+    fx.op(I::I32Load(ma(8, 2)));
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(form));
+    fx.op(I::Return);
+    fx.op(I::End);
+    // nargs = len - 1
+    fx.op(I::LocalGet(form));
+    fx.op(I::I32Load(ma(4, 2)));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Sub);
+    fx.op(I::LocalSet(nargs));
+
+    for m in macros {
+        let name_macro = em.intern_str(&format!("{}-MACRO", m.name)) as i32;
+        let arity = m.params.len();
+        let fidx = em.funcs[&m.name].0;
+        // head case string == "<name>-MACRO" ?
+        fx.op(I::LocalGet(head));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::I32Const(name_macro));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(nargs));
+        fx.op(I::I32Const(arity as i32));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        for j in 1..=arity {
+            fx.op(I::LocalGet(form));
+            fx.op(I::I32Load(ma(8 + 4 * j as u64, 2)));
+        }
+        fx.op(I::Call(fidx));
+        fx.op(I::Return);
+        fx.op(I::Else);
+        if arity == 1 {
+            // a 1-param macro given several args binds the whole args tuple
+            fx.op(I::LocalGet(nargs));
+            fx.op(I::I32Const(4));
+            fx.op(I::I32Mul);
+            fx.op(I::I32Const(8));
+            fx.op(I::I32Add);
+            fx.op(I::Call(em.h.alloc));
+            fx.op(I::LocalSet(tupb));
+            fx.op(I::LocalGet(tupb));
+            fx.op(I::I32Const(TAG_TUP));
+            fx.op(I::I32Store(ma(0, 2)));
+            fx.op(I::LocalGet(tupb));
+            fx.op(I::LocalGet(nargs));
+            fx.op(I::I32Store(ma(4, 2)));
+            fx.op(I::I32Const(0));
+            fx.op(I::LocalSet(e));
+            fx.op(I::Block(BlockType::Empty));
+            fx.op(I::Loop(BlockType::Empty));
+            fx.op(I::LocalGet(e));
+            fx.op(I::LocalGet(nargs));
+            fx.op(I::I32GeU);
+            fx.op(I::BrIf(1));
+            fx.op(I::LocalGet(tupb));
+            fx.op(I::LocalGet(e));
+            fx.op(I::I32Const(4));
+            fx.op(I::I32Mul);
+            fx.op(I::I32Add);
+            fx.op(I::LocalGet(form));
+            fx.op(I::LocalGet(e));
+            fx.op(I::I32Const(1));
+            fx.op(I::I32Add);
+            fx.op(I::I32Const(4));
+            fx.op(I::I32Mul);
+            fx.op(I::I32Add);
+            fx.op(I::I32Load(ma(8, 2)));
+            fx.op(I::I32Store(ma(8, 2)));
+            fx.op(I::LocalGet(e));
+            fx.op(I::I32Const(1));
+            fx.op(I::I32Add);
+            fx.op(I::LocalSet(e));
+            fx.op(I::Br(0));
+            fx.op(I::End);
+            fx.op(I::End);
+            fx.op(I::LocalGet(tupb));
+            fx.op(I::Call(fidx));
+            fx.op(I::Return);
+        } else {
+            // arity mismatch: leave the form unchanged (rare; the interpreter
+            // would raise an eval error here).
+            fx.op(I::LocalGet(form));
+            fx.op(I::Return);
+        }
+        fx.op(I::End);
+        fx.op(I::End);
+    }
+    // No matching macro → unchanged.
+    fx.op(I::LocalGet(form));
+    let t = em.ty_idx(vec![I32], vec![I32]);
     Ok((t, fx.finish()))
 }
 
