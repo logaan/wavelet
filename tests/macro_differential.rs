@@ -108,6 +108,27 @@ fn char_forms_agree() {
 }
 
 #[test]
+fn payloaded_variant_output_agrees() {
+    // A macro body that yields a payloaded variant value `ok(x)` must serialize
+    // back like value_to_form: a 1-argument call `(ok, x)`.
+    assert_agree(
+        "Package \"demo:m@0.1.0\"\n\
+         DefMacro mkok {x} ok(x)\n\
+         Mkok y\n",
+    );
+}
+
+#[test]
+fn qualified_symbol_output_agrees() {
+    // A quoted qualified symbol must round-trip as a `qsym`, not a flat `sym`.
+    assert_agree(
+        "Package \"demo:m@0.1.0\"\n\
+         DefMacro q {} Quote dsl/elem\n\
+         Q\n",
+    );
+}
+
+#[test]
 fn try_let_from_spec_agrees() {
     // §7.2 try-let: exercises rec-key/rec-val, a Let in the macro body, and a
     // quasi Match with nested unquotes.

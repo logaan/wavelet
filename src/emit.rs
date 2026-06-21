@@ -4055,6 +4055,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     }
     let tree_to_form_idx = take();
     let count_idx = take();
+    let sym_node_idx = take();
     let fill_idx = take();
     let form_to_tree_idx = take();
     let manifest_idx = take();
@@ -4069,7 +4070,9 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     em.bodies.push(b);
     let b = mc_count_nodes(&mut em, count_idx)?;
     em.bodies.push(b);
-    let b = mc_fill(&mut em, fill_idx)?;
+    let b = mc_sym_node(&mut em)?;
+    em.bodies.push(b);
+    let b = mc_fill(&mut em, fill_idx, sym_node_idx)?;
     em.bodies.push(b);
     let b = mc_form_to_tree(&mut em, count_idx, fill_idx)?;
     em.bodies.push(b);
@@ -4594,6 +4597,8 @@ fn mc_count_nodes(em: &mut Emitter, count_idx: u32) -> Result<(u32, Function), S
     fx.op(I::If(BlockType::Empty));
     fx.op(I::Unreachable);
     fx.op(I::End);
+    // A payloaded TAG_VAR `name(p)` becomes a `tup[sym(name), p]` (2 nodes plus
+    // the payload's subtree); a payload-less one is a single sym/qsym node.
     fx.op(I::LocalGet(tag));
     fx.op(I::I32Const(TAG_VAR));
     fx.op(I::I32Eq);
@@ -4601,7 +4606,14 @@ fn mc_count_nodes(em: &mut Emitter, count_idx: u32) -> Result<(u32, Function), S
     fx.op(I::LocalGet(form));
     fx.op(I::I32Load(ma(8, 2)));
     fx.op(I::If(BlockType::Empty));
-    fx.op(I::Unreachable);
+    fx.op(I::LocalGet(total));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(form));
+    fx.op(I::I32Load(ma(8, 2)));
+    fx.op(I::Call(count_idx));
+    fx.op(I::I32Add);
+    fx.op(I::LocalSet(total));
     fx.op(I::End);
     fx.op(I::End);
     // tup / lst: children at [form + 8 + 4e]
@@ -4681,10 +4693,184 @@ fn mc_count_nodes(em: &mut Emitter, count_idx: u32) -> Result<(u32, Function), S
     Ok((t, fx.finish()))
 }
 
+/// Copy `sublen` bytes from `src[8 + start ..]` into a fresh `[TAG_STR, sublen,
+/// bytes…]` box left in `out`. `start`/`sublen` are locals; `j` is a scratch
+/// loop local.
+fn emit_substr(em: &mut Emitter, fx: &mut FnCtx, src: u32, start: u32, sublen: u32, out: u32, j: u32) {
+    fx.op(I::LocalGet(sublen));
+    fx.op(I::I32Const(8));
+    fx.op(I::I32Add);
+    fx.op(I::Call(em.h.alloc));
+    fx.op(I::LocalSet(out));
+    fx.op(I::LocalGet(out));
+    fx.op(I::I32Const(TAG_STR));
+    fx.op(I::I32Store(ma(0, 2)));
+    fx.op(I::LocalGet(out));
+    fx.op(I::LocalGet(sublen));
+    fx.op(I::I32Store(ma(4, 2)));
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(j));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(j));
+    fx.op(I::LocalGet(sublen));
+    fx.op(I::I32GeU);
+    fx.op(I::BrIf(1));
+    // dst = out + 8 + j
+    fx.op(I::LocalGet(out));
+    fx.op(I::I32Const(8));
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(j));
+    fx.op(I::I32Add);
+    // byte = src[8 + start + j]
+    fx.op(I::LocalGet(src));
+    fx.op(I::I32Const(8));
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(start));
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(j));
+    fx.op(I::I32Add);
+    fx.op(I::I32Load8U(ma(0, 0)));
+    fx.op(I::I32Store8(ma(0, 0)));
+    fx.op(I::LocalGet(j));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::LocalSet(j));
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+}
+
+/// Build the wire node box for a symbol whose name is the string box `case`:
+/// a `sym(name)` node, or — when the name contains a `/` — a `qsym((alias,
+/// name))` node (mirroring `value::sym_node`, which splits a `Variant` case on
+/// `/`). Signature `(case-str) -> node-box`.
+fn mc_sym_node(em: &mut Emitter) -> Result<(u32, Function), String> {
+    use ValType::I32;
+    let mut fx = FnCtx::new(1);
+    let case = 0u32;
+    let len = fx.local(I32);
+    let i = fx.local(I32);
+    let slash = fx.local(I32);
+    let node = fx.local(I32);
+    let alias = fx.local(I32);
+    let name = fx.local(I32);
+    let tup = fx.local(I32);
+    let start = fx.local(I32);
+    let sublen = fx.local(I32);
+    let j = fx.local(I32);
+
+    fx.op(I::LocalGet(case));
+    fx.op(I::I32Load(ma(4, 2)));
+    fx.op(I::LocalSet(len));
+    fx.op(I::I32Const(-1));
+    fx.op(I::LocalSet(slash));
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(i));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(i));
+    fx.op(I::LocalGet(len));
+    fx.op(I::I32GeU);
+    fx.op(I::BrIf(1));
+    fx.op(I::LocalGet(case));
+    fx.op(I::I32Const(8));
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(i));
+    fx.op(I::I32Add);
+    fx.op(I::I32Load8U(ma(0, 0)));
+    fx.op(I::I32Const('/' as i32));
+    fx.op(I::I32Eq);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(i));
+    fx.op(I::LocalSet(slash));
+    fx.op(I::Br(2)); // first '/' found → exit the scan
+    fx.op(I::End);
+    fx.op(I::LocalGet(i));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::LocalSet(i));
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+
+    let sym = em.intern_str("sym") as i32;
+    let qsym = em.intern_str("qsym") as i32;
+    fx.op(I::LocalGet(slash));
+    fx.op(I::I32Const(-1));
+    fx.op(I::I32Eq);
+    fx.op(I::If(BlockType::Result(I32)));
+    // sym(name): payload is the whole case string box
+    fx.op(I::I32Const(12));
+    fx.op(I::Call(em.h.alloc));
+    fx.op(I::LocalSet(node));
+    fx.op(I::LocalGet(node));
+    fx.op(I::I32Const(TAG_VAR));
+    fx.op(I::I32Store(ma(0, 2)));
+    fx.op(I::LocalGet(node));
+    fx.op(I::I32Const(sym));
+    fx.op(I::I32Store(ma(4, 2)));
+    fx.op(I::LocalGet(node));
+    fx.op(I::LocalGet(case));
+    fx.op(I::I32Store(ma(8, 2)));
+    fx.op(I::LocalGet(node));
+    fx.op(I::Else);
+    // qsym((alias, name)): split at the slash
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(start));
+    fx.op(I::LocalGet(slash));
+    fx.op(I::LocalSet(sublen));
+    emit_substr(em, &mut fx, case, start, sublen, alias, j);
+    fx.op(I::LocalGet(slash));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::LocalSet(start));
+    fx.op(I::LocalGet(len));
+    fx.op(I::LocalGet(slash));
+    fx.op(I::I32Sub);
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Sub);
+    fx.op(I::LocalSet(sublen));
+    emit_substr(em, &mut fx, case, start, sublen, name, j);
+    // tup = [TAG_TUP, 2, alias, name]
+    fx.op(I::I32Const(16));
+    fx.op(I::Call(em.h.alloc));
+    fx.op(I::LocalSet(tup));
+    fx.op(I::LocalGet(tup));
+    fx.op(I::I32Const(TAG_TUP));
+    fx.op(I::I32Store(ma(0, 2)));
+    fx.op(I::LocalGet(tup));
+    fx.op(I::I32Const(2));
+    fx.op(I::I32Store(ma(4, 2)));
+    fx.op(I::LocalGet(tup));
+    fx.op(I::LocalGet(alias));
+    fx.op(I::I32Store(ma(8, 2)));
+    fx.op(I::LocalGet(tup));
+    fx.op(I::LocalGet(name));
+    fx.op(I::I32Store(ma(12, 2)));
+    // node = [TAG_VAR, "qsym", tup]
+    fx.op(I::I32Const(12));
+    fx.op(I::Call(em.h.alloc));
+    fx.op(I::LocalSet(node));
+    fx.op(I::LocalGet(node));
+    fx.op(I::I32Const(TAG_VAR));
+    fx.op(I::I32Store(ma(0, 2)));
+    fx.op(I::LocalGet(node));
+    fx.op(I::I32Const(qsym));
+    fx.op(I::I32Store(ma(4, 2)));
+    fx.op(I::LocalGet(node));
+    fx.op(I::LocalGet(tup));
+    fx.op(I::I32Store(ma(8, 2)));
+    fx.op(I::LocalGet(node));
+    fx.op(I::End);
+    let t = em.ty_idx(vec![I32], vec![I32]);
+    Ok((t, fx.finish()))
+}
+
 /// `box → wire`, recursively: emit `form`'s subtree into `nodes` (a list box,
 /// elements at +8) using a post-order id cursor (`cur`, a 4-byte cell), and
 /// return this form's assigned node id. Children are emitted before parents.
-fn mc_fill(em: &mut Emitter, fill_idx: u32) -> Result<(u32, Function), String> {
+fn mc_fill(em: &mut Emitter, fill_idx: u32, sym_node_idx: u32) -> Result<(u32, Function), String> {
     use ValType::I32;
     let mut fx = FnCtx::new(3);
     let form = 0u32;
@@ -4692,6 +4878,8 @@ fn mc_fill(em: &mut Emitter, fill_idx: u32) -> Result<(u32, Function), String> {
     let cur = 2u32;
     let tag = fx.local(I32);
     let id = fx.local(I32);
+    let headid = fx.local(I32);
+    let pid = fx.local(I32);
     let m = fx.local(I32);
     let e = fx.local(I32);
     let plist = fx.local(I32);
@@ -4773,20 +4961,53 @@ fn mc_fill(em: &mut Emitter, fill_idx: u32) -> Result<(u32, Function), String> {
         fx.op(I::Return);
         fx.op(I::End);
     }
-    // sym (payload-less TAG_VAR): wire `sym(name)`, payload = the case str box.
+    // TAG_VAR: a payload-less variant is a symbol (`sym`/`qsym` via mc_sym_node);
+    // a payloaded variant `name(p)` mirrors `value_to_form` as a 1-argument call
+    // `tup[sym(name), p]`.
     {
-        let sym = em.intern_str("sym") as i32;
         fx.op(I::LocalGet(tag));
         fx.op(I::I32Const(TAG_VAR));
         fx.op(I::I32Eq);
         fx.op(I::If(BlockType::Empty));
-        // payloaded TAG_VAR cannot appear in code → trap (kept in sync w/ count)
+        fx.op(I::LocalGet(form));
+        fx.op(I::I32Load(ma(8, 2))); // the variant's payload (0 if none)
+        fx.op(I::If(BlockType::Empty));
+        // payloaded → tup[ sym-node(name), fill(payload) ]
+        bump(&mut fx);
+        fx.op(I::LocalGet(id));
+        fx.op(I::LocalSet(headid));
+        fx.op(I::LocalGet(form));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::Call(sym_node_idx));
+        fx.op(I::LocalSet(node));
+        store_node(&mut fx, nodes, headid, node);
         fx.op(I::LocalGet(form));
         fx.op(I::I32Load(ma(8, 2)));
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::Unreachable);
-        fx.op(I::End);
+        fx.op(I::LocalGet(nodes));
+        fx.op(I::LocalGet(cur));
+        fx.op(I::Call(fill_idx));
+        fx.op(I::LocalSet(pid));
         bump(&mut fx);
+        // plist = [box_int(headid), box_int(pid)]
+        fx.op(I::I32Const(16));
+        fx.op(I::Call(em.h.alloc));
+        fx.op(I::LocalSet(plist));
+        fx.op(I::LocalGet(plist));
+        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(plist));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Store(ma(4, 2)));
+        fx.op(I::LocalGet(plist));
+        fx.op(I::LocalGet(headid));
+        fx.op(I::I64ExtendI32U);
+        fx.op(I::Call(em.h.box_int));
+        fx.op(I::I32Store(ma(8, 2)));
+        fx.op(I::LocalGet(plist));
+        fx.op(I::LocalGet(pid));
+        fx.op(I::I64ExtendI32U);
+        fx.op(I::Call(em.h.box_int));
+        fx.op(I::I32Store(ma(12, 2)));
         fx.op(I::I32Const(12));
         fx.op(I::Call(em.h.alloc));
         fx.op(I::LocalSet(node));
@@ -4794,15 +5015,25 @@ fn mc_fill(em: &mut Emitter, fill_idx: u32) -> Result<(u32, Function), String> {
         fx.op(I::I32Const(TAG_VAR));
         fx.op(I::I32Store(ma(0, 2)));
         fx.op(I::LocalGet(node));
-        fx.op(I::I32Const(sym));
+        fx.op(I::I32Const(em.intern_str("tup") as i32));
         fx.op(I::I32Store(ma(4, 2)));
         fx.op(I::LocalGet(node));
-        fx.op(I::LocalGet(form));
-        fx.op(I::I32Load(ma(4, 2))); // the symbol's name string box
+        fx.op(I::LocalGet(plist));
         fx.op(I::I32Store(ma(8, 2)));
         store_node(&mut fx, nodes, id, node);
         fx.op(I::LocalGet(id));
         fx.op(I::Return);
+        fx.op(I::Else);
+        // payload-less → sym / qsym
+        bump(&mut fx);
+        fx.op(I::LocalGet(form));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::Call(sym_node_idx));
+        fx.op(I::LocalSet(node));
+        store_node(&mut fx, nodes, id, node);
+        fx.op(I::LocalGet(id));
+        fx.op(I::Return);
+        fx.op(I::End);
         fx.op(I::End);
     }
     // tup / lst: fill children first, then a wire node whose payload is the
