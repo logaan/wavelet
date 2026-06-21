@@ -59,7 +59,6 @@ fn expand_forms(src: &str) -> Result<Vec<String>, String> {
 // --- Step 1: checker skeleton, literal types, total checking wired in --------
 
 #[test]
-#[ignore = "pending type system"]
 // Step 1 — the total checker is wired into the compile path: an ill-typed
 // function body is a compile error even though `bad` is never called (today the
 // body never runs, so the program is wrongly accepted). This is the smoke test
@@ -70,7 +69,6 @@ fn illtyped_uncalled_def_is_a_compile_error() {
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 1 — the checker knows builtins' operand types: `add` of an `s32` and a
 // `string` has no WIT type, so it is rejected (uncalled today ⇒ accepted).
 fn mixed_arithmetic_operands_are_rejected() {
@@ -81,7 +79,6 @@ fn mixed_arithmetic_operands_are_rejected() {
 // --- Step 2: bidirectional checking of the core forms ------------------------
 
 #[test]
-#[ignore = "pending type system"]
 // Step 2 — every expression has exactly one WIT type: an `If` whose branches are
 // `s64` and `string` cannot be typed, so it is a compile error (dead branch
 // today ⇒ accepted).
@@ -91,7 +88,6 @@ fn if_branches_must_share_one_wit_type() {
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 2 — `Match` clause results must unify to one WIT type, exactly like `If`.
 fn match_clause_results_must_share_one_wit_type() {
     let r = run(r#"Def f Fn {b: bool} Match b [(true 1) (false "s")]"#);
@@ -99,7 +95,6 @@ fn match_clause_results_must_share_one_wit_type() {
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 2 — checking is total and resolves names statically: an unbound name in
 // an uncalled function body is a compile error (today the body is never
 // evaluated, so it slips through).
@@ -109,7 +104,6 @@ fn unbound_name_in_uncalled_body_is_a_compile_error() {
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 2 — `Let` binding types flow into the body: `n` is inferred `s64`, so
 // using it where a `string` is required is a compile error.
 fn let_binding_types_flow_into_the_body() {
@@ -120,7 +114,6 @@ fn let_binding_types_flow_into_the_body() {
 // --- Step 3: `The` ascription + literal context-resolution & range checks -----
 
 #[test]
-#[ignore = "pending type system"]
 // Step 3 — numeric literals are context-resolved with a compile-time range
 // check: `300` does not fit `u8`, so `The u8 300` is a static error (uncalled
 // today ⇒ no runtime check fires).
@@ -130,7 +123,6 @@ fn out_of_range_literal_for_u8_is_a_compile_error() {
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 3 — a negative literal cannot resolve to an unsigned type.
 fn negative_literal_for_unsigned_is_a_compile_error() {
     let r = run(r#"Def f Fn {} The u8 -1"#);
@@ -138,7 +130,6 @@ fn negative_literal_for_unsigned_is_a_compile_error() {
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 3 — a float literal cannot resolve to an integer type.
 fn float_literal_where_int_expected_is_a_compile_error() {
     let r = run(r#"Def f Fn {} The s32 1.5"#);
@@ -148,7 +139,6 @@ fn float_literal_where_int_expected_is_a_compile_error() {
 // --- Step 4: function signatures are WIT function types; calls are checked ----
 
 #[test]
-#[ignore = "pending type system"]
 // Step 4 — call arguments are checked against the callee's WIT signature: a
 // `string` argument where the parameter is `s32` is a compile error.
 fn call_argument_type_mismatch_is_a_compile_error() {
@@ -158,7 +148,6 @@ Def f Fn {} g("str")"#);
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 4 — call arity is checked against the signature: two arguments to a
 // one-parameter function is a compile error.
 fn call_arity_mismatch_is_a_compile_error() {
@@ -168,7 +157,6 @@ Def f Fn {} g(1 2)"#);
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 4 — a typed parameter pins the type inside the body: using an `s32`
 // parameter where a `string` is required is a compile error.
 fn typed_parameter_used_at_wrong_type_is_rejected() {

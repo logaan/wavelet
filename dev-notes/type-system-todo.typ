@@ -19,14 +19,14 @@ defs is standard library._
 
 == Phase A — the core checker (the two rules, total monomorphic checking)
 
-1. ☐ *Checker skeleton + literal types.* WIT type lattice; infer atom/literal
+1. ☑ *Checker skeleton + literal types.* WIT type lattice; infer atom/literal
   types; unconstrained defaulting (`s64`/`f64`); wire a total check pass into the
   compile path (eval / run / build) so an ill-typed definition is rejected even
   when never called. \
   _tests:_ `illtyped_uncalled_def_is_a_compile_error`,
   `mixed_arithmetic_operands_are_rejected`
 
-2. ☐ *Bidirectional checking of the core forms.* Propagate expected types inward;
+2. ☑ *Bidirectional checking of the core forms.* Propagate expected types inward;
   `If` branches and `Match` clauses must unify to one WIT type; `Let`/`Do`/`Fn`
   bodies checked; names resolved statically; every expression gets exactly one
   WIT type or it is a compile error (totality). \
@@ -35,14 +35,14 @@ defs is standard library._
   `unbound_name_in_uncalled_body_is_a_compile_error`,
   `let_binding_types_flow_into_the_body`
 
-3. ☐ *`The` ascription + literal context-resolution & range checks.* Literals
+3. ☑ *`The` ascription + literal context-resolution & range checks.* Literals
   resolve to the expected type with a compile-time range check; `The` supplies an
   expected type to inference. \
   _tests:_ `out_of_range_literal_for_u8_is_a_compile_error`,
   `negative_literal_for_unsigned_is_a_compile_error`,
   `float_literal_where_int_expected_is_a_compile_error`
 
-4. ☐ *Function signatures are WIT function types.* First-order and monomorphic;
+4. ☑ *Function signatures are WIT function types.* First-order and monomorphic;
   calls checked against the callee's signature (arity + argument types); a typed
   parameter pins its type in the body; signatures WIT cannot name are rejected. \
   _tests:_ `call_argument_type_mismatch_is_a_compile_error`,
