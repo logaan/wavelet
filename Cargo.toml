@@ -11,12 +11,9 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 # The browser-playground bindings (`src/wasm.rs` + `wasm-bindgen`). ON by
-# default so `wasm-pack build` and the docs pipeline are unchanged. A *produced*
-# macro component (`tools/macro-guest`) depends on `wavelet` with
-# `default-features = false`, turning this OFF so the interpreter links for
-# `wasm32` with NO `wasm-bindgen` imports — a macro component must instantiate
-# under the consumer's empty, capability-free linker and so can carry no
-# `__wbindgen_placeholder__` imports.
+# default so `wasm-pack build` and the docs pipeline are unchanged. Turn it OFF
+# (`default-features = false`) for any other `wasm32` consumer that must link the
+# interpreter with NO `wasm-bindgen` imports.
 default = ["playground"]
 playground = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 
@@ -39,8 +36,8 @@ wit-parser = "0.251.0"
 wasmtime = { version = "45", default-features = false, features = ["runtime", "cranelift", "component-model"] }
 
 # wasm-only: the browser playground bindings (see `src/wasm.rs`). Optional and
-# gated behind the `playground` feature, so the macro-guest's `wasm32` build
-# (`default-features = false`) omits `wasm-bindgen` entirely.
+# gated behind the `playground` feature, so a `default-features = false` `wasm32`
+# build omits `wasm-bindgen` entirely.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }

@@ -1,32 +1,23 @@
-//! The guest-side semantics of a produced `wavelet:meta/macros` component
-//! (Step 9, strategy A: *interpreter-in-a-component*).
+//! One-step interpreter macro expansion, retained as the differential **oracle**
+//! (`CLAUDE.md`) the compiled macro components are validated against.
 //!
 //! A macro library written in Wavelet is a `.wvl` file whose top level is a
 //! `Package` declaration plus `DefMacro`s (and nothing the file exports as a
-//! runtime function — see [`crate::macrobuild`] for the build trigger). The
-//! producer compiles it into a component that bundles **this interpreter** plus
-//! the macro file's source as data; the component's `manifest`/`expand` exports
-//! are thin wrappers over the two functions here.
+//! runtime function — see [`crate::macrobuild`] for the build trigger). Producing
+//! one now **compiles each macro body to wasm** (strategy B, via
+//! [`crate::emit::emit_macro_component`]) instead of bundling this interpreter
+//! (the former strategy A).
 //!
-//! ## Why this lives in the (non-gated) shared crate
+//! ## Why this stays in the (non-gated) shared crate
 //!
-//! Strategy A reuses `interp.rs` — the semantics oracle (`CLAUDE.md`) — so a
-//! macro expanded via a produced component means *exactly* what it would mean
-//! expanded locally by [`crate::expand::expand_file`]. To guarantee that, the
-//! "register the file's `DefMacro`s, then run one expansion step for a named
-//! macro over a call form" logic is written **once**, here, and called from two
-//! places:
-//!
-//! 1. the wasm **guest** (compiled for `wasm32-unknown-unknown`), which marshals
-//!    the canonical-ABI `tree` to/from a [`crate::form::Arena`] and calls
-//!    [`expand_one`]; and
-//! 2. native tests, which call the very same functions to assert the produced
-//!    component agrees with local expansion.
-//!
-//! Because it speaks only `reader`/`interp`/`expand`/`value`/`form` — all of
-//! which already compile to `wasm32` for the docs playground — this module is
-//! **not** `cfg(not(target_arch = "wasm32"))`-gated, unlike the native producer
-//! ([`crate::macrobuild`]) and the consumer runtime ([`crate::macros`]).
+//! `interp.rs` is the semantics oracle (`CLAUDE.md`): a macro expanded by the
+//! compiled component must mean *exactly* what it would mean expanded by the
+//! interpreter via [`crate::expand::expand_file`]. The "register the file's
+//! `DefMacro`s, then run one expansion step for a named macro over a call form"
+//! logic is written **once**, here, and used as that reference — the differential
+//! harness (`tests/macro_differential.rs`) expands a corpus both ways and asserts
+//! they agree. Because it speaks only `reader`/`interp`/`expand`/`value`/`form`,
+//! it is **not** `cfg(not(target_arch = "wasm32"))`-gated.
 //!
 //! ## Equivalence with local expansion (the pinned contract)
 //!

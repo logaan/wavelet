@@ -8,3 +8,6 @@
 
 # Personal, un-checked-in working preferences
 /CLAUDE.local.md
+
+# pdfs are temporary
+*.pdf

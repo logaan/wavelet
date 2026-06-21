@@ -225,6 +225,18 @@ pub struct FileExpander {
     /// `(alias, name)` pair so a repeated qualified call doesn't re-`manifest()`
     /// the component on every probe.
     alias_owners: HashMap<(String, String), Option<usize>>,
+    /// The file's own local macros (`DefMacro`s), by unsuffixed name. On the
+    /// native path these are expanded through a *compiled* component
+    /// ([`local`]) — strategy B — rather than the interpreter, so the native
+    /// production expander uses no `Interp::expand_once`. The wasm playground
+    /// (which passes no [`FileExpander`]) keeps the interpreter local arm.
+    local_names: std::collections::HashSet<String>,
+    /// The file's `DefMacro`s compiled into a `wavelet:meta/macros` component,
+    /// produced eagerly in [`for_file`] (so an emit failure is captured) but
+    /// instantiated lazily in [`local_component`] (so a file that never expands
+    /// a local macro never spins up a runtime).
+    local_bytes: Option<Result<Vec<u8>, String>>,
+    local: Option<MacroComponent>,
 }
 
 impl FileExpander {
@@ -232,9 +244,12 @@ impl FileExpander {
     /// `macros: true` imports. `root` is the project root used to resolve each
     /// import's `.wasm` (the parent of `src/`; see [`MacroResolver::new`]).
     ///
-    /// Returns `None` when the file imports no macro libraries — the caller can
-    /// then expand with no foreign capability at all (the common, no-macro
-    /// path), so a file that uses no foreign macros never instantiates a runtime.
+    /// Returns `None` only when the file has **neither** `macros: true` imports
+    /// **nor** local `DefMacro`s — the common no-macro path, where the caller
+    /// expands with no foreign capability and never instantiates a runtime. When
+    /// the file defines local macros, the returned expander compiles them once
+    /// (strategy B) so the native path expands them as wasm rather than through
+    /// the interpreter.
     pub fn for_file(
         root: impl Into<PathBuf>,
         arena: &Arena,
@@ -244,15 +259,44 @@ impl FileExpander {
             .iter()
             .filter_map(|&id| parse_macro_import(arena, id))
             .collect();
-        if imports.is_empty() {
+        let local_names: std::collections::HashSet<String> = roots
+            .iter()
+            .filter_map(|&id| local_macro_name(arena, id))
+            .collect();
+        if imports.is_empty() && local_names.is_empty() {
             return None;
         }
+        // Compile the file's DefMacros into a component up front (in-process and
+        // cheap) so any emit error is captured; instantiate only on first use.
+        let local_bytes = if local_names.is_empty() {
+            None
+        } else {
+            Some(crate::emit::emit_macro_component(arena, roots))
+        };
         Some(FileExpander {
             resolver: MacroResolver::new(root),
             imports,
             owners: HashMap::new(),
             alias_owners: HashMap::new(),
+            local_names,
+            local_bytes,
+            local: None,
         })
+    }
+
+    /// The instantiated local-macro component, built lazily from the bytes
+    /// emitted in [`for_file`]. Surfaces an emit/instantiate failure as the macro
+    /// author's error.
+    fn local_component(&mut self) -> Result<&mut MacroComponent, String> {
+        if self.local.is_none() {
+            let bytes = match &self.local_bytes {
+                Some(Ok(b)) => b,
+                Some(Err(e)) => return Err(e.clone()),
+                None => return Err("internal: no local macros to compile".to_string()),
+            };
+            self.local = Some(MacroComponent::from_bytes(bytes)?);
+        }
+        Ok(self.local.as_mut().expect("just built"))
     }
 
     /// Find the index of the import whose macro component publishes `name`,
@@ -308,6 +352,24 @@ impl FileExpander {
     }
 }
 
+/// The unsuffixed name of a top-level `DefMacro` form
+/// (`Tup[defmacro-MACRO, Sym(name), {params}, body]`), or `None` for any other
+/// form. Mirrors how `macrolib::manifest` reads a macro's name.
+fn local_macro_name(arena: &Arena, id: NodeId) -> Option<String> {
+    let Node::Tup(items) = arena.node(id) else { return None };
+    if items.len() != 4 {
+        return None;
+    }
+    let Node::Sym(head) = arena.node(items[0]) else { return None };
+    if head != "defmacro-MACRO" {
+        return None;
+    }
+    match arena.node(items[1]) {
+        Node::Sym(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
 impl crate::expand::ForeignExpander for FileExpander {
     fn expand_call(
         &mut self,
@@ -316,6 +378,20 @@ impl crate::expand::ForeignExpander for FileExpander {
         arena: &Arena,
         call_id: NodeId,
     ) -> Option<Result<(Arena, NodeId), String>> {
+        // A local macro (bare head only — `DefMacro` registers a bare name)
+        // expands through the file's *compiled* component, taking precedence
+        // over foreign imports (mirroring the interpreter's local-first lookup).
+        if alias.is_none() && self.local_names.contains(name) {
+            let args = crate::meta::arena_to_tree(arena, call_id);
+            let comp = match self.local_component() {
+                Ok(c) => c,
+                Err(e) => return Some(Err(e)),
+            };
+            return Some(
+                comp.expand(name, &args)
+                    .map(|tree| crate::meta::tree_to_arena(&tree)),
+            );
+        }
         // Which imported component owns this macro? For a qualified head, route
         // strictly to the import bound to `alias`; for a bare head, scan all
         // imports. `None` => not foreign; fall through to local-macro handling.

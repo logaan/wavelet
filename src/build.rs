@@ -161,8 +161,8 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
 /// component (§6.3, Step 9), writing it to `<out_dir>/<package-path>.wasm` and
 /// returning that path.
 ///
-/// The component is produced via the bundled-interpreter guest
-/// ([`crate::macrobuild`]); the output is named after the file's own `Package`
+/// The component is produced by compiling each macro body to wasm (strategy B,
+/// [`crate::macrobuild`]); the output is named after the file's own `Package`
 /// path (`:` → `-`) so it sits alongside ordinary components and a consumer can
 /// drop it at the conventional `wit/macros/<ns>-<name>.wasm` location.
 fn build_macro_library(path: &str, src: &str, out_dir: &str) -> Result<String, String> {
@@ -171,11 +171,8 @@ fn build_macro_library(path: &str, src: &str, out_dir: &str) -> Result<String, S
     let (arena, roots) = crate::read_file(src).map_err(|e| format!("{path}: {e}"))?;
     let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
 
-    let bytes = crate::macrobuild::build_macro_component(
-        src,
-        &crate::macrobuild::default_guest_crate(),
-    )
-    .map_err(|e| format!("{path}: {e}"))?;
+    let bytes = crate::macrobuild::build_macro_component(&arena, &roots)
+        .map_err(|e| format!("{path}: {e}"))?;
 
     let out = format!("{out_dir}/{}.wasm", info.package_path.replace(':', "-"));
     std::fs::write(&out, &bytes).map_err(|e| format!("{out}: {e}"))?;
