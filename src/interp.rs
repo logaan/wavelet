@@ -518,7 +518,11 @@ fn check_type(ty: &str, v: &Value) -> bool {
         "u8" => matches!(v, Value::Int(n) if (0..=u8::MAX as i64).contains(n)),
         "u16" => matches!(v, Value::Int(n) if (0..=u16::MAX as i64).contains(n)),
         "u32" => matches!(v, Value::Int(n) if (0..=u32::MAX as i64).contains(n)),
-        "u64" | "s64" => matches!(v, Value::Int(_)),
+        // `u64` is the only unsigned type without an upper bound in this i64
+        // representation, but it still rejects negatives — matching the `to-u64`
+        // builtin's `n >= 0` check.
+        "u64" => matches!(v, Value::Int(n) if *n >= 0),
+        "s64" => matches!(v, Value::Int(_)),
         "s8" => matches!(v, Value::Int(n) if (i8::MIN as i64..=i8::MAX as i64).contains(n)),
         "s16" => matches!(v, Value::Int(n) if (i16::MIN as i64..=i16::MAX as i64).contains(n)),
         "s32" => matches!(v, Value::Int(n) if (i32::MIN as i64..=i32::MAX as i64).contains(n)),

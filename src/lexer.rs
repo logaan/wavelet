@@ -91,7 +91,13 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
             }
             '-' | '0'..='9' => {
                 let start = i;
-                if c == '-' && src[i + 1..].starts_with("inf") {
+                // Whole-word match only, like the positive `inf` path in
+                // `lex_name`: `-inf` must not be a prefix of a longer token
+                // (`-info`, `-infinity`).
+                if c == '-'
+                    && src[i + 1..].starts_with("inf")
+                    && b.get(i + 4).is_none_or(|&ch| !is_name_char(ch))
+                {
                     out.push((Tok::Dec(f64::NEG_INFINITY), span(start, start + 4)));
                     i += 4;
                 } else {
@@ -323,4 +329,28 @@ fn read_escape(
         other => return err(format!("unknown escape \\{other}"), at),
     };
     Ok(ch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toks(src: &str) -> Vec<Tok> {
+        lex(src).expect("lex").into_iter().map(|(t, _)| t).collect()
+    }
+
+    #[test]
+    fn neg_inf_is_a_whole_word() {
+        // bare `-inf` is the negative-infinity literal, including at a boundary
+        assert_eq!(toks("-inf"), vec![Tok::Dec(f64::NEG_INFINITY)]);
+        assert_eq!(toks("(-inf)"), vec![Tok::LParen, Tok::Dec(f64::NEG_INFINITY), Tok::RParen]);
+        // it must not be split out of a longer token (the old prefix match gave
+        // `[-inf, o]`); since identifiers can't begin with `-`, the leftover
+        // `-` is now a lex error rather than a bogus split.
+        assert!(lex("-info").is_err());
+        assert!(lex("-infinity").is_err());
+        // positive `inf` is already whole-word; the symmetry now holds
+        assert_eq!(toks("inf"), vec![Tok::Dec(f64::INFINITY)]);
+        assert_eq!(toks("info"), vec![Tok::Ident("info".into())]);
+    }
 }

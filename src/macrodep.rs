@@ -221,6 +221,10 @@ pub struct FileExpander {
     /// the import whose component owns it. `None` for a name confirmed *not* to
     /// be owned by any imported macro component (so the expander stops probing).
     owners: HashMap<String, Option<usize>>,
+    /// Same memoisation for qualified `alias/name` lookups, keyed by the
+    /// `(alias, name)` pair so a repeated qualified call doesn't re-`manifest()`
+    /// the component on every probe.
+    alias_owners: HashMap<(String, String), Option<usize>>,
     /// The file's own local macros (`DefMacro`s), by unsuffixed name. On the
     /// native path these are expanded through a *compiled* component
     /// ([`local`]) — strategy B — rather than the interpreter, so the native
@@ -273,6 +277,7 @@ impl FileExpander {
             resolver: MacroResolver::new(root),
             imports,
             owners: HashMap::new(),
+            alias_owners: HashMap::new(),
             local_names,
             local_bytes,
             local: None,
@@ -325,6 +330,11 @@ impl FileExpander {
     /// `name`, `Ok(None)` otherwise. Used to route a qualified `Alias/Name`
     /// head to one specific import (bypassing bare-name ambiguity).
     fn owner_for_alias(&mut self, alias: &str, name: &str) -> Result<Option<usize>, String> {
+        let key = (alias.to_string(), name.to_string());
+        if let Some(found) = self.alias_owners.get(&key) {
+            return Ok(*found);
+        }
+        let mut found = None;
         for i in 0..self.imports.len() {
             if self.imports[i].alias != alias {
                 continue;
@@ -333,10 +343,12 @@ impl FileExpander {
             let comp = self.resolver.resolve(import)?;
             let manifest = comp.manifest()?;
             if manifest.iter().any(|(n, _)| n == name) {
-                return Ok(Some(i));
+                found = Some(i);
+                break;
             }
         }
-        Ok(None)
+        self.alias_owners.insert(key, found);
+        Ok(found)
     }
 }
 
