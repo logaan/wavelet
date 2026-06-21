@@ -46,11 +46,22 @@ you work, and rename it to the new version when you cut a release.
   whose top level is a `Package` declaration plus `DefMacro`s only (no `Export`,
   no runtime defs) now compiles into a component exporting `wavelet:meta/macros`,
   so a macro library can be **written in Wavelet itself** and imported with
-  `Import {… macros: true}` like any other macro component (design.md §6.3). The
-  produced component bundles the Wavelet interpreter and runs the macros through
-  it, so its expansions match local expansion exactly. Built for
-  `wasm32-unknown-unknown` (no WASI), so it instantiates under the capability-free
-  macro linker.
+  `Import {… macros: true}` like any other macro component (design.md §6.3). Each
+  macro body is **compiled to wasm** (the compiler learned to emit
+  `Quote`/`Quasi`/`Unquote`/`Splice`, `gensym`, and the form-introspection
+  builtins), so the produced component carries no interpreter and is built
+  in-process — no `cargo`, no `wasm32-unknown-unknown` target. The interpreter
+  remains the differential oracle the compiled expansions are checked against.
+
+### Changed
+
+- **Macro expansion is compiled, not interpreted (native build).** A file's
+  local `DefMacro`s and produced macro libraries now expand through a compiled
+  `wavelet:meta/macros` component rather than the tree-walking interpreter, so
+  `wavelet build`/`wavelet expand` no longer interpret macros. Macro builds are
+  faster and need no `wasm32-unknown-unknown` target. The browser playground
+  keeps expanding local macros with the in-browser interpreter (it has no
+  component runtime); the interpreter also stays as the differential oracle.
 
 ## [0.7.0] - 2026-06-16
 

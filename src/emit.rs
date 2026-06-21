@@ -4656,7 +4656,6 @@ fn mc_fill(em: &mut Emitter, fill_idx: u32) -> Result<(u32, Function), String> {
     let id = fx.local(I32);
     let m = fx.local(I32);
     let e = fx.local(I32);
-    let kids = fx.local(I32);
     let plist = fx.local(I32);
     let node = fx.local(I32);
     let tupb = fx.local(I32);
@@ -4765,7 +4764,6 @@ fn mc_fill(em: &mut Emitter, fill_idx: u32) -> Result<(u32, Function), String> {
         fx.op(I::LocalGet(plist));
         fx.op(I::LocalGet(m));
         fx.op(I::I32Store(ma(4, 2)));
-        let _ = kids;
         fx.op(I::I32Const(0));
         fx.op(I::LocalSet(e));
         fx.op(I::Block(BlockType::Empty));
