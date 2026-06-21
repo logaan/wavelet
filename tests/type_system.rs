@@ -171,7 +171,6 @@ fn typed_parameter_used_at_wrong_type_is_rejected() {
 // --- Step 5: WIT synthesis driven by full inference --------------------------
 
 #[test]
-#[ignore = "pending type system"]
 // Step 5 — an *un-annotated* export parameter gets its WIT type inferred from
 // use (`upper`/`str-cat` force `string`), so the synthesized signature is
 // concrete. Today untyped parameters make synthesis fail outright.
@@ -187,7 +186,6 @@ Def shout Fn {phrase} str-cat(upper(phrase) "!")"#,
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 5 — the checker knows the monomorphic shape of sequence builtins, so a
 // `list<s32>`-returning body synthesizes a concrete result type (today `reverse`
 // is unknown to inference and synthesis fails).

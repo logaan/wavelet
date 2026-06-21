@@ -254,10 +254,21 @@ fn infer_sig(
     match arena.node(params_id) {
         Node::Flg(names) if names.is_empty() => {}
         Node::Flg(names) => {
-            return Err(format!(
-                "cannot synthesize WIT for `{name}`: parameters {names:?} are untyped \
-                 (annotate them or use the Export record form)"
-            ));
+            // Untyped parameters: infer each one's WIT type from how the body
+            // uses it (§"Inference and literals"). A parameter used as a direct
+            // argument to a builtin (or another def) whose parameter type at
+            // that position is known takes that type; uses are unified.
+            for n in names {
+                let Some(t) = infer_param_from_use(arena, n, body, defs) else {
+                    return Err(format!(
+                        "cannot synthesize WIT for `{name}`: parameter `{n}` is untyped \
+                         and its type cannot be inferred from use \
+                         (annotate it or use the Export record form)"
+                    ));
+                };
+                param_types.insert(n.clone(), t.clone());
+                params.push((n.clone(), t));
+            }
         }
         Node::Rec(fields) => {
             for (k, v) in fields {
@@ -279,6 +290,113 @@ fn infer_sig(
         }
     };
     Ok(FuncSig { name: name.to_string(), iface: "api".to_string(), params, result })
+}
+
+/// The WIT type a builtin imposes on its argument at position `pos`, if known.
+/// Models at least the string-imposing builtins (§"Inference and literals"):
+/// `upper`/`lower` and the `str-cat`/`split`/`join`/`contains` family all take
+/// `string` arguments. Returns `None` when the builtin does not pin a concrete
+/// argument type we can name in WIT.
+fn builtin_param_type(callee: &str, pos: usize) -> Option<String> {
+    match callee {
+        // Every operand is a string.
+        "upper" | "lower" | "str-cat" | "split" | "join" => Some("string".into()),
+        // `contains(haystack needle)` — both string in the string overload.
+        "contains" => Some("string".into()),
+        _ => {
+            let _ = pos;
+            None
+        }
+    }
+}
+
+/// Infer an untyped parameter `pname`'s WIT type by scanning `body` for uses of
+/// it as a *direct* argument to a call whose parameter type at that position is
+/// known (a string-imposing builtin, or another module-level def with a typed
+/// parameter). Types found across uses are unified; an inconsistent or absent
+/// constraint yields `None`.
+fn infer_param_from_use(
+    arena: &Arena,
+    pname: &str,
+    body: NodeId,
+    defs: &HashMap<String, (NodeId, NodeId)>,
+) -> Option<String> {
+    let mut found: Option<String> = None;
+    let mut conflict = false;
+    scan_param_uses(arena, pname, body, defs, &mut |t| match &found {
+        _ if conflict => {}
+        None => found = Some(t),
+        Some(prev) if *prev == t => {}
+        // Conflicting constraints across uses: not inferable.
+        Some(_) => conflict = true,
+    });
+    if conflict { None } else { found }
+}
+
+/// Walk `id`, invoking `on_use(ty)` each time `pname` appears as a direct
+/// argument to a call whose parameter type at that position is known.
+fn scan_param_uses(
+    arena: &Arena,
+    pname: &str,
+    id: NodeId,
+    defs: &HashMap<String, (NodeId, NodeId)>,
+    on_use: &mut dyn FnMut(String),
+) {
+    match arena.node(id) {
+        Node::Tup(items) => {
+            if let Some((&head, args)) = items.split_first()
+                && let Node::Sym(callee) = arena.node(head)
+            {
+                for (pos, &arg) in args.iter().enumerate() {
+                    // Is this argument the parameter used directly?
+                    let is_param = matches!(arena.node(arg), Node::Sym(s) if s == pname);
+                    if is_param
+                        && let Some(t) = call_param_type(arena, callee, pos, defs)
+                    {
+                        on_use(t);
+                    }
+                }
+            }
+            // Recurse into every child to catch nested uses.
+            for &child in items {
+                scan_param_uses(arena, pname, child, defs, on_use);
+            }
+        }
+        Node::Lst(items) => {
+            for &child in items {
+                scan_param_uses(arena, pname, child, defs, on_use);
+            }
+        }
+        Node::Rec(fields) => {
+            for (_k, v) in fields {
+                scan_param_uses(arena, pname, *v, defs, on_use);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The known parameter type of `callee` at position `pos`: a string-imposing
+/// builtin, or another module-level def with a typed parameter there.
+fn call_param_type(
+    arena: &Arena,
+    callee: &str,
+    pos: usize,
+    defs: &HashMap<String, (NodeId, NodeId)>,
+) -> Option<String> {
+    if let Some(t) = builtin_param_type(callee, pos) {
+        return Some(t);
+    }
+    // Follow a call to another module-level def: take that def's declared
+    // parameter type at `pos`, if it is typed (a `Rec` params form).
+    if let Some((params_id, _body)) = defs.get(callee)
+        && let Node::Rec(fields) = arena.node(*params_id)
+        && let Some((_k, v)) = fields.get(pos)
+        && let Ok(t) = type_text(arena, *v)
+    {
+        return Some(t);
+    }
+    None
 }
 
 /// Synthesize WIT text for a file (§6.1), as shown by `wavelet wit`.
@@ -503,6 +621,12 @@ fn infer(
                     Inferred::Known("string".into())
                 }
                 "len" => Inferred::Known("s64".into()),
+                // Sequence builtins whose monomorphic result type is the type of
+                // their (single) sequence argument: `reverse(xs)` and `tail(xs)`
+                // have the same type as `xs` (§"Inference and literals").
+                "reverse" | "tail" if args.len() == 1 => {
+                    infer(arena, args[0], params, defs, visiting)
+                }
                 "add" | "sub" | "mul" | "div" | "rem" | "neg" | "min" | "max" | "abs" => {
                     let any_dec = args.iter().any(|&i| {
                         matches!(infer(arena, i, params, defs, visiting),

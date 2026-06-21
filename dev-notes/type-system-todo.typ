@@ -51,7 +51,7 @@ defs is standard library._
 
 == Phase B — boundary synthesis from inference
 
-5. ☐ *WIT synthesis driven by full inference.* Export signatures come from the
+5. ☑ *WIT synthesis driven by full inference.* Export signatures come from the
   checker's inferred types (un-annotated params inferred from use; concrete
   result types incl. literal defaults), replacing the best-effort `wit::infer`. \
   _tests:_ `synthesis_infers_untyped_parameter_from_use`,
