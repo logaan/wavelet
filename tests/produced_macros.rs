@@ -214,24 +214,15 @@ fn worked_e2e_build_through_conventional_location() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Opt-in: actually run the producer (`wavelet::macrobuild`) and assert the
-/// freshly built component behaves identically to the checked-in one. Gated
-/// behind `WAVELET_TEST_BUILD_MACRO_COMPONENT=1` so `cargo test` never requires a
-/// wasm toolchain. Refreshes nothing on disk; it only verifies reproducibility.
+/// Run the producer (`wavelet::macrobuild`, strategy B) and assert the freshly
+/// built component behaves identically to the checked-in fixture. No wasm
+/// toolchain is needed any more — the bodies are compiled in-process — so this
+/// runs unconditionally.
 #[test]
 fn reproduce_component_from_source() {
-    if std::env::var("WAVELET_TEST_BUILD_MACRO_COMPONENT").as_deref() != Ok("1") {
-        eprintln!(
-            "skipping: set WAVELET_TEST_BUILD_MACRO_COMPONENT=1 to build the macro \
-             component (needs the wasm32-unknown-unknown target)"
-        );
-        return;
-    }
-    let bytes = wavelet::macrobuild::build_macro_component(
-        &lib_source(),
-        &wavelet::macrobuild::default_guest_crate(),
-    )
-    .expect("producer builds the macro component");
+    let (arena, roots) = wavelet::reader::read_file(&lib_source()).expect("read macro lib");
+    let bytes = wavelet::macrobuild::build_macro_component(&arena, &roots)
+        .expect("producer builds the macro component");
 
     let mut m = MacroComponent::from_bytes(&bytes).expect("freshly built is a macro component");
     let mut got = m.manifest().expect("manifest");

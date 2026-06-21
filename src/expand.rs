@@ -132,13 +132,27 @@ fn expand_form(
                 if name == "quote-MACRO" || name == "quasi-MACRO" {
                     return Ok(copy_form(arena, id, out));
                 }
-                // (1) Local macro: a `DefMacro` in this file.
+                // (1) Local macro: a `DefMacro` in this file. On the native path
+                // a `ForeignExpander` is present and owns the file's compiled
+                // local-macro component (strategy B), so the macro expands as
+                // wasm — no interpreter. The wasm playground passes no expander,
+                // so it falls through to `Interp::expand_once` (which also stays
+                // the differential oracle).
                 if let Some(Value::Macro(mac)) = env.lookup(name) {
+                    let bare = name.trim_end_matches("-MACRO");
+                    if let Some(fx) = foreign.as_deref_mut() {
+                        if let Some(result) = fx.expand_call(None, bare, arena, id) {
+                            let (expanded_arena, expanded) =
+                                result.map_err(|e| format!("expanding `{bare}`: {e}"))?;
+                            let expanded_arena = Rc::new(expanded_arena);
+                            return expand_form(
+                                interp, env, &expanded_arena, expanded, out, foreign,
+                            );
+                        }
+                    }
                     let (expanded_arena, expanded) = interp
                         .expand_once(&mac, arena, &items[1..])
-                        .map_err(|e| {
-                            format!("expanding `{}`: {e}", name.trim_end_matches("-MACRO"))
-                        })?;
+                        .map_err(|e| format!("expanding `{bare}`: {e}"))?;
                     return expand_form(interp, env, &expanded_arena, expanded, out, foreign);
                 }
                 // (2) Foreign macro (bare head): exported by an imported macro
