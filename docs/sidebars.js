@@ -19,6 +19,7 @@ const sidebars = {
         'language/pattern-matching',
         'language/macros',
         'language/tail-calls',
+        'language/type-system',
       ],
     },
     'stdlib',
