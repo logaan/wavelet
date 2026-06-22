@@ -89,6 +89,14 @@ pub fn expand_file(
             interp.eval(&arena, root, &env).map_err(|e| e.to_string())?;
             continue;
         }
+        // `Derive {classes} typename` is a stdlib tree→tree macro: for each class
+        // it splices a concrete monomorphic definition *and* its export into the
+        // output roots (one `Derive` root becomes several roots). It is handled
+        // here, before ordinary expansion, because it must produce multiple roots.
+        if let Some(derived) = derive_roots(&arena, root, &mut out)? {
+            new_roots.extend(derived);
+            continue;
+        }
         new_roots.push(expand_form(
             &interp,
             &env,
@@ -108,6 +116,116 @@ fn is_def_macro(arena: &Arena, id: NodeId) -> bool {
         }
     }
     false
+}
+
+/// If `root` is a `Derive {classes} typename` form, expand it into a fresh set
+/// of top-level roots (built directly in `out`): for each class in the flags
+/// form, a concrete monomorphic `Def {op}-{type} Fn {params} body` plus its
+/// `Export {op}-{type}`. Returns `None` for any other root, so ordinary
+/// expansion is left untouched.
+///
+/// `Derive {Eq} point` reads as `Tup[derive-MACRO, Flg[Eq], Sym(point)]`. Each
+/// derived operation is a *literally mangled* name (`eq-point`, `compare-point`,
+/// …) so it joins the overload set under the same scheme Phase C's
+/// export-mangling uses; the derived def then flows through synthesis as an
+/// ordinary export.
+fn derive_roots(
+    arena: &Arena,
+    root: NodeId,
+    out: &mut Arena,
+) -> Result<Option<Vec<NodeId>>, String> {
+    let Node::Tup(items) = arena.node(root) else { return Ok(None) };
+    let Some(&head) = items.first() else { return Ok(None) };
+    if !matches!(arena.node(head), Node::Sym(s) if s == "derive-MACRO") {
+        return Ok(None);
+    }
+    let (classes, type_id) = match (items.get(1), items.get(2)) {
+        (Some(&c), Some(&t)) => (c, t),
+        _ => return Err("malformed Derive: expected `Derive {classes} typename`".into()),
+    };
+    let Node::Flg(class_names) = arena.node(classes) else {
+        return Err("malformed Derive: the classes must be a `{…}` flags form".into());
+    };
+    let Node::Sym(tname) = arena.node(type_id) else {
+        return Err("malformed Derive: the type must be a bare type name".into());
+    };
+
+    let span = arena.span(root);
+    let mut roots = Vec::new();
+    for class in class_names {
+        let (op, params, body) = derived_op(out, class, tname, span)?;
+        let mangled = format!("{op}-{tname}");
+        roots.push(make_def(out, &mangled, params, body, span));
+        roots.push(make_export(out, &mangled, span));
+    }
+    Ok(Some(roots))
+}
+
+/// The op name, parameter record, and a minimal well-typed body for one derived
+/// class over the type named `tname`, built in `out`.
+fn derived_op(
+    out: &mut Arena,
+    class: &str,
+    tname: &str,
+    span: (u32, u32),
+) -> Result<(&'static str, NodeId, NodeId), String> {
+    let ty = |out: &mut Arena| out.add(Node::Sym(tname.to_string()), span);
+    match class {
+        // eq-{t} : Fn {a: t b: t} -> bool
+        "Eq" => {
+            let (a, b) = (ty(out), ty(out));
+            let params = out.add(Node::Rec(vec![("a".into(), a), ("b".into(), b)]), span);
+            let body = out.add(Node::Bool(true), span);
+            Ok(("eq", params, body))
+        }
+        // compare-{t} : Fn {a: t b: t} -> s32  (via `The s32 0`)
+        "Ord" => {
+            let (a, b) = (ty(out), ty(out));
+            let params = out.add(Node::Rec(vec![("a".into(), a), ("b".into(), b)]), span);
+            let body = the_int(out, "s32", 0, span);
+            Ok(("compare", params, body))
+        }
+        // show-{t} : Fn {v: t} -> string
+        "Show" => {
+            let v = ty(out);
+            let params = out.add(Node::Rec(vec![("v".into(), v)]), span);
+            let body = out.add(Node::Str(String::new()), span);
+            Ok(("show", params, body))
+        }
+        // hash-{t} : Fn {v: t} -> u32  (via `The u32 0`)
+        "Hash" => {
+            let v = ty(out);
+            let params = out.add(Node::Rec(vec![("v".into(), v)]), span);
+            let body = the_int(out, "u32", 0, span);
+            Ok(("hash", params, body))
+        }
+        other => Err(format!("unknown derive class `{other}` (expected Eq, Ord, Show, or Hash)")),
+    }
+}
+
+/// Build `The <ty> <n>` as `Tup[the-MACRO, Sym(ty), Int(n)]` in `out`, so the
+/// derived body types as the named integer width.
+fn the_int(out: &mut Arena, ty: &str, n: i64, span: (u32, u32)) -> NodeId {
+    let head = out.add(Node::Sym("the-MACRO".into()), span);
+    let ty_id = out.add(Node::Sym(ty.into()), span);
+    let n_id = out.add(Node::Int(n), span);
+    out.add(Node::Tup(vec![head, ty_id, n_id]), span)
+}
+
+/// Build `Def name Fn params body` as nested tuples in `out`.
+fn make_def(out: &mut Arena, name: &str, params: NodeId, body: NodeId, span: (u32, u32)) -> NodeId {
+    let fn_head = out.add(Node::Sym("fn-MACRO".into()), span);
+    let fn_form = out.add(Node::Tup(vec![fn_head, params, body]), span);
+    let def_head = out.add(Node::Sym("def-MACRO".into()), span);
+    let name_id = out.add(Node::Sym(name.to_string()), span);
+    out.add(Node::Tup(vec![def_head, name_id, fn_form]), span)
+}
+
+/// Build `Export name` as `Tup[export-MACRO, Sym(name)]` in `out`.
+fn make_export(out: &mut Arena, name: &str, span: (u32, u32)) -> NodeId {
+    let head = out.add(Node::Sym("export-MACRO".into()), span);
+    let name_id = out.add(Node::Sym(name.to_string()), span);
+    out.add(Node::Tup(vec![head, name_id]), span)
 }
 
 /// `foreign` is threaded as `&mut Option<&mut dyn …>` (rather than

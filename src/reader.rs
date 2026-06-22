@@ -59,6 +59,7 @@ impl MacroTable {
             ("splice-MACRO", 1),
             ("defmacro-MACRO", 3),
             ("the-MACRO", 2),
+            ("derive-MACRO", 2),
         ] {
             map.insert(name.to_string(), (arity, Origin::Local));
         }
@@ -160,6 +161,18 @@ impl MacroTable {
 /// a macro component that fails to instantiate, tied to the import's span).
 pub type FormHook<'a> =
     dyn FnMut(&Arena, NodeId, &mut MacroTable) -> Result<(), ReadError> + 'a;
+
+/// Recover a TitleCase flag entry's spelling from the macro-name token the lexer
+/// produced for it: `"eq-MACRO"` → `"Eq"`. Used for derive-class flags
+/// (`Derive {Eq Ord Show}`), which are single TitleCase words.
+fn title_flag_name(macro_name: &str) -> String {
+    let bare = macro_name.trim_end_matches("-MACRO");
+    let mut chars = bare.chars();
+    match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
+}
 
 pub fn read_file(src: &str) -> Result<(Arena, Vec<NodeId>), ReadError> {
     let mut macros = MacroTable::core();
@@ -521,6 +534,11 @@ impl Parser {
                         return Ok(self.arena.add(Node::Flg(names), (start, close.end)))
                     }
                     (Tok::Ident(name), _) => names.push(name),
+                    // TitleCase flag entries (e.g. `Derive {Eq Ord Show}`): the
+                    // lexer turns each into a `Title` macro-name token, so recover
+                    // the original spelling from it. WIT flags are all-lowercase,
+                    // so this only triggers for the derive-class surface.
+                    (Tok::Title(name), _) => names.push(title_flag_name(&name)),
                     (_, s) => return self.err("expected a flag name", s.start),
                 }
             }

@@ -303,7 +303,6 @@ Export eq"#,
 // --- Step 9: `Derive` and the derivers Eq / Ord / Show / Hash ----------------
 
 #[test]
-#[ignore = "pending type system"]
 // Step 9 — `Derive` is a stdlib macro (tree → tree): `Derive {Eq} point` emits a
 // concrete `eq-point` definition. Asserted at expansion time.
 fn derive_eq_emits_a_monomorphic_definition() {
@@ -321,7 +320,6 @@ Derive {Eq} point"#,
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 9 — a derived operation joins the overload set, so `eq(a b)` on `point`s
 // resolves to the derived `eq-point` and the export synthesizes (this is the
 // `fig-derive` example end-to-end).
