@@ -11,6 +11,12 @@ pub struct FileInfo {
     /// world name, e.g. `shout`
     pub world: String,
     pub imports: Vec<ImportInfo>,
+    /// Compile-time functor instantiations: an `Import {pkg: … elem: T as: alias}`
+    /// is not a runtime import but a request to stamp out a monomorphic component
+    /// specialized at element type `T` (Steps 10–11). Recorded here instead of in
+    /// `imports`, so synthesis emits a specialized interface rather than an
+    /// `import` of the (non-existent) functor package.
+    pub functors: Vec<FunctorInst>,
     pub exports: Vec<FuncSig>,
     pub types: Vec<(String, NodeId)>,
     /// all module-level `Def name Fn …` definitions: name -> (params, body).
@@ -49,6 +55,26 @@ pub struct ImportInfo {
     pub from: Option<String>,
 }
 
+/// Which built-in functor template an instantiation requests, identified from the
+/// import's `pkg`. The compiler knows these templates intrinsically — there is no
+/// real `wavelet:coll/*` component in the tree.
+#[derive(Clone, PartialEq, Eq)]
+pub enum FunctorKind {
+    /// `wavelet:coll/set` — a set parameterized over its element type.
+    Set,
+}
+
+/// One `Import {pkg: … elem: T as: alias}` functor instantiation (Steps 10–11).
+pub struct FunctorInst {
+    pub kind: FunctorKind,
+    /// the `as:` alias used to qualify the functor's ops (`pts/new`, `pts/add`, …)
+    pub alias: String,
+    /// the WIT type text of the element type, e.g. `point`, `string`, `s32`
+    pub elem: String,
+    /// the specialized interface name, e.g. `point-set`
+    pub iface: String,
+}
+
 #[derive(Clone)]
 pub struct FuncSig {
     pub name: String,
@@ -71,6 +97,7 @@ impl FuncSig {
 pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     let mut package = None;
     let mut imports = Vec::new();
+    let mut functors: Vec<FunctorInst> = Vec::new();
     let mut export_decls: Vec<(String, Option<FuncSig>)> = Vec::new();
     let mut types = Vec::new();
     let mut defs = HashMap::new();
@@ -93,6 +120,17 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
             }
             "import-MACRO" => {
                 let Some(&p) = items.get(1) else { continue };
+                // An `Import` carrying `elem:` is a *functor instantiation* (Steps
+                // 10–11), not a runtime import: stamp out a monomorphic component
+                // specialized at that element type. It is recorded in `functors`
+                // and never reaches the ordinary `imports` list, so synthesis emits
+                // a specialized interface rather than `import <functor pkg>;`.
+                if let Node::Rec(fields) = arena.node(p)
+                    && let Some(inst) = parse_functor(arena, fields)?
+                {
+                    functors.push(inst);
+                    continue;
+                }
                 let spec = match arena.node(p) {
                     Node::Str(s) => Some((s.clone(), None, false, None)),
                     Node::Rec(fields) => {
@@ -175,6 +213,11 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
         .unwrap_or("component")
         .to_string();
 
+    // The result types of every functor op, keyed by `(alias, op)`, so a
+    // qualified `alias/op(...)` call in an export body infers concretely (Steps
+    // 10–11). `Some(t)` is a Known WIT type; `None` is unit (`alias/add`).
+    let functor_ops = functor_op_table(&functors);
+
     let mut exports = Vec::new();
     for (name, explicit) in export_decls {
         // An exported *overload set* (≥2 same-named Fn defs, or a name that
@@ -190,7 +233,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
             let iface = explicit.map(|s| s.iface).unwrap_or_else(|| "api".to_string());
             for &(params_id, body) in members {
                 let mangled = mangle_name(arena, &name, params_id)?;
-                let mut sig = infer_sig(arena, &mangled, params_id, body, &defs)?;
+                let mut sig = infer_sig(arena, &mangled, params_id, body, &defs, &functor_ops)?;
                 sig.iface = iface.clone();
                 exports.push(sig);
             }
@@ -201,7 +244,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
             // a record form that only names/groups still gets an inferred sig
             Some(sig) if sig.params.is_empty() && sig.result.is_none() && defs.contains_key(&name) => {
                 let (params_id, body) = defs[&name];
-                let mut inferred = infer_sig(arena, &name, params_id, body, &defs)?;
+                let mut inferred = infer_sig(arena, &name, params_id, body, &defs, &functor_ops)?;
                 inferred.iface = sig.iface;
                 inferred
             }
@@ -210,7 +253,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                 let (params_id, body) = defs
                     .get(&name)
                     .ok_or(format!("Export `{name}` has no definition"))?;
-                infer_sig(arena, &name, *params_id, *body, &defs)?
+                infer_sig(arena, &name, *params_id, *body, &defs, &functor_ops)?
             }
         };
         exports.push(sig);
@@ -221,6 +264,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
         package_path,
         world,
         imports,
+        functors,
         exports,
         types,
         defs,
@@ -247,6 +291,72 @@ pub fn iface_order(exports: &[FuncSig], has_types: bool) -> Vec<String> {
 /// `"demo:shout@0.1.0"` -> `"demo:shout"`
 fn strip_version(s: &str) -> String {
     s.split('@').next().unwrap_or(s).to_string()
+}
+
+/// Parse an `Import` record as a functor instantiation if it carries an `elem:`
+/// field; otherwise return `Ok(None)` so the caller treats it as an ordinary
+/// import. Recognizes the built-in functor packages by their `pkg` path.
+fn parse_functor(
+    arena: &Arena,
+    fields: &[(String, NodeId)],
+) -> Result<Option<FunctorInst>, String> {
+    // Only a record carrying `elem:` is a functor instantiation.
+    if !fields.iter().any(|(k, _)| k == "elem") {
+        return Ok(None);
+    }
+    let mut pkg = None;
+    let mut alias = None;
+    let mut elem = None;
+    for (k, v) in fields {
+        match (k.as_str(), arena.node(*v)) {
+            ("pkg", Node::Str(s)) => pkg = Some(s.clone()),
+            ("as", Node::Sym(s)) => alias = Some(s.clone()),
+            ("elem", _) => elem = Some(type_text(arena, *v)?),
+            _ => {}
+        }
+    }
+    let pkg = pkg.ok_or("functor Import is missing `pkg:`")?;
+    let elem = elem.ok_or("functor Import is missing `elem:`")?;
+    let path = strip_version(&pkg);
+    let kind = if path.ends_with("coll/set") {
+        FunctorKind::Set
+    } else {
+        return Err(format!("unknown functor package `{path}` (known: wavelet:coll/set)"));
+    };
+    let alias = alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
+    let iface = format!("{elem}-set");
+    Ok(Some(FunctorInst { kind, alias, elem, iface }))
+}
+
+/// The result type of one functor op: `Some(t)` is a Known WIT type, `None` is
+/// unit (a discarding op like `set/add`).
+type FunctorOps = HashMap<(String, String), Option<String>>;
+
+/// Build the `(alias, op) -> result` table for every functor instantiation so
+/// qualified calls in export bodies infer concretely (Steps 10–11).
+fn functor_op_table(functors: &[FunctorInst]) -> FunctorOps {
+    let mut table: FunctorOps = HashMap::new();
+    for f in functors {
+        match f.kind {
+            FunctorKind::Set => {
+                // The set handle is the resource type `<elem>-set.set` (WIT's
+                // dotted interface-member syntax, as in fig-wit). Its exact text
+                // is unasserted — it only needs to be Known so an export returning
+                // `alias/new()` synthesizes.
+                let handle = format!("{}.set", f.iface);
+                let ops = [
+                    ("new", Some(handle)),
+                    ("contains", Some("bool".to_string())),
+                    ("add", None),
+                    ("size", Some("u32".to_string())),
+                ];
+                for (op, res) in ops {
+                    table.insert((f.alias.clone(), op.to_string()), res);
+                }
+            }
+        }
+    }
+    table
 }
 
 /// Whether an exported `name` denotes an overload set that must be name-mangled
@@ -311,6 +421,7 @@ fn infer_sig(
     params_id: NodeId,
     body: NodeId,
     defs: &HashMap<String, (NodeId, NodeId)>,
+    functor_ops: &FunctorOps,
 ) -> Result<FuncSig, String> {
     let mut params = Vec::new();
     let mut param_types = HashMap::new();
@@ -343,7 +454,7 @@ fn infer_sig(
         _ => return Err(format!("`{name}`: malformed Fn parameters")),
     }
     let mut visiting = vec![name.to_string()];
-    let result = match infer(arena, body, &param_types, defs, &mut visiting) {
+    let result = match infer(arena, body, &param_types, defs, functor_ops, &mut visiting) {
         Inferred::Known(t) => Some(t),
         Inferred::Unit => None,
         Inferred::Unknown => {
@@ -535,6 +646,13 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
         out.push_str("}\n");
     }
 
+    // Functor instantiations stamp out a specialized, monomorphic interface each
+    // (Steps 10–11). `Import {pkg: "wavelet:coll/set" elem: T as: …}` produces a
+    // `T-set` interface holding the element-specialized `set` resource (fig-wit).
+    for f in &info.functors {
+        out.push_str(&functor_interface(arena, f)?);
+    }
+
     out.push_str(&format!("\nworld {} {{\n", info.world));
     for imp in &info.imports {
         // A pure macro import (§6.3) is a compile-time-only dependency resolved
@@ -558,8 +676,33 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
             out.push_str(&format!("  export {iface};\n"));
         }
     }
+    // Each functor instantiation exports its specialized interface.
+    for f in &info.functors {
+        out.push_str(&format!("  export {};\n", f.iface));
+    }
     out.push_str("}\n");
     Ok(out)
+}
+
+/// The specialized WIT interface for one functor instantiation (fig-wit). For
+/// the `Set` functor at element type `T`, a `T-set` interface holding a `set`
+/// resource whose every method is monomorphized to `T`.
+fn functor_interface(_arena: &Arena, f: &FunctorInst) -> Result<String, String> {
+    match f.kind {
+        FunctorKind::Set => {
+            let t = &f.elem;
+            Ok(format!(
+                "\ninterface {iface} {{\n  \
+                   resource set {{\n    \
+                     constructor();\n    \
+                     add: func(value: {t});\n    \
+                     contains: func(value: {t}) -> bool;\n    \
+                     size: func() -> u32;\n  \
+                   }}\n}}\n",
+                iface = f.iface,
+            ))
+        }
+    }
 }
 
 /// An interface that names an external WIT interface directly — it contains a
@@ -657,6 +800,7 @@ fn infer(
     id: NodeId,
     params: &HashMap<String, String>,
     defs: &HashMap<String, (NodeId, NodeId)>,
+    functor_ops: &FunctorOps,
     visiting: &mut Vec<String>,
 ) -> Inferred {
     match arena.node(id) {
@@ -673,6 +817,15 @@ fn infer(
             let Some((&head, args)) = items.split_first() else {
                 return Inferred::Unknown;
             };
+            // A qualified call `alias/op(...)` is a functor op (Steps 10–11): its
+            // result type comes from the instantiation's op table, keyed by alias.
+            if let Node::Qsym(alias, op) = arena.node(head) {
+                return match functor_ops.get(&(alias.clone(), op.clone())) {
+                    Some(Some(t)) => Inferred::Known(t.clone()),
+                    Some(None) => Inferred::Unit,
+                    None => Inferred::Unknown,
+                };
+            }
             let Node::Sym(name) = arena.node(head) else {
                 return Inferred::Unknown;
             };
@@ -688,23 +841,23 @@ fn infer(
                 // their (single) sequence argument: `reverse(xs)` and `tail(xs)`
                 // have the same type as `xs` (§"Inference and literals").
                 "reverse" | "tail" if args.len() == 1 => {
-                    infer(arena, args[0], params, defs, visiting)
+                    infer(arena, args[0], params, defs, functor_ops, visiting)
                 }
                 "add" | "sub" | "mul" | "div" | "rem" | "neg" | "min" | "max" | "abs" => {
                     let any_dec = args.iter().any(|&i| {
-                        matches!(infer(arena, i, params, defs, visiting),
+                        matches!(infer(arena, i, params, defs, functor_ops, visiting),
                                  Inferred::Known(t) if t == "f64")
                     });
                     Inferred::Known(if any_dec { "f64" } else { "s64" }.into())
                 }
                 "drop" | "cell-set" => Inferred::Unit,
                 "if-MACRO" if args.len() == 3 => unify(
-                    infer(arena, args[1], params, defs, visiting),
-                    infer(arena, args[2], params, defs, visiting),
+                    infer(arena, args[1], params, defs, functor_ops, visiting),
+                    infer(arena, args[2], params, defs, functor_ops, visiting),
                 ),
                 "do-MACRO" if args.len() == 1 => match arena.node(args[0]) {
                     Node::Lst(items) => match items.last() {
-                        Some(&last) => infer(arena, last, params, defs, visiting),
+                        Some(&last) => infer(arena, last, params, defs, functor_ops, visiting),
                         None => Inferred::Unit,
                     },
                     _ => Inferred::Unknown,
@@ -713,12 +866,14 @@ fn infer(
                     let mut scope = params.clone();
                     if let Node::Rec(fields) = arena.node(args[0]) {
                         for (k, v) in fields {
-                            if let Inferred::Known(t) = infer(arena, *v, &scope, defs, visiting) {
+                            if let Inferred::Known(t) =
+                                infer(arena, *v, &scope, defs, functor_ops, visiting)
+                            {
                                 scope.insert(k.clone(), t);
                             }
                         }
                     }
-                    infer(arena, args[1], &scope, defs, visiting)
+                    infer(arena, args[1], &scope, defs, functor_ops, visiting)
                 }
                 // unify every clause's result type; pattern-bound names are
                 // left untyped (best effort, as elsewhere)
@@ -728,7 +883,7 @@ fn infer(
                         for &c in clauses {
                             if let Node::Tup(pair) = arena.node(c) {
                                 if pair.len() == 2 {
-                                    let r = infer(arena, pair[1], params, defs, visiting);
+                                    let r = infer(arena, pair[1], params, defs, functor_ops, visiting);
                                     acc = Some(match acc {
                                         None => r,
                                         Some(prev) => unify(prev, r),
@@ -756,7 +911,7 @@ fn infer(
                                 }
                             }
                         }
-                        let r = infer(arena, *body, &callee_params, defs, visiting);
+                        let r = infer(arena, *body, &callee_params, defs, functor_ops, visiting);
                         visiting.pop();
                         r
                     }

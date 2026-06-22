@@ -4005,6 +4005,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         package_path: "wavelet:macro-guest".to_string(),
         world: "macro-lib".to_string(),
         imports: Vec::new(),
+        functors: Vec::new(),
         exports: Vec::new(),
         types: Vec::new(),
         defs: HashMap::new(),

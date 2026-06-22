@@ -341,7 +341,6 @@ Def same Fn {a: point b: point} eq(a b)"#,
 // --- Step 10: source functors via parameterized `Import` ---------------------
 
 #[test]
-#[ignore = "pending type system"]
 // Step 10 — a functor is a component instantiated at a concrete element type at
 // compile time. `Import { … elem: point … }` stamps out a monomorphic `Set` and
 // synthesizes a concrete `point-set` interface.
@@ -358,7 +357,6 @@ Def has Fn {p: point} pts/contains(pts/new() p)"#,
 }
 
 #[test]
-#[ignore = "pending type system"]
 // Step 10 — two instantiations at different element types produce two distinct
 // concrete interfaces; nothing generic is shared.
 fn two_functor_instantiations_make_two_interfaces() {
@@ -378,7 +376,6 @@ Def demo Fn {p: point s: string} pts/contains(pts/new() p)"#,
 // --- Step 11: binary-functor specialization (the one new core functor pass) --
 
 #[test]
-#[ignore = "pending type system"]
 // Step 11 — a precompiled (binary) parameterized component is monomorphized by
 // substituting the element type into its WIT. The specialized resource's own
 // methods (e.g. `size`) appear concretely in the synthesized world.

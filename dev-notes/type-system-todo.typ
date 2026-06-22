@@ -80,20 +80,20 @@ defs is standard library._
 
 == Phase D — stdlib affordances, built on the core substrate
 
-9. ☐ *`Derive` + derivers (Eq / Ord / Show / Hash).* Stdlib `tree → tree` macros
+9. ☑ *`Derive` + derivers (Eq / Ord / Show / Hash).* Stdlib `tree → tree` macros
   emitting per-type monomorphic ops that join the overload sets; reader knows the
   `Derive` surface; derive-before-use ordering enforced. \
   _tests:_ `derive_eq_emits_a_monomorphic_definition`,
   `derived_eq_is_resolvable_and_synthesizes`
 
-10. ☐ *Source functors via parameterized `Import`.* `Import {pkg … elem: t as: …}`
+10. ☑ *Source functors via parameterized `Import`.* `Import {pkg … elem: t as: …}`
   instantiates a component per element type at compile time; required ops supplied
   by overload resolution; each instantiation synthesizes its own concrete
   interface (`point-set`, `string-set`); instantiate-before-use enforced. \
   _tests:_ `functor_instantiation_synthesizes_concrete_interface`,
   `two_functor_instantiations_make_two_interfaces`
 
-11. ☐ *Binary-functor specialization (the one new core functor pass).* Monomorphize
+11. ☑ *Binary-functor specialization (the one new core functor pass).* Monomorphize
   a precompiled, parameterized component by substituting the element type into its
   WIT (the case a macro cannot cover). \
   _tests:_ `binary_functor_specializes_its_resource_methods`
