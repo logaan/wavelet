@@ -100,7 +100,7 @@ defs is standard library._
 
 == Phase E — tie-off
 
-12. ☐ *Worked example end-to-end + downstream surfaces.* The `fig-source` program
+12. ☑ *Worked example end-to-end + downstream surfaces.* The `fig-source` program
   checks, monomorphizes, and synthesizes the `fig-wit` world. Then sweep the
   downstream surfaces (`CLAUDE.md`): regenerate `docs/examples.json`
   (`./scripts/regen-examples.sh`), update docs prose, the three syntax grammars

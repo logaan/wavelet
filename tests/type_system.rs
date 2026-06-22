@@ -400,7 +400,6 @@ Def build Fn {} ints/new()"#,
 // --- Step 12: worked example end-to-end + docs/examples regen ----------------
 
 #[test]
-#[ignore = "pending type system"]
 // Step 12 — the `fig-source` program checks, monomorphizes, and synthesizes the
 // `fig-wit` world: a concrete record, a derived `eq-point`, a `point`-specialized
 // `Set` interface, and a fully concrete export — nothing generic survives.
