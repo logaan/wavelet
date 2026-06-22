@@ -15,6 +15,33 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **Monomorphic type system — total static type checking.** Every Wavelet
+  expression now has a WIT type, decided by a static checker pass (`src/check.rs`)
+  that runs before emit. Checking is **total**: an ill-typed definition is a
+  compile error even when nothing calls it, so type errors surface at build time
+  rather than at the wasm boundary. Inference is **bidirectional** — types
+  propagate inward from contexts (function signatures, `Let` bindings, `Match`
+  results) and synthesize outward from atoms and applications.
+- **Numeric-literal resolution + defaulting, and `The` ascription.** A bare
+  numeric literal takes its type from context and is range-checked against it
+  (`The u8 300` is a compile error); with no context it **defaults** to `s64`
+  (integers) or `f64` (fractionals). The `The` form ascribes a type to an
+  expression (`The s64 5`), both to pin a literal and to drive resolution where
+  arguments alone don't decide.
+- **Ad-hoc overloading.** Several monomorphic `Def`s sharing a name form an
+  **overload set**. Each call site is resolved statically: first by the WIT types
+  of its arguments, then — when arguments don't decide — by the expected return
+  type supplied via `The`. An exported overload set is **name-mangled at the
+  component boundary** so each concrete instance gets a distinct WIT export
+  (e.g. an `eq` over `point` is exported as `eq-point`).
+- **`Derive {Eq Ord Show Hash} t`.** Derives the standard operations for a type,
+  expanding to concrete monomorphic definitions (e.g. `eq-point`, `show-point`)
+  whose WIT signatures are synthesized like any other export.
+- **Functor instantiation via `Import {pkg: … elem: t as: …}`.** A parameterized
+  import specializes a generic interface to a concrete element type, synthesizing
+  a per-element WIT interface (e.g. `set` instantiated at `point` yields a
+  concrete `point-set` interface) — nothing generic survives into the emitted
+  world.
 - **Macro components — run macros defined in other components.** `Import {pkg:
   "…" macros: true}` imports a *macro library*: a component exporting
   `wavelet:meta/macros@0.1.0` (`manifest()` → `(name, arity)` pairs, `expand(name,
