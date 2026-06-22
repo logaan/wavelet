@@ -738,8 +738,15 @@ impl<'a> Checker<'a> {
                 Ok(ty.clone())
             }
             _ => {
-                let actual = self.check(expr, Some(ty), scope)?;
-                let _ = actual;
+                // The interpreter only conformance-checks a *bare `Sym`*
+                // annotation against the runtime value (interp `the-MACRO`); a
+                // constructor annotation like `list(s32)` is not checked at all.
+                // Mirror that: propagate the expected type (so return-type-
+                // directed overload resolution still fires) only for a `Sym`
+                // annotation, so we never reject a program the interpreter runs,
+                // e.g. `The list(s32) ["a"]`.
+                let prop = matches!(self.arena.node(ty_form), Node::Sym(_)).then_some(ty);
+                self.check(expr, prop, scope)?;
                 Ok(ty.clone())
             }
         }
@@ -908,7 +915,7 @@ impl<'a> Checker<'a> {
         match name {
             // Arithmetic: every operand must be numeric; result is the unified
             // numeric type (Unknown if any operand is Unknown).
-            "add" | "sub" | "mul" | "div" | "rem" | "neg" | "min" | "max" | "abs" => {
+            "add" | "sub" | "mul" | "div" | "rem" | "neg" | "abs" => {
                 let mut result = Type::Unknown;
                 let mut any_unknown = false;
                 let mut seeded = false;
@@ -936,6 +943,18 @@ impl<'a> Checker<'a> {
                     Ok(result)
                 }
             }
+            // `min`/`max` return one of their operands and — via the
+            // interpreter's `compare` — are defined over numbers, strings, and
+            // chars, so they do NOT constrain operands to numeric (that would
+            // falsely reject `min("a" "b")`, which the interpreter runs). The
+            // result is the unified operand type, gradual when they disagree.
+            "min" | "max" => {
+                let mut result = Type::Unknown;
+                for t in &arg_tys {
+                    result = unify(&result, t).unwrap_or(Type::Unknown);
+                }
+                Ok(result)
+            }
             // str-cat: every arg must be string/char/unknown; result string.
             "str-cat" => {
                 for t in &arg_tys {
@@ -959,7 +978,11 @@ impl<'a> Checker<'a> {
             }
             // Comparisons and `not`: do NOT constrain operands; result bool.
             "eq" | "lt" | "le" | "gt" | "ge" | "not" => Ok(Type::Bool),
-            "len" => Ok(Type::S64),
+            // `len` returns a plain Int that range-checks against any int type
+            // at runtime (and promotes to float), so model it as an
+            // unconstrained int literal — not concrete `s64`, which would
+            // falsely reject e.g. `The u8 len(xs)` that the interpreter accepts.
+            "len" => Ok(Type::IntLit),
             // Everything else: result Unknown, args unconstrained (already
             // checked their subexpressions above). Later phases extend this.
             _ => Ok(Type::Unknown),

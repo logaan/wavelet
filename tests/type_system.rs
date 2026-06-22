@@ -422,3 +422,39 @@ Def nearest-set Fn {ps: list(point)}
     assert!(wit.contains("nearest-set"), "missing the export:\n{wit}");
     assert!(wit.contains("list<point>"), "export param not concrete:\n{wit}");
 }
+
+// ===========================================================================
+// Regression: the gradual checker must not reject programs the interpreter
+// runs (the "never preempt a runtime success" invariant). Each of these was a
+// false positive in the first cut of `check.rs`.
+// ===========================================================================
+
+#[test]
+// `min`/`max` dispatch through the interpreter's `compare`, which is defined
+// over strings and chars as well as numbers — so they must NOT be modelled as
+// numeric-only. `min("a" "b")` runs and yields "a".
+fn min_max_on_strings_is_not_rejected() {
+    let r = run(r#"min("a" "b")"#);
+    assert!(r.ok, "min on strings should run, got: {}", r.error);
+    assert_eq!(r.value, r#""a""#);
+}
+
+#[test]
+// The interpreter only conformance-checks a bare `Sym` `The` annotation; a
+// constructor annotation like `list(s32)` is never checked, so the checker must
+// stay gradual there rather than element-checking the list.
+fn the_with_a_constructor_annotation_is_not_element_checked() {
+    let r = run(r#"The list(s32) ["a"]"#);
+    assert!(r.ok, "The list(s32) [\"a\"] should run, got: {}", r.error);
+    assert_eq!(r.value, r#"["a"]"#);
+}
+
+#[test]
+// `len` returns a plain Int that range-checks against any int type at runtime,
+// so it must be modelled as an unconstrained int literal, not concrete `s64`
+// (which would reject `The u8 len(...)`).
+fn the_narrow_int_of_a_len_result_is_not_rejected() {
+    let r = run(r#"The u8 len([1 2 3])"#);
+    assert!(r.ok, "The u8 len(...) should run, got: {}", r.error);
+    assert_eq!(r.value, "3");
+}
