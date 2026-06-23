@@ -296,6 +296,56 @@ Export eq"#,
     );
 }
 
+#[test]
+// Step 8 (§3 review fix) — overload mangling is only triggered by genuinely
+// overloadable operations or a real ≥2-member overload set. An ordinary library
+// name (`get`, `head`, `map`, …) defined once is *not* an overload: it keeps its
+// given name at the boundary rather than being mangled into a degenerate label.
+fn lone_library_named_def_is_not_mangled() {
+    let wit = synth(
+        r#"Package "demo:util@0.1.0"
+Def get Fn {xs: list(s32)} xs
+Export get"#,
+    )
+    .expect("a lone library-named export should synthesize");
+    assert!(wit.contains("get: func("), "expected an un-mangled `get`:\n{wit}");
+    assert!(
+        !wit.contains("get-"),
+        "lone `get` was wrongly name-mangled:\n{wit}"
+    );
+}
+
+#[test]
+// Step 8 (§3 review fix) — a mangled suffix derived from a constructor (generic)
+// first-parameter type must be a legal WIT kebab identifier: `type_text` emits
+// `list<s32>` whose `<`/`>` are illegal in a WIT name, so the synthesizer must
+// sanitize it to `list-s32`. An intended `eq` overload over `list(s32)` and
+// `string` therefore lowers to `eq-list-s32` and `eq-string`, with no `<`/`>`.
+fn mangled_constructor_label_is_identifier_safe() {
+    let wit = synth(
+        r#"Package "demo:util@0.1.0"
+Def eq Fn {a: list(s32) b: list(s32)} true
+Def eq Fn {a: string b: string} true
+Export eq"#,
+    )
+    .expect("constructor-typed overload set should synthesize");
+    // The mangled function *label* must be a legal WIT identifier — no `<`/`>`.
+    // (Parameter *types* like `list<s32>` legitimately use `<`/`>`; those are WIT
+    // type syntax, not identifiers, so the check targets the `<label>: func(`.)
+    assert!(
+        wit.contains("eq-list-s32: func("),
+        "expected identifier-safe label eq-list-s32:\n{wit}"
+    );
+    assert!(
+        !wit.contains("eq-list<") && !wit.contains("eq-list>"),
+        "mangled label contains illegal identifier characters:\n{wit}"
+    );
+    assert!(
+        wit.contains("eq-string: func("),
+        "missing mangled label eq-string:\n{wit}"
+    );
+}
+
 // ===========================================================================
 // Phase D — the standard-library affordances, built on the core substrate
 // ===========================================================================

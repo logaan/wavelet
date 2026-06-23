@@ -359,19 +359,67 @@ fn functor_op_table(functors: &[FunctorInst]) -> FunctorOps {
     table
 }
 
+/// The builtin operation names that are genuinely *overloadable* — the
+/// operator-like and derivable operations whose meaning is per-type, so that a
+/// single typed `Def` of one of them is treated as one member of an overload
+/// set and name-mangled at the boundary (Step 8). This is deliberately much
+/// narrower than `builtins::NAMES`: the latter also lists the collection/string
+/// library (`get`, `head`, `map`, `concat`, `to-string`, …), which are ordinary
+/// functions — defining one of *those* once must keep its given name, not be
+/// mangled into illegal-looking labels.
+///
+/// It MUST include the derivable ops emitted by `Derive` (`eq`, `compare`,
+/// `show`, `hash` — see `expand.rs`) so a lone derived/typed `Def eq …` still
+/// mangles to `eq-point`, and it covers the comparison/arithmetic operators that
+/// share that operator-overloading story. `compare`/`show`/`hash` are not in
+/// `builtins::NAMES`, but they are derivable and so belong here.
+const OVERLOADABLE_OPS: &[&str] = &[
+    // derivable ops (Eq / Ord / Show / Hash)
+    "eq", "compare", "show", "hash",
+    // comparison operators
+    "lt", "le", "gt", "ge",
+    // arithmetic / ordering operators
+    "add", "sub", "mul", "div", "rem", "neg", "min", "max", "abs",
+];
+
 /// Whether an exported `name` denotes an overload set that must be name-mangled
 /// at the boundary (Step 8). The trigger is either ≥2 module-level Fn defs of
-/// `name`, **or** `name` colliding with a builtin operation (`builtins::NAMES`)
-/// — a single `Def eq …` is still mangled because `eq` is an overloadable
-/// operation name.
+/// `name` (a genuine overload set, whatever the name), **or** `name` being one
+/// of the curated overloadable operations (`OVERLOADABLE_OPS`) — a single
+/// `Def eq …` is still mangled because `eq` is an overloadable operation name.
+/// Ordinary library functions (`get`, `head`, `map`, `to-string`, …) defined
+/// once are *not* mangled and keep their given names.
 fn is_overload_export(name: &str, fn_defs: &HashMap<String, Vec<(NodeId, NodeId)>>) -> bool {
     let count = fn_defs.get(name).map(|v| v.len()).unwrap_or(0);
-    count >= 2 || crate::builtins::NAMES.contains(&name)
+    count >= 2 || OVERLOADABLE_OPS.contains(&name)
 }
 
-/// The mangled WIT name for one overload-set member: `name-<type>` where
-/// `<type>` is the WIT type name of the member's distinguishing (first)
-/// parameter. `eq` with a `point` first parameter → `eq-point`.
+/// Turn a `type_text` rendering of a parameter type into a WIT-identifier-safe
+/// token for use as a mangled-name suffix. `type_text` emits the WIT type
+/// *syntax* (`list<s32>`, `option<string>`, `tuple<s32, s32>`), whose `<`, `>`,
+/// `,` and spaces are illegal in a WIT identifier. This replaces every run of
+/// such separators with a single `-`, then trims leading/trailing `-`, so
+/// `list<s32>` → `list-s32`, `tuple<s32, s32>` → `tuple-s32-s32`, and a bare
+/// `point` stays `point` (keeping `eq-point` unchanged).
+fn safe_type_token(ty_text: &str) -> String {
+    let mut out = String::with_capacity(ty_text.len());
+    for ch in ty_text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+        } else {
+            // `<`, `>`, `,`, whitespace, etc. all collapse to a single `-`.
+            if !out.ends_with('-') {
+                out.push('-');
+            }
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// The mangled WIT name for one overload-set member: `name-<token>` where
+/// `<token>` is an identifier-safe rendering of the WIT type of the member's
+/// distinguishing (first) parameter. `eq` with a `point` first parameter →
+/// `eq-point`; with a `list(s32)` first parameter → `eq-list-s32`.
 fn mangle_name(arena: &Arena, name: &str, params_id: NodeId) -> Result<String, String> {
     let Node::Rec(fields) = arena.node(params_id) else {
         return Err(format!(
@@ -386,7 +434,7 @@ fn mangle_name(arena: &Arena, name: &str, params_id: NodeId) -> Result<String, S
         ));
     };
     let ty_text = type_text(arena, *ty)?;
-    Ok(format!("{name}-{ty_text}"))
+    Ok(format!("{name}-{}", safe_type_token(&ty_text)))
 }
 
 fn parse_explicit_sig(arena: &Arena, fields: &[(String, NodeId)]) -> Option<FuncSig> {

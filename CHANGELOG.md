@@ -117,6 +117,15 @@ you work, and rename it to the new version when you cut a release.
 - **`u64` parameters reject negatives.** The interpreter's dynamic type check for
   a `u64` parameter now rejects negative integers, consistent with the `to-u64`
   builtin.
+- **Overload name-mangling at the WIT boundary is no longer over-broad and emits
+  legal WIT.** Exporting an ordinary library-named function defined once (e.g.
+  `get`, `head`, `map`, `concat`, `to-string`) is no longer treated as a
+  one-member overload set and name-mangled; only a genuine ≥2-member overload set
+  or one of the curated overloadable operations (the derivable `eq`/`compare`/
+  `show`/`hash` and the comparison/arithmetic operators) triggers mangling. The
+  mangled suffix is also now an identifier-safe WIT label: a constructor-typed
+  first parameter such as `list(s32)` produces `eq-list-s32` rather than the
+  illegal `eq-list<s32>`.
 
 ## [0.7.0] - 2026-06-16
 
