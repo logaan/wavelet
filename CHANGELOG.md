@@ -151,6 +151,13 @@ you work, and rename it to the new version when you cut a release.
   `Import {pkg: "acme:widget/thing" elem: point as: w}`) stays an ordinary import
   with the unknown field ignored, instead of erroring with `unknown functor
   package`. A *known* functor package missing its `elem:` is still a clear error.
+- **`wavelet wit` now expands macros before synthesizing the world.** The `wit`
+  subcommand synthesized straight from the read forms without running expansion,
+  so `Derive` (and any foreign macro) never ran on the `wit` path: a program that
+  `wavelet build` compiles failed under `wavelet wit` with e.g. `Export eq-point
+  has no definition`. `wavelet wit` now runs the same foreign-macro-aware expand
+  pipeline as `wavelet build`/`wavelet expand`, so the two subcommands agree about
+  the same source.
 
 ## [0.7.0] - 2026-06-16
 
