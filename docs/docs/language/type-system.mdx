@@ -149,20 +149,16 @@ type:
 ```wit
 package demo:geo@0.1.0;
 
-interface types {
+interface api {
   record point { x: s32, y: s32 }
-}
-
-interface compare {
-  use types.{point};
   eq-point: func(a: point, b: point) -> bool;
   compare-point: func(a: point, b: point) -> s32;
   show-point: func(v: point) -> string;
+  nearest-set: func(ps: list<point>) -> point-set.set;
 }
 
 // the set functor, instantiated at `point`
 interface point-set {
-  use types.{point};
   resource set {
     constructor();
     add: func(value: point);
@@ -172,15 +168,15 @@ interface point-set {
 }
 
 world geo {
-  export types;
-  export compare;
+  export api;
   export point-set;
-  export nearest-set: func(ps: list<point>) -> point-set.set;
 }
 ```
 
-The overload set `eq` lowers to the distinctly named `eq-point`, the derived
-operations become concrete functions, and the `set` functor becomes the concrete
-`point-set` interface. A generic set would have wanted `resource set<t>` with
+The record, the derived operations, and the export all land in a single `api`
+interface, while each functor instantiation gets its own interface. The overload
+set `eq` lowers to the distinctly named `eq-point`, the derived operations become
+concrete functions, and the `set` functor becomes the concrete `point-set`
+interface. A generic set would have wanted `resource set<t>` with
 `add: func(value: t)`, which WIT simply cannot express — the functor produces a
 concrete interface instead.
