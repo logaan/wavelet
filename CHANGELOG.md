@@ -43,7 +43,15 @@ you work, and rename it to the new version when you cut a release.
   import specializes a generic interface to a concrete element type, synthesizing
   a per-element WIT interface (e.g. `set` instantiated at `point` yields a
   concrete `point-set` interface) — nothing generic survives into the emitted
-  world.
+  world. The `wavelet:coll/set` functor now also **runs**: instantiating it binds
+  the qualified ops `alias/new`, `alias/add`, `alias/contains`, and `alias/size`
+  (with the signatures the synthesized resource promises — `new() -> set`,
+  `add(set, elem)`, `contains(set, elem) -> bool`, `size(set) -> u32`), so a
+  functor program executes end to end under `wavelet run`. Set membership uses the
+  element type's `Eq`, so it agrees with `eq`/`compare`. `wavelet build` does not
+  yet emit functor components (the exported `set` resource has no emittable method
+  bodies) and now reports a clear error naming the functor rather than failing
+  obscurely or emitting a component that would diverge from the interpreter.
 - **Macro components — run macros defined in other components.** `Import {pkg:
   "…" macros: true}` imports a *macro library*: a component exporting
   `wavelet:meta/macros@0.1.0` (`manifest()` → `(name, arity)` pairs, `expand(name,
@@ -94,6 +102,12 @@ you work, and rename it to the new version when you cut a release.
 
 ### Fixed
 
+- **`wavelet run` now expands `Derive` (and any tree→tree stdlib macro).** The
+  run path skipped the `expand_file` pass that `wavelet build`/`wavelet wit` use,
+  so a program that `Derive`d a type died with `unbound name derive-MACRO` — even
+  before any functor was involved. `wavelet run` now runs the expander first,
+  matching the other paths, so derived programs (and functor programs, which lean
+  on derived ops over their element type) execute.
 - **The type checker now runs on `wavelet run`, `wavelet build`, and
   `wavelet wit`, not only the playground.** Previously the checker (and, on the
   run path, overload resolution) was wired into the playground evaluator alone:

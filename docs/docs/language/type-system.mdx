@@ -123,6 +123,34 @@ emitted world: a second instantiation at, say, `string` would produce a separate
 `string-set` interface. WIT cannot write `resource set<t>`, so the functor writes
 the monomorphic interface for you, once per element type you ask for.
 
+The instantiation also brings the functor's operations into scope, qualified by
+the alias. For the `set` functor these are `pts/new`, `pts/add`, `pts/contains`,
+and `pts/size`, with exactly the signatures the synthesized resource promises:
+
+```wavelet
+Let {s: pts/new()}              // new() -> set        (an empty set)
+  Do [ pts/add(s p)             // add(set, elem)       (returns unit)
+       pts/contains(s p)        // contains(set, elem) -> bool
+       pts/size(s) ]            // size(set) -> u32
+```
+
+`new()` hands back a fresh, mutable set; `add` mutates it in place and is a no-op
+for an element already present (membership uses the same equality `Derive {Eq}`
+gives the element type); `contains` and `size` observe it. These run under
+`wavelet run` and the playground today.
+
+:::note Building functors
+
+`wavelet wit` and `wavelet run` support functors. `wavelet build` does **not**
+yet: the synthesized world *exports* a `set` resource whose methods have no
+source bodies, so the wasm backend would have to generate a resource
+implementation and hand out canonical-ABI handles — machinery it does not have
+yet. Building a functor program reports a clear error rather than emitting a
+component that would diverge from the interpreter. (Functors on the emit/binary
+path are an open question in the type-system design notes.)
+
+:::
+
 ## Worked example: source to WIT
 
 Putting it together — a derived record type and a `set` of it — and the WIT the
@@ -180,3 +208,7 @@ concrete functions, and the `set` functor becomes the concrete `point-set`
 interface. A generic set would have wanted `resource set<t>` with
 `add: func(value: t)`, which WIT simply cannot express — the functor produces a
 concrete interface instead.
+
+(`each` here is illustrative iteration over the input list, applying `pts/add`
+for its side effect; it is not yet a builtin. To run a set today, iterate with
+`map`/`fold` or with explicit `pts/add` calls.)
