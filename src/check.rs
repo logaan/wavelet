@@ -1020,24 +1020,26 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// Whether `n` fits the integer type `ty`. Mirrors `interp::check_type`'s range
-/// logic so the compile-time `The` check matches the runtime one.
+/// Whether `n` fits the integer type `ty`. Delegates to [`crate::value::int_fits`],
+/// the single source of truth shared with the runtime `The` check
+/// (`interp::check_type`), so the compile-time and runtime bounds cannot drift.
 fn int_in_range(n: i64, ty: &Type) -> bool {
-    match ty {
-        Type::U8 => (0..=u8::MAX as i64).contains(&n),
-        Type::U16 => (0..=u16::MAX as i64).contains(&n),
-        Type::U32 => (0..=u32::MAX as i64).contains(&n),
-        Type::U64 => n >= 0,
-        Type::S8 => (i8::MIN as i64..=i8::MAX as i64).contains(&n),
-        Type::S16 => (i16::MIN as i64..=i16::MAX as i64).contains(&n),
-        Type::S32 => (i32::MIN as i64..=i32::MAX as i64).contains(&n),
-        Type::S64 => true,
-        // A float type accepts any integer literal (int promotes to float).
-        Type::F32 | Type::F64 => true,
-        // Any non-numeric ascription target leaves the literal unconstrained
+    let name = match ty {
+        Type::U8 => "u8",
+        Type::U16 => "u16",
+        Type::U32 => "u32",
+        Type::U64 => "u64",
+        Type::S8 => "s8",
+        Type::S16 => "s16",
+        Type::S32 => "s32",
+        Type::S64 => "s64",
+        // A float type accepts any integer literal (int promotes to float). Any
+        // non-numeric ascription target also leaves the literal unconstrained
         // here; gradual elsewhere.
-        _ => true,
-    }
+        _ => return true,
+    };
+    // `int_fits` returns `Some` for all eight names matched above.
+    crate::value::int_fits(name, n).unwrap_or(true)
 }
 
 /// The printed name of a type form, for error messages (matches the runtime
