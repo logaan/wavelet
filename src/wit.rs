@@ -85,6 +85,34 @@ pub struct FunctorInst {
     pub iface: String,
 }
 
+/// The result type of one `Set` functor operation, abstracted away from the
+/// element type so a single table describes the template.
+enum SetOpResult {
+    /// the set handle, the resource type `<iface>.set`
+    Handle,
+    /// a fixed Known WIT type, e.g. `bool` or `u32`
+    Ty(&'static str),
+    /// unit — a discarding op like `add`
+    Unit,
+}
+
+/// One operation of the `Set` functor template. Single source of truth for both
+/// the inference op-table (`functor_op_table`) and the emitted WIT resource
+/// (`functor_interface`), so the two cannot drift.
+struct SetOp {
+    name: &'static str,
+    takes_value: bool,
+    result: SetOpResult,
+}
+
+/// The `Set` functor's operations, in interface order (constructor first).
+const SET_OPS: &[SetOp] = &[
+    SetOp { name: "new", takes_value: false, result: SetOpResult::Handle },
+    SetOp { name: "add", takes_value: true, result: SetOpResult::Unit },
+    SetOp { name: "contains", takes_value: true, result: SetOpResult::Ty("bool") },
+    SetOp { name: "size", takes_value: false, result: SetOpResult::Ty("u32") },
+];
+
 #[derive(Clone)]
 pub struct FuncSig {
     pub name: String,
@@ -439,19 +467,18 @@ fn functor_op_table(functors: &[FunctorInst]) -> FunctorOps {
     for f in functors {
         match f.kind {
             FunctorKind::Set => {
-                // The set handle is the resource type `<elem>-set.set` (WIT's
+                // The set handle is the resource type `<iface>.set` (WIT's
                 // dotted interface-member syntax, as in fig-wit). Its exact text
                 // is unasserted — it only needs to be Known so an export returning
-                // `alias/new()` synthesizes.
-                let handle = format!("{}.set", f.iface);
-                let ops = [
-                    ("new", Some(handle)),
-                    ("contains", Some("bool".to_string())),
-                    ("add", None),
-                    ("size", Some("u32".to_string())),
-                ];
-                for (op, res) in ops {
-                    table.insert((f.alias.clone(), op.to_string()), res);
+                // `alias/new()` synthesizes. Every op is derived from `SET_OPS`,
+                // the same descriptor that drives the emitted WIT.
+                for op in SET_OPS {
+                    let res = match op.result {
+                        SetOpResult::Handle => Some(format!("{}.set", f.iface)),
+                        SetOpResult::Ty(t) => Some(t.to_string()),
+                        SetOpResult::Unit => None,
+                    };
+                    table.insert((f.alias.clone(), op.name.to_string()), res);
                 }
             }
         }
@@ -861,14 +888,31 @@ fn functor_interface(_arena: &Arena, f: &FunctorInst) -> Result<String, String> 
     match f.kind {
         FunctorKind::Set => {
             let t = &f.elem;
+            // Build the resource members from `SET_OPS`, the same descriptor that
+            // drives the inference op-table, so the two cannot drift.
+            let mut members = String::new();
+            for op in SET_OPS {
+                match op.result {
+                    SetOpResult::Handle => members.push_str("    constructor();\n"),
+                    _ => {
+                        let params = if op.takes_value {
+                            format!("value: {t}")
+                        } else {
+                            String::new()
+                        };
+                        let arrow = match op.result {
+                            SetOpResult::Ty(r) => format!(" -> {r}"),
+                            _ => String::new(),
+                        };
+                        members.push_str(&format!(
+                            "    {name}: func({params}){arrow};\n",
+                            name = op.name,
+                        ));
+                    }
+                }
+            }
             Ok(format!(
-                "\ninterface {iface} {{\n  \
-                   resource set {{\n    \
-                     constructor();\n    \
-                     add: func(value: {t});\n    \
-                     contains: func(value: {t}) -> bool;\n    \
-                     size: func() -> u32;\n  \
-                   }}\n}}\n",
+                "\ninterface {iface} {{\n  resource set {{\n{members}  }}\n}}\n",
                 iface = f.iface,
             ))
         }
