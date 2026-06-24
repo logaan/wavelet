@@ -616,6 +616,48 @@ world shout {
     }
 
     #[test]
+    fn emit_single_curated_overload_export_componentize() {
+        // §2 regression: a single curated-op overload export (`eq` is in
+        // OVERLOADABLE_OPS) is name-mangled by `wit::collect` to `eq-point`, but
+        // the backing `Def` is named `eq`. The emitter must register an internal
+        // function under the *mangled* name so the export wrapper can find a body
+        // — previously this failed with `export `eq-point` has no Def Fn`.
+        let src = "Package \"demo:eqs@0.1.0\"\n\
+                   DefType point {x: s32 y: s32}\n\
+                   Def eq Fn {a: point b: point} true\n\
+                   Export eq";
+        let (arena, roots) = read_file(src).unwrap();
+        let info = wit::collect(&arena, &roots).unwrap();
+        let bytes =
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
+                .unwrap();
+        assert!(bytes.starts_with(b"\0asm"));
+    }
+
+    #[test]
+    fn emit_two_member_overload_export_componentize() {
+        // §2 regression: a genuine 2-member overload set mangles to two distinct
+        // exports (`eq-point`, `eq-string`). Each member needs its own concrete
+        // internal function emitted from its own `(params, body)`; `info.defs`
+        // collapses the name last-wins, so the emitter keys on the identity
+        // recorded in `info.overload_bodies`.
+        let src = "Package \"demo:eqo@0.1.0\"\n\
+                   DefType point {x: s32 y: s32}\n\
+                   Def eq Fn {a: point b: point} true\n\
+                   Def eq Fn {a: string b: string} true\n\
+                   Export eq";
+        let (arena, roots) = read_file(src).unwrap();
+        let info = wit::collect(&arena, &roots).unwrap();
+        // Both members are mangled into the export list.
+        assert!(info.exports.iter().any(|s| s.name == "eq-point"));
+        assert!(info.exports.iter().any(|s| s.name == "eq-string"));
+        let bytes =
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
+                .unwrap();
+        assert!(bytes.starts_with(b"\0asm"));
+    }
+
+    #[test]
     fn eval_record_construct_and_match() {
         // the interpreter and wasm backend agree on this program's result
         assert_eq!(

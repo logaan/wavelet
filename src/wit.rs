@@ -30,6 +30,16 @@ pub struct FileInfo {
     pub fn_defs: HashMap<String, Vec<(NodeId, NodeId)>>,
     /// non-function module-level defs, in file order: (name, expr)
     pub value_defs: Vec<(String, NodeId)>,
+    /// For every member of an *exported* overload set, the mangled WIT name
+    /// (`eq-point`, `eq-string`, …) it was synthesized into, mapped to the exact
+    /// `(params, body)` NodeIds it came from. The underlying `Def` is named `eq`,
+    /// so `info.defs`/`fn_defs` are keyed by the original name and the emitter
+    /// would otherwise have no function to back the mangled export. The emitter
+    /// keys on this identity to register and emit one internal function per
+    /// member. NodeIds are valid only for the local arena `emit` walks (the build
+    /// path), which is exactly where this is consumed — it is *not* preserved
+    /// across cross-package `Dep` clones.
+    pub overload_bodies: HashMap<String, (NodeId, NodeId)>,
 }
 
 pub struct ImportInfo {
@@ -103,6 +113,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     let mut defs = HashMap::new();
     let mut fn_defs: HashMap<String, Vec<(NodeId, NodeId)>> = HashMap::new();
     let mut value_defs = Vec::new();
+    let mut overload_bodies: HashMap<String, (NodeId, NodeId)> = HashMap::new();
 
     for &root in roots {
         // Top-level forms are tuples `Tup[head, …args]`. The arity-1 special
@@ -278,6 +289,10 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
             for (&(params_id, body), mangled) in members.iter().zip(labels) {
                 let mut sig = infer_sig(arena, &mangled, params_id, body, &defs, &functor_ops)?;
                 sig.iface = iface.clone();
+                // Record the identity backing this mangled export so the emitter
+                // can register a concrete internal function for it (the `Def` is
+                // named `name`, not `mangled`, so `defs`/`fn_defs` cannot back it).
+                overload_bodies.insert(sig.name.clone(), (params_id, body));
                 exports.push(sig);
             }
             continue;
@@ -313,6 +328,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
         defs,
         fn_defs,
         value_defs,
+        overload_bodies,
     })
 }
 

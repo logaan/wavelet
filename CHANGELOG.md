@@ -158,6 +158,17 @@ you work, and rename it to the new version when you cut a release.
   has no definition`. `wavelet wit` now runs the same foreign-macro-aware expand
   pipeline as `wavelet build`/`wavelet expand`, so the two subcommands agree about
   the same source.
+- **An exported overload set now builds to a component.** `wavelet wit`
+  synthesized a mangled WIT export per overload member (`eq-point`,
+  `eq-string`, …) and the interpreter resolved the set, but `wavelet build`
+  failed with `export `eq-point` has no Def Fn`: the emitter keyed its internal
+  functions by the members' shared original name (`eq`), which collapses
+  last-wins, so the export wrappers — which look bodies up by the *mangled* name
+  — found nothing. The emitter now records the exact `(params, body)` each
+  mangled export was synthesized from and emits one concrete internal function
+  per member keyed on that identity, so a single curated-op overload export
+  (`Def eq Fn {a: point b: point} true` + `Export eq`) and a genuine multi-member
+  overload set both componentize.
 
 ## [0.7.0] - 2026-06-16
 
