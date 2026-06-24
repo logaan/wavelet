@@ -368,36 +368,45 @@ fn strip_version(s: &str) -> String {
     s.split('@').next().unwrap_or(s).to_string()
 }
 
-/// Parse an `Import` record as a functor instantiation if it carries an `elem:`
-/// field; otherwise return `Ok(None)` so the caller treats it as an ordinary
-/// import. Recognizes the built-in functor packages by their `pkg` path.
+/// Parse an `Import` record as a functor instantiation, keyed on the `pkg:`
+/// *package identity* — not on the presence of any particular field. A record
+/// whose `pkg:` is a recognized functor package (currently only
+/// `wavelet:coll/set`) is a functor instantiation; anything else returns
+/// `Ok(None)` so the caller treats it as an ordinary import (whose unknown
+/// fields, such as a generic `elem:`, are simply ignored). Only once the package
+/// is known to be a functor is a missing `elem:` an error, since at that point
+/// the record is a malformed functor instantiation.
 fn parse_functor(
     arena: &Arena,
     fields: &[(String, NodeId)],
 ) -> Result<Option<FunctorInst>, String> {
-    // Only a record carrying `elem:` is a functor instantiation.
-    if !fields.iter().any(|(k, _)| k == "elem") {
+    // Classify on the package, not the fields: read `pkg:` first and bail out as
+    // an ordinary import unless it names a known functor package.
+    let pkg = fields.iter().find_map(|(k, v)| match (k.as_str(), arena.node(*v)) {
+        ("pkg", Node::Str(s)) => Some(s.clone()),
+        _ => None,
+    });
+    let Some(pkg) = pkg else { return Ok(None) };
+    let path = strip_version(&pkg);
+    let kind = if path.ends_with("coll/set") {
+        FunctorKind::Set
+    } else {
+        // Not a functor package: an ordinary import that merely shares a field
+        // name (e.g. `elem:`) with the functor form. Leave it for the caller.
         return Ok(None);
-    }
-    let mut pkg = None;
+    };
+    // From here the package *is* a functor, so the instantiation must be
+    // well-formed: an `elem:` is required.
     let mut alias = None;
     let mut elem = None;
     for (k, v) in fields {
         match (k.as_str(), arena.node(*v)) {
-            ("pkg", Node::Str(s)) => pkg = Some(s.clone()),
             ("as", Node::Sym(s)) => alias = Some(s.clone()),
             ("elem", _) => elem = Some(type_text(arena, *v)?),
             _ => {}
         }
     }
-    let pkg = pkg.ok_or("functor Import is missing `pkg:`")?;
-    let elem = elem.ok_or("functor Import is missing `elem:`")?;
-    let path = strip_version(&pkg);
-    let kind = if path.ends_with("coll/set") {
-        FunctorKind::Set
-    } else {
-        return Err(format!("unknown functor package `{path}` (known: wavelet:coll/set)"));
-    };
+    let elem = elem.ok_or_else(|| format!("functor Import `{path}` is missing `elem:`"))?;
     let alias = alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
     let iface = format!("{elem}-set");
     Ok(Some(FunctorInst { kind, alias, elem, iface }))

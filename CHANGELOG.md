@@ -143,6 +143,14 @@ you work, and rename it to the new version when you cut a release.
   `eq-point` WIT function. Identical export declarations — same exported name and
   same explicit signature — are now collapsed to one before WIT synthesis;
   declarations that share a name but differ in interface or signature are kept.
+- **An ordinary `Import` carrying an `elem:` field is no longer hijacked as a
+  functor.** Functor instantiation is now classified by the import's *package*
+  identity, not by the presence of an `elem:` field: only an `Import` whose `pkg:`
+  is a known functor package (currently `wavelet:coll/set`) is read as a functor.
+  Any other import that merely happens to use `elem:` (e.g.
+  `Import {pkg: "acme:widget/thing" elem: point as: w}`) stays an ordinary import
+  with the unknown field ignored, instead of erroring with `unknown functor
+  package`. A *known* functor package missing its `elem:` is still a clear error.
 
 ## [0.7.0] - 2026-06-16
 

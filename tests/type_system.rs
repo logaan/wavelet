@@ -516,6 +516,26 @@ Def build Fn {} ints/new()"#,
     );
 }
 
+#[test]
+// §7 regression — functor classification is keyed on the *package*, not on the
+// presence of an `elem:` field. An ordinary import whose package is not a known
+// functor package must stay an ordinary import even when it happens to carry an
+// `elem:` field; that unknown field is ignored, not hijacked into a functor
+// instantiation (which used to hard-error `unknown functor package`).
+fn ordinary_import_with_elem_field_is_not_a_functor() {
+    let wit = synth(
+        r#"Package "demo:main@0.1.0"
+Import {pkg: "acme:widget/thing" elem: point as: w}
+Export run
+Def run Fn {} drop("hi")"#,
+    )
+    .expect("an ordinary import carrying `elem:` should not be read as a functor");
+    assert!(
+        wit.contains("import acme:widget/thing;"),
+        "import not treated as ordinary:\n{wit}"
+    );
+}
+
 // ===========================================================================
 // Phase E — tie-off: the worked example and the downstream surfaces
 // ===========================================================================
