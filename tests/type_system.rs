@@ -346,6 +346,58 @@ Export eq"#,
     );
 }
 
+#[test]
+// Step 8 (§5 review fix) — first-parameter-only mangling collides when two
+// members differ only *past* the first parameter: both `{a: point b: string}`
+// and `{a: point b: s32}` would mangle to `eq-point`, synthesizing two functions
+// of the same name into one interface (invalid WIT). The synthesizer must detect
+// the collision and disambiguate over all parameter types, yielding distinct
+// labels `eq-point-string` and `eq-point-s32`, with no duplicated function name.
+fn first_parameter_mangle_collision_is_disambiguated() {
+    let wit = synth(
+        r#"Package "demo:geo@0.1.0"
+DefType point {x: s32 y: s32}
+Def eq Fn {a: point b: string} true
+Def eq Fn {a: point b: s32} true
+Export eq"#,
+    )
+    .expect("colliding overload set should synthesize over all parameter types");
+    assert!(
+        wit.contains("eq-point-string: func("),
+        "expected disambiguated label eq-point-string:\n{wit}"
+    );
+    assert!(
+        wit.contains("eq-point-s32: func("),
+        "expected disambiguated label eq-point-s32:\n{wit}"
+    );
+    // No duplicated function name: the collided `eq-point` label must not survive
+    // as a standalone declaration.
+    assert!(
+        !wit.contains("eq-point: func("),
+        "collided first-parameter label leaked a duplicate function:\n{wit}"
+    );
+}
+
+#[test]
+// Step 8 (§5 review fix) — two members with *byte-identical* parameter type
+// lists are a genuine duplicate definition: even the full-signature labels
+// collide, so the set is unrepresentable in WIT. The synthesizer must report a
+// clear compile error naming the export rather than emitting invalid WIT.
+fn true_duplicate_overload_definition_is_an_error() {
+    let err = synth(
+        r#"Package "demo:geo@0.1.0"
+DefType point {x: s32 y: s32}
+Def eq Fn {a: point b: point} true
+Def eq Fn {a: point b: point} false
+Export eq"#,
+    )
+    .expect_err("a true duplicate overload must be rejected");
+    assert!(
+        err.contains("eq"),
+        "duplicate-overload error should name the export `eq`: {err}"
+    );
+}
+
 // ===========================================================================
 // Phase D — the standard-library affordances, built on the core substrate
 // ===========================================================================

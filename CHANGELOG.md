@@ -126,6 +126,16 @@ you work, and rename it to the new version when you cut a release.
   mangled suffix is also now an identifier-safe WIT label: a constructor-typed
   first parameter such as `list(s32)` produces `eq-list-s32` rather than the
   illegal `eq-list<s32>`.
+- **Overload mangling no longer collides on members that differ only past the
+  first parameter.** The mangled WIT label was derived from the first parameter
+  type alone, so two members like `eq {a: point b: string}` and
+  `eq {a: point b: s32}` both became `eq-point` — two functions of the same name
+  in one interface (invalid WIT). When the first-parameter labels are all
+  distinct they are kept unchanged (so `eq` over `point`/`string` stays
+  `eq-point`/`eq-string`); when any collide, the whole set is disambiguated over
+  *all* parameter types (`eq-point-string`, `eq-point-s32`). A genuine duplicate
+  (two members with identical parameter type lists) is now a clear compile error
+  naming the export instead of emitting invalid WIT.
 
 ## [0.7.0] - 2026-06-16
 

@@ -231,8 +231,41 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                 .get(&name)
                 .ok_or(format!("Export `{name}` has no definition"))?;
             let iface = explicit.map(|s| s.iface).unwrap_or_else(|| "api".to_string());
-            for &(params_id, body) in members {
-                let mangled = mangle_name(arena, &name, params_id)?;
+
+            // First-parameter labels disambiguate the set only if they are all
+            // distinct (preserving the established `eq-point` / `eq-string`
+            // scheme). If two members collide on the first parameter, fall back
+            // to mangling over *all* parameter types for the whole set so the
+            // labels stay mutually consistent. If even the full-signature labels
+            // collide, two members have byte-identical parameter type lists — a
+            // genuine duplicate that WIT cannot represent — so report it.
+            let first_labels = members
+                .iter()
+                .map(|&(params_id, _)| mangle_name(arena, &name, params_id))
+                .collect::<Result<Vec<_>, _>>()?;
+            let first_distinct = {
+                let unique: std::collections::HashSet<&String> = first_labels.iter().collect();
+                unique.len() == first_labels.len()
+            };
+            let labels = if first_distinct {
+                first_labels
+            } else {
+                let full_labels = members
+                    .iter()
+                    .map(|&(params_id, _)| mangle_name_full(arena, &name, params_id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let unique: std::collections::HashSet<&String> = full_labels.iter().collect();
+                if unique.len() != full_labels.len() {
+                    return Err(format!(
+                        "exported overload set `{name}` has two members with identical \
+                         parameter types; they mangle to the same WIT name and cannot \
+                         both be exported (remove the duplicate definition)"
+                    ));
+                }
+                full_labels
+            };
+
+            for (&(params_id, body), mangled) in members.iter().zip(labels) {
                 let mut sig = infer_sig(arena, &mangled, params_id, body, &defs, &functor_ops)?;
                 sig.iface = iface.clone();
                 exports.push(sig);
@@ -416,25 +449,47 @@ fn safe_type_token(ty_text: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-/// The mangled WIT name for one overload-set member: `name-<token>` where
-/// `<token>` is an identifier-safe rendering of the WIT type of the member's
-/// distinguishing (first) parameter. `eq` with a `point` first parameter →
-/// `eq-point`; with a `list(s32)` first parameter → `eq-list-s32`.
-fn mangle_name(arena: &Arena, name: &str, params_id: NodeId) -> Result<String, String> {
+/// The identifier-safe tokens of every parameter type of an overload-set member,
+/// in order: `{a: point b: string}` → `["point", "string"]`. The member's
+/// parameters must be typed (a `{a: t …}` record) so the overloads can be
+/// distinguished by argument type.
+fn param_type_tokens(arena: &Arena, name: &str, params_id: NodeId) -> Result<Vec<String>, String> {
     let Node::Rec(fields) = arena.node(params_id) else {
         return Err(format!(
             "cannot mangle overloaded export `{name}`: its parameters must be \
              typed (a `{{a: t …}}` record) to distinguish overloads"
         ));
     };
-    let Some((_k, ty)) = fields.first() else {
+    if fields.is_empty() {
         return Err(format!(
             "cannot mangle overloaded export `{name}`: it takes no parameters, \
              so its overloads cannot be distinguished by argument type"
         ));
-    };
-    let ty_text = type_text(arena, *ty)?;
-    Ok(format!("{name}-{}", safe_type_token(&ty_text)))
+    }
+    fields
+        .iter()
+        .map(|(_k, ty)| Ok(safe_type_token(&type_text(arena, *ty)?)))
+        .collect()
+}
+
+/// The mangled WIT name for one overload-set member when its first parameter
+/// type alone disambiguates the set: `name-<token>` where `<token>` is an
+/// identifier-safe rendering of the WIT type of the member's first parameter.
+/// `eq` with a `point` first parameter → `eq-point`; with a `list(s32)` first
+/// parameter → `eq-list-s32`.
+fn mangle_name(arena: &Arena, name: &str, params_id: NodeId) -> Result<String, String> {
+    let tokens = param_type_tokens(arena, name, params_id)?;
+    Ok(format!("{name}-{}", tokens[0]))
+}
+
+/// The mangled WIT name disambiguated over *all* parameter types, used when the
+/// first-parameter label alone collides across the overload set:
+/// `{a: point b: string}` → `name-point-string`, `{a: point b: s32}` →
+/// `name-point-s32`. Each parameter type goes through the same identifier-safe
+/// token path, joined by `-`.
+fn mangle_name_full(arena: &Arena, name: &str, params_id: NodeId) -> Result<String, String> {
+    let tokens = param_type_tokens(arena, name, params_id)?;
+    Ok(format!("{name}-{}", tokens.join("-")))
 }
 
 fn parse_explicit_sig(arena: &Arena, fields: &[(String, NodeId)]) -> Option<FuncSig> {
