@@ -40,6 +40,32 @@ pub fn unit() -> Value {
     Value::Rec(vec![])
 }
 
+/// Whether the integer `n` fits within the WIT integer type named `type_name`.
+///
+/// This is the single source of truth for the per-width integer bounds: both
+/// the runtime `The` check ([`crate::interp`]'s `check_type`) and the
+/// compile-time one ([`crate::check`]'s `int_in_range`) delegate here so the two
+/// can never silently diverge.
+///
+/// Returns `None` when `type_name` is not one of the eight integer types, and
+/// `Some(in_range)` otherwise. Note `u64` is the only unsigned type without an
+/// upper bound in this `i64` representation — it merely rejects negatives,
+/// matching the `to-u64` builtin's `n >= 0` check — and `s64` accepts any `i64`.
+pub fn int_fits(type_name: &str, n: i64) -> Option<bool> {
+    let fits = match type_name {
+        "u8" => (0..=u8::MAX as i64).contains(&n),
+        "u16" => (0..=u16::MAX as i64).contains(&n),
+        "u32" => (0..=u32::MAX as i64).contains(&n),
+        "u64" => n >= 0,
+        "s8" => (i8::MIN as i64..=i8::MAX as i64).contains(&n),
+        "s16" => (i16::MIN as i64..=i16::MAX as i64).contains(&n),
+        "s32" => (i32::MIN as i64..=i32::MAX as i64).contains(&n),
+        "s64" => true,
+        _ => return None,
+    };
+    Some(fits)
+}
+
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         use Value::*;

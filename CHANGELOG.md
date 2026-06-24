@@ -15,6 +15,35 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **Monomorphic type system — total static type checking.** Every Wavelet
+  expression now has a WIT type, decided by a static checker pass (`src/check.rs`)
+  that runs on **every** path — `wavelet run`, `wavelet build`, `wavelet wit`,
+  and the playground — before any code runs or any component is emitted. Checking
+  is **total**: an ill-typed definition is a compile error even when nothing calls
+  it, so type errors surface at build/run/wit time rather than at the wasm
+  boundary. Inference is **bidirectional** — types propagate inward from contexts
+  (function signatures, `Let` bindings, `Match` results) and synthesize outward
+  from atoms and applications.
+- **Numeric-literal resolution + defaulting, and `The` ascription.** A bare
+  numeric literal takes its type from context and is range-checked against it
+  (`The u8 300` is a compile error); with no context it **defaults** to `s64`
+  (integers) or `f64` (fractionals). The `The` form ascribes a type to an
+  expression (`The s64 5`), both to pin a literal and to drive resolution where
+  arguments alone don't decide.
+- **Ad-hoc overloading.** Several monomorphic `Def`s sharing a name form an
+  **overload set**. Each call site is resolved statically: first by the WIT types
+  of its arguments, then — when arguments don't decide — by the expected return
+  type supplied via `The`. An exported overload set is **name-mangled at the
+  component boundary** so each concrete instance gets a distinct WIT export
+  (e.g. an `eq` over `point` is exported as `eq-point`).
+- **`Derive {Eq Ord Show Hash} t`.** Derives the standard operations for a type,
+  expanding to concrete monomorphic definitions (e.g. `eq-point`, `show-point`)
+  whose WIT signatures are synthesized like any other export.
+- **Functor instantiation via `Import {pkg: … elem: t as: …}`.** A parameterized
+  import specializes a generic interface to a concrete element type, synthesizing
+  a per-element WIT interface (e.g. `set` instantiated at `point` yields a
+  concrete `point-set` interface) — nothing generic survives into the emitted
+  world.
 - **Macro components — run macros defined in other components.** `Import {pkg:
   "…" macros: true}` imports a *macro library*: a component exporting
   `wavelet:meta/macros@0.1.0` (`manifest()` → `(name, arity)` pairs, `expand(name,
@@ -65,6 +94,15 @@ you work, and rename it to the new version when you cut a release.
 
 ### Fixed
 
+- **The type checker now runs on `wavelet run`, `wavelet build`, and
+  `wavelet wit`, not only the playground.** Previously the checker (and, on the
+  run path, overload resolution) was wired into the playground evaluator alone:
+  `wavelet run` bound same-named `Def`s by last-wins shadowing — so an overloaded
+  call reached whichever def was read last and failed or silently ran the wrong
+  body — and `wavelet build`/`wavelet wit` emitted/synthesized ill-typed programs
+  without complaint. Each of these paths now type-checks the (expanded, for
+  build/wit) program first, so an ill-typed program is rejected everywhere and an
+  overloaded call dispatched through `wavelet run` resolves to the correct member.
 - **Compiled `add`/`sub`/`mul`/`div`/`rem`/`neg` and `lt`/`le`/`gt`/`ge` now
   match the interpreter on floats and strings.** The wasm backend previously
   unboxed every operand as an integer, so a compiled component that did `f64`
@@ -90,6 +128,58 @@ you work, and rename it to the new version when you cut a release.
 - **`u64` parameters reject negatives.** The interpreter's dynamic type check for
   a `u64` parameter now rejects negative integers, consistent with the `to-u64`
   builtin.
+- **Overload name-mangling at the WIT boundary is no longer over-broad and emits
+  legal WIT.** Exporting an ordinary library-named function defined once (e.g.
+  `get`, `head`, `map`, `concat`, `to-string`) is no longer treated as a
+  one-member overload set and name-mangled; only a genuine ≥2-member overload set
+  or one of the curated overloadable operations (the derivable `eq`/`compare`/
+  `show`/`hash` and the comparison/arithmetic operators) triggers mangling. The
+  mangled suffix is also now an identifier-safe WIT label: a constructor-typed
+  first parameter such as `list(s32)` produces `eq-list-s32` rather than the
+  illegal `eq-list<s32>`.
+- **Overload mangling no longer collides on members that differ only past the
+  first parameter.** The mangled WIT label was derived from the first parameter
+  type alone, so two members like `eq {a: point b: string}` and
+  `eq {a: point b: s32}` both became `eq-point` — two functions of the same name
+  in one interface (invalid WIT). When the first-parameter labels are all
+  distinct they are kept unchanged (so `eq` over `point`/`string` stays
+  `eq-point`/`eq-string`); when any collide, the whole set is disambiguated over
+  *all* parameter types (`eq-point-string`, `eq-point-s32`). A genuine duplicate
+  (two members with identical parameter type lists) is now a clear compile error
+  naming the export instead of emitting invalid WIT.
+- **A `Derive`d op's auto-export no longer collides with an explicit
+  re-export.** `Derive` auto-emits a bare `Export {op}-{t}` for each derived
+  operation, so writing that same `Export eq-point` yourself (a derived op is an
+  ordinary exportable function) declared it twice and synthesized a duplicate
+  `eq-point` WIT function. Identical export declarations — same exported name and
+  same explicit signature — are now collapsed to one before WIT synthesis;
+  declarations that share a name but differ in interface or signature are kept.
+- **An ordinary `Import` carrying an `elem:` field is no longer hijacked as a
+  functor.** Functor instantiation is now classified by the import's *package*
+  identity, not by the presence of an `elem:` field: only an `Import` whose `pkg:`
+  is a known functor package (currently `wavelet:coll/set`) is read as a functor.
+  Any other import that merely happens to use `elem:` (e.g.
+  `Import {pkg: "acme:widget/thing" elem: point as: w}`) stays an ordinary import
+  with the unknown field ignored, instead of erroring with `unknown functor
+  package`. A *known* functor package missing its `elem:` is still a clear error.
+- **`wavelet wit` now expands macros before synthesizing the world.** The `wit`
+  subcommand synthesized straight from the read forms without running expansion,
+  so `Derive` (and any foreign macro) never ran on the `wit` path: a program that
+  `wavelet build` compiles failed under `wavelet wit` with e.g. `Export eq-point
+  has no definition`. `wavelet wit` now runs the same foreign-macro-aware expand
+  pipeline as `wavelet build`/`wavelet expand`, so the two subcommands agree about
+  the same source.
+- **An exported overload set now builds to a component.** `wavelet wit`
+  synthesized a mangled WIT export per overload member (`eq-point`,
+  `eq-string`, …) and the interpreter resolved the set, but `wavelet build`
+  failed with `export `eq-point` has no Def Fn`: the emitter keyed its internal
+  functions by the members' shared original name (`eq`), which collapses
+  last-wins, so the export wrappers — which look bodies up by the *mangled* name
+  — found nothing. The emitter now records the exact `(params, body)` each
+  mangled export was synthesized from and emits one concrete internal function
+  per member keyed on that identity, so a single curated-op overload export
+  (`Def eq Fn {a: point b: point} true` + `Export eq`) and a genuine multi-member
+  overload set both componentize.
 
 ## [0.7.0] - 2026-06-16
 

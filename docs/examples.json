@@ -376,5 +376,28 @@
     "code": "Let {c: cell-new(0)}\n  Do [cell-set(c 41)\n      cell-set(c add(cell-get(c) 1))\n      cell-get(c)]",
     "value": "42",
     "output": ""
+  },
+  "ty-overload-int": {
+    "code": "// Two same-named monomorphic defs form an overload set;\n// the call resolves on the static argument type.\nDef show Fn {x: s32} \"int\"\nDef show Fn {x: string} \"str\"\nshow(5)",
+    "value": "\"int\"",
+    "output": ""
+  },
+  "ty-overload-str": {
+    "code": "// Definition order doesn't matter — the string overload is reachable too.\nDef show Fn {x: string} \"str\"\nDef show Fn {x: s32} \"int\"\nshow(\"hi\")",
+    "value": "\"str\"",
+    "output": ""
+  },
+  "ty-the-return": {
+    "code": "// When the arguments don't decide, the expected type from 'The'\n// selects which overload to call.\nDef make Fn {} 1\nDef make Fn {} \"x\"\nThe s64 make()",
+    "value": "1",
+    "output": ""
+  },
+  "ty-the-range": {
+    "code": "// A literal is range-checked against its type at compile time.\nThe u8 300",
+    "error": "eval error: The: 300 does not conform to type `u8`"
+  },
+  "ty-mixed-add": {
+    "code": "// 'add' has no overload mixing an s32 and a string, so this is a\n// compile-time type error even though 'bad' is never called.\nDef bad Fn {x: s32} add(x \"y\")",
+    "error": "eval error: `add` requires numeric operands"
   }
 }

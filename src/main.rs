@@ -45,9 +45,37 @@ fn wit_cmd(path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match wavelet::read_file(&src).map_err(|e| e.to_string()).and_then(|(arena, roots)| {
-        wavelet::wit::synthesize(&arena, &roots)
-    }) {
+    // Expand macros (`Derive`, foreign macros) before synthesizing WIT, using the
+    // same foreign-macro-aware pipeline `wavelet build`/`wavelet expand` use, so
+    // `wavelet wit` agrees with `wavelet build` about the same source. Project
+    // root = parent of the `src/` dir the file lives in; default to `.` when
+    // there is no parent.
+    let root = std::path::Path::new(path)
+        .parent()
+        .and_then(|d| d.parent())
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let result = wavelet::macrodep::read_file_with_macros(&src, &root)
+        .map_err(|e| e.to_string())
+        .and_then(|(arena, roots)| {
+            let mut foreign = wavelet::macrodep::FileExpander::for_file(&root, &arena, &roots);
+            wavelet::expand::expand_file(
+                arena,
+                &roots,
+                foreign
+                    .as_mut()
+                    .map(|f| f as &mut dyn wavelet::expand::ForeignExpander),
+            )
+        })
+        .and_then(|(arena, roots)| {
+            // Type-check the expanded program before synthesizing its WIT, so an
+            // ill-typed program is a `wit` error too — the static guarantee holds
+            // on this path as well, not only the playground.
+            wavelet::check::check_program(&arena, &roots)?;
+            wavelet::wit::synthesize(&arena, &roots)
+        });
+    match result {
         Ok(wit) => {
             print!("{wit}");
             ExitCode::SUCCESS

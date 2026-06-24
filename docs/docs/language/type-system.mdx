@@ -1,0 +1,186 @@
+---
+sidebar_position: 9
+title: The type system
+description: Total monomorphic static typing — two rules, numeric-literal inference, overloading, Derive, and functors.
+---
+
+# The type system
+
+Wavelet is **statically typed**. Every expression has exactly one
+[WIT](https://component-model.bytecodealliance.org/design/wit.html) type, decided
+before any code runs. The compiler runs a checker pass over your whole program on
+every path — `wavelet run`, `wavelet build`, `wavelet wit`, and the playground —
+and an ill-typed definition is a **compile error even if nothing calls it**.
+There is no runtime type error to discover at the wasm boundary — if it builds,
+it is well-typed.
+
+The system is **monomorphic**: there are no type variables in the language you
+write or in the WIT it produces. Generics live entirely at compile time
+(`Derive`, functors), and what ships is always concrete.
+
+## Two rules
+
+Checking is **bidirectional**, which is just two rules working together:
+
+1. **Synthesis** — some expressions tell you their own type. An atom
+   (`true`, `'x'`, `"hi"`), a bound name, or a call all *produce* a type from the
+   bottom up.
+2. **Checking** — some positions *expect* a type, and push it inward. A function
+   parameter's declared type, a `Let` binding, the branches of an `If`, and the
+   clause results of a `Match` all flow an expected type down into the
+   sub-expression.
+
+Two consequences fall straight out of "every expression has exactly one type":
+
+- The branches of an `If` must share a type — `If b 1 "s"` is rejected, because
+  an `s64` and a `string` have no common WIT type.
+- The result clauses of a `Match` must likewise all unify to one type.
+
+Because checking is **total**, names are resolved statically too: an unbound name
+or a wrong-typed use inside a never-called function is still a compile error.
+
+## Numeric literals and `The`
+
+A bare numeric literal has no fixed type on its own — it takes its type from
+context and is **range-checked** against it. `100` is a fine `u8`; `300` is not:
+
+<Playground id="sf-the-bad" />
+
+When there is no context to resolve a literal, it **defaults**: integer literals
+default to `s64`, fractional literals to `f64`.
+
+The `The` form ascribes a type to an expression. Use it to pin a literal's type,
+to drive a range check, or — as you'll see below — to choose between overloads by
+the result you want:
+
+<Playground id="sf-the-ok" />
+
+A literal that cannot fit the ascribed type is a compile error (`The u8 300`,
+`The u8 -1`, `The s32 1.5` are all rejected).
+
+## Overloading
+
+Several `Def`s sharing a name form an **overload set**. Each call site is
+resolved statically, first by the WIT types of its arguments:
+
+<Playground id="ty-overload-int" />
+
+Resolution doesn't depend on definition order — the other member is just as
+reachable:
+
+<Playground id="ty-overload-str" />
+
+When the arguments don't decide (for instance, two zero-argument members), the
+**expected return type** breaks the tie. Supply it with `The`:
+
+<Playground id="ty-the-return" />
+
+With neither arguments nor an expected type to disambiguate, the call is
+**ambiguous** and is a compile error — you fix it by adding a `The`.
+
+WIT has no overloading, so an *exported* overload set is **name-mangled at the
+component boundary**: each concrete member gets a distinct export. An `eq` over a
+`point` type, for example, is exported as `eq-point`.
+
+A call that has no matching overload at all is simply ill-typed, even when it sits
+in an uncalled function:
+
+<Playground id="ty-mixed-add" />
+
+## Derive
+
+`Derive` generates the standard operations for a type so you don't write the
+boilerplate by hand. It takes a set of derivers and a type, and expands — at
+compile time — into ordinary monomorphic definitions:
+
+```wavelet
+DefType point {x: s32 y: s32}
+Derive {Eq Ord Show} point
+```
+
+This produces concrete operations specialized to `point` (an `eq` and a `show`
+for `point`, an ordering comparison, and so on). The available derivers are
+`Eq`, `Ord`, `Show`, and `Hash`. Because the generated definitions are just
+ordinary overload-set members, exporting them mangles their names exactly like
+any other export (`eq-point`, `show-point`, …).
+
+`Derive` is a file-level macro: it runs during compilation of a component, not in
+the interpreter playground.
+
+## Functors
+
+A **functor** specializes a generic data structure to a concrete element type at
+compile time. You instantiate one with a parameterized `Import`, naming the
+package, the element type, and a local alias:
+
+```wavelet
+Import {pkg: "wavelet:coll/set" elem: point as: pts}
+```
+
+This synthesizes a **concrete, per-element WIT interface** — instantiating `set`
+at `point` yields a `point-set` interface. Nothing generic survives into the
+emitted world: a second instantiation at, say, `string` would produce a separate
+`string-set` interface. WIT cannot write `resource set<t>`, so the functor writes
+the monomorphic interface for you, once per element type you ask for.
+
+## Worked example: source to WIT
+
+Putting it together — a derived record type and a `set` of it — and the WIT the
+compiler synthesizes. The headline is that **nothing in the WIT is generic**:
+
+```wavelet
+Package "demo:geo@0.1.0"
+
+DefType point {x: s32 y: s32}
+Derive {Eq Ord Show} point
+
+Import {pkg: "wavelet:coll/set" elem: point as: pts}
+
+Export nearest-set
+Def nearest-set Fn {ps: list(point)}
+  Let {s: pts/new()}
+    Do [ each(ps Fn {p} pts/add(s p))
+         s ]
+```
+
+synthesizes a world whose every signature is a concrete, ordinary WIT function or
+type:
+
+```wit
+package demo:geo@0.1.0;
+
+interface types {
+  record point { x: s32, y: s32 }
+}
+
+interface compare {
+  use types.{point};
+  eq-point: func(a: point, b: point) -> bool;
+  compare-point: func(a: point, b: point) -> s32;
+  show-point: func(v: point) -> string;
+}
+
+// the set functor, instantiated at `point`
+interface point-set {
+  use types.{point};
+  resource set {
+    constructor();
+    add: func(value: point);
+    contains: func(value: point) -> bool;
+    size: func() -> u32;
+  }
+}
+
+world geo {
+  export types;
+  export compare;
+  export point-set;
+  export nearest-set: func(ps: list<point>) -> point-set.set;
+}
+```
+
+The overload set `eq` lowers to the distinctly named `eq-point`, the derived
+operations become concrete functions, and the `set` functor becomes the concrete
+`point-set` interface. A generic set would have wanted `resource set<t>` with
+`add: func(value: t)`, which WIT simply cannot express — the functor produces a
+concrete interface instead.

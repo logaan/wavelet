@@ -59,6 +59,7 @@ impl MacroTable {
             ("splice-MACRO", 1),
             ("defmacro-MACRO", 3),
             ("the-MACRO", 2),
+            ("derive-MACRO", 2),
         ] {
             map.insert(name.to_string(), (arity, Origin::Local));
         }
@@ -161,6 +162,18 @@ impl MacroTable {
 pub type FormHook<'a> =
     dyn FnMut(&Arena, NodeId, &mut MacroTable) -> Result<(), ReadError> + 'a;
 
+/// Recover a TitleCase flag entry's spelling from the macro-name token the lexer
+/// produced for it: `"eq-MACRO"` → `"Eq"`. Used for derive-class flags
+/// (`Derive {Eq Ord Show}`), which are single TitleCase words.
+fn title_flag_name(macro_name: &str) -> String {
+    let bare = macro_name.trim_end_matches("-MACRO");
+    let mut chars = bare.chars();
+    match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 pub fn read_file(src: &str) -> Result<(Arena, Vec<NodeId>), ReadError> {
     let mut macros = MacroTable::core();
     read_with(src, &mut macros)
@@ -193,6 +206,7 @@ pub fn read_with_hook(
         pos: 0,
         arena: Arena::new(),
         macros: std::mem::replace(macros, MacroTable::core()),
+        allow_title_flags: false,
     };
     let mut roots = Vec::new();
     let result = (|| {
@@ -215,6 +229,10 @@ struct Parser {
     pos: usize,
     arena: Arena,
     macros: MacroTable,
+    /// One-shot flag: set while reading Derive's first argument so `parse_braces`
+    /// accepts TitleCase derive-class flag entries (`{Eq Ord Show}`) there, and
+    /// nowhere else. Consumed (taken) at the top of `parse_braces`.
+    allow_title_flags: bool,
 }
 
 impl Parser {
@@ -419,10 +437,16 @@ impl Parser {
             }
             _ => unreachable!(),
         };
+        let derive = matches!(self.arena.node(head), Node::Sym(n) if n == "derive-MACRO");
         let mut items = Vec::with_capacity(arity);
-        for _ in 0..arity {
+        for i in 0..arity {
+            // Only Derive's first argument is the derive-class flags literal
+            // `{Eq Ord Show}`; TitleCase flag entries are valid there and nowhere
+            // else (WIT flags are all-lowercase).
+            self.allow_title_flags = derive && i == 0;
             items.push(self.parse_form()?);
         }
+        self.allow_title_flags = false;
         let end = items
             .last()
             .map(|&n| self.arena.span(n).1)
@@ -489,6 +513,9 @@ impl Parser {
     /// `{…}`: record if the first name is followed by `:`, otherwise flags.
     fn parse_braces(&mut self, span: Token) -> Result<NodeId, ReadError> {
         let start = span.start;
+        // Take the one-shot flag so a nested/other `{…}` deeper in the same
+        // argument does not inherit Derive's TitleCase-flag allowance.
+        let allow_titles = std::mem::take(&mut self.allow_title_flags);
         if let Some((Tok::RBrace, close)) = self.peek() {
             let sp = (start, close.end);
             self.pos += 1;
@@ -521,6 +548,12 @@ impl Parser {
                         return Ok(self.arena.add(Node::Flg(names), (start, close.end)))
                     }
                     (Tok::Ident(name), _) => names.push(name),
+                    // TitleCase flag entries (e.g. `Derive {Eq Ord Show}`): the
+                    // lexer turns each into a `Title` macro-name token, so recover
+                    // the original spelling from it. WIT flags are all-lowercase,
+                    // so this is only valid in Derive's flags argument, gated by
+                    // `allow_titles`; elsewhere it falls through to the error below.
+                    (Tok::Title(name), _) if allow_titles => names.push(title_flag_name(&name)),
                     (_, s) => return self.err("expected a flag name", s.start),
                 }
             }
@@ -607,5 +640,41 @@ mod macro_table_tests {
         // Core forms stay unambiguous and resolvable by their bare names.
         assert_eq!(t.arity("if-MACRO"), Some(3));
         assert!(t.is_ambiguous("if-MACRO").is_none());
+    }
+}
+
+#[cfg(test)]
+mod title_flags_scope_tests {
+    use super::*;
+
+    /// Derive's first argument is the one place TitleCase flag entries are
+    /// allowed: `Derive {Eq Ord Show} point` must still read successfully.
+    #[test]
+    fn derive_flags_literal_accepts_titlecase() {
+        let (arena, roots) =
+            read_file("Derive {Eq Ord Show} point").expect("Derive flags literal should read");
+        assert_eq!(roots.len(), 1);
+        // `Tup[derive-MACRO, Flg[Eq, Ord, Show], Sym(point)]`.
+        let Node::Tup(items) = arena.node(roots[0]) else {
+            panic!("expected a Tup for the Derive form");
+        };
+        assert!(matches!(arena.node(items[0]), Node::Sym(s) if s == "derive-MACRO"));
+        let Node::Flg(names) = arena.node(items[1]) else {
+            panic!("expected a flags literal for Derive's first argument");
+        };
+        assert_eq!(names, &["Eq".to_string(), "Ord".to_string(), "Show".to_string()]);
+    }
+
+    /// A TitleCase token in any *other* flags literal (here a free-standing
+    /// `{…}`, outside Derive's first argument) is rejected: WIT flags are
+    /// all-lowercase, so the recovery must not fire and the read must error.
+    #[test]
+    fn non_derive_flags_literal_rejects_titlecase() {
+        let err = read_file("{Foo bar}").expect_err("a TitleCase flag name must be rejected");
+        assert!(
+            err.msg.contains("expected a flag name"),
+            "unexpected error message: {}",
+            err.msg
+        );
     }
 }

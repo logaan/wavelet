@@ -212,6 +212,27 @@ E['std-cells'] = `Let {c: cell-new(0)}
       cell-set(c add(cell-get(c) 1))
       cell-get(c)]`;
 
+// ── Type system: overloading, `The`, range-checked literals ──
+E['ty-overload-int'] = `// Two same-named monomorphic defs form an overload set;
+// the call resolves on the static argument type.
+Def show Fn {x: s32} "int"
+Def show Fn {x: string} "str"
+show(5)`;
+E['ty-overload-str'] = `// Definition order doesn't matter — the string overload is reachable too.
+Def show Fn {x: string} "str"
+Def show Fn {x: s32} "int"
+show("hi")`;
+E['ty-the-return'] = `// When the arguments don't decide, the expected type from 'The'
+// selects which overload to call.
+Def make Fn {} 1
+Def make Fn {} "x"
+The s64 make()`;
+E['ty-the-range'] = `// A literal is range-checked against its type at compile time.
+The u8 300`;
+E['ty-mixed-add'] = `// 'add' has no overload mixing an s32 and a string, so this is a
+// compile-time type error even though 'bad' is never called.
+Def bad Fn {x: s32} add(x "y")`;
+
 // ── Run each through the interpreter and record expected results ──
 const out = {};
 let errCount = 0;

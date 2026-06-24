@@ -3730,6 +3730,31 @@ fn emit_core_module(
     em.h.cmp_raw = take();
     em.h.neg_raw = take();
 
+    // An *exported overload set* (≥2 same-named `Def Fn`s, or a curated-op name)
+    // is lowered by `wit::collect` to one mangled WIT export per member
+    // (`eq-point`, `eq-string`, …), recorded in `info.overload_bodies` as
+    // mangled-name -> (params, body). The underlying `Def`s share one original
+    // name (`eq`) which collapses last-wins in `info.defs`, so the export
+    // wrappers — which look bodies up by the *mangled* name — would otherwise
+    // find nothing (`export `eq-point` has no Def Fn`). Register and emit one
+    // internal function per mangled member instead, keyed on identity. Skip the
+    // original collapsed name in the normal pass below so we don't emit a bogus,
+    // unreferenced `eq` (and avoid any clash). Keep `info.fn_defs`/overload sets
+    // intact — internal-call resolution and type-checking land in a later step.
+    let mut overload_order: Vec<String> = info.overload_bodies.keys().cloned().collect();
+    overload_order.sort(); // deterministic index assignment
+    // Original def names whose every member was consumed by overload mangling.
+    let overloaded_origins: std::collections::HashSet<&String> = info
+        .fn_defs
+        .iter()
+        .filter(|(_, members)| {
+            members
+                .iter()
+                .all(|m| info.overload_bodies.values().any(|ob| ob == m))
+        })
+        .map(|(name, _)| name)
+        .collect();
+
     // ---- assign internal function indices (file order)
     let mut internal_order: Vec<String> = Vec::new();
     for &root in roots {
@@ -3738,7 +3763,10 @@ fn emit_core_module(
                 && matches!(arena.node(items[0]), Node::Sym(s) if s == "def-MACRO")
             {
                 if let Node::Sym(name) = arena.node(items[1]) {
-                    if info.defs.contains_key(name) && !internal_order.contains(name) {
+                    if info.defs.contains_key(name)
+                        && !overloaded_origins.contains(name)
+                        && !internal_order.contains(name)
+                    {
                         internal_order.push(name.clone());
                     }
                 }
@@ -3752,6 +3780,12 @@ fn emit_core_module(
         let (params_id, _) = info.defs[name];
         let params = param_names(arena, params_id)?;
         em.funcs.insert(name.clone(), (take(), params));
+    }
+    // Mangled overload members get their own internal-function indices.
+    for mangled in &overload_order {
+        let (params_id, _) = info.overload_bodies[mangled];
+        let params = param_names(arena, params_id)?;
+        em.funcs.insert(mangled.clone(), (take(), params));
     }
 
     // ---- helper bodies (order must match index assignment above)
@@ -3770,6 +3804,22 @@ fn emit_core_module(
         fx.scopes.push(scope);
         em.expr(&mut fx, body, true)
             .map_err(|e| format!("in `{name}`: {e}"))?;
+        let t = em.ty_idx(vec![I32; n], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+    // ---- mangled overload member bodies (same paired order as their indices)
+    for mangled in &overload_order {
+        let (_, body) = info.overload_bodies[mangled];
+        let params = em.funcs[mangled].1.clone();
+        let n = params.len();
+        let mut fx = FnCtx::new(n as u32);
+        let mut scope = HashMap::new();
+        for (i, p) in params.iter().enumerate() {
+            scope.insert(p.clone(), i as u32);
+        }
+        fx.scopes.push(scope);
+        em.expr(&mut fx, body, true)
+            .map_err(|e| format!("in `{mangled}`: {e}"))?;
         let t = em.ty_idx(vec![I32; n], vec![I32]);
         em.bodies.push((t, fx.finish()));
     }
@@ -4005,10 +4055,13 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         package_path: "wavelet:macro-guest".to_string(),
         world: "macro-lib".to_string(),
         imports: Vec::new(),
+        functors: Vec::new(),
         exports: Vec::new(),
         types: Vec::new(),
         defs: HashMap::new(),
+        fn_defs: HashMap::new(),
         value_defs: Vec::new(),
+        overload_bodies: HashMap::new(),
     };
     let deps: HashMap<String, Dep> = HashMap::new();
 

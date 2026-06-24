@@ -515,17 +515,11 @@ fn check_type(ty: &str, v: &Value) -> bool {
         "bool" => matches!(v, Value::Bool(_)),
         "char" => matches!(v, Value::Char(_)),
         "f32" | "f64" => matches!(v, Value::Dec(_) | Value::Int(_)),
-        "u8" => matches!(v, Value::Int(n) if (0..=u8::MAX as i64).contains(n)),
-        "u16" => matches!(v, Value::Int(n) if (0..=u16::MAX as i64).contains(n)),
-        "u32" => matches!(v, Value::Int(n) if (0..=u32::MAX as i64).contains(n)),
-        // `u64` is the only unsigned type without an upper bound in this i64
-        // representation, but it still rejects negatives — matching the `to-u64`
-        // builtin's `n >= 0` check.
-        "u64" => matches!(v, Value::Int(n) if *n >= 0),
-        "s64" => matches!(v, Value::Int(_)),
-        "s8" => matches!(v, Value::Int(n) if (i8::MIN as i64..=i8::MAX as i64).contains(n)),
-        "s16" => matches!(v, Value::Int(n) if (i16::MIN as i64..=i16::MAX as i64).contains(n)),
-        "s32" => matches!(v, Value::Int(n) if (i32::MIN as i64..=i32::MAX as i64).contains(n)),
+        // The eight integer widths share their bounds with the compile-time
+        // checker via `value::int_fits`, the single source of truth for ranges.
+        "u8" | "u16" | "u32" | "u64" | "s8" | "s16" | "s32" | "s64" => {
+            matches!(v, Value::Int(n) if crate::value::int_fits(ty, *n) == Some(true))
+        }
         _ => true,
     }
 }
