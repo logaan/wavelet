@@ -21,7 +21,15 @@ use wavelet::host::{HostComponent, Val};
 /// external toolchain — `build_files` runs the component encoder with
 /// validation on, and `HostComponent` instantiates against an empty linker.
 fn numeric_component() -> HostComponent {
-    let dir = std::env::temp_dir().join(format!("wavelet-numeric-{}", std::process::id()));
+    // Unique per call: both tests in this binary build through here, and each
+    // removes its dir at start and end. Keying the dir on the PID alone let two
+    // concurrent calls (same process) wipe each other's build mid-flight under a
+    // loaded `cargo test`; a per-call sequence number keeps them isolated.
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir =
+        std::env::temp_dir().join(format!("wavelet-numeric-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
