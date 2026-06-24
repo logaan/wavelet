@@ -209,6 +209,12 @@ struct Checker<'a> {
     /// index of the chosen candidate within its overload set. Filled in while
     /// checking; read back by [`resolve_overloads`] to rewrite the program.
     resolved: RefCell<HashMap<NodeId, usize>>,
+    /// Memoised result types from [`Self::infer_sig_result`], keyed by the Fn
+    /// body's `NodeId`. The inferred result depends only on the body (inference
+    /// builds its own scope from the sig's params and ignores the caller's), and
+    /// its side effects on `resolved` are throwaway, so re-running it for the
+    /// same body is pure redundant work during return-type-directed resolution.
+    sig_result_cache: RefCell<HashMap<NodeId, Type>>,
 }
 
 /// Check a whole program (the top-level roots). Returns `Err(msg)` on the first
@@ -237,7 +243,13 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        Checker { arena, sigs, defs, resolved: RefCell::new(HashMap::new()) }
+        Checker {
+            arena,
+            sigs,
+            defs,
+            resolved: RefCell::new(HashMap::new()),
+            sig_result_cache: RefCell::new(HashMap::new()),
+        }
     }
 
     /// Second pass: check every top-level form's body.
@@ -843,11 +855,19 @@ impl<'a> Checker<'a> {
         let Some(body) = sig.body else {
             return Type::Unknown;
         };
+        // The result depends only on the body, so memoise it: a body can recur
+        // through return-type-directed resolution and is also inferred again for
+        // the chosen winner, all yielding the same type.
+        if let Some(cached) = self.sig_result_cache.borrow().get(&body) {
+            return cached.clone();
+        }
         let mut scope: Scope = sig.params.clone();
         // Inference errors inside a candidate body don't disqualify it here (the
         // body is checked properly when its own Def is checked); treat them as
         // an unconstrained result so resolution stays gradual.
-        self.infer(body, None, &mut scope).unwrap_or(Type::Unknown)
+        let result = self.infer(body, None, &mut scope).unwrap_or(Type::Unknown);
+        self.sig_result_cache.borrow_mut().insert(body, result.clone());
+        result
     }
 
     fn check_def_call(
