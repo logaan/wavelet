@@ -706,6 +706,27 @@ pub fn emit_component(
     info: &FileInfo,
     deps: &HashMap<String, Dep>,
 ) -> Result<Vec<u8>, String> {
+    // The wasm backend does not yet emit functor components. `wavelet wit` and
+    // `wavelet run` support functors (the interpreter is the oracle, see
+    // `builtins`'s `set-*` ops), but `build` does not: the synthesized world
+    // *exports* a `set` resource whose `new`/`add`/`contains`/`size` methods have
+    // no source bodies, so emit would have to generate a resource implementation
+    // and hand out canonical-ABI `own<set>` handles — machinery this backend does
+    // not have. Rather than emit a component that validates yet diverges from the
+    // interpreter (the one thing the project treats as a hard bug), fail with a
+    // clear, honest error. See `dev-notes/dd-type-system.typ` (functors are an
+    // open question for the binary/emit path) and the CHANGELOG.
+    if let Some(f) = info.functors.first() {
+        return Err(format!(
+            "the wasm backend cannot yet build functor components \
+             (`Import {{pkg: \"…coll/set\" elem: … as: {alias}}}`): the synthesized \
+             world exports a `{iface}` resource with no emittable method bodies. \
+             `wavelet wit` and `wavelet run` support this functor; `wavelet build` \
+             does not yet. Track this in the type-system design notes.",
+            alias = f.alias,
+            iface = f.iface,
+        ));
+    }
     let mut module = emit_core_module(arena, roots, info, deps)?;
     let wit = synthesize_world_wit(arena, info, deps)?;
 

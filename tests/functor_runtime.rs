@@ -193,3 +193,36 @@ fn each_is_not_yet_defined() {
     let err = run_source(src).expect_err("`each` is not defined yet");
     assert!(err.contains("each"), "unexpected error: {err}");
 }
+
+#[test]
+// `wavelet build` does not yet support functor programs. The interpreter is the
+// oracle and the backend must never produce a component that diverges from it;
+// rather than emit such a component, the backend fails with a clear, honest
+// error naming the functor. This pins that contract: build must fail (not
+// silently succeed), and the message must mention the unsupported functor.
+fn build_rejects_functor_programs_cleanly() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "wavelet-functor-build-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let path = src.join("app.wvl");
+    std::fs::write(&path, WORKED_EXAMPLE).unwrap();
+
+    let out = dir.join("out");
+    let res = wavelet::build::build_files(
+        &[path.to_string_lossy().into_owned()],
+        &out.to_string_lossy(),
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let err = res.expect_err("building a functor program must not silently succeed");
+    assert!(
+        err.contains("functor"),
+        "build error should explain the functor limitation, got: {err}"
+    );
+}
