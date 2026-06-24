@@ -68,7 +68,13 @@ fn wit_cmd(path: &str) -> ExitCode {
                     .map(|f| f as &mut dyn wavelet::expand::ForeignExpander),
             )
         })
-        .and_then(|(arena, roots)| wavelet::wit::synthesize(&arena, &roots));
+        .and_then(|(arena, roots)| {
+            // Type-check the expanded program before synthesizing its WIT, so an
+            // ill-typed program is a `wit` error too — the static guarantee holds
+            // on this path as well, not only the playground.
+            wavelet::check::check_program(&arena, &roots)?;
+            wavelet::wit::synthesize(&arena, &roots)
+        });
     match result {
         Ok(wit) => {
             print!("{wit}");

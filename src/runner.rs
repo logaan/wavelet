@@ -41,6 +41,16 @@ pub fn run_files(paths: &[String]) -> Result<(), String> {
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
         let (arena, roots) = crate::macrodep::read_file_with_macros(&src, &root)
             .map_err(|e| format!("{path}: {e}"))?;
+        // Static type checking + overload resolution before evaluation, exactly
+        // as the playground (`eval_snippet`) does: an ill-typed module is a
+        // compile error even when the bad code is never reached at runtime, and
+        // overloaded calls are rewritten to uniquely-named defs so the
+        // interpreter dispatches to the correct member rather than relying on
+        // last-wins shadowing. With no overload set the rewrite is an identity.
+        // The checker runs on the read (pre-expansion) forms; the interpreter
+        // expands user/foreign macros lazily, just as in `eval_snippet`.
+        let (arena, roots) = crate::check::resolve_overloads(arena, &roots)
+            .map_err(|e| format!("{path}: {e}"))?;
         let arena = Rc::new(arena);
         let package = find_package(&arena, &roots);
         if let Some(pkg) = &package {
