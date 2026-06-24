@@ -440,6 +440,27 @@ Def same Fn {a: point b: point} eq(a b)"#,
     );
 }
 
+#[test]
+// Step 9 (§6 review fix) — `Derive` auto-emits a bare `Export eq-point` for each
+// derived op, so an author who *also* writes that same `Export eq-point`
+// explicitly declares it twice. The synthesizer must collapse the identical
+// declarations and emit exactly one `eq-point: func(...)`, not a duplicate WIT
+// function.
+fn derive_auto_export_and_explicit_reexport_dedup() {
+    let wit = synth(
+        r#"Package "demo:geo@0.1.0"
+DefType point {x: s32 y: s32}
+Derive {Eq Ord Show} point
+Export eq-point"#,
+    )
+    .expect("derive auto-export colliding with an explicit re-export should synthesize");
+    assert_eq!(
+        wit.matches("eq-point: func(").count(),
+        1,
+        "duplicate eq-point function in synthesized WIT:\n{wit}"
+    );
+}
+
 // --- Step 10: source functors via parameterized `Import` ---------------------
 
 #[test]

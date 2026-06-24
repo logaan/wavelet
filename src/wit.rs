@@ -218,6 +218,16 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     // 10–11). `Some(t)` is a Known WIT type; `None` is unit (`alias/add`).
     let functor_ops = functor_op_table(&functors);
 
+    // De-duplicate identical export declarations before lowering (§6 review
+    // fix). `Derive` auto-emits a bare `Export {op}-{tname}` for each derived op
+    // (`expand.rs`), so an author who also writes that same bare `Export eq-point`
+    // explicitly would declare it twice — and `synthesize` would then emit two
+    // identical `eq-point: func(...)` lines (invalid WIT). Collapse runs that are
+    // *genuinely identical* (same exported name and same explicit signature, if
+    // any); keep distinct declarations that merely share a name but differ in
+    // `iface:`/signature, since those are not the case this fix targets.
+    let export_decls = dedup_export_decls(export_decls);
+
     let mut exports = Vec::new();
     for (name, explicit) in export_decls {
         // An exported *overload set* (≥2 same-named Fn defs, or a name that
@@ -304,6 +314,38 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
         fn_defs,
         value_defs,
     })
+}
+
+/// Drop later export declarations that are byte-for-byte identical to one
+/// already seen, preserving first-appearance order (§6 review fix). Two
+/// declarations are "identical" iff they name the same export *and* carry the
+/// same explicit signature payload (or both carry none). Declarations that share
+/// a name but differ in their explicit signature (`iface:`, params, result) are
+/// kept — those are not duplicates this fix collapses.
+fn dedup_export_decls(decls: Vec<(String, Option<FuncSig>)>) -> Vec<(String, Option<FuncSig>)> {
+    let mut out: Vec<(String, Option<FuncSig>)> = Vec::with_capacity(decls.len());
+    for decl in decls {
+        let dup = out
+            .iter()
+            .any(|seen| seen.0 == decl.0 && opt_sig_eq(&seen.1, &decl.1));
+        if !dup {
+            out.push(decl);
+        }
+    }
+    out
+}
+
+/// Structural equality of two optional explicit export signatures. `FuncSig`
+/// does not derive `PartialEq` (its `NodeId`-free fields are compared by value),
+/// so compare the carried strings directly.
+fn opt_sig_eq(a: &Option<FuncSig>, b: &Option<FuncSig>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => {
+            x.name == y.name && x.iface == y.iface && x.params == y.params && x.result == y.result
+        }
+        _ => false,
+    }
 }
 
 /// Distinct export interfaces in first-appearance order; `api` is forced

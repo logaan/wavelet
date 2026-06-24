@@ -136,6 +136,13 @@ you work, and rename it to the new version when you cut a release.
   *all* parameter types (`eq-point-string`, `eq-point-s32`). A genuine duplicate
   (two members with identical parameter type lists) is now a clear compile error
   naming the export instead of emitting invalid WIT.
+- **A `Derive`d op's auto-export no longer collides with an explicit
+  re-export.** `Derive` auto-emits a bare `Export {op}-{t}` for each derived
+  operation, so writing that same `Export eq-point` yourself (a derived op is an
+  ordinary exportable function) declared it twice and synthesized a duplicate
+  `eq-point` WIT function. Identical export declarations — same exported name and
+  same explicit signature — are now collapsed to one before WIT synthesis;
+  declarations that share a name but differ in interface or signature are kept.
 
 ## [0.7.0] - 2026-06-16
 
