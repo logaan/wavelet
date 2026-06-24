@@ -8,10 +8,11 @@ description: Total monomorphic static typing — two rules, numeric-literal infe
 
 Wavelet is **statically typed**. Every expression has exactly one
 [WIT](https://component-model.bytecodealliance.org/design/wit.html) type, decided
-before any code runs. The compiler runs a checker pass over your whole program;
-an ill-typed definition is a **compile error even if nothing calls it**. There is
-no runtime type error to discover at the wasm boundary — if it builds, it is
-well-typed.
+before any code runs. The compiler runs a checker pass over your whole program on
+every path — `wavelet run`, `wavelet build`, `wavelet wit`, and the playground —
+and an ill-typed definition is a **compile error even if nothing calls it**.
+There is no runtime type error to discover at the wasm boundary — if it builds,
+it is well-typed.
 
 The system is **monomorphic**: there are no type variables in the language you
 write or in the WIT it produces. Generics live entirely at compile time

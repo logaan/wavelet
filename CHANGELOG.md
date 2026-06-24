@@ -17,11 +17,13 @@ you work, and rename it to the new version when you cut a release.
 
 - **Monomorphic type system — total static type checking.** Every Wavelet
   expression now has a WIT type, decided by a static checker pass (`src/check.rs`)
-  that runs before emit. Checking is **total**: an ill-typed definition is a
-  compile error even when nothing calls it, so type errors surface at build time
-  rather than at the wasm boundary. Inference is **bidirectional** — types
-  propagate inward from contexts (function signatures, `Let` bindings, `Match`
-  results) and synthesize outward from atoms and applications.
+  that runs on **every** path — `wavelet run`, `wavelet build`, `wavelet wit`,
+  and the playground — before any code runs or any component is emitted. Checking
+  is **total**: an ill-typed definition is a compile error even when nothing calls
+  it, so type errors surface at build/run/wit time rather than at the wasm
+  boundary. Inference is **bidirectional** — types propagate inward from contexts
+  (function signatures, `Let` bindings, `Match` results) and synthesize outward
+  from atoms and applications.
 - **Numeric-literal resolution + defaulting, and `The` ascription.** A bare
   numeric literal takes its type from context and is range-checked against it
   (`The u8 300` is a compile error); with no context it **defaults** to `s64`
@@ -92,6 +94,15 @@ you work, and rename it to the new version when you cut a release.
 
 ### Fixed
 
+- **The type checker now runs on `wavelet run`, `wavelet build`, and
+  `wavelet wit`, not only the playground.** Previously the checker (and, on the
+  run path, overload resolution) was wired into the playground evaluator alone:
+  `wavelet run` bound same-named `Def`s by last-wins shadowing — so an overloaded
+  call reached whichever def was read last and failed or silently ran the wrong
+  body — and `wavelet build`/`wavelet wit` emitted/synthesized ill-typed programs
+  without complaint. Each of these paths now type-checks the (expanded, for
+  build/wit) program first, so an ill-typed program is rejected everywhere and an
+  overloaded call dispatched through `wavelet run` resolves to the correct member.
 - **Compiled `add`/`sub`/`mul`/`div`/`rem`/`neg` and `lt`/`le`/`gt`/`ge` now
   match the interpreter on floats and strings.** The wasm backend previously
   unboxed every operand as an integer, so a compiled component that did `f64`
