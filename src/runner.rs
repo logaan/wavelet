@@ -41,14 +41,28 @@ pub fn run_files(paths: &[String]) -> Result<(), String> {
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
         let (arena, roots) = crate::macrodep::read_file_with_macros(&src, &root)
             .map_err(|e| format!("{path}: {e}"))?;
+        // Run the tree→tree expander before checking/evaluation, exactly as
+        // `wavelet wit`/`wavelet build` do. Lazy macro expansion inside the
+        // interpreter handles *user* (`DefMacro`) and *foreign* macro calls, but
+        // the stdlib `Derive` macro is a tree→tree pass that `expand_file` owns:
+        // it splices a concrete monomorphic def (and export) per derived class,
+        // and is never reached by the interpreter's call dispatch (there is no
+        // `derive-MACRO` value to look up). Running it here keeps `run` in step
+        // with `wit`/`build` and lets functor programs — which lean on `Derive`d
+        // ops over their element type — evaluate.
+        let mut foreign = crate::macrodep::FileExpander::for_file(&root, &arena, &roots);
+        let (arena, roots) = crate::expand::expand_file(
+            arena,
+            &roots,
+            foreign.as_mut().map(|f| f as &mut dyn crate::expand::ForeignExpander),
+        )
+        .map_err(|e| format!("{path}: {e}"))?;
         // Static type checking + overload resolution before evaluation, exactly
         // as the playground (`eval_snippet`) does: an ill-typed module is a
         // compile error even when the bad code is never reached at runtime, and
         // overloaded calls are rewritten to uniquely-named defs so the
         // interpreter dispatches to the correct member rather than relying on
         // last-wins shadowing. With no overload set the rewrite is an identity.
-        // The checker runs on the read (pre-expansion) forms; the interpreter
-        // expands user/foreign macros lazily, just as in `eval_snippet`.
         let (arena, roots) = crate::check::resolve_overloads(arena, &roots)
             .map_err(|e| format!("{path}: {e}"))?;
         let arena = Rc::new(arena);
@@ -136,6 +150,14 @@ fn eval_module(
                 modules[idx].exports.push(entry);
             }
             ("import-MACRO", Some(payload)) => {
+                // A functor instantiation (`Import {pkg: "wavelet:coll/set"
+                // elem: T as: alias}`) is not backed by a sibling module: the
+                // compiler knows the template intrinsically. Bind its ops
+                // (`alias/new`, `alias/add`, …) directly and move on.
+                if let Some(functor) = builtins::parse_functor_import(&arena, payload) {
+                    builtins::bind_functor(&modules[idx].env, &functor);
+                    continue;
+                }
                 let spec = parse_import(&arena, payload)
                     .ok_or(format!("{path}: malformed Import"))?;
                 let dep = *by_package.get(&spec.package).ok_or(format!(

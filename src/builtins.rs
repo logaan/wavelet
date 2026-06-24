@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::form::{Arena, Node, NodeId};
 use crate::interp::{err, EvalError, Interp};
 use crate::value::{form_to_value, print_value, unit, Env, Value};
 
@@ -21,12 +22,91 @@ pub const NAMES: &[&str] = &[
     "cell-new", "cell-get", "cell-set", "drop",
 ];
 
+/// The functor `Set` operation builtins, kept out of [`NAMES`] so they are *not*
+/// installed under bare names: only a functor `Import` reaches them, via the
+/// alias-qualified bindings (`alias/new`, `alias/add`, …) that
+/// [`crate::runner::bind_functor`] defines as `Value::Builtin`s. The interpreter
+/// dispatches any `Value::Builtin(name)` through [`call`] regardless of whether
+/// the name was installed, so listing them here is all that is required to make
+/// them callable. The runtime backing is a [`SetHandle`].
+pub const SET_OPS: &[&str] = &["set-new", "set-add", "set-contains", "set-size"];
+
 pub fn install(env: &Env) {
     for name in NAMES {
         env.define(*name, Value::Builtin(name));
     }
     env.define("none", Value::Variant("none".into(), None));
     env.define("pi", Value::Dec(std::f64::consts::PI));
+}
+
+/// Which built-in functor template an `Import` instantiates, identified from its
+/// `pkg:`. The compiler knows these intrinsically — there is no real
+/// `wavelet:coll/*` component in the tree. Mirrors `wit::FunctorKind` (the WIT
+/// side); kept here so the always-compiled interpreter path (`eval_snippet`,
+/// shared with the wasm playground) can bind functor ops without depending on
+/// the native-only `wit`/`runner` modules.
+pub enum FunctorKind {
+    /// `wavelet:coll/set`
+    Set,
+}
+
+/// A functor instantiation as the interpreter needs to see it: its alias and
+/// which template it names. The element type is a compile-time/WIT concern that
+/// does not affect runtime behaviour — the interpreter's set is element-agnostic
+/// and uses `Value` equality.
+pub struct FunctorImport {
+    pub alias: String,
+    pub kind: FunctorKind,
+}
+
+/// Recognize an `Import` record payload as a functor instantiation, keyed on its
+/// `pkg:` naming a known functor package (`wit::parse_functor` is the authority
+/// for the WIT side; this mirrors its package test). Returns `None` for any
+/// ordinary import. The `as:` alias defaults to the trailing path segment, as in
+/// `wit`/`runner::parse_import`.
+pub fn parse_functor_import(arena: &Arena, payload: NodeId) -> Option<FunctorImport> {
+    let Node::Rec(fields) = arena.node(payload) else {
+        return None;
+    };
+    let pkg = fields.iter().find_map(|(k, v)| match (k.as_str(), arena.node(*v)) {
+        ("pkg", Node::Str(s)) => Some(s.clone()),
+        _ => None,
+    })?;
+    let path = pkg.split('@').next().unwrap_or(&pkg);
+    let kind = if path.ends_with("coll/set") {
+        FunctorKind::Set
+    } else {
+        return None;
+    };
+    let alias = fields
+        .iter()
+        .find_map(|(k, v)| match (k.as_str(), arena.node(*v)) {
+            ("as", Node::Sym(s)) => Some(s.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_string());
+    Some(FunctorImport { alias, kind })
+}
+
+/// Bind a functor's qualified operations into `env` as builtins. For the `Set`
+/// functor, `alias/new`, `alias/add`, `alias/contains`, and `alias/size` map to
+/// the `set-*` builtins, whose semantics mirror the `SET_OPS` WIT descriptor in
+/// `wit.rs` (`new() -> set`, `add(set, elem)`, `contains(set, elem) -> bool`,
+/// `size(set) -> u32`). The qualified name is what `Node::Qsym` evaluation and
+/// call dispatch look up, so binding it here is all that is needed.
+pub fn bind_functor(env: &Env, functor: &FunctorImport) {
+    match functor.kind {
+        FunctorKind::Set => {
+            for (op, builtin) in [
+                ("new", "set-new"),
+                ("add", "set-add"),
+                ("contains", "set-contains"),
+                ("size", "set-size"),
+            ] {
+                env.define(format!("{}/{op}", functor.alias), Value::Builtin(builtin));
+            }
+        }
+    }
 }
 
 fn args_n(arg: Value, n: usize, name: &str) -> R<Vec<Value>> {
@@ -437,6 +517,54 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             }
         }
         "drop" => Ok(unit()),
+        // ---- functor `Set` operations (see `SET_OPS`) -----------------------
+        // A set is backed by a `Value::Cell` holding a `Value::Lst` of its
+        // distinct elements: the `Cell`'s `Rc` gives the handle its shared,
+        // mutable identity (so `add` is observed by a later `contains`/`size` on
+        // the same handle), and element membership reuses `Value`'s `PartialEq`,
+        // which is exactly the equality the `eq` builtin computes — so the set's
+        // notion of "same element" agrees with the language's `eq`/`compare`.
+        "set-new" => Ok(Value::Cell(Rc::new(RefCell::new(Value::Lst(Vec::new()))))),
+        "set-add" => {
+            let a = args_n(arg, 2, name)?;
+            let mut elems = set_elems(&a[0], name)?;
+            let elem = a[1].clone();
+            if !elems.contains(&elem) {
+                elems.push(elem);
+                set_store(&a[0], elems);
+            }
+            Ok(unit())
+        }
+        "set-contains" => {
+            let a = args_n(arg, 2, name)?;
+            let elems = set_elems(&a[0], name)?;
+            Ok(Value::Bool(elems.contains(&a[1])))
+        }
+        "set-size" => {
+            let elems = set_elems(&arg, name)?;
+            Ok(Value::Int(elems.len() as i64))
+        }
         _ => err(format!("unknown builtin `{name}`")),
+    }
+}
+
+/// Read the distinct elements out of a set handle (a `Value::Cell` of a `Lst`).
+fn set_elems(v: &Value, name: &str) -> R<Vec<Value>> {
+    match v {
+        Value::Cell(c) => match &*c.borrow() {
+            Value::Lst(items) => Ok(items.clone()),
+            other => err(format!(
+                "`{name}` expects a set handle, got a cell of {}",
+                print_value(other)
+            )),
+        },
+        other => err(format!("`{name}` expects a set handle, got {}", print_value(other))),
+    }
+}
+
+/// Replace a set handle's elements in place, preserving the handle's identity.
+fn set_store(v: &Value, elems: Vec<Value>) {
+    if let Value::Cell(c) = v {
+        *c.borrow_mut() = Value::Lst(elems);
     }
 }
