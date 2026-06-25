@@ -58,9 +58,12 @@ interpreter is *the* hard bug this project forbids (`CLAUDE.md`).
 - *Branch basis — STACKED on PR #22.* The shared branch `worktree-functor-build`
   was created from PR #22's tip (`worktree-agent-ab091bae27225f3b1`), so the
   run-path and the parity-test harness are already present.
-- *Landing — ONE branch, ONE PR.* All steps commit to the one shared branch;
-  a single PR opens only at the end (step 06), after the full `cargo test`
-  suite is verified green. No per-step PRs.
+- *Landing — ONE branch, ONE PR, opened now.* The plan and the implementation
+  share branch `worktree-functor-build` and a single PR, opened together with
+  the plan commit (base = PR #22's branch). Each step pushes its commits to that
+  same branch, so the PR updates as the work lands; no step opens a second PR.
+  Step 06 finalises the PR (downstream sweep, green suite, mark ready for
+  review). Nobody merges — the repo owner reviews and merges.
 
 = The shared-branch / fresh-agent model
 
@@ -69,8 +72,9 @@ All steps run on the one branch `worktree-functor-build`, in the worktree
 fresh branch: each agent enters the *same* worktree
 (`EnterWorktree path=.claude/worktrees/functor-build`), reads its step brief plus
 the previous step's summary, does the work, commits to the shared branch, and
-writes its own summary for the next agent. Summaries are the inter-agent memory
-and are committed so the next agent sees them.
+pushes (updating the shared PR), then writes its own summary for the next agent.
+Summaries are the inter-agent memory and are committed/pushed so the next agent
+sees them.
 
 Every executing agent must first read `plan/00-agent-rules.typ` and follow it
 verbatim. The critical rules are also restated at the top of each step brief.
@@ -97,7 +101,8 @@ verbatim. The critical rules are also restated at the top of each step brief.
   element type. Fix any divergence (oracle wins). → writes `summaries/05-parity.typ`.
 + `plan/06-downstream-and-pr.typ` — Tie-off per `CLAUDE.md`: docs, examples
   regen, CHANGELOG, `dd-type-system.typ` open-question resolution; full test
-  sweep; open the single PR. → writes `summaries/06-done.typ`.
+  sweep; finalise the existing PR (push, mark ready for review). → writes
+  `summaries/06-done.typ`.
 
 = Dependency chain
 

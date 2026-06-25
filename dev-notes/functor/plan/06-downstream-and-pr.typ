@@ -13,7 +13,8 @@
 *First read `plan/00-agent-rules.typ`*, then `summaries/05-parity.typ`. Critical
 rules: branch `worktree-functor-build` via
 `EnterWorktree path=.claude/worktrees/functor-build`; commit as you go with the
-two trailers. THIS is the only step that opens a PR.
+two trailers. The PR is ALREADY OPEN (it was opened with the plan commit); this
+step finalises it — it does NOT open a new one.
 
 == Goal
 
@@ -52,26 +53,34 @@ Sweep the surfaces, verify the whole suite, and open the one PR.
   bump.)
 + *Final sweep.* `cargo test` green once more after the regen.
 
-== Open the single PR
+== Finalise the existing PR
 
-+ *Choose the base.* Check PR #22's state:
-  - If PR #22 is already MERGED to `main`: rebase `worktree-functor-build` onto
-    `origin/main`, resolve any conflicts, and target `main`.
-  - If PR #22 is still OPEN: target its branch
-    (`worktree-agent-ab091bae27225f3b1`) so this PR stacks cleanly and shows
-    only the build-path diff.
-  State the chosen base and the dependency on #22 in the PR body.
-+ *Push and create.* Push `worktree-functor-build` to `origin` and
-  `gh pr create`. Do NOT merge it; do NOT push to `origin/main`.
-  - Title: `feat(functor): build set functor components in the wasm backend`.
+The PR already exists (opened with the plan commit, base = PR #22's branch,
+`worktree-agent-ab091bae27225f3b1`). Do NOT open a new one.
+
++ *Reconcile the base.* Check PR #22's state:
+  - If PR #22 is now MERGED to `main`: rebase `worktree-functor-build` onto
+    `origin/main`, resolve any conflicts, and retarget this PR to `main`
+    (`gh pr edit --base main`). GitHub may have auto-retargeted it already when
+    #22 merged — confirm.
+  - If PR #22 is still OPEN: leave the base as its branch so this PR keeps
+    showing only the build-path diff.
++ *Push the final commits.* `git push` `worktree-functor-build`. Do NOT merge it;
+  do NOT push to `origin/main`.
++ *Update the PR body* to the final state and mark it ready:
+  - Title (already set): `feat(functor): build set functor components in the
+    wasm backend`.
   - Body: what changed (exported-resource emission: rep, bodies, intrinsics,
     handle lift/lower, call routing), the parity proof (`backend_functor.rs`),
     the step-by-step structure, downstream surfaces touched, and the dependency
-    on PR #22. End the body with exactly:
+    on PR #22. Update it with `gh pr edit --body-file …`. End the body with
+    exactly:
 
 ```
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
+
+  - Take the PR out of draft: `gh pr ready`.
 
 == Write `summaries/06-done.typ`
 

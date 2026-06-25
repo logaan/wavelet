@@ -37,11 +37,18 @@ Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01KGe633NMqR4TY2QgA1K8rm
 ```
 
-== Do NOT open a PR (except step 06)
+== The PR already exists — push to it, do NOT open another
 
-- This whole feature lands as ONE PR, opened by step 06 only. Steps 01–05 must
-  NOT open a PR, must NOT push to `origin/main`, and must NOT merge anything.
-- Just commit to `worktree-functor-build`. Step 06 opens the single PR.
+- The plan and the implementation share ONE PR, already open from branch
+  `worktree-functor-build` (base = PR #22's branch). You are adding commits to an
+  existing PR, not starting a new one.
+- Commit to `worktree-functor-build` and `git push` when your step is done (you
+  may push intermediate commits too) so the PR reflects your work. The branch is
+  shared and steps run sequentially, so a plain `git push` is safe — you have the
+  latest locally.
+- Do NOT open a second PR. Do NOT push to `origin/main`. Do NOT merge anything.
+- Step 06 finalises the PR (downstream sweep, then `gh pr ready`). The repo owner
+  reviews and merges.
 
 == The interpreter is the oracle (the one hard rule)
 
