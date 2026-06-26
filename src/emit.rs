@@ -167,10 +167,18 @@ pub enum TypeDef {
 /// `records` (name → field (name, type-string)); enum/variant/flags through
 /// `defs` (name → [`TypeDef`]). Split so the long-standing record path stays
 /// byte-for-byte unchanged while the richer kinds are added alongside.
+///
+/// `aliases` resolves a *named type alias* (`DefType pair list<s32>`,
+/// `DefType coord tuple<s32, s32>`) to its underlying WIT type text. WIT only
+/// allows a simple identifier for a functor element / a record field type, so a
+/// `list`/`tuple`/`option`/`result` element must be named with a `DefType`; that
+/// name lands here and `wit_ty` expands it before lowering (matching the
+/// interpreter, which carries those values structurally regardless of the name).
 #[derive(Default)]
 struct TypeEnv {
     records: HashMap<String, Vec<(String, String)>>,
     defs: HashMap<String, TypeDef>,
+    aliases: HashMap<String, String>,
 }
 
 fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
@@ -272,6 +280,13 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
                         WitTy::Variant(resolved)
                     }
                 }
+            } else if let Some(target) = env.aliases.get(other) {
+                // A named alias to a compound WIT type (`list<…>`, `tuple<…>`,
+                // `option<…>`, `result<…>`, or another alias). Expand to the
+                // underlying type text and lower that — the value-level carriage
+                // (TAG_LIST/TAG_TUP/TAG_VAR boxes) is the same one the interpreter
+                // builds, so `eq_raw` dedups these structurally just like records.
+                return wit_ty(target, env);
             } else {
                 return Err(format!("type `{other}` not supported by the wasm backend yet"));
             }
@@ -881,8 +896,10 @@ fn features_of(arena: &Arena, info: &FileInfo) -> Features {
 }
 
 /// Record types from a file's `DefType` forms: name → field (name, type-string).
-/// Only record-shaped types are collected (variants/flags/aliases are skipped;
-/// the boundary ABI for those is not implemented in the wasm backend yet).
+/// Only record-shaped types are collected here; variants/flags go through
+/// [`local_non_record_types`] (into `TypeEnv::defs`) and bare aliases (`list`,
+/// `tuple`, …) into `TypeEnv::aliases`, so every `DefType` kind has a boundary
+/// ABI — the layouts already exist (`WitTy::List`/`Tuple`/`Variant`/`Flags`).
 fn record_types(arena: &Arena, types: &[(String, NodeId)]) -> Vec<(String, Vec<(String, String)>)> {
     let mut out = Vec::new();
     for (name, node) in types {
@@ -910,6 +927,77 @@ fn record_types(arena: &Arena, types: &[(String, NodeId)]) -> Vec<(String, Vec<(
 /// on its [`Dep`].
 pub fn dep_record_types(arena: &Arena, info: &FileInfo) -> Vec<(String, Vec<(String, String)>)> {
     record_types(arena, &info.types)
+}
+
+/// Non-record local `DefType`s, split into the two `TypeEnv` channels:
+///   * variants/flags become [`TypeDef`]s (keyed by name) — `Node::Lst` is a
+///     `variant` (payload-less cases are an enum, the same as a variant with all
+///     `None` payloads — and how `wit::type_decl` already renders them), and
+///     `Node::Flg` is a `flags`. This mirrors what `witdep.rs` builds for *dep*
+///     type_defs, so a local and an imported variant/flags lower identically.
+///   * everything else `wit::type_text` can render — `list<…>`, `tuple<…>`,
+///     `option<…>`, `result<…>`, or an alias to another named type — becomes an
+///     *alias* (name → WIT type text), which `wit_ty` expands recursively.
+///
+/// Records are handled by [`record_types`] and skipped here. A `DefType` whose
+/// body neither parses as a known kind nor renders to type text is left out
+/// (any reference to it still surfaces the honest "not supported" error).
+fn local_non_record_types(
+    arena: &Arena,
+    types: &[(String, NodeId)],
+) -> (Vec<(String, TypeDef)>, Vec<(String, String)>) {
+    let mut defs = Vec::new();
+    let mut aliases = Vec::new();
+    for (name, node) in types {
+        match arena.node(*node) {
+            Node::Rec(_) => {} // records: see `record_types`
+            Node::Flg(names) => defs.push((name.clone(), TypeDef::Flags(names.clone()))),
+            Node::Lst(cases) => {
+                // A `[case …]` form is a variant; a payload carries as a Tup
+                // `[head, payload…]` exactly as `wit::type_decl` reads it.
+                let mut resolved = Vec::with_capacity(cases.len());
+                let mut ok = true;
+                for &c in cases {
+                    match arena.node(c) {
+                        Node::Sym(s) => resolved.push((s.clone(), None)),
+                        Node::Tup(items) => {
+                            let Some((&h, payload)) = items.split_first() else {
+                                ok = false;
+                                break;
+                            };
+                            let Node::Sym(case) = arena.node(h) else {
+                                ok = false;
+                                break;
+                            };
+                            // Multi-payload cases would need a tuple payload; the
+                            // backend (like the variant ABI) carries one payload
+                            // box, so only single-payload cases are supported.
+                            match payload {
+                                [] => resolved.push((case.clone(), None)),
+                                [one] => match crate::wit::type_text(arena, *one) {
+                                    Ok(t) => resolved.push((case.clone(), Some(t))),
+                                    Err(_) => { ok = false; break; }
+                                },
+                                _ => { ok = false; break; }
+                            }
+                        }
+                        _ => { ok = false; break; }
+                    }
+                }
+                if ok {
+                    defs.push((name.clone(), TypeDef::Variant(resolved)));
+                }
+            }
+            // A bare alias: `list<…>`, `tuple<…>`, `option<…>`, `result<…>`, or a
+            // name for another named type. Record its WIT type text for `wit_ty`.
+            _ => {
+                if let Ok(t) = crate::wit::type_text(arena, *node) {
+                    aliases.push((name.clone(), t));
+                }
+            }
+        }
+    }
+    (defs, aliases)
 }
 
 /// `"demo:shout/render"` → `"render"`; a bare package path means `api`.
@@ -3680,6 +3768,18 @@ fn emit_core_module(
     let mut type_env = TypeEnv::default();
     for (name, fields) in record_types(arena, &info.types) {
         type_env.records.insert(name, fields);
+    }
+    // Local non-record `DefType`s: variants/flags as `defs`, list/tuple/option/
+    // result/alias names as `aliases`. This lets a functor instantiate over a
+    // named compound element (`DefType pair list<s32>` → `pair-set`) and lets an
+    // export pass/return those types — matching the interpreter, which already
+    // handles every element kind structurally.
+    let (local_defs, local_aliases) = local_non_record_types(arena, &info.types);
+    for (name, def) in local_defs {
+        type_env.defs.insert(name, def);
+    }
+    for (name, target) in local_aliases {
+        type_env.aliases.insert(name, target);
     }
     for dep in deps.values() {
         for (name, fields) in &dep.types {
@@ -7907,8 +8007,16 @@ fn synthesize_world_wit(
             }
         }
         out.push_str(&format!("interface {iface} {{\n"));
+        // Each functor interface names its resource `set`, so an interface that
+        // references *two* functor handles (two instantiations, both returned or
+        // taken by exports) would `use` two types both called `set` — a WIT
+        // "defined more than once" collision. Alias each `use` to a per-functor
+        // name (`set as <iface>-handle`) and rewrite the dotted `<iface>.set`
+        // occurrences in the signatures to that alias. A single functor still
+        // reads naturally; multiple instantiations no longer collide. (The alias
+        // only renames the WIT type binding — the handle still lowers to one i32.)
         for funct in &used {
-            out.push_str(&format!("  use {funct}.{{set}};\n"));
+            out.push_str(&format!("  use {funct}.{{set as {funct}-handle}};\n"));
         }
         if iface == "api" {
             for (name, ty) in &info.types {
@@ -7918,7 +8026,7 @@ fn synthesize_world_wit(
         for sig in &sigs {
             let mut line = sig.to_wit();
             for funct in &used {
-                line = line.replace(&format!("{funct}.set"), "set");
+                line = line.replace(&format!("{funct}.set"), &format!("{funct}-handle"));
             }
             out.push_str(&format!("  {line}\n"));
         }
