@@ -224,10 +224,13 @@ fn build_source(src_text: &str) -> Result<Vec<u8>, String> {
 // instantiates the functor and *derives an ordinary result* from it (here a
 // `u32` from `size`) builds and produces a component that `wasm-tools` validates,
 // whose WIT exports the specialized `point-set` interface with the `set`
-// resource and its four ops. The qualified `pts/...` calls are not yet *routed*
-// (step 04) — their emitted bodies trap if reached — but the component is
-// structurally complete and valid. (Runtime call-correctness is covered by the
-// interpreter-oracle tests above and lands in the backend in the routing step.)
+// resource and its four ops. As of step 04 the qualified `pts/...` calls are
+// *routed* to those emitted bodies (`new` -> constructor, `add`/`contains`/`size`
+// -> the method bodies via `[resource-rep]set`), so the program runs correctly,
+// not just validates — `backend_functor::routed_record_set_size_matches_interpreter`
+// executes this exact shape end-to-end and the deduped `size` matches the
+// interpreter. This test pins the structural WIT contract (interface, resource,
+// the four ops).
 fn build_emits_a_validating_set_resource() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
