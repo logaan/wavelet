@@ -6650,6 +6650,12 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
     }
 
     // eq_raw(a, b) -> i32   [locals: ta=2, la=3, i=4]
+    //
+    // Structural equality mirroring the interpreter's `impl PartialEq for Value`
+    // (src/value.rs). Primitives (bool/int/char/dec/str) compare by content;
+    // compound boxes (rec/list/tup/var/flg) recurse into their element boxes via
+    // this very fn (`em.h.eq_raw`, already reserved). Only closures (TAG_FN) keep
+    // pointer identity, matching `Rc::ptr_eq` for `Closure`/`Macro`.
     {
         let mut fx = FnCtx::new(2);
         let ta = fx.local(I32);
@@ -6746,7 +6752,208 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Const(1));
         fx.op(I::Return);
         fx.op(I::End);
-        // lists & anything else: identity
+        // char: i64 scalar @8 (TAG_INT layout)
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64Eq);
+        fx.op(I::Return);
+        fx.op(I::End);
+        // record: n @4, then (key strbox @8+8i, value box @12+8i) pairs.
+        // Order-sensitive (Value::Rec is a Vec compare): both n must match, then
+        // each key AND value compared positionally by recursing eq_raw.
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_REC));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalTee(la));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(la));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        // key: load a[8+8i], b[8+8i] and recurse
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // value: load a[12+8i], b[12+8i] and recurse
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(12, 2)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(12, 2)));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // list / tuple / flags: len @4, element boxes @8+4i. Order-sensitive
+        // (Value::Lst/Tup/Flg are Vec compares). All three share this layout: a
+        // flags box stores its name str boxes @8+4i, so structural recursion over
+        // them matches the interpreter's `Flg(Vec<String>)` equality too.
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Eq);
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_TUP));
+        fx.op(I::I32Eq);
+        fx.op(I::I32Or);
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_FLG));
+        fx.op(I::I32Eq);
+        fx.op(I::I32Or);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalTee(la));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(la));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        // element: load a[8+4i], b[8+4i] and recurse
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // variant: case-name strbox @4, payload box @8 (0 if none). Equal iff
+        // case names match (recurse) and payloads match: both absent (0) is equal,
+        // exactly one absent is unequal, else recurse on the two payload boxes.
+        // Mirrors `Variant(a,p) == Variant(b,q) => a == b && p == q`.
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_VAR));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        // case names
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // payload presence: la = a.payload, i = b.payload
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::LocalSet(la));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::LocalSet(i));
+        // both absent -> equal
+        fx.op(I::LocalGet(la));
+        fx.op(I::I32Eqz);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Eqz);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // exactly one absent -> unequal (la == 0 XOR i == 0)
+        fx.op(I::LocalGet(la));
+        fx.op(I::I32Eqz);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Eqz);
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // both present -> recurse on payloads
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(i));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // closures (TAG_FN) and anything else unhandled: pointer identity,
+        // matching the interpreter's `Rc::ptr_eq` for Closure/Macro.
         fx.op(I::LocalGet(0));
         fx.op(I::LocalGet(1));
         fx.op(I::I32Eq);
