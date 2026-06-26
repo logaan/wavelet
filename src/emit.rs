@@ -1088,6 +1088,12 @@ struct Emitter<'a> {
     /// expander, so the `expand` builtin (used *inside* a macro body) can call
     /// it. `None` in an ordinary module, where `expand` is unsupported.
     macro_expand_idx: Option<u32>,
+    /// Each functor instantiation's `set` resource core-func indices, keyed by
+    /// the instantiation alias (`pts`). Populated up front in `emit_core_module`
+    /// — before the internal/export bodies are emitted — so `dep_call` can route
+    /// an `alias/op` call (`pts/new`, `pts/add`, …) to the matching resource fn
+    /// while those bodies are still being lowered (step 04 routing).
+    functor_fns: HashMap<String, ResourceFns>,
 }
 
 impl<'a> Emitter<'a> {
@@ -2270,27 +2276,80 @@ impl<'a> Emitter<'a> {
         fname: &str,
         args: &[NodeId],
     ) -> Result<(), String> {
-        // STEP 04 STUB. A functor op (`pts/new`, `pts/add`, …) is not a runtime
-        // import: it must be routed to the locally-emitted `set` resource's core
-        // funcs (constructor/method indices in `ResourceFns`), via the canonical
-        // resource ABI (mint a handle on `new`, pass the rep as `self` to a
-        // method). That routing is step 04. Until then, emit a body that
-        // type-checks and validates but *traps* if reached at runtime — never a
-        // silently-diverging value (the one hard rule). The arguments are still
-        // evaluated (so their own emit is exercised), then dropped; `unreachable`
-        // makes the stack polymorphic and the trailing unit box satisfies the
-        // expression-yields-a-box contract for validation.
+        // A functor op (`pts/new`, `pts/add`, `pts/contains`, `pts/size`) is not a
+        // runtime import: it routes to the locally-emitted `set` resource's core
+        // funcs (`ResourceFns`, indices reserved in `em.functor_fns`). The mapping
+        // mirrors the interpreter's `bind_functor` (`builtins.rs`): `new`→ctor,
+        // `add`/`contains`/`size`→methods.
         //
-        // Step 04 replaces this whole branch with real dispatch keyed on
-        // `(alias, fname)` against the instantiation's `ResourceFns`.
+        // HANDLE CONVENTION (step 04 ABI decision; see `summaries/04-routing.typ`):
+        // a `set` Wavelet value carries the OWN handle minted by the constructor's
+        // `resource.new`, boxed as an int box (TAG_INT) — the same opaque-handle
+        // carriage `lower`/`lift` already use for `WitTy::Handle`, so the export
+        // boundary (`nearest-set -> own<set>`) needs no special-casing: it just
+        // unboxes the i32. A method's core body, however, receives the REP as
+        // `self` (summary 01: the canonical ABI hands an exported resource's method
+        // the rep directly). So intra-guest we convert handle→rep with the
+        // `[resource-rep]set` intrinsic before each method call. (This is the
+        // alternative to carrying the rep guest-side and minting at the boundary;
+        // it keeps `lower`/`lift` untouched and reuses the ctor verbatim.)
         if let Some(inst) = self.info.functors.iter().find(|f| f.alias == alias) {
-            let _ = inst;
-            for &a in args {
-                self.expr(fx, a, false)?;
-                fx.op(I::Drop);
+            let fns = *self.functor_fns.get(alias).ok_or_else(|| {
+                format!("internal error: no emitted `set` resource for functor alias `{alias}`")
+            })?;
+            match fname {
+                "new" => {
+                    if !args.is_empty() {
+                        return Err(format!("`{alias}/new` takes no arguments"));
+                    }
+                    fx.op(I::Call(fns.ctor)); // () -> i32 own handle
+                    self.lift(fx, &WitTy::Handle); // box the handle as the set value
+                }
+                "add" | "contains" | "size" => {
+                    let want = if fname == "size" { 1 } else { 2 };
+                    if args.len() != want {
+                        return Err(format!(
+                            "`{alias}/{fname}` takes {want} argument{}",
+                            if want == 1 { "" } else { "s" }
+                        ));
+                    }
+                    // arg 0 is the set: unbox its handle, recover the rep (the
+                    // method's `self`), and stash it below the flattened value args.
+                    let rep = fx.local(ValType::I32);
+                    self.expr(fx, args[0], false)?;
+                    fx.op(I::Call(self.h.unbox_int));
+                    fx.op(I::I32WrapI64);
+                    fx.op(I::Call(fns.rep_import)); // handle -> rep
+                    fx.op(I::LocalSet(rep));
+                    fx.op(I::LocalGet(rep));
+                    if fname != "size" {
+                        // the element value, flattened in canonical-ABI order
+                        let elem = wit_ty(&inst.elem, &self.type_env)?;
+                        self.expr(fx, args[1], false)?;
+                        self.lower(fx, &elem)?;
+                    }
+                    match fname {
+                        "add" => {
+                            fx.op(I::Call(fns.add)); // (rep, <elem>) -> ()
+                            fx.op(I::I32Const(self.unit_addr() as i32));
+                        }
+                        "contains" => {
+                            fx.op(I::Call(fns.contains)); // -> i32 0/1
+                            self.lift(fx, &WitTy::Bool);
+                        }
+                        _ => {
+                            fx.op(I::Call(fns.size)); // -> i32 u32
+                            self.lift(fx, &WitTy::IntU);
+                        }
+                    }
+                }
+                other => {
+                    return Err(format!(
+                        "functor `set` (alias `{alias}`) has no op `{other}`; \
+                         expected new / add / contains / size"
+                    ));
+                }
             }
-            fx.op(I::Unreachable);
-            fx.op(I::I32Const(self.unit_addr() as i32));
             return Ok(());
         }
         let imp = self
@@ -3706,6 +3765,7 @@ fn emit_core_module(
         false_addr: 0,
         true_addr: 0,
         macro_expand_idx: None,
+        functor_fns: HashMap::new(),
     };
 
     // static boxes: false @16, true @24
@@ -3822,6 +3882,38 @@ fn emit_core_module(
     em.h.cmp_raw = take();
     em.h.neg_raw = take();
 
+    // ---- reserve the functor `set` resource core-func indices (step 04)
+    //
+    // The five resource funcs (ctor/add/contains/size/dtor) per instantiation are
+    // EMITTED just after `emit_helpers` below, so in `em.bodies` they sit directly
+    // after the helper bodies and before the internal/export bodies. Reserve their
+    // indices here, in that exact position in the `take()` sequence, so the indices
+    // recorded in `em.functor_fns` match where `emit_set_resource` will self-index
+    // them — and so the internal/overload/export `take()`s that follow are shifted
+    // past the resource slots. `dep_call` reads `em.functor_fns` to route an
+    // `alias/op` call while the internal/export bodies (which contain those calls)
+    // are still being lowered, i.e. before the resource bodies exist.
+    for (inst, &(new_i, rep_i, drop_i)) in info.functors.iter().zip(&functor_intrinsics) {
+        let ctor = take();
+        let add = take();
+        let contains = take();
+        let size = take();
+        let dtor = take();
+        em.functor_fns.insert(
+            inst.alias.clone(),
+            ResourceFns {
+                ctor,
+                add,
+                contains,
+                size,
+                dtor,
+                new_import: new_i,
+                rep_import: rep_i,
+                drop_import: drop_i,
+            },
+        );
+    }
+
     // An *exported overload set* (≥2 same-named `Def Fn`s, or a curated-op name)
     // is lowered by `wit::collect` to one mangled WIT export per member
     // (`eq-point`, `eq-string`, …), recorded in `info.overload_bodies` as
@@ -3882,6 +3974,30 @@ fn emit_core_module(
 
     // ---- helper bodies (order must match index assignment above)
     emit_helpers(&mut em)?;
+
+    // ---- functor `set` resource bodies (step 02 bodies; emitted here in step 04)
+    //
+    // Emitted right after the helpers and BEFORE the internal/export bodies, so
+    // each resource's five `em.bodies` positions line up with the indices reserved
+    // in `em.functor_fns` above. `dep_call` routes `alias/op` calls to those
+    // reserved indices; the canonical export NAMES are registered later (alongside
+    // the export wrappers). The element type is resolved through the boundary
+    // `type_env`; `flat_checked` inside `emit_set_resource` rejects any element the
+    // backend can't flatten with an honest error.
+    for (inst, &(new_i, rep_i, drop_i)) in info.functors.iter().zip(&functor_intrinsics) {
+        let elem = wit_ty(&inst.elem, &em.type_env).map_err(|e| {
+            format!(
+                "functor `set` over `{}` (alias `{}`): {e}",
+                inst.elem, inst.alias
+            )
+        })?;
+        let fns = emit_set_resource(&mut em, inst, &elem, new_i, rep_i, drop_i)?;
+        debug_assert_eq!(
+            em.functor_fns.get(&inst.alias).copied(),
+            Some(fns),
+            "reserved functor `set` indices must match the emitted body positions"
+        );
+    }
 
     // ---- internal function bodies
     for name in &internal_order {
@@ -4001,31 +4117,18 @@ fn emit_core_module(
         exports.push((format!("{own_iface}#{}", sig.name), take()));
     }
 
-    // `take` is no longer needed: the functor `set` bodies below self-index from
-    // `n_imports + em.bodies.len()` (the same invariant `take` tracked), and the
-    // assembly walks `em.bodies`/`em.exports` directly. Drop it so its mutable
-    // borrow of `next` ends before the resource emission.
-    drop(take);
+    drop(take); // `next`/`take` are done; the resource bodies were emitted above.
 
-    // ---- functor `set` resource bodies + exports (one resource per instantiation)
+    // ---- functor `set` resource EXPORTS (canonical names) — one per instantiation
     //
-    // For each `Set` instantiation, emit the five core funcs (ctor/add/contains/
-    // size/dtor) via the step-02 `emit_set_resource`, then export them under the
-    // canonical names from summary 01 §1, prefixed by the versioned specialized
-    // interface (`demo:geo/point-set@0.1.0`). `emit_set_resource` self-assigns its
-    // function indices from `n_imports + em.bodies.len()`, the same imports-first
-    // index space the export wrappers use, so no `take()` bookkeeping is needed.
-    // The element type is resolved through the boundary `type_env` (records,
-    // primitives), and `flat_checked` inside `emit_set_resource` rejects any
-    // element type the backend can't flatten with an honest error.
-    for (inst, &(new_i, rep_i, drop_i)) in info.functors.iter().zip(&functor_intrinsics) {
-        let elem = wit_ty(&inst.elem, &em.type_env).map_err(|e| {
-            format!(
-                "functor `set` over `{}` (alias `{}`): {e}",
-                inst.elem, inst.alias
-            )
-        })?;
-        let fns = emit_set_resource(&mut em, inst, &elem, new_i, rep_i, drop_i)?;
+    // The five core funcs were already emitted right after the helpers (so their
+    // indices match `em.functor_fns`). Here we only register their canonical
+    // resource-ABI export names, prefixed by the versioned specialized interface
+    // (`demo:geo/point-set@0.1.0`); the index for each comes from the reserved
+    // `em.functor_fns`. `ExportSection` later writes these verbatim, same as any
+    // ordinary export.
+    for inst in &info.functors {
+        let fns = em.functor_fns[&inst.alias];
         let iface = versioned_iface(&info.package, &inst.iface);
         exports.push((format!("{iface}#[constructor]set"), fns.ctor));
         exports.push((format!("{iface}#[method]set.add"), fns.add));
@@ -4178,7 +4281,7 @@ fn emit_core_module(
 /// The five core functions implementing one `set` instantiation, by core
 /// function index, plus the resource-intrinsic import indices their bodies
 /// reference. Step 03 wires these into the export/import sections.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceFns {
     /// `[constructor]set` — core sig `() -> i32` (returns an OWN handle).
     pub ctor: u32,
@@ -4560,6 +4663,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         false_addr: 0,
         true_addr: 0,
         macro_expand_idx: None,
+        functor_fns: HashMap::new(),
     };
 
     // static boxes: false @16, true @24
@@ -7807,6 +7911,7 @@ world app {
             false_addr: 0,
             true_addr: 0,
             macro_expand_idx: None,
+            functor_fns: HashMap::new(),
         };
 
         // static boxes: false @16, true @24 (same as emit_core_module).
