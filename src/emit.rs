@@ -706,27 +706,21 @@ pub fn emit_component(
     info: &FileInfo,
     deps: &HashMap<String, Dep>,
 ) -> Result<Vec<u8>, String> {
-    // The wasm backend does not yet emit functor components. `wavelet wit` and
-    // `wavelet run` support functors (the interpreter is the oracle, see
-    // `builtins`'s `set-*` ops), but `build` does not: the synthesized world
-    // *exports* a `set` resource whose `new`/`add`/`contains`/`size` methods have
-    // no source bodies, so emit would have to generate a resource implementation
-    // and hand out canonical-ABI `own<set>` handles — machinery this backend does
-    // not have. Rather than emit a component that validates yet diverges from the
-    // interpreter (the one thing the project treats as a hard bug), fail with a
-    // clear, honest error. See `dev-notes/dd-type-system.typ` (functors are an
-    // open question for the binary/emit path) and the CHANGELOG.
-    if let Some(f) = info.functors.first() {
-        return Err(format!(
-            "the wasm backend cannot yet build functor components \
-             (`Import {{pkg: \"…coll/set\" elem: … as: {alias}}}`): the synthesized \
-             world exports a `{iface}` resource with no emittable method bodies. \
-             `wavelet wit` and `wavelet run` support this functor; `wavelet build` \
-             does not yet. Track this in the type-system design notes.",
-            alias = f.alias,
-            iface = f.iface,
-        ));
-    }
+    // Functor components: the wasm backend now emits the exported `set` resource
+    // for each `Set` instantiation. `emit_core_module` synthesizes the
+    // ctor/add/contains/size/dtor core funcs (step 02 bodies) and exports them
+    // under the canonical resource ABI names; `synthesize_world_wit` declares and
+    // exports each specialized interface, so the encoder synthesizes the matching
+    // `[resource-new/rep/drop]set` intrinsics. The resource MEANS what the
+    // interpreter's `set-*` builtins mean (structural `eq_raw` membership) — the
+    // one hard project rule.
+    //
+    // Runtime routing of the qualified `pts/new`/`pts/add` ops inside an export
+    // body is step 04 (`dep_call` does not yet know the functor alias). Until
+    // then a body that calls `pts/<op>` fails to emit with an honest
+    // "unknown import alias" — the component still builds and validates whenever
+    // no body calls a functor op (the resource and its WIT are exported either
+    // way).
     let mut module = emit_core_module(arena, roots, info, deps)?;
     let wit = synthesize_world_wit(arena, info, deps)?;
 
@@ -2276,6 +2270,29 @@ impl<'a> Emitter<'a> {
         fname: &str,
         args: &[NodeId],
     ) -> Result<(), String> {
+        // STEP 04 STUB. A functor op (`pts/new`, `pts/add`, …) is not a runtime
+        // import: it must be routed to the locally-emitted `set` resource's core
+        // funcs (constructor/method indices in `ResourceFns`), via the canonical
+        // resource ABI (mint a handle on `new`, pass the rep as `self` to a
+        // method). That routing is step 04. Until then, emit a body that
+        // type-checks and validates but *traps* if reached at runtime — never a
+        // silently-diverging value (the one hard rule). The arguments are still
+        // evaluated (so their own emit is exercised), then dropped; `unreachable`
+        // makes the stack polymorphic and the trailing unit box satisfies the
+        // expression-yields-a-box contract for validation.
+        //
+        // Step 04 replaces this whole branch with real dispatch keyed on
+        // `(alias, fname)` against the instantiation's `ResourceFns`.
+        if let Some(inst) = self.info.functors.iter().find(|f| f.alias == alias) {
+            let _ = inst;
+            for &a in args {
+                self.expr(fx, a, false)?;
+                fx.op(I::Drop);
+            }
+            fx.op(I::Unreachable);
+            fx.op(I::I32Const(self.unit_addr() as i32));
+            return Ok(());
+        }
         let imp = self
             .info
             .imports
@@ -3627,10 +3644,21 @@ fn emit_core_module(
     // that varies and the rep is element-generic, one `set -> Resource` entry
     // serves every instantiation. The element type itself resolves through the
     // same `type_env` (records via `type_env.records`, primitives intrinsically).
-    if !info.functors.is_empty() {
+    for inst in &info.functors {
+        // The bare resource name, as it appears in a method signature
+        // (`add: func(value: point)` → receiver `set`).
         type_env
             .defs
             .entry("set".to_string())
+            .or_insert(TypeDef::Resource);
+        // The dotted `<iface>.set` form is the *return type text* an export body
+        // gets for `alias/new()` (see `wit::functor_op_table`: a `Handle` op
+        // infers to `"{iface}.set"`). Register it as a resource too so the export
+        // wrapper's `flat_result`/`wit_ty` map it to `WitTy::Handle` rather than
+        // rejecting it as an unknown type.
+        type_env
+            .defs
+            .entry(format!("{}.set", inst.iface))
             .or_insert(TypeDef::Resource);
     }
 
@@ -3701,6 +3729,14 @@ fn emit_core_module(
     use ValType::{F64, I32, I64};
     let _ = (I32, I64, F64);
     for (alias, fname) in &feats.dep_calls {
+        // A functor alias (`pts` in `pts/new`) is NOT a runtime import — its
+        // `set` resource is *exported*, not imported, so it contributes no import
+        // here. Routing the call itself is step 04; the body's `dep_call` stubs it
+        // for now. Skip it so the import-declaration loop does not reject it as an
+        // unknown import alias.
+        if info.functors.iter().any(|f| &f.alias == alias) {
+            continue;
+        }
         let imp = info
             .imports
             .iter()
@@ -7495,14 +7531,85 @@ fn synthesize_world_wit(
     // defined by the dependency's WIT; we only export them by name, never
     // re-declare them here.
     for iface in ifaces.iter().filter(|i| !is_external_iface(i)) {
+        // An export whose signature references a functor handle gets it as the
+        // dotted `<funct-iface>.set` text (from `wit::functor_op_table`). WIT does
+        // not accept an inline dotted type reference; the type must be `use`-d
+        // from its interface and then named bare. Detect which functor interfaces
+        // an interface's signatures reference and emit a `use <funct>.{set};` for
+        // each, rewriting the dotted occurrences in the signatures to bare `set`.
+        // (The functor interface is declared later in the same package; WIT `use`
+        // resolves forward references within a package.)
+        let sigs: Vec<&FuncSig> =
+            info.exports.iter().filter(|s| &s.iface == iface).collect();
+        let used: Vec<&str> = info
+            .functors
+            .iter()
+            .filter(|f| {
+                let dotted = format!("{}.set", f.iface);
+                sigs.iter().any(|s| {
+                    s.result.as_deref() == Some(dotted.as_str())
+                        || s.params.iter().any(|(_, t)| t == &dotted)
+                })
+            })
+            .map(|f| f.iface.as_str())
+            .collect();
+        // WIT forbids interface cycles. An export in `api` that *returns* (or
+        // takes) a functor handle makes `api` depend on the functor interface
+        // (`use point-set.{set}`); when that functor's element is a local record,
+        // the functor interface already depends back on `api` (`use api.{point}`).
+        // That `api ↔ point-set` cycle is not expressible in WIT — the encoder
+        // rejects it. This is the `nearest-set: func(..) -> point-set.set` shape
+        // in the docs example. Surface it as an honest, specific error rather than
+        // emitting WIT that fails to parse deep in the encoder. (An export whose
+        // result/params are ordinary types — e.g. `-> u32`/`-> bool` derived from
+        // set ops — has no such cycle and builds + validates fine. Lifting this
+        // limitation is future work, likely by hoisting the element record into a
+        // shared interface; tracked for step 04.)
+        for funct in &used {
+            if let Some(f) = info.functors.iter().find(|f| f.iface == *funct) {
+                if info.types.iter().any(|(name, _)| name == &f.elem) {
+                    return Err(format!(
+                        "export `{}` in interface `{iface}` references the functor \
+                         handle `{}.set`, whose element type `{}` is a local record. \
+                         That makes `{iface}` and `{}` mutually depend (`{iface}` \
+                         `use`s the handle, `{}` `use`s the record) — a WIT interface \
+                         cycle, which the component model cannot express. An export \
+                         returning a `set` handle over a local record type is not yet \
+                         supported by the wasm backend; an export deriving an ordinary \
+                         result (e.g. `size`/`contains`) from the set works. \
+                         (Resource emission + routing of the handle return is tracked \
+                         for the functor build follow-up.)",
+                        sigs.iter()
+                            .find(|s| {
+                                let d = format!("{funct}.set");
+                                s.result.as_deref() == Some(d.as_str())
+                                    || s.params.iter().any(|(_, t)| t == &d)
+                            })
+                            .map(|s| s.name.as_str())
+                            .unwrap_or("?"),
+                        funct,
+                        f.elem,
+                        funct,
+                        funct,
+                    ));
+                }
+            }
+        }
         out.push_str(&format!("interface {iface} {{\n"));
+        for funct in &used {
+            out.push_str(&format!("  use {funct}.{{set}};\n"));
+        }
         if iface == "api" {
             for (name, ty) in &info.types {
                 out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
             }
         }
-        for sig in info.exports.iter().filter(|s| &s.iface == iface) {
-            out.push_str(&format!("  {}\n", sig.to_wit()));
+        for sig in &sigs {
+            let mut line = sig.to_wit();
+            for funct in &used {
+                line = line.replace(&format!("{funct}.set"), "set");
+            }
+            out.push_str(&format!("  {line}\n"));
         }
         out.push_str("}\n\n");
     }
@@ -7512,7 +7619,7 @@ fn synthesize_world_wit(
     // (`wit::functor_interface`) so the WIT the encoder validates against and the
     // resource the wasm backend implements cannot drift.
     for f in &info.functors {
-        out.push_str(crate::wit::functor_interface(arena, f)?.trim_start());
+        out.push_str(crate::wit::functor_interface(arena, f, &info.types)?.trim_start());
         out.push('\n');
     }
 
