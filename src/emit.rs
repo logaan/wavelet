@@ -3619,6 +3619,20 @@ fn emit_core_module(
                 .or_insert_with(|| def.clone());
         }
     }
+    // Each functor instantiation exports a `set` resource. Declaring `set` as a
+    // `TypeDef::Resource` makes `wit_ty` map a bare `set` (and `own<set>` /
+    // `borrow<set>`) to `WitTy::Handle` at the boundary — `emit.rs:177`–`184`,
+    // `:260`. All instantiations name their resource `set` (interfaces differ:
+    // `point-set`, `string-set`, …); since the element type is the only thing
+    // that varies and the rep is element-generic, one `set -> Resource` entry
+    // serves every instantiation. The element type itself resolves through the
+    // same `type_env` (records via `type_env.records`, primitives intrinsically).
+    if !info.functors.is_empty() {
+        type_env
+            .defs
+            .entry("set".to_string())
+            .or_insert(TypeDef::Resource);
+    }
 
     let mut em = Emitter {
         arena,
@@ -3720,6 +3734,27 @@ fn emit_core_module(
         {
             add_import(&mut em, &module, &sig.name, p, r);
         }
+    }
+
+    // ---- functor resource-intrinsic imports (one triple per instantiation)
+    //
+    // For every `Set` functor instantiation the encoder synthesizes three
+    // resource intrinsics — `[resource-new/rep/drop]set` — under the module
+    // string `[export]<versioned specialized iface>` (summary 01 §2). They MUST
+    // be declared here, in the imports-first index block, so the function index
+    // space stays imports-first; their indices are captured for `emit_set_resource`
+    // (which the constructor calls `resource.new` through). The intrinsics only
+    // exist because the synthesized world *exports* the resource interface.
+    let mut functor_intrinsics: Vec<(u32, u32, u32)> = Vec::new();
+    for inst in &info.functors {
+        let module = format!("[export]{}", versioned_iface(&info.package, &inst.iface));
+        add_import(&mut em, &module, "[resource-new]set", vec![I32], vec![I32]);
+        add_import(&mut em, &module, "[resource-rep]set", vec![I32], vec![I32]);
+        add_import(&mut em, &module, "[resource-drop]set", vec![I32], vec![]);
+        let new_i = em.import_idx(&module, "[resource-new]set");
+        let rep_i = em.import_idx(&module, "[resource-rep]set");
+        let drop_i = em.import_idx(&module, "[resource-drop]set");
+        functor_intrinsics.push((new_i, rep_i, drop_i));
     }
 
     // ---- assign helper indices
@@ -3928,6 +3963,39 @@ fn emit_core_module(
             versioned_iface(&info.package, &sig.iface)
         };
         exports.push((format!("{own_iface}#{}", sig.name), take()));
+    }
+
+    // `take` is no longer needed: the functor `set` bodies below self-index from
+    // `n_imports + em.bodies.len()` (the same invariant `take` tracked), and the
+    // assembly walks `em.bodies`/`em.exports` directly. Drop it so its mutable
+    // borrow of `next` ends before the resource emission.
+    drop(take);
+
+    // ---- functor `set` resource bodies + exports (one resource per instantiation)
+    //
+    // For each `Set` instantiation, emit the five core funcs (ctor/add/contains/
+    // size/dtor) via the step-02 `emit_set_resource`, then export them under the
+    // canonical names from summary 01 §1, prefixed by the versioned specialized
+    // interface (`demo:geo/point-set@0.1.0`). `emit_set_resource` self-assigns its
+    // function indices from `n_imports + em.bodies.len()`, the same imports-first
+    // index space the export wrappers use, so no `take()` bookkeeping is needed.
+    // The element type is resolved through the boundary `type_env` (records,
+    // primitives), and `flat_checked` inside `emit_set_resource` rejects any
+    // element type the backend can't flatten with an honest error.
+    for (inst, &(new_i, rep_i, drop_i)) in info.functors.iter().zip(&functor_intrinsics) {
+        let elem = wit_ty(&inst.elem, &em.type_env).map_err(|e| {
+            format!(
+                "functor `set` over `{}` (alias `{}`): {e}",
+                inst.elem, inst.alias
+            )
+        })?;
+        let fns = emit_set_resource(&mut em, inst, &elem, new_i, rep_i, drop_i)?;
+        let iface = versioned_iface(&info.package, &inst.iface);
+        exports.push((format!("{iface}#[constructor]set"), fns.ctor));
+        exports.push((format!("{iface}#[method]set.add"), fns.add));
+        exports.push((format!("{iface}#[method]set.contains"), fns.contains));
+        exports.push((format!("{iface}#[method]set.size"), fns.size));
+        exports.push((format!("{iface}#[dtor]set"), fns.dtor));
     }
 
     // ---- assemble
@@ -7439,6 +7507,15 @@ fn synthesize_world_wit(
         out.push_str("}\n\n");
     }
 
+    // Functor instantiations stamp out a specialized, monomorphic interface each
+    // (Steps 10–11), rendered from the SAME `SET_OPS` source as `wavelet wit`
+    // (`wit::functor_interface`) so the WIT the encoder validates against and the
+    // resource the wasm backend implements cannot drift.
+    for f in &info.functors {
+        out.push_str(crate::wit::functor_interface(arena, f)?.trim_start());
+        out.push('\n');
+    }
+
     out.push_str(&format!("world {} {{\n", info.world));
     for imp in &info.imports {
         // A pure macro import (§6.3) is compile-time only: it is resolved to a
@@ -7461,6 +7538,12 @@ fn synthesize_world_wit(
         } else {
             out.push_str(&format!("  export {iface};\n"));
         }
+    }
+    // Each functor instantiation exports its specialized interface (so the
+    // encoder synthesizes the `[resource-new/rep/drop]set` intrinsics the core
+    // module imports — they only appear when the world *exports* the resource).
+    for f in &info.functors {
+        out.push_str(&format!("  export {};\n", f.iface));
     }
     out.push_str("}\n");
 

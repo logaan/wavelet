@@ -884,7 +884,12 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
 /// The specialized WIT interface for one functor instantiation (fig-wit). For
 /// the `Set` functor at element type `T`, a `T-set` interface holding a `set`
 /// resource whose every method is monomorphized to `T`.
-fn functor_interface(_arena: &Arena, f: &FunctorInst) -> Result<String, String> {
+///
+/// `pub(crate)` so the emit/build path (`emit::synthesize_world_wit`) renders the
+/// SAME interface text from the SAME `SET_OPS` source as `wavelet wit` does —
+/// the resource the wasm backend implements and the WIT the encoder validates
+/// against cannot drift.
+pub(crate) fn functor_interface(_arena: &Arena, f: &FunctorInst) -> Result<String, String> {
     match f.kind {
         FunctorKind::Set => {
             let t = &f.elem;
