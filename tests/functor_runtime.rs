@@ -194,13 +194,9 @@ fn each_is_not_yet_defined() {
     assert!(err.contains("each"), "unexpected error: {err}");
 }
 
-#[test]
-// `wavelet build` does not yet support functor programs. The interpreter is the
-// oracle and the backend must never produce a component that diverges from it;
-// rather than emit such a component, the backend fails with a clear, honest
-// error naming the functor. This pins that contract: build must fail (not
-// silently succeed), and the message must mention the unsupported functor.
-fn build_rejects_functor_programs_cleanly() {
+/// Build one `.wvl` source through `wavelet build` in a throwaway dir, returning
+/// the build result and (on success) the bytes of the single output component.
+fn build_source(src_text: &str) -> Result<Vec<u8>, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -211,18 +207,101 @@ fn build_rejects_functor_programs_cleanly() {
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
     let path = src.join("app.wvl");
-    std::fs::write(&path, WORKED_EXAMPLE).unwrap();
+    std::fs::write(&path, src_text).unwrap();
 
     let out = dir.join("out");
     let res = wavelet::build::build_files(
         &[path.to_string_lossy().into_owned()],
         &out.to_string_lossy(),
-    );
+    )
+    .map(|outputs| std::fs::read(&outputs[0]).expect("read built component"));
     let _ = std::fs::remove_dir_all(&dir);
+    res
+}
 
-    let err = res.expect_err("building a functor program must not silently succeed");
+#[test]
+// `wavelet build` now emits the functor `set` resource. A program that
+// instantiates the functor and *derives an ordinary result* from it (here a
+// `u32` from `size`) builds and produces a component that `wasm-tools` validates,
+// whose WIT exports the specialized `point-set` interface with the `set`
+// resource and its four ops. The qualified `pts/...` calls are not yet *routed*
+// (step 04) — their emitted bodies trap if reached — but the component is
+// structurally complete and valid. (Runtime call-correctness is covered by the
+// interpreter-oracle tests above and lands in the backend in the routing step.)
+fn build_emits_a_validating_set_resource() {
+    const SRC: &str = r#"Package "demo:geo@0.1.0"
+DefType point {x: s32 y: s32}
+Derive {Eq Ord Show} point
+Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Export count-distinct
+Def count-distinct Fn {ps: list(point)}
+  Let {s: pts/new()}
+    Do [ pts/add(s {x: 1 y: 2})
+         pts/size(s) ]"#;
+
+    let bytes = build_source(SRC).expect("a functor program now builds");
+    let wit = wasm_tools_component_wit(&bytes);
+    // The specialized interface and its `set` resource with all four ops.
+    assert!(wit.contains("interface point-set"), "WIT missing point-set: {wit}");
+    assert!(wit.contains("resource set"), "WIT missing the set resource: {wit}");
+    for op in ["constructor()", "add:", "contains:", "size:"] {
+        assert!(wit.contains(op), "WIT missing `{op}` on the set resource: {wit}");
+    }
+}
+
+#[test]
+// An export that *returns* a `set` handle whose element is a *local record*
+// (the docs `nearest-set: func(..) -> point-set.set` shape) makes `api` and the
+// `point-set` interface mutually depend in WIT — `api` `use`s the handle while
+// `point-set` `use`s the record — a cycle the component model cannot express.
+// The backend rejects it with an honest, specific error rather than emitting WIT
+// that fails to parse. (Lifting this is follow-up work; an export deriving an
+// ordinary result from the set, as above, has no cycle and builds.)
+fn build_rejects_handle_returning_export_over_local_record() {
+    const SRC: &str = r#"Package "demo:geo@0.1.0"
+DefType point {x: s32 y: s32}
+Derive {Eq Ord Show} point
+Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Export nearest-set
+Def nearest-set Fn {ps: list(point)}
+  Let {s: pts/new()}
+    Do [ pts/add(s {x: 1 y: 2})
+         s ]"#;
+
+    let err = build_source(SRC)
+        .expect_err("a handle-returning export over a local record must not silently succeed");
     assert!(
-        err.contains("functor"),
-        "build error should explain the functor limitation, got: {err}"
+        err.contains("cycle") && err.contains("nearest-set"),
+        "build error should explain the WIT interface cycle, got: {err}"
     );
+}
+
+/// Run `wasm-tools component wit` on built component bytes, returning the WIT
+/// text. Skips with a panic only if `wasm-tools` is absent (it is a dev/test
+/// dependency the build path already relies on transitively).
+fn wasm_tools_component_wit(bytes: &[u8]) -> String {
+    use std::io::Write;
+    let dir = std::env::temp_dir().join(format!(
+        "wavelet-wit-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("c.wasm");
+    std::fs::File::create(&path).unwrap().write_all(bytes).unwrap();
+    let out = std::process::Command::new("wasm-tools")
+        .args(["component", "wit"])
+        .arg(&path)
+        .output()
+        .expect("run wasm-tools component wit");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        out.status.success(),
+        "wasm-tools component wit failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).unwrap()
 }
