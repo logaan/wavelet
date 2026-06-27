@@ -13,6 +13,39 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-27
+
+### Added
+
+- **The `set` functor now runs and builds end to end.** Instantiating
+  `wavelet:coll/set` with `Import {pkg: … elem: t as: …}` binds the qualified ops
+  `alias/new`, `alias/add`, `alias/contains`, and `alias/size` (with the
+  signatures the synthesized resource promises — `new() -> set`,
+  `add(set, elem)`, `contains(set, elem) -> bool`, `size(set) -> u32`), so a
+  functor program **executes** under `wavelet run`; membership uses the element
+  type's `Eq`, so it agrees with `eq`/`compare`. The wasm backend now also
+  **builds** `set` functor components: the synthesized per-element interface is
+  emitted as a real exported WIT resource at parity with the interpreter — any
+  element type (primitive, string, record, and compound list/tuple) and multiple
+  instantiations per world, with the same structural-equality membership the
+  interpreter uses. The one limitation is shaping, not semantics: an export that
+  returns the `set` handle over a *local-record* element forms a WIT interface
+  cycle (the element's `api` interface and the resource's interface would each
+  `use` the other), which WIT cannot express, so it is rejected with a clear
+  error. Exports that derive an ordinary result (e.g. `-> u32`), or that return a
+  handle over a primitive/string element, build fine. The type-system guide's
+  "A program you can build" section walks both buildable shapes with the WIT each
+  emits.
+
+### Fixed
+
+- **`wavelet run` now expands `Derive` (and any tree→tree stdlib macro).** The
+  run path skipped the `expand_file` pass that `wavelet build`/`wavelet wit` use,
+  so a program that `Derive`d a type died with `unbound name derive-MACRO` — even
+  before any functor was involved. `wavelet run` now runs the expander first,
+  matching the other paths, so derived programs (and functor programs, which lean
+  on derived ops over their element type) execute.
+
 ## [0.8.0] - 2026-06-25
 
 ### Added
@@ -45,22 +78,7 @@ you work, and rename it to the new version when you cut a release.
   import specializes a generic interface to a concrete element type, synthesizing
   a per-element WIT interface (e.g. `set` instantiated at `point` yields a
   concrete `point-set` interface) — nothing generic survives into the emitted
-  world. The `wavelet:coll/set` functor now also **runs**: instantiating it binds
-  the qualified ops `alias/new`, `alias/add`, `alias/contains`, and `alias/size`
-  (with the signatures the synthesized resource promises — `new() -> set`,
-  `add(set, elem)`, `contains(set, elem) -> bool`, `size(set) -> u32`), so a
-  functor program executes end to end under `wavelet run`. Set membership uses the
-  element type's `Eq`, so it agrees with `eq`/`compare`. The wasm backend now also
-  **builds** `set` functor components: the synthesized per-element interface is
-  emitted as a real exported WIT resource at parity with the interpreter — any
-  element type (primitive, string, record, and compound list/tuple) and multiple
-  instantiations per world, with the same structural-equality membership the
-  interpreter uses. The one limitation is shaping, not semantics: an export that
-  returns the `set` handle over a *local-record* element forms a WIT interface
-  cycle (the element's `api` interface and the resource's interface would each
-  `use` the other), which WIT cannot express, so it is rejected with a clear
-  error. Exports that derive an ordinary result (e.g. `-> u32`), or that return a
-  handle over a primitive/string element, build fine.
+  world.
 - **Macro components — run macros defined in other components.** `Import {pkg:
   "…" macros: true}` imports a *macro library*: a component exporting
   `wavelet:meta/macros@0.1.0` (`manifest()` → `(name, arity)` pairs, `expand(name,
@@ -111,12 +129,6 @@ you work, and rename it to the new version when you cut a release.
 
 ### Fixed
 
-- **`wavelet run` now expands `Derive` (and any tree→tree stdlib macro).** The
-  run path skipped the `expand_file` pass that `wavelet build`/`wavelet wit` use,
-  so a program that `Derive`d a type died with `unbound name derive-MACRO` — even
-  before any functor was involved. `wavelet run` now runs the expander first,
-  matching the other paths, so derived programs (and functor programs, which lean
-  on derived ops over their element type) execute.
 - **The type checker now runs on `wavelet run`, `wavelet build`, and
   `wavelet wit`, not only the playground.** Previously the checker (and, on the
   run path, overload resolution) was wired into the playground evaluator alone:
@@ -440,7 +452,8 @@ Initial release.
   artifacts.
 - Docusaurus documentation site with a live, wasm-compiled `<Playground>`.
 
-[Unreleased]: https://github.com/logaan/wavelet/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/logaan/wavelet/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/logaan/wavelet/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/logaan/wavelet/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/logaan/wavelet/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/logaan/wavelet/compare/v0.5.0...v0.6.0
