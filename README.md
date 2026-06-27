@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="brand/Logo.png" alt="Wavelet logo" width="180" height="180">
+</p>
+
 # Wavelet
 
 A small homoiconic language for the **WebAssembly Component Model**.

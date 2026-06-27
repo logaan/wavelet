@@ -69,7 +69,7 @@ const config = {
         title: 'Wavelet',
         logo: {
           alt: 'Wavelet',
-          src: 'img/logo.svg',
+          src: 'img/Logo.png',
         },
         items: [
           {
