@@ -48,10 +48,17 @@ you work, and rename it to the new version when you cut a release.
   (with the signatures the synthesized resource promises — `new() -> set`,
   `add(set, elem)`, `contains(set, elem) -> bool`, `size(set) -> u32`), so a
   functor program executes end to end under `wavelet run`. Set membership uses the
-  element type's `Eq`, so it agrees with `eq`/`compare`. `wavelet build` does not
-  yet emit functor components (the exported `set` resource has no emittable method
-  bodies) and now reports a clear error naming the functor rather than failing
-  obscurely or emitting a component that would diverge from the interpreter.
+  element type's `Eq`, so it agrees with `eq`/`compare`. The wasm backend now also
+  **builds** `set` functor components: the synthesized per-element interface is
+  emitted as a real exported WIT resource at parity with the interpreter — any
+  element type (primitive, string, record, and compound list/tuple) and multiple
+  instantiations per world, with the same structural-equality membership the
+  interpreter uses. The one limitation is shaping, not semantics: an export that
+  returns the `set` handle over a *local-record* element forms a WIT interface
+  cycle (the element's `api` interface and the resource's interface would each
+  `use` the other), which WIT cannot express, so it is rejected with a clear
+  error. Exports that derive an ordinary result (e.g. `-> u32`), or that return a
+  handle over a primitive/string element, build fine.
 - **Macro components — run macros defined in other components.** `Import {pkg:
   "…" macros: true}` imports a *macro library*: a component exporting
   `wavelet:meta/macros@0.1.0` (`manifest()` → `(name, arity)` pairs, `expand(name,

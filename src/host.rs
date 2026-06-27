@@ -177,6 +177,20 @@ impl HostComponent {
         self.invoke(f, &format!("{instance}#{func}"), args)
     }
 
+    /// Explicitly drop an exported resource handle, running the guest's
+    /// destructor (`[dtor]`) for it. The dynamic `Val::Resource` API never frees
+    /// a handle on its own, so a host that wants to observe a guest dtor (e.g.
+    /// the functor ABI spike / parity tests) must call this. Surfaces wasmtime's
+    /// diagnostic on failure (e.g. a trapping dtor).
+    pub fn drop_resource(&mut self, handle: Val) -> Result<(), String> {
+        match handle {
+            Val::Resource(r) => r
+                .resource_drop(&mut self.store)
+                .map_err(|e| format!("dropping resource failed: {e:#}")),
+            other => Err(format!("not a resource handle: {other:?}")),
+        }
+    }
+
     /// Shared invoke tail: size the result buffer to the export's declared
     /// result count, call, and surface failures with `name` for context.
     fn invoke(&mut self, func: Func, name: &str, args: &[Val]) -> Result<Vec<Val>, String> {
