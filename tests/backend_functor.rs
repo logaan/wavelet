@@ -130,3 +130,31 @@ Def build-ints Fn {}
     c.drop_resource(handle)
         .expect("dropping the returned set handle should run the dtor cleanly");
 }
+
+#[test]
+// COMPOUND (list) element: a functor over `list(s32)`, deriving a `u32`.
+// `count-groups` adds `[1 2]`, `[3 4]`, `[1 2]` (the third a structural dup) and
+// returns `groups/size(s)`. The structural `eq_raw` (step 04) dedups lists by
+// value, order-sensitively, exactly as the interpreter does, so the result is 2.
+// This is the compound-element coverage standing in for the brief's worked
+// example (a handle return over `list<point>` is the known WIT interface-cycle
+// limit; see `functor_runtime.rs` and summary 04 §7).
+fn compound_list_element_dedups_like_interpreter() {
+    const SRC: &str = r#"Package "demo:cmp@0.1.0"
+DefType nums list(s32)
+Import {pkg: "wavelet:coll/set" elem: nums as: groups}
+Export count-groups
+Def count-groups Fn {}
+  Let {s: groups/new()}
+    Do [ groups/add(s [1 2])
+         groups/add(s [3 4])
+         groups/add(s [1 2])
+         groups/size(s) ]"#;
+
+    let mut c = build_component(SRC);
+    // Interpreter oracle: {[1 2],[3 4],[1 2]} dedups to 2 distinct lists.
+    assert_eq!(
+        one(&mut c, "demo:cmp/api@0.1.0", "count-groups", &[]),
+        Val::U32(2)
+    );
+}
