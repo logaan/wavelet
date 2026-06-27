@@ -210,6 +210,24 @@ Def count-groups Fn {}
 }
 
 #[test]
+// Edge: a freshly constructed, empty set has size 0. `count-empty` calls
+// `ints/new()` then `ints/size(s)` with no adds, matching the interpreter.
+fn empty_set_size_is_zero() {
+    const SRC: &str = r#"Package "demo:empty@0.1.0"
+Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+Export count-empty
+Def count-empty Fn {}
+  Let {s: ints/new()}
+    ints/size(s)"#;
+
+    let mut c = build_component(SRC);
+    assert_eq!(
+        one(&mut c, "demo:empty/api@0.1.0", "count-empty", &[]),
+        Val::U32(0)
+    );
+}
+
+#[test]
 // STRING element with a handle return + host-side methods. `build-words` adds
 // "hi", "yo", "hi" (one a structural dup) and *returns* the `own<set>` handle;
 // the host then calls `size`/`contains` on the returned resource. Strings dedup
