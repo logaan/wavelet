@@ -141,13 +141,20 @@ gives the element type); `contains` and `size` observe it. These run under
 
 :::note Building functors
 
-`wavelet wit` and `wavelet run` support functors. `wavelet build` does **not**
-yet: the synthesized world *exports* a `set` resource whose methods have no
-source bodies, so the wasm backend would have to generate a resource
-implementation and hand out canonical-ABI handles — machinery it does not have
-yet. Building a functor program reports a clear error rather than emitting a
-component that would diverge from the interpreter. (Functors on the emit/binary
-path are an open question in the type-system design notes.)
+`wavelet wit`, `wavelet run`, and now `wavelet build` all support functors. The
+backend emits the synthesized per-element interface as a **real exported WIT
+`set` resource**, at interpreter parity: any element type (primitive, string,
+record, and compound list/tuple) works, and you can instantiate the functor
+multiple times in one world. Membership uses the same structural equality the
+interpreter does, so a built component dedups exactly like `wavelet run`.
+
+The single limitation is shaping, not semantics: an export that *returns the
+`set` handle* (`own<set>`) over a **local-record** element would make the
+element's `api` interface and the resource's interface each `use` the other — a
+WIT interface cycle, which WIT cannot express, so it is rejected with a clear
+error. The buildable shapes are therefore (1) exports that derive an ordinary
+result from the set (e.g. `-> u32`), and (2) handle-returning exports whose
+element is a primitive or string.
 
 :::
 
@@ -187,6 +194,7 @@ interface api {
 
 // the set functor, instantiated at `point`
 interface point-set {
+  use api.{point};
   resource set {
     constructor();
     add: func(value: point);
@@ -202,12 +210,19 @@ world geo {
 ```
 
 The record, the derived operations, and the export all land in a single `api`
-interface, while each functor instantiation gets its own interface. The overload
-set `eq` lowers to the distinctly named `eq-point`, the derived operations become
-concrete functions, and the `set` functor becomes the concrete `point-set`
-interface. A generic set would have wanted `resource set<t>` with
-`add: func(value: t)`, which WIT simply cannot express — the functor produces a
-concrete interface instead.
+interface, while each functor instantiation gets its own interface (which `use`s
+the element type from `api`). The overload set `eq` lowers to the distinctly
+named `eq-point`, the derived operations become concrete functions, and the `set`
+functor becomes the concrete `point-set` interface. A generic set would have
+wanted `resource set<t>` with `add: func(value: t)`, which WIT simply cannot
+express — the functor produces a concrete interface instead.
+
+One caveat on this particular example: `nearest-set` *returns* the `set` handle
+over the local record `point`, which is exactly the shape `wavelet build` rejects
+(the `api` and `point-set` interfaces would each `use` the other — a WIT
+interface cycle). `wavelet wit` and `wavelet run` still synthesize and execute it,
+so it illustrates the synthesis above; to *build* a `point` set, derive an
+ordinary result from it (e.g. `-> u32`) rather than returning the handle.
 
 (`each` here is illustrative iteration over the input list, applying `pts/add`
 for its side effect; it is not yet a builtin. To run a set today, iterate with
