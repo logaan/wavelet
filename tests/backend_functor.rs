@@ -132,6 +132,56 @@ Def build-ints Fn {}
 }
 
 #[test]
+// TWO functor instantiations in ONE world, both returning handles. Exercises the
+// `set as <iface>-handle` aliasing fix (commit 0444f6a): the two `set` resources
+// must land in distinct interfaces (`s32-set`, `string-set`) without colliding.
+// `build-ints` adds 1 twice (-> size 1, the "same element twice" edge);
+// `build-words` adds "a","b","a" (-> size 2). Both built once, called on the
+// same component, matching the interpreter.
+fn two_instantiations_in_one_world_match_interpreter() {
+    const SRC: &str = r#"Package "demo:multi@0.1.0"
+Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+Import {pkg: "wavelet:coll/set" elem: string as: words}
+Export build-ints
+Def build-ints Fn {}
+  Let {s: ints/new()}
+    Do [ ints/add(s 1) ints/add(s 1) s ]
+Export build-words
+Def build-words Fn {}
+  Let {s: words/new()}
+    Do [ words/add(s "a") words/add(s "b") words/add(s "a") s ]"#;
+    const API: &str = "demo:multi/api@0.1.0";
+    const INTS_IFACE: &str = "demo:multi/s32-set@0.1.0";
+    const WORDS_IFACE: &str = "demo:multi/string-set@0.1.0";
+
+    let mut c = build_component(SRC);
+
+    // build-ints: 1 added twice dedups to size 1.
+    let ints = match one(&mut c, API, "build-ints", &[]) {
+        v @ Val::Resource(_) => v,
+        other => panic!("`build-ints` should return a set resource, got {other:?}"),
+    };
+    let ints_size = c
+        .call_instance(INTS_IFACE, "[method]set.size", &[ints.clone()])
+        .expect("ints size call should succeed");
+    assert_eq!(ints_size, vec![Val::U32(1)], "1 added twice dedups to 1");
+    c.drop_resource(ints)
+        .expect("dropping the ints set handle should run the dtor cleanly");
+
+    // build-words: "a","b","a" dedups to size 2.
+    let words = match one(&mut c, API, "build-words", &[]) {
+        v @ Val::Resource(_) => v,
+        other => panic!("`build-words` should return a set resource, got {other:?}"),
+    };
+    let words_size = c
+        .call_instance(WORDS_IFACE, "[method]set.size", &[words.clone()])
+        .expect("words size call should succeed");
+    assert_eq!(words_size, vec![Val::U32(2)], "\"a\",\"b\",\"a\" dedups to 2");
+    c.drop_resource(words)
+        .expect("dropping the words set handle should run the dtor cleanly");
+}
+
+#[test]
 // COMPOUND (list) element: a functor over `list(s32)`, deriving a `u32`.
 // `count-groups` adds `[1 2]`, `[3 4]`, `[1 2]` (the third a structural dup) and
 // returns `groups/size(s)`. The structural `eq_raw` (step 04) dedups lists by
