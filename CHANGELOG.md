@@ -13,6 +13,13 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-06-27
+
+### Changed
+
+- The documentation site now uses the Wavelet wave brand mark as its favicon,
+  replacing the default Docusaurus favicon.
+
 ## [0.9.1] - 2026-06-27
 
 ### Changed
@@ -459,7 +466,8 @@ Initial release.
   artifacts.
 - Docusaurus documentation site with a live, wasm-compiled `<Playground>`.
 
-[Unreleased]: https://github.com/logaan/wavelet/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/logaan/wavelet/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/logaan/wavelet/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/logaan/wavelet/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/logaan/wavelet/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/logaan/wavelet/compare/v0.7.0...v0.8.0
