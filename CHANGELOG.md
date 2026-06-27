@@ -13,6 +13,13 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-27
+
+### Changed
+
+- **New project logo.** The Docusaurus site navbar and the `README` now use the
+  wave brand mark (`brand/Logo.png`) in place of the placeholder Docusaurus SVG.
+
 ## [0.9.0] - 2026-06-27
 
 ### Added
@@ -452,7 +459,8 @@ Initial release.
   artifacts.
 - Docusaurus documentation site with a live, wasm-compiled `<Playground>`.
 
-[Unreleased]: https://github.com/logaan/wavelet/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/logaan/wavelet/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/logaan/wavelet/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/logaan/wavelet/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/logaan/wavelet/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/logaan/wavelet/compare/v0.6.0...v0.7.0
