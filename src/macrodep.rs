@@ -12,12 +12,10 @@
 //!
 //! Macro components are *executable artifacts*, and the project's existing
 //! dependency machinery only knows how to fetch dependency **WIT** into
-//! `wit/deps` (`wkg wit fetch`; see `dev-notes/decouple-wasi.md`). `wkg` does
-//! **not** fetch components today, so registry-fetch of a macro component is
-//! deferred (see the handoff in
-//! `dev-notes/macro-components/step-05-resolve-macro-component.md`). For now a
-//! project points an import at a locally built macro component, resolved in this
-//! order:
+//! `wit/deps` (`wkg wit fetch`). `wkg` does **not** fetch components today, so
+//! registry-fetch of a macro component is deferred (tracked in
+//! `dev-notes/gaps.typ`). For now a project points an import at a locally built
+//! macro component, resolved in this order:
 //!
 //! 1. **Explicit `from:` path** — `Import {pkg: "acme:html/dsl" macros: true
 //!    from: "path/to/macros.wasm"}`. The path is taken relative to the project

@@ -1,10 +1,10 @@
-//! TDD plan for the monomorphic type system (`dev-notes/dd-type-system.typ`).
+//! Regression suite for the monomorphic type system (`dev-notes/dd-type-system.typ`).
 //!
-//! Every test here describes behaviour the type system *will* have but does not
-//! yet. They are all `#[ignore]`d so the normal suite stays green; each carries a
-//! `// Step N` comment pointing at the implementation step (tracked in
-//! `dev-notes/type-system-todo.typ`) that should turn it from red to green. As a
-//! step lands, delete that step's `#[ignore]` lines and make the tests pass.
+//! These tests began as a TDD plan: each described behaviour the checker did not
+//! yet have, tagged with a `// Step N` comment for the implementation step that
+//! turned it green. That work has all landed, so the tests now run as ordinary
+//! regressions under `cargo test`. Any remaining outstanding work is tracked in
+//! `dev-notes/gaps.typ`.
 //!
 //! These tests are written against today's *public* API so the crate keeps
 //! compiling (a non-compiling test crate would break `cargo test` for everyone,
@@ -18,13 +18,11 @@
 //!     boundary behaviour: inferred signatures, overload name-mangling, functor
 //!     instantiation.
 //!
-//! Run *only* the pending suite to confirm it is all red (the TDD baseline):
+//! Run just this suite:
 //!
 //! ```console
-//! cargo test --test type_system -- --ignored
+//! cargo test --test type_system
 //! ```
-//!
-//! Normal `cargo test` skips every test in this file.
 
 use wavelet::{eval_snippet, expand, print, read_file, wit, EvalOutcome};
 

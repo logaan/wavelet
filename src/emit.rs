@@ -4351,9 +4351,8 @@ fn emit_core_module(
 
 // ------------------------------------------------- functor `set` resource bodies
 //
-// Step 02 (see `dev-notes/functor/plan/02-rep-and-bodies.typ` and the verified
-// ABI in `summaries/01-abi.typ`): emit the core wasm functions that implement a
-// `set` resource for ONE instantiation at element type `elem`. This is the
+// Emit the core wasm functions that implement a `set` resource for ONE
+// instantiation at element type `elem`. This is the
 // "guest implements an exported resource" case; the bodies mirror the
 // interpreter's `Value::Cell(Rc<RefCell<Value::Lst>>)` set, with structural
 // `eq_raw` membership (the project's one hard rule).
