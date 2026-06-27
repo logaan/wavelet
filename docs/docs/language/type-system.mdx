@@ -227,3 +227,118 @@ ordinary result from it (e.g. `-> u32`) rather than returning the handle.
 (`each` here is illustrative iteration over the input list, applying `pts/add`
 for its side effect; it is not yet a builtin. To run a set today, iterate with
 `map`/`fold` or with explicit `pts/add` calls.)
+
+## A program you can build
+
+The example above *synthesizes* — `wavelet wit` prints it and `wavelet run`
+executes it — but its `nearest-set` returns the `set` handle over a record, the
+one shape `wavelet build` rejects. Here are the two shapes that **do** build,
+each shown with the WIT the backend actually emits (run `wavelet build` then
+`wasm-tools component wit` on the result to reproduce these verbatim).
+
+### Derive an ordinary result
+
+The simplest buildable functor program never hands the `set` back across the
+boundary — it derives a plain value from it. Reusing the `point` set, an export
+that counts distinct points returns a `u32`:
+
+```wavelet
+Package "demo:geo@0.1.0"
+
+DefType point {x: s32 y: s32}
+Derive {Eq Ord Show} point
+
+Import {pkg: "wavelet:coll/set" elem: point as: pts}
+
+Export count-distinct
+Def count-distinct Fn {}
+  Let {s: pts/new()}
+    Do [ pts/add(s {x: 1 y: 2})
+         pts/add(s {x: 3 y: 4})
+         pts/add(s {x: 1 y: 2})   // a structural duplicate of the first
+         pts/size(s) ]
+```
+
+`wavelet build` emits a component whose `api` exports `count-distinct` as an
+ordinary `u32` function; the `set` resource stays entirely inside the guest:
+
+```wit
+package demo:geo@0.1.0;
+
+interface api {
+  record point { x: s32, y: s32 }
+  eq-point: func(a: point, b: point) -> bool;
+  compare-point: func(a: point, b: point) -> s32;
+  show-point: func(v: point) -> string;
+  count-distinct: func() -> u32;
+}
+
+interface point-set {
+  use api.{point};
+  resource set {
+    constructor();
+    add: func(value: point);
+    contains: func(value: point) -> bool;
+    size: func() -> u32;
+  }
+}
+
+world geo {
+  export api;
+  export point-set;
+}
+```
+
+Calling `count-distinct` returns `2`: the two `{x: 1 y: 2}` points are
+structurally equal, so the set dedups them — exactly the answer `wavelet run`
+gives, because membership uses the same structural equality on both paths.
+
+### Return the handle (primitive or string element)
+
+When the element is a primitive or a string — not a local record — there is no
+interface cycle, so an export *can* hand the `set` itself back as an `own<set>`
+handle for a host to keep and query:
+
+```wavelet
+Package "demo:app@0.1.0"
+
+Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+
+Export build-ints
+Def build-ints Fn {}
+  Let {s: ints/new()}
+    Do [ ints/add(s 1)
+         ints/add(s 2)
+         ints/add(s 1)            // duplicate; dedups away
+         s ]                      // return the set itself
+```
+
+The emitted `api` returns the handle. Each functor interface names its resource
+`set`, so the `use` is aliased (`set as s32-set-handle`) — which is also what lets
+a single world instantiate the functor at several element types without the names
+colliding:
+
+```wit
+package demo:app@0.1.0;
+
+interface s32-set {
+  resource set {
+    constructor();
+    add: func(value: s32);
+    contains: func(value: s32) -> bool;
+    size: func() -> u32;
+  }
+}
+
+interface api {
+  use s32-set.{set as s32-set-handle};
+  build-ints: func() -> s32-set-handle;
+}
+```
+
+A host calls `build-ints`, then invokes `size`/`contains` on the returned
+resource (here `size` is `2`; `contains 1` and `contains 2` are true, `contains 9`
+is false) and finally drops the handle to run the resource's destructor. This is
+exactly what `tests/backend_functor.rs` does in-process against the wasmtime host
+to prove the built component matches the interpreter — over `s32`, `string`,
+`point` records, and `list` elements, and with two instantiations in one world.
