@@ -123,6 +123,41 @@ emitted world: a second instantiation at, say, `string` would produce a separate
 `string-set` interface. WIT cannot write `resource set<t>`, so the functor writes
 the monomorphic interface for you, once per element type you ask for.
 
+The instantiation also brings the functor's operations into scope, qualified by
+the alias. For the `set` functor these are `pts/new`, `pts/add`, `pts/contains`,
+and `pts/size`, with exactly the signatures the synthesized resource promises:
+
+```wavelet
+Let {s: pts/new()}              // new() -> set        (an empty set)
+  Do [ pts/add(s p)             // add(set, elem)       (returns unit)
+       pts/contains(s p)        // contains(set, elem) -> bool
+       pts/size(s) ]            // size(set) -> u32
+```
+
+`new()` hands back a fresh, mutable set; `add` mutates it in place and is a no-op
+for an element already present (membership uses the same equality `Derive {Eq}`
+gives the element type); `contains` and `size` observe it. These run under
+`wavelet run` and the playground today.
+
+:::note Building functors
+
+`wavelet wit`, `wavelet run`, and now `wavelet build` all support functors. The
+backend emits the synthesized per-element interface as a **real exported WIT
+`set` resource**, at interpreter parity: any element type (primitive, string,
+record, and compound list/tuple) works, and you can instantiate the functor
+multiple times in one world. Membership uses the same structural equality the
+interpreter does, so a built component dedups exactly like `wavelet run`.
+
+The single limitation is shaping, not semantics: an export that *returns the
+`set` handle* (`own<set>`) over a **local-record** element would make the
+element's `api` interface and the resource's interface each `use` the other — a
+WIT interface cycle, which WIT cannot express, so it is rejected with a clear
+error. The buildable shapes are therefore (1) exports that derive an ordinary
+result from the set (e.g. `-> u32`), and (2) handle-returning exports whose
+element is a primitive or string.
+
+:::
+
 ## Worked example: source to WIT
 
 Putting it together — a derived record type and a `set` of it — and the WIT the
@@ -159,6 +194,7 @@ interface api {
 
 // the set functor, instantiated at `point`
 interface point-set {
+  use api.{point};
   resource set {
     constructor();
     add: func(value: point);
@@ -174,9 +210,20 @@ world geo {
 ```
 
 The record, the derived operations, and the export all land in a single `api`
-interface, while each functor instantiation gets its own interface. The overload
-set `eq` lowers to the distinctly named `eq-point`, the derived operations become
-concrete functions, and the `set` functor becomes the concrete `point-set`
-interface. A generic set would have wanted `resource set<t>` with
-`add: func(value: t)`, which WIT simply cannot express — the functor produces a
-concrete interface instead.
+interface, while each functor instantiation gets its own interface (which `use`s
+the element type from `api`). The overload set `eq` lowers to the distinctly
+named `eq-point`, the derived operations become concrete functions, and the `set`
+functor becomes the concrete `point-set` interface. A generic set would have
+wanted `resource set<t>` with `add: func(value: t)`, which WIT simply cannot
+express — the functor produces a concrete interface instead.
+
+One caveat on this particular example: `nearest-set` *returns* the `set` handle
+over the local record `point`, which is exactly the shape `wavelet build` rejects
+(the `api` and `point-set` interfaces would each `use` the other — a WIT
+interface cycle). `wavelet wit` and `wavelet run` still synthesize and execute it,
+so it illustrates the synthesis above; to *build* a `point` set, derive an
+ordinary result from it (e.g. `-> u32`) rather than returning the handle.
+
+(`each` here is illustrative iteration over the input list, applying `pts/add`
+for its side effect; it is not yet a builtin. To run a set today, iterate with
+`map`/`fold` or with explicit `pts/add` calls.)

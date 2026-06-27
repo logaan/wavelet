@@ -847,7 +847,7 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
     // (Steps 10–11). `Import {pkg: "wavelet:coll/set" elem: T as: …}` produces a
     // `T-set` interface holding the element-specialized `set` resource (fig-wit).
     for f in &info.functors {
-        out.push_str(&functor_interface(arena, f)?);
+        out.push_str(&functor_interface(arena, f, &info.types)?);
     }
 
     out.push_str(&format!("\nworld {} {{\n", info.world));
@@ -884,10 +884,30 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
 /// The specialized WIT interface for one functor instantiation (fig-wit). For
 /// the `Set` functor at element type `T`, a `T-set` interface holding a `set`
 /// resource whose every method is monomorphized to `T`.
-fn functor_interface(_arena: &Arena, f: &FunctorInst) -> Result<String, String> {
+///
+/// `pub(crate)` so the emit/build path (`emit::synthesize_world_wit`) renders the
+/// SAME interface text from the SAME `SET_OPS` source as `wavelet wit` does —
+/// the resource the wasm backend implements and the WIT the encoder validates
+/// against cannot drift.
+/// `local_types` are the file's own `DefType` names (those that land in the
+/// `api` interface). When the element type is one of them, the specialized
+/// functor interface must `use api.{<elem>};` to bring the record into scope —
+/// a primitive element (`s32`, `string`, …) needs no `use`.
+pub(crate) fn functor_interface(
+    _arena: &Arena,
+    f: &FunctorInst,
+    local_types: &[(String, NodeId)],
+) -> Result<String, String> {
     match f.kind {
         FunctorKind::Set => {
             let t = &f.elem;
+            // The element references a locally-defined record (it appears in the
+            // `api` interface): bring it into scope with a `use`.
+            let uses = if local_types.iter().any(|(name, _)| name == t) {
+                format!("  use api.{{{t}}};\n")
+            } else {
+                String::new()
+            };
             // Build the resource members from `SET_OPS`, the same descriptor that
             // drives the inference op-table, so the two cannot drift.
             let mut members = String::new();
@@ -912,7 +932,7 @@ fn functor_interface(_arena: &Arena, f: &FunctorInst) -> Result<String, String> 
                 }
             }
             Ok(format!(
-                "\ninterface {iface} {{\n  resource set {{\n{members}  }}\n}}\n",
+                "\ninterface {iface} {{\n{uses}  resource set {{\n{members}  }}\n}}\n",
                 iface = f.iface,
             ))
         }

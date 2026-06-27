@@ -167,10 +167,18 @@ pub enum TypeDef {
 /// `records` (name → field (name, type-string)); enum/variant/flags through
 /// `defs` (name → [`TypeDef`]). Split so the long-standing record path stays
 /// byte-for-byte unchanged while the richer kinds are added alongside.
+///
+/// `aliases` resolves a *named type alias* (`DefType pair list<s32>`,
+/// `DefType coord tuple<s32, s32>`) to its underlying WIT type text. WIT only
+/// allows a simple identifier for a functor element / a record field type, so a
+/// `list`/`tuple`/`option`/`result` element must be named with a `DefType`; that
+/// name lands here and `wit_ty` expands it before lowering (matching the
+/// interpreter, which carries those values structurally regardless of the name).
 #[derive(Default)]
 struct TypeEnv {
     records: HashMap<String, Vec<(String, String)>>,
     defs: HashMap<String, TypeDef>,
+    aliases: HashMap<String, String>,
 }
 
 fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
@@ -272,6 +280,13 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
                         WitTy::Variant(resolved)
                     }
                 }
+            } else if let Some(target) = env.aliases.get(other) {
+                // A named alias to a compound WIT type (`list<…>`, `tuple<…>`,
+                // `option<…>`, `result<…>`, or another alias). Expand to the
+                // underlying type text and lower that — the value-level carriage
+                // (TAG_LIST/TAG_TUP/TAG_VAR boxes) is the same one the interpreter
+                // builds, so `eq_raw` dedups these structurally just like records.
+                return wit_ty(target, env);
             } else {
                 return Err(format!("type `{other}` not supported by the wasm backend yet"));
             }
@@ -706,6 +721,21 @@ pub fn emit_component(
     info: &FileInfo,
     deps: &HashMap<String, Dep>,
 ) -> Result<Vec<u8>, String> {
+    // Functor components: the wasm backend now emits the exported `set` resource
+    // for each `Set` instantiation. `emit_core_module` synthesizes the
+    // ctor/add/contains/size/dtor core funcs (step 02 bodies) and exports them
+    // under the canonical resource ABI names; `synthesize_world_wit` declares and
+    // exports each specialized interface, so the encoder synthesizes the matching
+    // `[resource-new/rep/drop]set` intrinsics. The resource MEANS what the
+    // interpreter's `set-*` builtins mean (structural `eq_raw` membership) — the
+    // one hard project rule.
+    //
+    // Runtime routing of the qualified `pts/new`/`pts/add` ops inside an export
+    // body is step 04 (`dep_call` does not yet know the functor alias). Until
+    // then a body that calls `pts/<op>` fails to emit with an honest
+    // "unknown import alias" — the component still builds and validates whenever
+    // no body calls a functor op (the resource and its WIT are exported either
+    // way).
     let mut module = emit_core_module(arena, roots, info, deps)?;
     let wit = synthesize_world_wit(arena, info, deps)?;
 
@@ -866,8 +896,10 @@ fn features_of(arena: &Arena, info: &FileInfo) -> Features {
 }
 
 /// Record types from a file's `DefType` forms: name → field (name, type-string).
-/// Only record-shaped types are collected (variants/flags/aliases are skipped;
-/// the boundary ABI for those is not implemented in the wasm backend yet).
+/// Only record-shaped types are collected here; variants/flags go through
+/// [`local_non_record_types`] (into `TypeEnv::defs`) and bare aliases (`list`,
+/// `tuple`, …) into `TypeEnv::aliases`, so every `DefType` kind has a boundary
+/// ABI — the layouts already exist (`WitTy::List`/`Tuple`/`Variant`/`Flags`).
 fn record_types(arena: &Arena, types: &[(String, NodeId)]) -> Vec<(String, Vec<(String, String)>)> {
     let mut out = Vec::new();
     for (name, node) in types {
@@ -895,6 +927,77 @@ fn record_types(arena: &Arena, types: &[(String, NodeId)]) -> Vec<(String, Vec<(
 /// on its [`Dep`].
 pub fn dep_record_types(arena: &Arena, info: &FileInfo) -> Vec<(String, Vec<(String, String)>)> {
     record_types(arena, &info.types)
+}
+
+/// Non-record local `DefType`s, split into the two `TypeEnv` channels:
+///   * variants/flags become [`TypeDef`]s (keyed by name) — `Node::Lst` is a
+///     `variant` (payload-less cases are an enum, the same as a variant with all
+///     `None` payloads — and how `wit::type_decl` already renders them), and
+///     `Node::Flg` is a `flags`. This mirrors what `witdep.rs` builds for *dep*
+///     type_defs, so a local and an imported variant/flags lower identically.
+///   * everything else `wit::type_text` can render — `list<…>`, `tuple<…>`,
+///     `option<…>`, `result<…>`, or an alias to another named type — becomes an
+///     *alias* (name → WIT type text), which `wit_ty` expands recursively.
+///
+/// Records are handled by [`record_types`] and skipped here. A `DefType` whose
+/// body neither parses as a known kind nor renders to type text is left out
+/// (any reference to it still surfaces the honest "not supported" error).
+fn local_non_record_types(
+    arena: &Arena,
+    types: &[(String, NodeId)],
+) -> (Vec<(String, TypeDef)>, Vec<(String, String)>) {
+    let mut defs = Vec::new();
+    let mut aliases = Vec::new();
+    for (name, node) in types {
+        match arena.node(*node) {
+            Node::Rec(_) => {} // records: see `record_types`
+            Node::Flg(names) => defs.push((name.clone(), TypeDef::Flags(names.clone()))),
+            Node::Lst(cases) => {
+                // A `[case …]` form is a variant; a payload carries as a Tup
+                // `[head, payload…]` exactly as `wit::type_decl` reads it.
+                let mut resolved = Vec::with_capacity(cases.len());
+                let mut ok = true;
+                for &c in cases {
+                    match arena.node(c) {
+                        Node::Sym(s) => resolved.push((s.clone(), None)),
+                        Node::Tup(items) => {
+                            let Some((&h, payload)) = items.split_first() else {
+                                ok = false;
+                                break;
+                            };
+                            let Node::Sym(case) = arena.node(h) else {
+                                ok = false;
+                                break;
+                            };
+                            // Multi-payload cases would need a tuple payload; the
+                            // backend (like the variant ABI) carries one payload
+                            // box, so only single-payload cases are supported.
+                            match payload {
+                                [] => resolved.push((case.clone(), None)),
+                                [one] => match crate::wit::type_text(arena, *one) {
+                                    Ok(t) => resolved.push((case.clone(), Some(t))),
+                                    Err(_) => { ok = false; break; }
+                                },
+                                _ => { ok = false; break; }
+                            }
+                        }
+                        _ => { ok = false; break; }
+                    }
+                }
+                if ok {
+                    defs.push((name.clone(), TypeDef::Variant(resolved)));
+                }
+            }
+            // A bare alias: `list<…>`, `tuple<…>`, `option<…>`, `result<…>`, or a
+            // name for another named type. Record its WIT type text for `wit_ty`.
+            _ => {
+                if let Ok(t) = crate::wit::type_text(arena, *node) {
+                    aliases.push((name.clone(), t));
+                }
+            }
+        }
+    }
+    (defs, aliases)
 }
 
 /// `"demo:shout/render"` → `"render"`; a bare package path means `api`.
@@ -1073,6 +1176,12 @@ struct Emitter<'a> {
     /// expander, so the `expand` builtin (used *inside* a macro body) can call
     /// it. `None` in an ordinary module, where `expand` is unsupported.
     macro_expand_idx: Option<u32>,
+    /// Each functor instantiation's `set` resource core-func indices, keyed by
+    /// the instantiation alias (`pts`). Populated up front in `emit_core_module`
+    /// — before the internal/export bodies are emitted — so `dep_call` can route
+    /// an `alias/op` call (`pts/new`, `pts/add`, …) to the matching resource fn
+    /// while those bodies are still being lowered (step 04 routing).
+    functor_fns: HashMap<String, ResourceFns>,
 }
 
 impl<'a> Emitter<'a> {
@@ -2255,6 +2364,82 @@ impl<'a> Emitter<'a> {
         fname: &str,
         args: &[NodeId],
     ) -> Result<(), String> {
+        // A functor op (`pts/new`, `pts/add`, `pts/contains`, `pts/size`) is not a
+        // runtime import: it routes to the locally-emitted `set` resource's core
+        // funcs (`ResourceFns`, indices reserved in `em.functor_fns`). The mapping
+        // mirrors the interpreter's `bind_functor` (`builtins.rs`): `new`→ctor,
+        // `add`/`contains`/`size`→methods.
+        //
+        // HANDLE CONVENTION (step 04 ABI decision; see `summaries/04-routing.typ`):
+        // a `set` Wavelet value carries the OWN handle minted by the constructor's
+        // `resource.new`, boxed as an int box (TAG_INT) — the same opaque-handle
+        // carriage `lower`/`lift` already use for `WitTy::Handle`, so the export
+        // boundary (`nearest-set -> own<set>`) needs no special-casing: it just
+        // unboxes the i32. A method's core body, however, receives the REP as
+        // `self` (summary 01: the canonical ABI hands an exported resource's method
+        // the rep directly). So intra-guest we convert handle→rep with the
+        // `[resource-rep]set` intrinsic before each method call. (This is the
+        // alternative to carrying the rep guest-side and minting at the boundary;
+        // it keeps `lower`/`lift` untouched and reuses the ctor verbatim.)
+        if let Some(inst) = self.info.functors.iter().find(|f| f.alias == alias) {
+            let fns = *self.functor_fns.get(alias).ok_or_else(|| {
+                format!("internal error: no emitted `set` resource for functor alias `{alias}`")
+            })?;
+            match fname {
+                "new" => {
+                    if !args.is_empty() {
+                        return Err(format!("`{alias}/new` takes no arguments"));
+                    }
+                    fx.op(I::Call(fns.ctor)); // () -> i32 own handle
+                    self.lift(fx, &WitTy::Handle); // box the handle as the set value
+                }
+                "add" | "contains" | "size" => {
+                    let want = if fname == "size" { 1 } else { 2 };
+                    if args.len() != want {
+                        return Err(format!(
+                            "`{alias}/{fname}` takes {want} argument{}",
+                            if want == 1 { "" } else { "s" }
+                        ));
+                    }
+                    // arg 0 is the set: unbox its handle, recover the rep (the
+                    // method's `self`), and stash it below the flattened value args.
+                    let rep = fx.local(ValType::I32);
+                    self.expr(fx, args[0], false)?;
+                    fx.op(I::Call(self.h.unbox_int));
+                    fx.op(I::I32WrapI64);
+                    fx.op(I::Call(fns.rep_import)); // handle -> rep
+                    fx.op(I::LocalSet(rep));
+                    fx.op(I::LocalGet(rep));
+                    if fname != "size" {
+                        // the element value, flattened in canonical-ABI order
+                        let elem = wit_ty(&inst.elem, &self.type_env)?;
+                        self.expr(fx, args[1], false)?;
+                        self.lower(fx, &elem)?;
+                    }
+                    match fname {
+                        "add" => {
+                            fx.op(I::Call(fns.add)); // (rep, <elem>) -> ()
+                            fx.op(I::I32Const(self.unit_addr() as i32));
+                        }
+                        "contains" => {
+                            fx.op(I::Call(fns.contains)); // -> i32 0/1
+                            self.lift(fx, &WitTy::Bool);
+                        }
+                        _ => {
+                            fx.op(I::Call(fns.size)); // -> i32 u32
+                            self.lift(fx, &WitTy::IntU);
+                        }
+                    }
+                }
+                other => {
+                    return Err(format!(
+                        "functor `set` (alias `{alias}`) has no op `{other}`; \
+                         expected new / add / contains / size"
+                    ));
+                }
+            }
+            return Ok(());
+        }
         let imp = self
             .info
             .imports
@@ -3584,6 +3769,18 @@ fn emit_core_module(
     for (name, fields) in record_types(arena, &info.types) {
         type_env.records.insert(name, fields);
     }
+    // Local non-record `DefType`s: variants/flags as `defs`, list/tuple/option/
+    // result/alias names as `aliases`. This lets a functor instantiate over a
+    // named compound element (`DefType pair list<s32>` → `pair-set`) and lets an
+    // export pass/return those types — matching the interpreter, which already
+    // handles every element kind structurally.
+    let (local_defs, local_aliases) = local_non_record_types(arena, &info.types);
+    for (name, def) in local_defs {
+        type_env.defs.insert(name, def);
+    }
+    for (name, target) in local_aliases {
+        type_env.aliases.insert(name, target);
+    }
     for dep in deps.values() {
         for (name, fields) in &dep.types {
             type_env
@@ -3597,6 +3794,31 @@ fn emit_core_module(
                 .entry(name.clone())
                 .or_insert_with(|| def.clone());
         }
+    }
+    // Each functor instantiation exports a `set` resource. Declaring `set` as a
+    // `TypeDef::Resource` makes `wit_ty` map a bare `set` (and `own<set>` /
+    // `borrow<set>`) to `WitTy::Handle` at the boundary — `emit.rs:177`–`184`,
+    // `:260`. All instantiations name their resource `set` (interfaces differ:
+    // `point-set`, `string-set`, …); since the element type is the only thing
+    // that varies and the rep is element-generic, one `set -> Resource` entry
+    // serves every instantiation. The element type itself resolves through the
+    // same `type_env` (records via `type_env.records`, primitives intrinsically).
+    for inst in &info.functors {
+        // The bare resource name, as it appears in a method signature
+        // (`add: func(value: point)` → receiver `set`).
+        type_env
+            .defs
+            .entry("set".to_string())
+            .or_insert(TypeDef::Resource);
+        // The dotted `<iface>.set` form is the *return type text* an export body
+        // gets for `alias/new()` (see `wit::functor_op_table`: a `Handle` op
+        // infers to `"{iface}.set"`). Register it as a resource too so the export
+        // wrapper's `flat_result`/`wit_ty` map it to `WitTy::Handle` rather than
+        // rejecting it as an unknown type.
+        type_env
+            .defs
+            .entry(format!("{}.set", inst.iface))
+            .or_insert(TypeDef::Resource);
     }
 
     let mut em = Emitter {
@@ -3643,6 +3865,7 @@ fn emit_core_module(
         false_addr: 0,
         true_addr: 0,
         macro_expand_idx: None,
+        functor_fns: HashMap::new(),
     };
 
     // static boxes: false @16, true @24
@@ -3666,6 +3889,14 @@ fn emit_core_module(
     use ValType::{F64, I32, I64};
     let _ = (I32, I64, F64);
     for (alias, fname) in &feats.dep_calls {
+        // A functor alias (`pts` in `pts/new`) is NOT a runtime import — its
+        // `set` resource is *exported*, not imported, so it contributes no import
+        // here. Routing the call itself is step 04; the body's `dep_call` stubs it
+        // for now. Skip it so the import-declaration loop does not reject it as an
+        // unknown import alias.
+        if info.functors.iter().any(|f| &f.alias == alias) {
+            continue;
+        }
         let imp = info
             .imports
             .iter()
@@ -3701,6 +3932,27 @@ fn emit_core_module(
         }
     }
 
+    // ---- functor resource-intrinsic imports (one triple per instantiation)
+    //
+    // For every `Set` functor instantiation the encoder synthesizes three
+    // resource intrinsics — `[resource-new/rep/drop]set` — under the module
+    // string `[export]<versioned specialized iface>` (summary 01 §2). They MUST
+    // be declared here, in the imports-first index block, so the function index
+    // space stays imports-first; their indices are captured for `emit_set_resource`
+    // (which the constructor calls `resource.new` through). The intrinsics only
+    // exist because the synthesized world *exports* the resource interface.
+    let mut functor_intrinsics: Vec<(u32, u32, u32)> = Vec::new();
+    for inst in &info.functors {
+        let module = format!("[export]{}", versioned_iface(&info.package, &inst.iface));
+        add_import(&mut em, &module, "[resource-new]set", vec![I32], vec![I32]);
+        add_import(&mut em, &module, "[resource-rep]set", vec![I32], vec![I32]);
+        add_import(&mut em, &module, "[resource-drop]set", vec![I32], vec![]);
+        let new_i = em.import_idx(&module, "[resource-new]set");
+        let rep_i = em.import_idx(&module, "[resource-rep]set");
+        let drop_i = em.import_idx(&module, "[resource-drop]set");
+        functor_intrinsics.push((new_i, rep_i, drop_i));
+    }
+
     // ---- assign helper indices
     let mut next = n_imports;
     let mut take = || {
@@ -3729,6 +3981,38 @@ fn emit_core_module(
     em.h.arith_raw = take();
     em.h.cmp_raw = take();
     em.h.neg_raw = take();
+
+    // ---- reserve the functor `set` resource core-func indices (step 04)
+    //
+    // The five resource funcs (ctor/add/contains/size/dtor) per instantiation are
+    // EMITTED just after `emit_helpers` below, so in `em.bodies` they sit directly
+    // after the helper bodies and before the internal/export bodies. Reserve their
+    // indices here, in that exact position in the `take()` sequence, so the indices
+    // recorded in `em.functor_fns` match where `emit_set_resource` will self-index
+    // them — and so the internal/overload/export `take()`s that follow are shifted
+    // past the resource slots. `dep_call` reads `em.functor_fns` to route an
+    // `alias/op` call while the internal/export bodies (which contain those calls)
+    // are still being lowered, i.e. before the resource bodies exist.
+    for (inst, &(new_i, rep_i, drop_i)) in info.functors.iter().zip(&functor_intrinsics) {
+        let ctor = take();
+        let add = take();
+        let contains = take();
+        let size = take();
+        let dtor = take();
+        em.functor_fns.insert(
+            inst.alias.clone(),
+            ResourceFns {
+                ctor,
+                add,
+                contains,
+                size,
+                dtor,
+                new_import: new_i,
+                rep_import: rep_i,
+                drop_import: drop_i,
+            },
+        );
+    }
 
     // An *exported overload set* (≥2 same-named `Def Fn`s, or a curated-op name)
     // is lowered by `wit::collect` to one mangled WIT export per member
@@ -3790,6 +4074,30 @@ fn emit_core_module(
 
     // ---- helper bodies (order must match index assignment above)
     emit_helpers(&mut em)?;
+
+    // ---- functor `set` resource bodies (step 02 bodies; emitted here in step 04)
+    //
+    // Emitted right after the helpers and BEFORE the internal/export bodies, so
+    // each resource's five `em.bodies` positions line up with the indices reserved
+    // in `em.functor_fns` above. `dep_call` routes `alias/op` calls to those
+    // reserved indices; the canonical export NAMES are registered later (alongside
+    // the export wrappers). The element type is resolved through the boundary
+    // `type_env`; `flat_checked` inside `emit_set_resource` rejects any element the
+    // backend can't flatten with an honest error.
+    for (inst, &(new_i, rep_i, drop_i)) in info.functors.iter().zip(&functor_intrinsics) {
+        let elem = wit_ty(&inst.elem, &em.type_env).map_err(|e| {
+            format!(
+                "functor `set` over `{}` (alias `{}`): {e}",
+                inst.elem, inst.alias
+            )
+        })?;
+        let fns = emit_set_resource(&mut em, inst, &elem, new_i, rep_i, drop_i)?;
+        debug_assert_eq!(
+            em.functor_fns.get(&inst.alias).copied(),
+            Some(fns),
+            "reserved functor `set` indices must match the emitted body positions"
+        );
+    }
 
     // ---- internal function bodies
     for name in &internal_order {
@@ -3909,6 +4217,26 @@ fn emit_core_module(
         exports.push((format!("{own_iface}#{}", sig.name), take()));
     }
 
+    drop(take); // `next`/`take` are done; the resource bodies were emitted above.
+
+    // ---- functor `set` resource EXPORTS (canonical names) — one per instantiation
+    //
+    // The five core funcs were already emitted right after the helpers (so their
+    // indices match `em.functor_fns`). Here we only register their canonical
+    // resource-ABI export names, prefixed by the versioned specialized interface
+    // (`demo:geo/point-set@0.1.0`); the index for each comes from the reserved
+    // `em.functor_fns`. `ExportSection` later writes these verbatim, same as any
+    // ordinary export.
+    for inst in &info.functors {
+        let fns = em.functor_fns[&inst.alias];
+        let iface = versioned_iface(&info.package, &inst.iface);
+        exports.push((format!("{iface}#[constructor]set"), fns.ctor));
+        exports.push((format!("{iface}#[method]set.add"), fns.add));
+        exports.push((format!("{iface}#[method]set.contains"), fns.contains));
+        exports.push((format!("{iface}#[method]set.size"), fns.size));
+        exports.push((format!("{iface}#[dtor]set"), fns.dtor));
+    }
+
     // ---- assemble
     let heap_base = {
         em.align8();
@@ -4021,6 +4349,332 @@ fn emit_core_module(
     Ok(module.finish())
 }
 
+// ------------------------------------------------- functor `set` resource bodies
+//
+// Step 02 (see `dev-notes/functor/plan/02-rep-and-bodies.typ` and the verified
+// ABI in `summaries/01-abi.typ`): emit the core wasm functions that implement a
+// `set` resource for ONE instantiation at element type `elem`. This is the
+// "guest implements an exported resource" case; the bodies mirror the
+// interpreter's `Value::Cell(Rc<RefCell<Value::Lst>>)` set, with structural
+// `eq_raw` membership (the project's one hard rule).
+//
+// REP LAYOUT (mirrors the interpreter):
+//   * A `set` rep is a pointer to a one-word mutable CELL: `[i32 list-ptr]`.
+//     The mutable cell gives the resource a stable identity so a later
+//     `contains`/`size` observes earlier `add`s — exactly `RefCell` semantics.
+//   * The cell's word points at the existing boxed-list layout
+//     `[TAG_LIST, len, elem-ptr…]` (TAG_LIST=3; `len` is the i32 word @4).
+//   * Elements are stored as boxed values (the same heap boxes the rest of the
+//     backend uses), so `eq_raw`/list iteration operate uniformly across any
+//     element type (record / string / primitive).
+//
+// ABI (from summary 01, the THING TO GET RIGHT):
+//   * constructor `() -> i32`: mint an OWN handle with `resource.new(cell)`.
+//   * every method's param 0 (`self`, a `borrow`) arrives as the REP DIRECTLY —
+//     i.e. the cell ptr we passed to `resource.new`. Do NOT call `resource.rep`
+//     on it (that traps "unknown handle index"; `resource.rep` is for the
+//     opposite direction). Use param 0 as the cell ptr verbatim.
+//   * dtor `(i32 rep) -> ()`: safe no-op (bump allocator never frees).
+//   * `contains`/`size` return a bare core i32 (the encoder's `canon lift` does
+//     i32→bool / i32→u32), so no value-`lower` is needed on the result.
+
+/// The five core functions implementing one `set` instantiation, by core
+/// function index, plus the resource-intrinsic import indices their bodies
+/// reference. Step 03 wires these into the export/import sections.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceFns {
+    /// `[constructor]set` — core sig `() -> i32` (returns an OWN handle).
+    pub ctor: u32,
+    /// `[method]set.add` — core sig `(i32 self, <flat elem>) -> ()`.
+    pub add: u32,
+    /// `[method]set.contains` — core sig `(i32 self, <flat elem>) -> i32` (0/1).
+    pub contains: u32,
+    /// `[method]set.size` — core sig `(i32 self) -> i32` (u32 count).
+    pub size: u32,
+    /// `[dtor]set` — core sig `(i32 rep) -> ()` (no-op).
+    pub dtor: u32,
+    /// import idx of `[resource-new]set` `(i32 rep) -> i32 handle` (ctor uses it).
+    pub new_import: u32,
+    /// import idx of `[resource-rep]set` `(i32 handle) -> i32 rep`. The bodies do
+    /// NOT call this (methods already receive the rep), but it is declared and
+    /// carried so step 03 can wire the intrinsic table the encoder expects.
+    pub rep_import: u32,
+    /// import idx of `[resource-drop]set` `(i32 handle) -> ()`. Unused by the
+    /// bodies; carried for the intrinsic table.
+    pub drop_import: u32,
+}
+
+/// Build an empty boxed list `[TAG_LIST, 0]` (8 bytes), leaving its ptr on the
+/// stack.
+fn emit_empty_list_box(em: &mut Emitter, fx: &mut FnCtx) {
+    let p = fx.local(ValType::I32);
+    fx.op(I::I32Const(8));
+    fx.op(I::Call(em.h.alloc));
+    fx.op(I::LocalSet(p));
+    fx.op(I::LocalGet(p));
+    fx.op(I::I32Const(TAG_LIST));
+    fx.op(I::I32Store(ma(0, 2)));
+    fx.op(I::LocalGet(p));
+    fx.op(I::I32Const(0));
+    fx.op(I::I32Store(ma(4, 2)));
+    fx.op(I::LocalGet(p));
+}
+
+/// Linear-scan the boxed list in local `list` for a box structurally-equal (via
+/// `eq_raw`) to the box in local `needle`. Leaves an i32 0/1 on the stack: 1 if
+/// present, else 0. Allocates two fresh i32 locals (`i`, `n`) internally.
+fn emit_list_contains(em: &mut Emitter, fx: &mut FnCtx, list: u32, needle: u32) {
+    let i = fx.local(ValType::I32);
+    let n = fx.local(ValType::I32);
+    // n = list.len  (@4)
+    fx.op(I::LocalGet(list));
+    fx.op(I::I32Load(ma(4, 2)));
+    fx.op(I::LocalSet(n));
+    // i = 0
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(i));
+    // result accumulated as a block that returns i32: default 0, early-return 1
+    fx.op(I::Block(BlockType::Result(ValType::I32)));
+    fx.op(I::Loop(BlockType::Empty));
+    // if i >= n: break out with 0
+    fx.op(I::LocalGet(i));
+    fx.op(I::LocalGet(n));
+    fx.op(I::I32GeU);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::I32Const(0));
+    fx.op(I::Br(2)); // br to the result block, yielding 0
+    fx.op(I::End);
+    // elem = list[8 + 4*i]
+    fx.op(I::LocalGet(list));
+    fx.op(I::LocalGet(i));
+    fx.op(I::I32Const(4));
+    fx.op(I::I32Mul);
+    fx.op(I::I32Add);
+    fx.op(I::I32Load(ma(8, 2)));
+    // eq_raw(elem, needle)
+    fx.op(I::LocalGet(needle));
+    fx.op(I::Call(em.h.eq_raw));
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::I32Const(1));
+    fx.op(I::Br(2)); // present → result block yields 1
+    fx.op(I::End);
+    // i += 1; continue
+    fx.op(I::LocalGet(i));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::LocalSet(i));
+    fx.op(I::Br(0)); // loop
+    fx.op(I::End); // loop
+    // unreachable fallthrough: the loop only exits via Br(2)
+    fx.op(I::I32Const(0));
+    fx.op(I::End); // block → i32 on stack
+}
+
+/// Build a NEW boxed list whose elements are the old list's elements followed by
+/// the box in local `extra`. Leaves the new list-box ptr on the stack. Allocates
+/// fresh i32 locals internally.
+fn emit_list_append(em: &mut Emitter, fx: &mut FnCtx, old: u32, extra: u32) {
+    let n = fx.local(ValType::I32); // old length
+    let new = fx.local(ValType::I32); // new list ptr
+    let i = fx.local(ValType::I32); // copy cursor
+    // n = old.len (@4)
+    fx.op(I::LocalGet(old));
+    fx.op(I::I32Load(ma(4, 2)));
+    fx.op(I::LocalSet(n));
+    // new = alloc(8 + 4*(n+1))
+    fx.op(I::I32Const(8 + 4));
+    fx.op(I::LocalGet(n));
+    fx.op(I::I32Const(4));
+    fx.op(I::I32Mul);
+    fx.op(I::I32Add);
+    fx.op(I::Call(em.h.alloc));
+    fx.op(I::LocalSet(new));
+    // new.tag = TAG_LIST
+    fx.op(I::LocalGet(new));
+    fx.op(I::I32Const(TAG_LIST));
+    fx.op(I::I32Store(ma(0, 2)));
+    // new.len = n + 1
+    fx.op(I::LocalGet(new));
+    fx.op(I::LocalGet(n));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::I32Store(ma(4, 2)));
+    // copy old elems: for i in 0..n: new[8+4i] = old[8+4i]
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(i));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(i));
+    fx.op(I::LocalGet(n));
+    fx.op(I::I32GeU);
+    fx.op(I::BrIf(1)); // exit copy loop
+    // new[8 + 4*i] = old[8 + 4*i]
+    fx.op(I::LocalGet(new));
+    fx.op(I::LocalGet(i));
+    fx.op(I::I32Const(4));
+    fx.op(I::I32Mul);
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(old));
+    fx.op(I::LocalGet(i));
+    fx.op(I::I32Const(4));
+    fx.op(I::I32Mul);
+    fx.op(I::I32Add);
+    fx.op(I::I32Load(ma(8, 2)));
+    fx.op(I::I32Store(ma(8, 2)));
+    fx.op(I::LocalGet(i));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::LocalSet(i));
+    fx.op(I::Br(0));
+    fx.op(I::End); // loop
+    fx.op(I::End); // block
+    // new[8 + 4*n] = extra
+    fx.op(I::LocalGet(new));
+    fx.op(I::LocalGet(n));
+    fx.op(I::I32Const(4));
+    fx.op(I::I32Mul);
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(extra));
+    fx.op(I::I32Store(ma(8, 2)));
+    fx.op(I::LocalGet(new));
+}
+
+/// Emit the five `set` bodies for one instantiation at element type `elem`,
+/// appending them to `em.bodies` and returning their indices in [`ResourceFns`].
+///
+/// The three resource-intrinsic import indices (`[resource-new/rep/drop]set`)
+/// are passed in: imports must be declared before any helper/body index is
+/// assigned (function index space is imports-first), so step 03 declares them in
+/// the up-front import loop and hands the indices here. This keeps the function
+/// purely additive over `em.bodies` and side-effect-free on the import section.
+///
+/// `inst` is accepted for symmetry / future per-instantiation specialisation
+/// (e.g. distinct rep tags) but is not needed by the current bodies; the only
+/// thing that varies is `elem`, which drives the flat param shape and boxing.
+fn emit_set_resource(
+    em: &mut Emitter,
+    _inst: &crate::wit::FunctorInst,
+    elem: &WitTy,
+    new_import: u32,
+    rep_import: u32,
+    drop_import: u32,
+) -> Result<ResourceFns, String> {
+    use ValType::I32;
+    // Flat core params of the element value (after `self`), in canonical-ABI flat
+    // order. `flat_checked` rejects element types the backend can't flatten.
+    let elem_flat = flat_checked(elem)?;
+    let n_elem = elem_flat.len() as u32;
+
+    // The function index of the next body we push. Bodies are emitted later (in
+    // the same order) at `n_imports + position`; the caller assigns that base.
+    let body_base = em.imports.len() as u32;
+    let mut next_idx = body_base + em.bodies.len() as u32;
+    let mut alloc_idx = || {
+        let i = next_idx;
+        next_idx += 1;
+        i
+    };
+
+    // ---- constructor: () -> i32 (own handle)
+    let ctor = alloc_idx();
+    {
+        let mut fx = FnCtx::new(0);
+        let cell = fx.local(I32);
+        // cell = alloc(4)
+        fx.op(I::I32Const(4));
+        fx.op(I::Call(em.h.alloc));
+        fx.op(I::LocalSet(cell));
+        // cell[0] = empty list box
+        fx.op(I::LocalGet(cell));
+        emit_empty_list_box(em, &mut fx);
+        fx.op(I::I32Store(ma(0, 2)));
+        // resource.new(cell) -> handle ; return it
+        fx.op(I::LocalGet(cell));
+        fx.op(I::Call(new_import));
+        let t = em.ty_idx(vec![], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // ---- add: (i32 self, <flat elem>) -> ()
+    //   self IS the cell ptr (see ABI note). value flats start at local 1.
+    let add = alloc_idx();
+    {
+        let mut params = vec![I32];
+        params.extend_from_slice(&elem_flat);
+        let mut fx = FnCtx::new(params.len() as u32);
+        let list = fx.local(I32);
+        let needle = fx.local(I32);
+        // list = *self  (the cell's word)
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::LocalSet(list));
+        // needle = box the flattened incoming value (param locals 1..1+n_elem)
+        em.lift_flat(&mut fx, elem, 1)?;
+        fx.op(I::LocalSet(needle));
+        // if present → return (dedup-on-add by Value equality)
+        emit_list_contains(em, &mut fx, list, needle);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // *self = old list + needle
+        fx.op(I::LocalGet(0));
+        emit_list_append(em, &mut fx, list, needle);
+        fx.op(I::I32Store(ma(0, 2)));
+        let _ = n_elem; // silence if elem flattens to zero (no such WitTy today)
+        let t = em.ty_idx(params, vec![]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // ---- contains: (i32 self, <flat elem>) -> i32 (0/1)
+    let contains = alloc_idx();
+    {
+        let mut params = vec![I32];
+        params.extend_from_slice(&elem_flat);
+        let mut fx = FnCtx::new(params.len() as u32);
+        let list = fx.local(I32);
+        let needle = fx.local(I32);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::LocalSet(list));
+        em.lift_flat(&mut fx, elem, 1)?;
+        fx.op(I::LocalSet(needle));
+        emit_list_contains(em, &mut fx, list, needle); // i32 0/1 on stack
+        let t = em.ty_idx(params, vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // ---- size: (i32 self) -> i32 (u32 element count)
+    let size = alloc_idx();
+    {
+        let mut fx = FnCtx::new(1);
+        // *self -> list ptr ; load len @4
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Load(ma(4, 2)));
+        let t = em.ty_idx(vec![I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // ---- dtor: (i32 rep) -> ()  — safe no-op (bump allocator never frees)
+    let dtor = alloc_idx();
+    {
+        let fx = FnCtx::new(1);
+        let t = em.ty_idx(vec![I32], vec![]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    Ok(ResourceFns {
+        ctor,
+        add,
+        contains,
+        size,
+        dtor,
+        new_import,
+        rep_import,
+        drop_import,
+    })
+}
+
 // ----------------------------------------------- strategy-B macro component
 //
 // `emit_macro_core_module` builds the core wasm for a `wavelet:meta/macros`
@@ -4109,6 +4763,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         false_addr: 0,
         true_addr: 0,
         macro_expand_idx: None,
+        functor_fns: HashMap::new(),
     };
 
     // static boxes: false @16, true @24
@@ -6095,6 +6750,12 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
     }
 
     // eq_raw(a, b) -> i32   [locals: ta=2, la=3, i=4]
+    //
+    // Structural equality mirroring the interpreter's `impl PartialEq for Value`
+    // (src/value.rs). Primitives (bool/int/char/dec/str) compare by content;
+    // compound boxes (rec/list/tup/var/flg) recurse into their element boxes via
+    // this very fn (`em.h.eq_raw`, already reserved). Only closures (TAG_FN) keep
+    // pointer identity, matching `Rc::ptr_eq` for `Closure`/`Macro`.
     {
         let mut fx = FnCtx::new(2);
         let ta = fx.local(I32);
@@ -6191,7 +6852,208 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Const(1));
         fx.op(I::Return);
         fx.op(I::End);
-        // lists & anything else: identity
+        // char: i64 scalar @8 (TAG_INT layout)
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64Eq);
+        fx.op(I::Return);
+        fx.op(I::End);
+        // record: n @4, then (key strbox @8+8i, value box @12+8i) pairs.
+        // Order-sensitive (Value::Rec is a Vec compare): both n must match, then
+        // each key AND value compared positionally by recursing eq_raw.
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_REC));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalTee(la));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(la));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        // key: load a[8+8i], b[8+8i] and recurse
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // value: load a[12+8i], b[12+8i] and recurse
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(12, 2)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(12, 2)));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // list / tuple / flags: len @4, element boxes @8+4i. Order-sensitive
+        // (Value::Lst/Tup/Flg are Vec compares). All three share this layout: a
+        // flags box stores its name str boxes @8+4i, so structural recursion over
+        // them matches the interpreter's `Flg(Vec<String>)` equality too.
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Eq);
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_TUP));
+        fx.op(I::I32Eq);
+        fx.op(I::I32Or);
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_FLG));
+        fx.op(I::I32Eq);
+        fx.op(I::I32Or);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalTee(la));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(la));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        // element: load a[8+4i], b[8+4i] and recurse
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // variant: case-name strbox @4, payload box @8 (0 if none). Equal iff
+        // case names match (recurse) and payloads match: both absent (0) is equal,
+        // exactly one absent is unequal, else recurse on the two payload boxes.
+        // Mirrors `Variant(a,p) == Variant(b,q) => a == b && p == q`.
+        fx.op(I::LocalGet(ta));
+        fx.op(I::I32Const(TAG_VAR));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        // case names
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // payload presence: la = a.payload, i = b.payload
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::LocalSet(la));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(8, 2)));
+        fx.op(I::LocalSet(i));
+        // both absent -> equal
+        fx.op(I::LocalGet(la));
+        fx.op(I::I32Eqz);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Eqz);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // exactly one absent -> unequal (la == 0 XOR i == 0)
+        fx.op(I::LocalGet(la));
+        fx.op(I::I32Eqz);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Eqz);
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // both present -> recurse on payloads
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(i));
+        fx.op(I::Call(em.h.eq_raw));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // closures (TAG_FN) and anything else unhandled: pointer identity,
+        // matching the interpreter's `Rc::ptr_eq` for Closure/Macro.
         fx.op(I::LocalGet(0));
         fx.op(I::LocalGet(1));
         fx.op(I::I32Eq);
@@ -7080,16 +7942,104 @@ fn synthesize_world_wit(
     // defined by the dependency's WIT; we only export them by name, never
     // re-declare them here.
     for iface in ifaces.iter().filter(|i| !is_external_iface(i)) {
+        // An export whose signature references a functor handle gets it as the
+        // dotted `<funct-iface>.set` text (from `wit::functor_op_table`). WIT does
+        // not accept an inline dotted type reference; the type must be `use`-d
+        // from its interface and then named bare. Detect which functor interfaces
+        // an interface's signatures reference and emit a `use <funct>.{set};` for
+        // each, rewriting the dotted occurrences in the signatures to bare `set`.
+        // (The functor interface is declared later in the same package; WIT `use`
+        // resolves forward references within a package.)
+        let sigs: Vec<&FuncSig> =
+            info.exports.iter().filter(|s| &s.iface == iface).collect();
+        let used: Vec<&str> = info
+            .functors
+            .iter()
+            .filter(|f| {
+                let dotted = format!("{}.set", f.iface);
+                sigs.iter().any(|s| {
+                    s.result.as_deref() == Some(dotted.as_str())
+                        || s.params.iter().any(|(_, t)| t == &dotted)
+                })
+            })
+            .map(|f| f.iface.as_str())
+            .collect();
+        // WIT forbids interface cycles. An export in `api` that *returns* (or
+        // takes) a functor handle makes `api` depend on the functor interface
+        // (`use point-set.{set}`); when that functor's element is a local record,
+        // the functor interface already depends back on `api` (`use api.{point}`).
+        // That `api ↔ point-set` cycle is not expressible in WIT — the encoder
+        // rejects it. This is the `nearest-set: func(..) -> point-set.set` shape
+        // in the docs example. Surface it as an honest, specific error rather than
+        // emitting WIT that fails to parse deep in the encoder. (An export whose
+        // result/params are ordinary types — e.g. `-> u32`/`-> bool` derived from
+        // set ops — has no such cycle and builds + validates fine. Lifting this
+        // limitation is future work, likely by hoisting the element record into a
+        // shared interface; tracked for step 04.)
+        for funct in &used {
+            if let Some(f) = info.functors.iter().find(|f| f.iface == *funct) {
+                if info.types.iter().any(|(name, _)| name == &f.elem) {
+                    return Err(format!(
+                        "export `{}` in interface `{iface}` references the functor \
+                         handle `{}.set`, whose element type `{}` is a local record. \
+                         That makes `{iface}` and `{}` mutually depend (`{iface}` \
+                         `use`s the handle, `{}` `use`s the record) — a WIT interface \
+                         cycle, which the component model cannot express. An export \
+                         returning a `set` handle over a local record type is not yet \
+                         supported by the wasm backend; an export deriving an ordinary \
+                         result (e.g. `size`/`contains`) from the set works. \
+                         (Resource emission + routing of the handle return is tracked \
+                         for the functor build follow-up.)",
+                        sigs.iter()
+                            .find(|s| {
+                                let d = format!("{funct}.set");
+                                s.result.as_deref() == Some(d.as_str())
+                                    || s.params.iter().any(|(_, t)| t == &d)
+                            })
+                            .map(|s| s.name.as_str())
+                            .unwrap_or("?"),
+                        funct,
+                        f.elem,
+                        funct,
+                        funct,
+                    ));
+                }
+            }
+        }
         out.push_str(&format!("interface {iface} {{\n"));
+        // Each functor interface names its resource `set`, so an interface that
+        // references *two* functor handles (two instantiations, both returned or
+        // taken by exports) would `use` two types both called `set` — a WIT
+        // "defined more than once" collision. Alias each `use` to a per-functor
+        // name (`set as <iface>-handle`) and rewrite the dotted `<iface>.set`
+        // occurrences in the signatures to that alias. A single functor still
+        // reads naturally; multiple instantiations no longer collide. (The alias
+        // only renames the WIT type binding — the handle still lowers to one i32.)
+        for funct in &used {
+            out.push_str(&format!("  use {funct}.{{set as {funct}-handle}};\n"));
+        }
         if iface == "api" {
             for (name, ty) in &info.types {
                 out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
             }
         }
-        for sig in info.exports.iter().filter(|s| &s.iface == iface) {
-            out.push_str(&format!("  {}\n", sig.to_wit()));
+        for sig in &sigs {
+            let mut line = sig.to_wit();
+            for funct in &used {
+                line = line.replace(&format!("{funct}.set"), &format!("{funct}-handle"));
+            }
+            out.push_str(&format!("  {line}\n"));
         }
         out.push_str("}\n\n");
+    }
+
+    // Functor instantiations stamp out a specialized, monomorphic interface each
+    // (Steps 10–11), rendered from the SAME `SET_OPS` source as `wavelet wit`
+    // (`wit::functor_interface`) so the WIT the encoder validates against and the
+    // resource the wasm backend implements cannot drift.
+    for f in &info.functors {
+        out.push_str(crate::wit::functor_interface(arena, f, &info.types)?.trim_start());
+        out.push('\n');
     }
 
     out.push_str(&format!("world {} {{\n", info.world));
@@ -7114,6 +8064,12 @@ fn synthesize_world_wit(
         } else {
             out.push_str(&format!("  export {iface};\n"));
         }
+    }
+    // Each functor instantiation exports its specialized interface (so the
+    // encoder synthesizes the `[resource-new/rep/drop]set` intrinsics the core
+    // module imports — they only appear when the world *exports* the resource).
+    for f in &info.functors {
+        out.push_str(&format!("  export {};\n", f.iface));
     }
     out.push_str("}\n");
 
@@ -7182,4 +8138,318 @@ fn package_block_name(block: &str) -> Option<String> {
         .take_while(|&c| c != '{' && c != ';' && !c.is_whitespace())
         .collect();
     if name.is_empty() { None } else { Some(name) }
+}
+
+// ---------------------------------------------------------- set-resource tests
+//
+// Step 02 verification. We drive the REAL `emit_set_resource` bodies (not the
+// hand-authored spike ones) through the SAME `embed_component_metadata` +
+// `ComponentEncoder` pipeline `emit_component` uses, then instantiate via
+// `HostComponent` and exercise ctor → add (incl. a duplicate) → size → contains.
+// This proves the rep/list/eq_raw bodies dedup and answer membership correctly.
+// It does NOT go through `emit_component` (that wiring is step 03), so it is a
+// minimal hand-assembled module — but every `set` body is the production one.
+#[cfg(test)]
+mod set_resource_tests {
+    use super::*;
+    use crate::host::{HostComponent, Val};
+    use crate::wit::{FunctorInst, FunctorKind};
+
+    const IFACE: &str = "demo:app/s32-set@0.1.0";
+    const EXPORT_MOD: &str = "[export]demo:app/s32-set@0.1.0";
+
+    const WIT: &str = r#"package demo:app@0.1.0;
+
+interface s32-set {
+  resource set {
+    constructor();
+    add: func(value: s32);
+    contains: func(value: s32) -> bool;
+    size: func() -> u32;
+  }
+}
+
+world app {
+  export s32-set;
+}
+"#;
+
+    /// Stand up a minimal `Emitter` exactly as `emit_core_module` does up to the
+    /// point `emit_set_resource` needs (static boxes, the three resource-intrinsic
+    /// imports, helper indices, helper bodies), call `emit_set_resource`, and
+    /// assemble a core module with the verified ABI export names.
+    fn build_core(elem: &WitTy) -> Result<Vec<u8>, String> {
+        use ValType::I32;
+
+        // A FileInfo / deps with nothing in them: the set bodies are self-contained.
+        let arena = Arena::new();
+        let info = FileInfo {
+            package: "demo:app@0.1.0".to_string(),
+            package_path: "demo:app".to_string(),
+            world: "app".to_string(),
+            imports: Vec::new(),
+            functors: Vec::new(),
+            exports: Vec::new(),
+            types: Vec::new(),
+            defs: HashMap::new(),
+            fn_defs: HashMap::new(),
+            value_defs: Vec::new(),
+            overload_bodies: HashMap::new(),
+        };
+        let deps: HashMap<String, Dep> = HashMap::new();
+
+        let mut em = Emitter {
+            arena: &arena,
+            info: &info,
+            deps: &deps,
+            type_env: TypeEnv::default(),
+            data: Vec::new(),
+            str_cache: HashMap::new(),
+            types: Vec::new(),
+            imports: Vec::new(),
+            import_fn: HashMap::new(),
+            h: Helpers {
+                alloc: 0, realloc: 0, box_int: 0, box_bool: 0, box_dec: 0,
+                box_str: 0, truthy: 0, unbox_int: 0, unbox_dec: 0, eq_raw: 0,
+                len_raw: 0, head_h: 0, tail_h: 0, strcat2: 0, case_h: 0,
+                to_str: 0, rec_get: 0, as_f64: 0, arith_raw: 0, cmp_raw: 0,
+                neg_raw: 0,
+            },
+            funcs: HashMap::new(),
+            value_globals: HashMap::new(),
+            compiling_values: Vec::new(),
+            bodies: Vec::new(),
+            closure_bodies: Vec::new(),
+            fn_wrappers: HashMap::new(),
+            fn_box_cache: HashMap::new(),
+            var_box_cache: HashMap::new(),
+            false_addr: 0,
+            true_addr: 0,
+            macro_expand_idx: None,
+            functor_fns: HashMap::new(),
+        };
+
+        // static boxes: false @16, true @24 (same as emit_core_module).
+        em.false_addr = DATA_BASE;
+        em.put_i32(TAG_BOOL);
+        em.put_i32(0);
+        em.true_addr = DATA_BASE + 8;
+        em.put_i32(TAG_BOOL);
+        em.put_i32(1);
+
+        // ---- imports: the three resource intrinsics, declared up front so the
+        // function index space is imports-first (exactly emit_component's order).
+        let mut n_imports = 0u32;
+        let mut add_import =
+            |em: &mut Emitter, field: &str, p: Vec<ValType>, r: Vec<ValType>| {
+                let t = em.ty_idx(p, r);
+                em.imports.push((EXPORT_MOD.to_string(), field.to_string(), t));
+                em.import_fn
+                    .insert((EXPORT_MOD.to_string(), field.to_string()), n_imports);
+                n_imports += 1;
+            };
+        add_import(&mut em, "[resource-new]set", vec![I32], vec![I32]);
+        add_import(&mut em, "[resource-rep]set", vec![I32], vec![I32]);
+        add_import(&mut em, "[resource-drop]set", vec![I32], vec![]);
+        let new_i = em.import_idx(EXPORT_MOD, "[resource-new]set");
+        let rep_i = em.import_idx(EXPORT_MOD, "[resource-rep]set");
+        let drop_i = em.import_idx(EXPORT_MOD, "[resource-drop]set");
+
+        // ---- helper indices (same order/assignment as emit_core_module).
+        let mut next = n_imports;
+        let mut take = || {
+            let i = next;
+            next += 1;
+            i
+        };
+        em.h.alloc = take();
+        em.h.realloc = take();
+        em.h.box_int = take();
+        em.h.box_bool = take();
+        em.h.box_dec = take();
+        em.h.box_str = take();
+        em.h.truthy = take();
+        em.h.unbox_int = take();
+        em.h.unbox_dec = take();
+        em.h.eq_raw = take();
+        em.h.len_raw = take();
+        em.h.head_h = take();
+        em.h.tail_h = take();
+        em.h.strcat2 = take();
+        em.h.case_h = take();
+        em.h.to_str = take();
+        em.h.rec_get = take();
+        em.h.as_f64 = take();
+        em.h.arith_raw = take();
+        em.h.cmp_raw = take();
+        em.h.neg_raw = take();
+
+        // helper bodies (must precede our set bodies, matching index order).
+        emit_helpers(&mut em)?;
+
+        let inst = FunctorInst {
+            kind: FunctorKind::Set,
+            alias: "xs".to_string(),
+            elem: "s32".to_string(),
+            iface: "s32-set".to_string(),
+        };
+        let fns = emit_set_resource(&mut em, &inst, elem, new_i, rep_i, drop_i)?;
+
+        // ---- assemble (mirror emit_core_module's section order, minus the
+        // features the set bodies don't use: no closures, globals, value defs).
+        let heap_base = {
+            em.align8();
+            DATA_BASE + em.data.len() as u32
+        };
+        let pages = (heap_base as u64 >> 16) + 1;
+
+        let mut module = Module::new();
+        let mut ts = TypeSection::new();
+        for (p, r) in &em.types {
+            ts.ty().function(p.iter().copied(), r.iter().copied());
+        }
+        module.section(&ts);
+
+        let mut is = ImportSection::new();
+        for (m, f, t) in &em.imports {
+            is.import(m, f, EntityType::Function(*t));
+        }
+        module.section(&is);
+
+        let mut fs = FunctionSection::new();
+        for (t, _) in &em.bodies {
+            fs.function(*t);
+        }
+        module.section(&fs);
+
+        let mut ms = MemorySection::new();
+        ms.memory(MemoryType {
+            minimum: pages,
+            maximum: None,
+            memory64: false,
+            shared: false,
+            page_size_log2: None,
+        });
+        module.section(&ms);
+
+        // heap pointer global (global 0), same as the real assembly.
+        let mut gs = GlobalSection::new();
+        gs.global(
+            GlobalType { val_type: I32, mutable: true, shared: false },
+            &ConstExpr::i32_const(heap_base as i32),
+        );
+        module.section(&gs);
+
+        let mut es = ExportSection::new();
+        es.export("memory", ExportKind::Memory, 0);
+        es.export("cabi_realloc", ExportKind::Func, em.h.realloc);
+        es.export(&format!("{IFACE}#[constructor]set"), ExportKind::Func, fns.ctor);
+        es.export(&format!("{IFACE}#[method]set.add"), ExportKind::Func, fns.add);
+        es.export(&format!("{IFACE}#[method]set.contains"), ExportKind::Func, fns.contains);
+        es.export(&format!("{IFACE}#[method]set.size"), ExportKind::Func, fns.size);
+        es.export(&format!("{IFACE}#[dtor]set"), ExportKind::Func, fns.dtor);
+        module.section(&es);
+
+        let mut cs = CodeSection::new();
+        for (_, f) in &em.bodies {
+            cs.function(f);
+        }
+        module.section(&cs);
+
+        let mut ds = DataSection::new();
+        ds.active(0, &ConstExpr::i32_const(DATA_BASE as i32), em.data.iter().copied());
+        module.section(&ds);
+
+        Ok(module.finish())
+    }
+
+    /// Run a core module through the real componentize pipeline.
+    fn componentize(elem: &WitTy) -> Result<Vec<u8>, String> {
+        let mut module = build_core(elem)?;
+
+        let mut resolve = wit_parser::Resolve::default();
+        let pkg = resolve
+            .push_str("set.wit", WIT)
+            .map_err(|e| format!("WIT parse: {e:#}"))?;
+        let world = resolve
+            .select_world(&[pkg], Some("app"))
+            .map_err(|e| format!("world select: {e:#}"))?;
+
+        wit_component::embed_component_metadata(
+            &mut module,
+            &resolve,
+            world,
+            wit_component::StringEncoding::UTF8,
+        )
+        .map_err(|e| format!("embed metadata: {e:#}"))?;
+
+        if std::env::var("SET_DUMP").is_ok() {
+            std::fs::write("/tmp/set_embedded_core.wasm", &module).unwrap();
+        }
+
+        wit_component::ComponentEncoder::default()
+            .validate(true)
+            .module(&module)
+            .map_err(|e| format!("componentize: {e:#}"))?
+            .encode()
+            .map_err(|e| format!("encode: {e:#}"))
+    }
+
+    #[test]
+    fn set_bodies_dedup_and_membership_s32() {
+        let bytes = componentize(&WitTy::IntS).expect("componentize + validate");
+        let mut c = HostComponent::from_bytes(&bytes).expect("instantiate");
+
+        // constructor() -> own<set>
+        let ctor_out = c
+            .call_instance(IFACE, "[constructor]set", &[])
+            .expect("constructor call");
+        let handle = match &ctor_out[0] {
+            Val::Resource(_) => ctor_out[0].clone(),
+            other => panic!("ctor should return a resource, got {other:?}"),
+        };
+
+        let size = |c: &mut HostComponent, h: &Val| -> u32 {
+            match c.call_instance(IFACE, "[method]set.size", &[h.clone()]).unwrap()[..] {
+                [Val::U32(n)] => n,
+                ref other => panic!("size returned {other:?}"),
+            }
+        };
+        let contains = |c: &mut HostComponent, h: &Val, v: i32| -> bool {
+            match c
+                .call_instance(IFACE, "[method]set.contains", &[h.clone(), Val::S32(v)])
+                .unwrap()[..]
+            {
+                [Val::Bool(b)] => b,
+                ref other => panic!("contains returned {other:?}"),
+            }
+        };
+        let add = |c: &mut HostComponent, h: &Val, v: i32| {
+            c.call_instance(IFACE, "[method]set.add", &[h.clone(), Val::S32(v)])
+                .unwrap();
+        };
+
+        // fresh set is empty
+        assert_eq!(size(&mut c, &handle), 0, "new set is empty");
+        assert!(!contains(&mut c, &handle, 7), "empty set contains nothing");
+
+        // add 7, 42, 7 (duplicate) → dedup keeps size 2
+        add(&mut c, &handle, 7);
+        add(&mut c, &handle, 42);
+        add(&mut c, &handle, 7); // duplicate: must NOT grow the set
+        assert_eq!(size(&mut c, &handle), 2, "duplicate add is deduped by eq_raw");
+
+        // membership is exact
+        assert!(contains(&mut c, &handle, 7), "7 is present");
+        assert!(contains(&mut c, &handle, 42), "42 is present");
+        assert!(!contains(&mut c, &handle, 100), "100 was never added");
+
+        // a third distinct element grows the set; identity persists across calls
+        add(&mut c, &handle, 100);
+        assert_eq!(size(&mut c, &handle), 3, "distinct add grows the set");
+        assert!(contains(&mut c, &handle, 100), "100 now present");
+
+        // dropping the handle runs the no-op dtor cleanly.
+        c.drop_resource(handle).expect("drop runs the no-op dtor");
+    }
 }

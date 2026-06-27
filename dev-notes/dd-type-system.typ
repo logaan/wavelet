@@ -346,6 +346,24 @@ Two clarifications @fig-core-stdlib compresses:
   The standard library can ship most generic structures as source functors and
   lean on the core only for the binary case.
 
+  *Resolved (emit/binary path).* The wasm backend now _builds_ the `set` functor,
+  not just synthesizes its WIT and runs it under the interpreter. The synthesized
+  per-element `set` is emitted as a guest-implemented _exported_ WIT resource: its
+  rep is a 1-word cell holding a pointer to a boxed list (mirroring the
+  interpreter's `Value::Cell(Rc<RefCell<Value::Lst>>)`), and membership uses the
+  same structural `eq_raw` the interpreter's `Value` equality does, so a built set
+  dedups exactly like `wavelet run`. The resource is wired through the canonical
+  `resource.new` / `resource.rep` / `resource.drop` intrinsics; the `own<set>`
+  handle is carried as an int box, and each method recovers its rep via
+  `resource.rep`. This holds at full interpreter parity — any element type
+  (primitive, string, record, compound list/tuple) and multiple instantiations
+  per world. The _one_ limitation is shaping, not semantics: an export that
+  returns the `set` handle over a _local-record_ element is a WIT interface cycle
+  (the element's `api` interface and the resource's interface would each `use` the
+  other), which WIT cannot express, so it is rejected with a clear error. Lifting
+  it would require hoisting the element record into a shared types interface — a
+  follow-up, not part of this work.
+
 The upshot: the core's seventeen special forms gain _no_ new members for
 generics. They gain a type checker (with overload resolution and literal
 defaulting), and the rest — `Derive`, `Set`, `eq`, `map` — rides in as
