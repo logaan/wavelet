@@ -133,6 +133,7 @@ And what you can use instead.
 - No polymorphism. Functors, type inference, and a little sugar mean you might
   not even notice.
 - No sets, regex, etc. Pull them in from libraries.
+- Commas. They're whitespace.
 
 ## The `wavelet` CLI
 
@@ -141,15 +142,17 @@ And what you can use instead.
   TODO: Drop references to the interpreter
 -->
 
-    wavelet new <name> [--type=cli|http]                 # scaffold a new project (cli is the default)
-    wavelet read [file.wvl]                              # parse and print the canonical WAVE form tree (reads stdin if no file)
-    wavelet expand <file.wvl>                            # run macros to fixpoint and print the result
-    wavelet wit <file.wvl>                               # show the synthesized WIT world
-    wavelet repl                                         # interactive read-eval-print loop
-    wavelet run <file.wvl>... [-- <args>...]             # interpret directly (no codegen)
-    wavelet build <file.wvl>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
-    wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
-    wavelet --version                                    # print the wavelet version
+``` text
+wavelet new <name> [--type=cli|http]                 # scaffold a new project (cli is the default)
+wavelet read [file.wvl]                              # parse and print the canonical WAVE form tree (reads stdin if no file)
+wavelet expand <file.wvl>                            # run macros to fixpoint and print the result
+wavelet wit <file.wvl>                               # show the synthesized WIT world
+wavelet repl                                         # interactive read-eval-print loop
+wavelet run <file.wvl>... [-- <args>...]             # interpret directly (no codegen)
+wavelet build <file.wvl>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
+wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
+wavelet --version                                    # print the wavelet version
+```
 
 `run` interprets a set of files together — resolving `Import`s by package id,
 honoring `Export`/`as:`/`open:`, and calling the exported `run`. It is the
@@ -169,10 +172,15 @@ them with `wac`-style auto-plugging.
 model it imports across the component boundary), build/run scripts, and a short
 README. `--type` picks the template; `cli` is the default:
 
+<!--
+  TODO: Update these examples.
+-->
+
 ``` bash
-$ wavelet new my-app          # cli: a wasi:cli/command program
+$ wavelet new my-app
 $ cd my-app
-$ scripts/run.sh Ada          # build, then run with wasmtime → "Hello, Ada!"
+$ scripts/run.sh Ada
+Hello, Ada!
 ```
 
 `--type=http` instead lays down a web app whose front end implements the
@@ -183,7 +191,8 @@ request path. `scripts/serve.sh` builds it and runs it with `wasmtime serve`:
 ``` bash
 $ wavelet new my-site --type=http
 $ cd my-site
-$ scripts/serve.sh           # then open http://localhost:8080
+$ scripts/serve.sh
+Running at http://localhost:8080
 ```
 
 ## Editor support
