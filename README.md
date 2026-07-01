@@ -6,62 +6,22 @@
 
 A small homoiconic language that compiles to **WebAssembly Components**.
 
-Wavelet rests on three commitments:
+## Installation
 
---------------------------------------------------------------------------------
+The `wavelet` CLI and the `wavelet-lsp` language server are available from a
+personal Homebrew [tap][]:
 
-1.  Wavelet only uses the [Wasm Interface Types].
+``` bash
+brew install logaan/tap/wavelet
+```
 
-    1.  `bool`
-        1.  `s8`, `s16`, `s32`, `s64`
-        2.  `u8`, `u16`, `u32`, `u64`
-        3.  `f32`, `f64`
-    2.  `char`
-    3.  `string`
-    4.  `list`
-    5.  `option`
-    6.  `result`
-    7.  `tuple`
-    8.  `record`
-    9.  `variant`
-    10. `enum`
-    11. `resource`
-    12. `flags`
-    13. `func`
+<!-- TODO Link to the Editor support section below -->
 
-2.  And it's able to make and use the higher order entities.
+## Example
 
-    14. `interface`
-    15. `world`
-    16. `package`
-
-3.  foo
-
---------------------------------------------------------------------------------
-
-1.  **One file is one component.** The unit you edit, compile, link, version,
-    and deploy is the same thing. Nothing distinguishes a component written in
-    Wavelet from one written in Rust, Go, or JavaScript — composition happens at
-    the WIT level.
-2.  **The syntax is [WAVE].** Source code is WAVE text (the Component Model's
-    human-readable value encoding) plus a thin layer of reader sugar. Wavelet is
-    homoiconic the way Lisp is over s-expressions — except its "s-expressions"
-    are exactly the values that cross component boundaries.
-3.  **The core is minimal.** Seventeen special forms, closures, guaranteed
-    tail-call elimination, and a macro system. Everything else — including the
-    standard library and macros — is delivered as components.
-
-The consequence that ties these together: **there is no FFI.** Wavelet has no
-native data types of its own. Its booleans, strings, lists, records, variants,
-options, results, and flags *are* WIT types, so calling a Rust component looks
-identical to calling a function defined two lines up.
-
-See [`design.md`] for the full language design (draft 0.1).
-
-## A taste
+`shout.wvl` — compiles to `demo:shout.wasm`
 
 ``` rust
-// shout.wvl — compiles to demo:shout.wasm
 Package "demo:shout@0.1.0"
 
 Export shout
@@ -69,42 +29,117 @@ Def shout Fn {phrase: string}
   str-cat[upper(phrase) "!"]
 ```
 
+`main.wvl` compiles to `demo:main.wasm`
+
 ``` rust
-// main.wvl — compiles to demo:main.wasm
 Package "demo:main@0.1.0"
 
 Import {pkg: "demo:shout/api" as: sh}
 
 Export greet
 Def greet Fn {phrase: string}
-  sh/shout{phrase: phrase}
+  str-cat("Hello, " sh/shout(phrase))
 ```
+
+<!-- TODO: Switch to a term that's less jargony than REPL-->
+
+The repl (Read Eval Print Loop) lets us run code interactively.
 
 ``` bash
-$ wavelet build examples/shout.wvl examples/main.wvl
-$ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
+$ wavelet repl examples/main.wvl
+$ demo:main/greet("world")
+-> "Hello, WORLD!"
 ```
 
-Each file declares its own package, becomes its own component, and the composer
-wires `main`'s import of `demo:shout/api` to `shout`'s export. Swapping in a
-implementation of `demo:shout/api` written in another language would require
-changing nothing in `main.wvl`. A component that wants stdout, args, or to
-handle HTTP imports the relevant WASI interface (e.g. `wasi:cli/stdout`) and
-calls it like any other dependency. See the `wavelet new --type=cli` and
-`--type=http` templates for examples.
+## Features of the language
 
-## Installing
+Because Wavelet has a small core language that's tightly aligned with WASM
+components it runs everywhere, and communicates with web assembly code written
+in any language as fluently as one Wavelet function calling another.
 
-### Homebrew
+### Compositional sandboxing
 
-The `wavelet` CLI and the `wavelet-lsp` language server are available from a
-personal [tap][]:
+<!--
+  TODO: Explain sandboxing and dependency injection to someone who's
+  unfamiliar with them.
+-->
 
-``` bash
-brew install logaan/tap/wavelet
-```
+- Wavelet programs are entirely self contained by default. They have no access
+  to your network or hard drive, not even to clocks or random numbers. This is a
+  feature of the WebAssembly Component Model.
+- For a wavelet file to access these features it must ask to be given those
+  functions. They host may choose to provide any implementation they like. In
+  production you'll give full access but in your test suites you may substitute
+  mock implementations.
+- The same restrictions apply to libraries that your program consumes. You have
+  have confidence that your `left-pad` dependency isn't going to read your
+  credentials files and publish them online. It doesn't have access to your disk
+  or to the internet unless it explicitly asks for it and you explicitly grant
+  it.
+
+### Only Wasm Interface Types
+
+<!--
+  TODO: Explain foreign function interfaces, impedance mismatch, and the
+  boundary problem to someone who's unfamiliar with them.
+-->
+
+Wavelet programs can only use data types, and definition constructs that can be
+expressed with [Wasm Interface Types]. This is a significant restriction, but it
+means that wavelet programs can use, and be used by, external components with no
+type conversion at the boundary.
+
+1.  Built in types:
+    1.  Primitives: `bool`, `s8`, `s16`, `s32`, `s64`, `u8`, `u16`, `u32`,
+        `u64`, `f32`, `f64`, `char`, `string`
+    2.  Collections: `list`, `option`, `result`, `tuple`
+2.  User defined: `record`, `variant`, `enum`, `resource`, `flags`
+3.  Interfaces: `func`, `interface`, `world`, `package`
+
+### Code is data + a little sugar
+
+<!--
+  TODO: Explain homoiconicity, macros, and DLSs to someone who's unfamiliar with
+  them.
+-->
+
+- Wavelet has a rich syntax of literals for every data type
+- It uses that same syntax, and those same data types, to express the program's
+  code as well as its data.
+- This lets us implement new language features in the language itself.
+- Features that you might expect are fundamental like binary `And` and `Or` can
+  be implemented in a library rather than needing to be baked into the language.
+- Wavelet also gives users the freedom to swap out the standard library, truly
+  tailoring their environment to the task at hand on a file by file basis.
+
+### Small set of powerful features
+
+- You can pick it up quickly.
+- You're not going to be scratching your head when you come back to it after a
+  while away.
+- It's still an expressive language.
+  - Higher order functions let you create powerful abstractions day to day.
+  - Functors let you use new types with existing data structures.
+  - Macros give you ultimate power remove any boilerplate, and change the
+    language.
+
+### What you don't get
+
+And what you can use instead.
+
+- No loops. Use recursion or combinators.
+- No exceptions. Instead return errors using results.
+- No generics. Instead use functors.
+- No polymorphism. Functors, type inference, and a little sugar mean you might
+  not even notice.
+- No sets, regex, etc. Pull them in from libraries.
 
 ## The `wavelet` CLI
+
+<!--
+  TODO: Improve the ergonomics with paths
+  TODO: Drop references to the interpreter
+-->
 
     wavelet new <name> [--type=cli|http]                 # scaffold a new project (cli is the default)
     wavelet read [file.wvl]                              # parse and print the canonical WAVE form tree (reads stdin if no file)
@@ -204,57 +239,15 @@ so you also get diagnostics, completion, hover, and document symbols with no
 extra download. (Override the server with the `wavelet.lsp.serverPath` setting,
 or disable it with `wavelet.lsp.enable`.) See [`tooling/vscode/`] for details.
 
-## Pipeline
-
-The compiler is **read → expand → analyze → emit → componentize**:
-
-| Stage | Source | Role |
-|----|----|----|
-| read | `lexer.rs`, `reader.rs`, `form.rs`, `printer.rs` | WAVE tokens → form-tree arena; all sugar dies here |
-| expand | `expand.rs` | macros run to fixpoint over form trees |
-| interpret | `interp.rs`, `value.rs`, `builtins.rs`, `runner.rs` | dynamic evaluator over the WIT value space (semantics oracle) |
-| WIT synthesis | `wit.rs` | derive the component's WIT world from its forms |
-| emit | `emit.rs`, `build.rs` | core wasm (linear-memory value boxes, `return_call` tail calls) → component |
-
-The interpreter exists so language semantics can be validated independently of
-codegen; the wasm backend is checked against it.
-
-## Status
-
-Draft 0.1, actively implemented. Working today:
-
-- Full reader with the §2 sugar (attachment rule, arity-driven TitleCase macros,
-  qualified calls, quasiquote).
-- Macro expander (`DefMacro`, `Quote`/`Quasi`/`Unquote`/`Splice`, `gensym`).
-- Tree-walking interpreter with tail-call elimination, pattern matching, and a
-  standard-library of builtins.
-- WIT world synthesis from typed `Fn` params, `Export` records, and `DefType`.
-- A wasm backend covering scalars, lists, records, variants, tuples, closures,
-  and option/result — including these types passed **across component
-  boundaries** via the canonical ABI.
-- End-to-end `build` + `compose` producing components that run on wasmtime.
-- **WASI HTTP**: a component can implement the `wasi:http/proxy` interface
-  (resource handles + `http/*` intrinsics over the wasi:http response pipeline)
-  and be served by `wasmtime serve`. The `--type=http` template demonstrates it.
-
-Not yet done (see [`todo.md`]): macro components (compile-time wasm
-instantiation), general resource definitions/methods beyond the wasi:http
-intrinsics, string/parsing builtins in the wasm backend (`split`, `reverse`,
-`read`, `to-s64`), boundary coercions / the `safely` wrapper, richer type
-inference, and `compose --fuse`.
-
 ## License
 
 [Apache-2.0]
 
-  [Wasm Interface Types]: https://component-model.bytecodealliance.org/design/wit.html
-  [WAVE]: https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave
-  [`design.md`]: design.md
   [tap]: https://github.com/logaan/homebrew-tap
+  [Wasm Interface Types]: https://component-model.bytecodealliance.org/design/wit.html
   [releases page]: https://github.com/logaan/wavelet/releases/latest
   [`logaan/wavelet.nvim`]: https://github.com/logaan/wavelet.nvim
   [`tooling/neovim`]: tooling/neovim
   [`tooling/wavelet-lsp/`]: tooling/wavelet-lsp/
   [`tooling/vscode/`]: tooling/vscode/
-  [`todo.md`]: todo.md
   [Apache-2.0]: https://opensource.org/license/Apache-2.0
