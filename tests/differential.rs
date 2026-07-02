@@ -51,10 +51,10 @@ const EXPAND: &str = "`expand` is only available inside a macro library when bui
 /// Found by this harness: `build_files` runs the pure checker but never
 /// `resolve_overloads`, so a *non-exported* overload set collapses to
 /// `FileInfo::defs`'s last-wins entry and every call dispatches there,
-/// whatever the argument (or `The`-expected) type says.
+/// whatever the argument (or `The`-expected) type says. Tracked as 3.14.
 const OVERLOAD: &str =
     "non-exported overload sets dispatch last-wins in the backend (no \
-     resolve_overloads on the build path)";
+     resolve_overloads on the build path; 3.14)";
 /// The interpreter checks `If` conditions are bools at runtime; compiled code
 /// applies bare truthiness. Closed when the checker rejects it statically
 /// (goal 3).
