@@ -1,8 +1,8 @@
-//! The static type checker (Phase A of the monomorphic type system).
+//! The static type checker (Phases A and C of the monomorphic type system).
 //!
 //! `dd-type-system.typ` defines two rules: every function's signature is a WIT
-//! function type, and every expression has a WIT type. This module is the start
-//! of the *total* checker that enforces them. It runs over the form arena
+//! function type, and every expression has a WIT type. This module enforces
+//! them as far as the phases below reach. It runs over the form arena
 //! (`Node`/`NodeId`) BEFORE evaluation in [`crate::eval_snippet`], so an
 //! ill-typed program is a compile error even when the bad code is never reached
 //! at runtime.
@@ -14,8 +14,20 @@
 //! existing example suite green: the checker must never preempt an existing
 //! runtime error with a different message.
 //!
-//! Later phases (WIT synthesis from inference, overload resolution, derivers,
-//! functors) build on the [`Type`] lattice and the per-form checking here.
+//! Where the phases stand:
+//! - **Phase A** (per-form gradual checking) is this module's core:
+//!   [`check_program`] and the `Checker::check`/`infer` walk.
+//! - **Phase B** (WIT synthesis from inference) is implemented in
+//!   [`crate::wit`] (`infer_sig`, `infer_param_from_use`), which also
+//!   implements compile-time functors (Steps 10–11).
+//! - **Phase C** (overload resolution, Steps 6–8) is implemented here too:
+//!   same-named `Fn` defs form overload sets, call sites resolve by static
+//!   argument types then return-type-directed inference, and
+//!   [`resolve_overloads`] rewrites the program so the interpreter needs no
+//!   overload awareness. Boundary name-mangling for exported overloads
+//!   (Step 8) lives in [`crate::wit`].
+//! - **Phase D** (derivers; overloaded names as first-class values) remains
+//!   future work, building on the [`Type`] lattice here.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
