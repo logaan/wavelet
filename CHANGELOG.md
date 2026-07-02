@@ -13,7 +13,19 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-02
+
 ### Added
+
+- **WIT round-trip conformance suite** (`conformance/`). A `roundtrip:suite`
+  WIT world that exercises every WIT feature (all primitives, strings, lists,
+  tuples, records, options, results, variants, enums, flags, type aliases,
+  and resources), with two independently seeded Rust reference components, a
+  composition harness, and a Wavelet runner that drives the full check matrix
+  against both Rust callees. The Wavelet *callee* counterpart is checked in as
+  the acceptance target for the remaining backend gaps, which are tracked as
+  individual follow-up tasks. The two fixes below are the first two items off
+  that list.
 
 - **`to-char` builtin, and char↔codepoint conversion.** `to-char(n)` converts
   an int to the char with that codepoint (erroring on surrogates and values
@@ -495,7 +507,8 @@ Initial release.
   artifacts.
 - Docusaurus documentation site with a live, wasm-compiled `<Playground>`.
 
-[Unreleased]: https://github.com/logaan/wavelet/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/logaan/wavelet/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/logaan/wavelet/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/logaan/wavelet/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/logaan/wavelet/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/logaan/wavelet/compare/v0.8.0...v0.9.0
