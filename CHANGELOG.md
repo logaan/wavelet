@@ -13,7 +13,25 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- **`to-char` builtin, and char↔codepoint conversion.** `to-char(n)` converts
+  an int to the char with that codepoint (erroring on surrogates and values
+  past `0x10FFFF`; a char passes through unchanged), and the integer
+  conversions (`to-u8` … `to-s64`) now accept a char and yield its codepoint —
+  so e.g. the next Unicode scalar of `'a'` is
+  `to-char(add(to-u32('a') 1))`.
+
 ### Fixed
+
+- **Chars no longer trap at the compiled component boundary.** Compiled code
+  lowered a char argument through the int unboxer, which traps on a char box,
+  so calling any imported or exported function with a `char` hit a wasm
+  `unreachable`; and a char lifted *in* arrived boxed as an int, so it stopped
+  behaving as a char in-guest. Chars now lower from and lift to proper char
+  values in every placement (arguments, results, list elements, option/result
+  payloads), and the ordered comparisons (`lt` `le` `gt` `ge`) order chars by
+  codepoint in compiled code, matching the interpreter.
 
 - **Byte-width payloads no longer corrupt at the component boundary.** The wasm
   backend gave every sub-4-byte integer (`u8`/`s8`/`u16`/`s16`) a 4-byte

@@ -200,6 +200,8 @@ E['std-tostring'] = `to-string([1 some(2) {k: "v"}])`;
 E['std-read'] = `read("add(1 2)")`;
 E['std-conv'] = `[to-u8(255)  to-s8(-128)  to-f64(3)]`;
 E['std-conv-bad'] = `to-u8(256)`;
+E['std-char-conv'] = `[to-u32('a')  to-char(98)  to-char(add(to-u32('a') 1))]`;
+E['std-char-conv-bad'] = `to-char(55296)`;
 E['std-apply'] = `apply(Fn {a b} add(a b) [20 22])`;
 // A quoted call is a tuple now, so 'form-kind(Quote foo(1))' reports "tup"; a
 // runtime variant with a payload ('ok(1)') still reports "call".
