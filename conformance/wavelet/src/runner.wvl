@@ -13,8 +13,6 @@ Package "conformance:wavelet@0.1.0"
 //     result-string-err-rt: lowering a payload-less ok()/err() panics the
 //     compiler (emit.rs "never a single flat value").
 //   - permissions-rt: flag literals are not supported by the wasm backend.
-//   - char-rt: lowering/lifting a char at the boundary traps at runtime
-//     (wasm unreachable) — excluded so the rest of the run survives.
 //   - f32-rt and every-primitive-rt (f32 field): f32 unsupported by backend.
 //   - points-rt: dep type aliases unsupported by backend.
 //   - option-u8-rt none side: none() missing from the wasm backend.
@@ -51,6 +49,7 @@ Def values-fails Fn {}
              check("u32-rt" eq(iv/u32-rt(4000000000) 4000000001))
              check("u64-rt" eq(iv/u64-rt(9007199254740991) 9007199254740992))
              check("f64-rt" eq(iv/f64-rt(-0.75) 0.25))
+             check("char-rt" eq(iv/char-rt('a') 'b'))
              check("string-rt" eq(iv/string-rt("wave") "wave!"))
              check("list-u8-rt" eq(iv/list-u8-rt([1 2 3]) [2 3 4]))
              check("list-string-rt" eq(iv/list-string-rt(["a" ""]) ["a!" "!"]))

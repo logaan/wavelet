@@ -352,6 +352,15 @@
     "code": "to-u8(256)",
     "error": "eval error: `to-u8`: 256 out of range"
   },
+  "std-char-conv": {
+    "code": "[to-u32('a')  to-char(98)  to-char(add(to-u32('a') 1))]",
+    "value": "[97, 'b', 'b']",
+    "output": ""
+  },
+  "std-char-conv-bad": {
+    "code": "to-char(55296)",
+    "error": "eval error: `to-char`: 55296 is not a Unicode scalar value"
+  },
   "std-apply": {
     "code": "apply(Fn {a b} add(a b) [20 22])",
     "value": "42",

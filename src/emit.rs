@@ -703,6 +703,7 @@ struct Helpers {
     box_str: u32,
     truthy: u32,
     unbox_int: u32,
+    unbox_char: u32,
     unbox_dec: u32,
     eq_raw: u32,
     len_raw: u32,
@@ -2534,7 +2535,11 @@ impl<'a> Emitter<'a> {
     fn lower(&mut self, fx: &mut FnCtx, ty: &WitTy) -> Result<(), String> {
         match ty {
             WitTy::Bool => fx.op(I::Call(self.h.truthy)),
-            WitTy::Char | WitTy::IntS(_) | WitTy::IntU(_) | WitTy::Handle => {
+            WitTy::Char => {
+                fx.op(I::Call(self.h.unbox_char));
+                fx.op(I::I32WrapI64);
+            }
+            WitTy::IntS(_) | WitTy::IntU(_) | WitTy::Handle => {
                 fx.op(I::Call(self.h.unbox_int));
                 fx.op(I::I32WrapI64);
             }
@@ -2861,7 +2866,11 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I64ExtendI32S);
                 fx.op(I::Call(self.h.box_int));
             }
-            WitTy::Char | WitTy::IntU(_) | WitTy::Handle => {
+            WitTy::Char => {
+                fx.op(I::I64ExtendI32U);
+                self.box_char(fx);
+            }
+            WitTy::IntU(_) | WitTy::Handle => {
                 fx.op(I::I64ExtendI32U);
                 fx.op(I::Call(self.h.box_int));
             }
@@ -3104,7 +3113,14 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.truthy));
                 fx.op(I::I32Store8(ma(off, 0)));
             }
-            WitTy::Char | WitTy::Handle => {
+            WitTy::Char => {
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(src));
+                fx.op(I::Call(self.h.unbox_char));
+                fx.op(I::I32WrapI64);
+                fx.op(I::I32Store(ma(off, 2)));
+            }
+            WitTy::Handle => {
                 fx.op(I::LocalGet(dst));
                 fx.op(I::LocalGet(src));
                 fx.op(I::Call(self.h.unbox_int));
@@ -3319,7 +3335,13 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I64ExtendI32U);
                 fx.op(I::Call(self.h.box_int));
             }
-            WitTy::Char | WitTy::Handle => {
+            WitTy::Char => {
+                fx.op(I::LocalGet(src));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::I64ExtendI32U);
+                self.box_char(fx);
+            }
+            WitTy::Handle => {
                 fx.op(I::LocalGet(src));
                 fx.op(I::I32Load(ma(off, 2)));
                 fx.op(I::I64ExtendI32U);
@@ -3629,8 +3651,8 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.box_bool));
             }
             "lt" | "le" | "gt" | "ge" => {
-                // cmp_raw yields -1/0/1 over ints, decs and strings (chars ride
-                // in int boxes), matching the interpreter's `compare`.
+                // cmp_raw yields -1/0/1 over ints, decs, strings and chars,
+                // matching the interpreter's `compare`.
                 nargs(2)?;
                 self.expr(fx, items[0], false)?;
                 self.expr(fx, items[1], false)?;
@@ -3697,6 +3719,47 @@ impl<'a> Emitter<'a> {
                 nargs(1)?;
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.to_str));
+            }
+            "to-char" => {
+                // A char passes through; an int must be a Unicode scalar value
+                // (traps otherwise, like the interpreter's range error). Anything
+                // else traps in unbox_int, matching `to-char expects an int`.
+                nargs(1)?;
+                self.expr(fx, items[0], false)?;
+                let b = fx.local(ValType::I32);
+                fx.op(I::LocalSet(b));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_CHAR));
+                fx.op(I::I32Eq);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                fx.op(I::LocalGet(b));
+                fx.op(I::Else);
+                let n = fx.local(ValType::I64);
+                fx.op(I::LocalGet(b));
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::LocalSet(n));
+                // invalid if n > 0x10FFFF (unsigned, catches negatives) or a
+                // surrogate (0xD800..=0xDFFF)
+                fx.op(I::LocalGet(n));
+                fx.op(I::I64Const(0x10FFFF));
+                fx.op(I::I64GtU);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I64Const(0xD800));
+                fx.op(I::I64GeU);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I64Const(0xDFFF));
+                fx.op(I::I64LeU);
+                fx.op(I::I32And);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(n));
+                self.box_char(fx);
+                fx.op(I::End);
             }
             "upper" | "lower" => {
                 nargs(1)?;
@@ -3777,7 +3840,7 @@ impl<'a> Emitter<'a> {
 
 const BUILTINS: &[&str] = &[
     "eq", "not", "lt", "le", "gt", "ge", "add", "sub", "mul", "div", "rem", "neg", "len",
-    "head", "tail", "str-cat", "upper", "lower", "to-string",
+    "head", "tail", "str-cat", "upper", "lower", "to-string", "to-char",
     "some", "ok", "err",
     // compile-time form machinery (macro bodies)
     "form-kind", "rec-key", "rec-val", "gensym", "expand",
@@ -3871,6 +3934,7 @@ fn emit_core_module(
             box_str: 0,
             truthy: 0,
             unbox_int: 0,
+            unbox_char: 0,
             unbox_dec: 0,
             eq_raw: 0,
             len_raw: 0,
@@ -3999,6 +4063,7 @@ fn emit_core_module(
     em.h.box_str = take();
     em.h.truthy = take();
     em.h.unbox_int = take();
+    em.h.unbox_char = take();
     em.h.unbox_dec = take();
     em.h.eq_raw = take();
     em.h.len_raw = take();
@@ -4768,6 +4833,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
             box_str: 0,
             truthy: 0,
             unbox_int: 0,
+            unbox_char: 0,
             unbox_dec: 0,
             eq_raw: 0,
             len_raw: 0,
@@ -4819,6 +4885,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     em.h.box_str = take();
     em.h.truthy = take();
     em.h.unbox_int = take();
+    em.h.unbox_char = take();
     em.h.unbox_dec = take();
     em.h.eq_raw = take();
     em.h.len_raw = take();
@@ -5070,8 +5137,8 @@ fn mc_tree_to_form(em: &mut Emitter) -> Result<(u32, Function), String> {
         fx.op(I::LocalSet(formbox));
         fx.op(I::End);
     }
-    // char-val: the wire payload is a `char` lifted as an int box; rebuild it as
-    // a distinct TAG_CHAR form box so it round-trips as a char (not an int).
+    // char-val: the wire payload is a `char`, lifted as a TAG_CHAR box already —
+    // use it directly.
     {
         let s = em.intern_str("char-val") as i32;
         fx.op(I::LocalGet(case));
@@ -5079,8 +5146,6 @@ fn mc_tree_to_form(em: &mut Emitter) -> Result<(u32, Function), String> {
         fx.op(I::Call(em.h.eq_raw));
         fx.op(I::If(BlockType::Empty));
         fx.op(I::LocalGet(payload));
-        fx.op(I::I64Load(ma(8, 3)));
-        em.box_char(&mut fx);
         fx.op(I::LocalSet(formbox));
         fx.op(I::End);
     }
@@ -5724,8 +5789,8 @@ fn mc_fill(em: &mut Emitter, fill_idx: u32, sym_node_idx: u32) -> Result<(u32, F
         fx.op(I::Return);
         fx.op(I::End);
     }
-    // char (TAG_CHAR): wire `char-val`, payload = the codepoint as an int box so
-    // the boundary's `lower(char)` (= unbox_int) reads it.
+    // char (TAG_CHAR): wire `char-val`, payload = the char box itself, which
+    // the boundary's `lower(char)` (= unbox_char) reads.
     {
         let caddr = em.intern_str("char-val") as i32;
         fx.op(I::LocalGet(tag));
@@ -5744,8 +5809,6 @@ fn mc_fill(em: &mut Emitter, fill_idx: u32, sym_node_idx: u32) -> Result<(u32, F
         fx.op(I::I32Store(ma(4, 2)));
         fx.op(I::LocalGet(node));
         fx.op(I::LocalGet(form));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::Call(em.h.box_int));
         fx.op(I::I32Store(ma(8, 2)));
         store_node(&mut fx, nodes, id, node);
         fx.op(I::LocalGet(id));
@@ -6753,6 +6816,22 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::LocalGet(0));
         fx.op(I::I32Load(ma(0, 2)));
         fx.op(I::I32Const(TAG_INT));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        let t = em.ty_idx(vec![I32], vec![I64]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // unbox_char(box) -> i64 codepoint (traps unless tag char)
+    {
+        let mut fx = FnCtx::new(1);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_CHAR));
         fx.op(I::I32Ne);
         fx.op(I::If(BlockType::Empty));
         fx.op(I::Unreachable);
@@ -7772,9 +7851,8 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
     }
 
     // cmp_raw(a, b) -> i32 in {-1, 0, 1}   total order over strings (byte
-    // lexicographic) and numbers (widened to f64); traps on NaN/non-comparable,
-    // matching the interpreter's `compare`. Chars ride in int boxes, so the
-    // numeric path already orders them by codepoint.
+    // lexicographic), chars (by codepoint) and numbers (widened to f64); traps
+    // on NaN/non-comparable, matching the interpreter's `compare`.
     // [locals: xf=2, yf=3 (f64); la=4, lb=5, n=6, i=7, ca=8, cb=9 (i32)]
     {
         let mut fx = FnCtx::new(2);
@@ -7786,6 +7864,38 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         let i = fx.local(I32);
         let ca = fx.local(I32);
         let cb = fx.local(I32);
+        // both char? order by codepoint (interpreter: `Char(x).cmp(Char(y))`)
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Eq);
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Eq);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64LtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(-1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64GtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
         // both str?
         fx.op(I::LocalGet(0));
         fx.op(I::I32Load(ma(0, 2)));
@@ -8240,7 +8350,7 @@ world app {
             import_fn: HashMap::new(),
             h: Helpers {
                 alloc: 0, realloc: 0, box_int: 0, box_bool: 0, box_dec: 0,
-                box_str: 0, truthy: 0, unbox_int: 0, unbox_dec: 0, eq_raw: 0,
+                box_str: 0, truthy: 0, unbox_int: 0, unbox_char: 0, unbox_dec: 0, eq_raw: 0,
                 len_raw: 0, head_h: 0, tail_h: 0, strcat2: 0, case_h: 0,
                 to_str: 0, rec_get: 0, as_f64: 0, arith_raw: 0, cmp_raw: 0,
                 neg_raw: 0,
@@ -8300,6 +8410,7 @@ world app {
         em.h.box_str = take();
         em.h.truthy = take();
         em.h.unbox_int = take();
+        em.h.unbox_char = take();
         em.h.unbox_dec = take();
         em.h.eq_raw = take();
         em.h.len_raw = take();

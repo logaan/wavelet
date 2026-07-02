@@ -15,7 +15,7 @@ pub const NAMES: &[&str] = &[
     "str-cat", "upper", "lower", "split", "join", "contains",
     "to-string", "read",
     "to-u8", "to-u16", "to-u32", "to-u64", "to-s8", "to-s16", "to-s32", "to-s64",
-    "to-f32", "to-f64",
+    "to-f32", "to-f64", "to-char",
     "apply", "gensym", "expand",
     "form-kind", "rec-key", "rec-val",
     "some", "ok", "err",
@@ -409,6 +409,7 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             let n = match &arg {
                 Value::Int(n) => *n,
                 Value::Dec(f) if f.fract() == 0.0 => *f as i64,
+                Value::Char(c) => *c as i64,
                 other => return err(format!("`{name}` expects a number, got {}", print_value(other))),
             };
             let ok = match name {
@@ -430,6 +431,14 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
         "to-f32" | "to-f64" => match want_num(&arg, name)? {
             Num::I(n) => Ok(Value::Dec(n as f64)),
             Num::D(f) => Ok(Value::Dec(f)),
+        },
+        "to-char" => match &arg {
+            Value::Char(_) => Ok(arg.clone()),
+            Value::Int(n) => match u32::try_from(*n).ok().and_then(char::from_u32) {
+                Some(c) => Ok(Value::Char(c)),
+                None => err(format!("`to-char`: {n} is not a Unicode scalar value")),
+            },
+            other => return err(format!("`to-char` expects an int, got {}", print_value(other))),
         },
         "apply" => {
             let mut a = args_n(arg, 2, name)?;

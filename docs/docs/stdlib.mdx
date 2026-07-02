@@ -110,8 +110,9 @@ A float operand promotes the result to a float:
 |---|---|---|
 | `to-string` | `to-string(v)` | canonical WAVE text for any value |
 | `read` | `read(s)` | parse a string to a form → `ok(form)` / `err(msg)` |
-| `to-u8` … `to-u64`, `to-s8` … `to-s64` | `to-u8(n)` | range-checked integer narrowing |
+| `to-u8` … `to-u64`, `to-s8` … `to-s64` | `to-u8(n)` | range-checked integer narrowing (a char gives its codepoint) |
 | `to-f32` `to-f64` | `to-f64(n)` | to floating point |
+| `to-char` | `to-char(n)` | int codepoint → char (must be a Unicode scalar value) |
 
 <Playground id="std-tostring" />
 
@@ -124,6 +125,15 @@ Numeric conversions range-check:
 <Playground id="std-conv" />
 
 <Playground id="std-conv-bad" />
+
+Chars convert to and from their Unicode codepoints — `to-u32` (or any integer
+conversion wide enough) reads a char's codepoint, and `to-char` builds a char
+back from an int. `to-char` rejects ints that are not Unicode scalar values
+(surrogates, or anything past `0x10FFFF`):
+
+<Playground id="std-char-conv" />
+
+<Playground id="std-char-conv-bad" />
 
 ## Input / output
 

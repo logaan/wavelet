@@ -63,6 +63,7 @@ fn builtin_doc(name: &str) -> &'static str {
         "split" | "join" => "Split a string / join a list of strings.",
         "contains" => "Substring / membership test.",
         "to-string" => "Render a value as a string.",
+        "to-char" => "Convert an integer Unicode scalar value to a char.",
         "read" => "Parse a string into a form.",
         "apply" => "Call a function with a list of arguments.",
         "gensym" => "A fresh, unique symbol (for macros).",
