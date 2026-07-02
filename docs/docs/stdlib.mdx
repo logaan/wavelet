@@ -193,7 +193,3 @@ A `cell` is the standard library's mutable reference — the one place mutation 
 | `drop` | `drop(h)` | release a resource handle |
 
 <Playground id="std-cells" />
-
-:::info[Resources beyond cells]
-`cell` is the only resource type that ships today. General resource handles — opening, methods, owned-handle drop semantics — are part of the component-interop story and are **not yet implemented**; `drop` currently accepts any value and returns unit. See [Components & composition](./components#resources) and the [roadmap](./roadmap).
-:::

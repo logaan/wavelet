@@ -32,4 +32,4 @@ In the compiled backend these become the wasm `return_call` / `return_call_indir
 
 The guarantee holds **within a component**. A call to an *imported* function passes through canonical-ABI adapters that the composer generates, and those frames are outside Wavelet's control — so a recursion cycle routed through a component boundary consumes stack.
 
-The compiler warns when it can see an unbounded recursion routed through an import, and the planned [`compose --fuse`](../roadmap) optimisation dissolves the boundary for all-Wavelet subgraphs, restoring cross-component tail calls.
+The compiler warns when it can see an unbounded recursion routed through an import.
