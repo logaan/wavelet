@@ -32,24 +32,10 @@ These are implemented and exercised — most of them power the [live playgrounds
 
 Everything below is part of the [design](./philosophy) but **does not work yet**. Where it's mentioned in the docs, you'll find a callout linking back here.
 
-### Resources beyond `cell`
-
-- The only concrete resource is the standard-library [`cell`](./stdlib#cells).
-- General resource handles from imported interfaces — constructors, methods, owned-handle drop semantics — are **not implemented**. [`drop`](./stdlib#cells) currently accepts any value and returns unit.
-
 ### Boundary coercions & the `safely` wrapper
 
 - Automatic checked coercion of dynamic values to boundary WIT types (beyond the scalar checks in typed `Fn` params and [`The`](./language/special-forms#the)) is **partial**.
 - The `safely` wrapper — turning a boundary type-mismatch trap into an `err` instead — is **not implemented**.
-
-### Closures across component boundaries
-
-- First-class closures **within** a component work.
-- Automatic lifting of an **escaping** closure into a single-method resource (and the inbound duck-typing of any lone-`call` resource) is **not yet implemented**. See [Components & composition](./components#closures-across-boundaries).
-
-### `compose --fuse`
-
-- Merging all-Wavelet subgraphs into one core module — eliding boundary copies and restoring cross-component [tail calls](./language/tail-calls#the-honest-caveat) — is **not implemented**.
 
 ### A compose manifest
 

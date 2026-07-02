@@ -58,6 +58,6 @@ Every commitment has a cost. The design accepts them openly:
 | Fixed macro arity | Paren-free macro syntax, but macros must be defined before use, and variadic macros take a single list. |
 | Code as an arena type | The wire encoding of "a form" is a flat node table, uglier than a recursive type — but it is what WIT can express today, and Wavelet hides it everywhere except the wire. |
 | Dynamic core | Some errors surface at the boundary rather than at the keystroke; annotations recover this where it matters. |
-| Per-file components | Boundary calls copy data; a planned `--fuse` step recovers this for all-Wavelet subgraphs (see the [roadmap](./roadmap)). |
+| Per-file components | Boundary calls copy data. |
 
 These trade-offs are deliberate. Wavelet would rather be a small, honest layer over the Component Model than a large language that hides it.
