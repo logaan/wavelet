@@ -1,0 +1,220 @@
+/// # roundtrip:suite — a WIT round-trip conformance suite
+///
+/// This package exercises every type and feature documented on
+/// <https://component-model.bytecodealliance.org/design/wit.html>.
+///
+/// ## The protocol
+///
+/// An implementation under test exports the `values` and `resources`
+/// interfaces. For every `*-rt` function the rule is the same: take the
+/// argument, apply the *documented transform* for its type (see each doc
+/// comment below), and return the result. A test driver imports the same
+/// interfaces, calls every function with a hard-coded seed value, and checks
+/// the response against the transform it computed locally. Seeds are private
+/// to each driver build (two builds with different seed tables are shipped),
+/// so a callee cannot hard-code responses; it must actually decompose and
+/// rebuild each value.
+///
+/// ## Transform conventions
+///
+/// - integers: add 1, wrapping at the type's width
+/// - floats: add 1.0
+/// - bool: negate
+/// - char: next Unicode scalar value (skipping the surrogate gap,
+///   U+10FFFF wraps to U+0000)
+/// - string: append "!"
+/// - list: transform each element (length preserved)
+/// - option: none stays none; some(v) becomes some(transform(v))
+/// - result with payloads: keep the side, transform the payload
+/// - bare result: flip ok <-> err
+/// - tuple / record: transform each field
+/// - enum: rotate to the next case (last wraps to first)
+/// - flags: toggle every defined member
+/// - variant: per-case rules given on the type
+/// - resources: semantics documented per function on the `resources`
+///   interface
+package roundtrip:suite@0.1.0;
+
+/// Type definitions shared by the other interfaces via `use`.
+interface types {
+  /// Transform: x and y each gain 1.
+  record point {
+    x: s32,
+    y: s32,
+  }
+
+  /// One field per primitive type. Transform: each field follows its
+  /// primitive's rule (see package docs).
+  record every-primitive {
+    a: bool,
+    b: s8,
+    c: s16,
+    d: s32,
+    e: s64,
+    f: u8,
+    g: u16,
+    h: u32,
+    i: u64,
+    j: f32,
+    k: f64,
+    l: char,
+    m: string,
+  }
+
+  /// Field names that collide with WIT keywords, spelled with the `%`
+  /// escape. Transform: fieldwise (integer +1, string appends "!").
+  record awkward {
+    %record: u32,
+    %list: string,
+  }
+
+  /// Transform, per case:
+  /// - dot            -> circle(1.0)
+  /// - circle(r)      -> circle(r + 1.0)
+  /// - rect(p)        -> rect(transform(p))
+  /// - labelled(s)    -> labelled(s + "!")
+  variant shape {
+    dot,
+    circle(f64),
+    rect(point),
+    labelled(string),
+  }
+
+  /// Transform: rotate north -> east -> south -> west -> north.
+  enum direction {
+    north,
+    east,
+    south,
+    west,
+  }
+
+  /// Transform: toggle every member.
+  flags permissions {
+    read,
+    write,
+    exec,
+    admin,
+  }
+
+  /// A type alias over a compound type. Transform: as list<point>.
+  type points = list<point>;
+}
+
+/// One round-trip function per plain data type and function shape.
+interface values {
+  use types.{point, every-primitive, awkward, shape, direction, permissions, points};
+
+  // --- primitives ---
+  bool-rt: func(v: bool) -> bool;
+  s8-rt: func(v: s8) -> s8;
+  s16-rt: func(v: s16) -> s16;
+  s32-rt: func(v: s32) -> s32;
+  s64-rt: func(v: s64) -> s64;
+  u8-rt: func(v: u8) -> u8;
+  u16-rt: func(v: u16) -> u16;
+  u32-rt: func(v: u32) -> u32;
+  u64-rt: func(v: u64) -> u64;
+  f32-rt: func(v: f32) -> f32;
+  f64-rt: func(v: f64) -> f64;
+  char-rt: func(v: char) -> char;
+  string-rt: func(v: string) -> string;
+
+  // --- built-in compounds ---
+  list-u8-rt: func(v: list<u8>) -> list<u8>;
+  list-string-rt: func(v: list<string>) -> list<string>;
+  list-list-u8-rt: func(v: list<list<u8>>) -> list<list<u8>>;
+  option-u8-rt: func(v: option<u8>) -> option<u8>;
+  option-shape-rt: func(v: option<shape>) -> option<shape>;
+  /// Bare result: ok flips to err and err flips to ok.
+  result-rt: func(v: result) -> result;
+  result-u32-rt: func(v: result<u32>) -> result<u32>;
+  result-string-err-rt: func(v: result<_, string>) -> result<_, string>;
+  result-u32-string-rt: func(v: result<u32, string>) -> result<u32, string>;
+  result-tuple-direction-rt: func(v: result<tuple<u8, u8>, direction>) -> result<tuple<u8, u8>, direction>;
+  tuple-rt: func(v: tuple<u8, string, bool>) -> tuple<u8, string, bool>;
+  tuple-nested-rt: func(v: tuple<point, list<u8>>) -> tuple<point, list<u8>>;
+
+  // --- user-defined types ---
+  point-rt: func(v: point) -> point;
+  every-primitive-rt: func(v: every-primitive) -> every-primitive;
+  awkward-rt: func(v: awkward) -> awkward;
+  shape-rt: func(v: shape) -> shape;
+  direction-rt: func(v: direction) -> direction;
+  permissions-rt: func(v: permissions) -> permissions;
+  points-rt: func(v: points) -> points;
+
+  // --- function shapes ---
+  /// Takes nothing, must return exactly 42.
+  no-params: func() -> u32;
+  /// Returns nothing; must simply not trap.
+  no-result: func(v: u32);
+  /// Takes and returns nothing; must simply not trap.
+  no-params-no-result: func();
+  /// Transform: a + b + c + d + 1, all as u64, wrapping.
+  multi-param: func(a: u8, b: u16, c: u32, d: u64) -> u64;
+}
+
+/// Resource round-trips: handles crossing the boundary in both directions,
+/// constructors, methods, statics, and borrows.
+interface resources {
+  use types.{point};
+
+  /// A stateful counter.
+  resource counter {
+    /// Starts the counter at `start`.
+    constructor(start: u32);
+    /// Post-increment: returns the current value, then advances by 1.
+    next: func() -> u32;
+    /// Returns the current value without advancing.
+    value: func() -> u32;
+    /// Static constructor: a counter whose value is the sum of `values`
+    /// (wrapping), starting at 0 for an empty list.
+    sum: static func(values: list<u32>) -> counter;
+  }
+
+  /// Returns a freshly constructed counter starting at `start`
+  /// (an owned handle crossing the boundary outward).
+  make-counter: func(start: u32) -> counter;
+
+  /// Advances the borrowed counter once and returns the post-advance value.
+  bump-counter: func(c: borrow<counter>) -> u32;
+
+  /// Consumes the counter and returns its final value.
+  take-counter: func(c: counter) -> u32;
+
+  /// Consumes the counter and returns a new one starting at value + 1.
+  counter-round-trip: func(c: counter) -> counter;
+
+  /// Reads the borrowed counter into a point: x = value as s32,
+  /// y = x + 1. (Exercises `use`d types alongside resources.)
+  counter-to-point: func(c: borrow<counter>) -> point;
+}
+
+/// The test driver's entry point.
+interface runner {
+  /// Calls every function of the imported `values` and `resources`
+  /// interfaces with this build's seed values and checks each response.
+  /// Returns ok on a clean pass, or err with one message per failed check.
+  run: func() -> result<_, list<string>>;
+  /// The `values` checks alone — so an implementation whose resource
+  /// support is missing (or stubbed) still gets a granular data-type report.
+  run-values: func() -> result<_, list<string>>;
+  /// The `resources` checks alone.
+  run-resources: func() -> result<_, list<string>>;
+}
+
+/// Exports-only world: the terminator at the end of a composition chain
+/// (its exports are never actually called), or a pure callee.
+world stub {
+  export values;
+  export resources;
+}
+
+/// The symmetric artifact: tests whatever it imports, and can itself be
+/// tested through what it exports. (`include stub` pulls in the exports.)
+world roundtrip {
+  include stub;
+  import values;
+  import resources;
+  export runner;
+}
