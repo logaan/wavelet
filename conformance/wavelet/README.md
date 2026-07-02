@@ -18,12 +18,12 @@ transforms, and harness). The suite's WIT is vendored under
   wasmtime run --invoke 'run()' composed.wasm          # or run-values() / run-resources()
   ```
 
-  Current result against both rust-a and rust-b callees:
-  `run-resources()` → `ok` (all ten resource checks pass);
-  `run-values()` → three failures, all documenting one live backend bug
-  (byte-width payloads corrupted on lift: `list-u8-rt`, `option-u8-rt some`,
-  `result-tuple-direction-rt ok`). Checks Wavelet cannot yet express are
-  absent and listed in the header comment of `runner.wvl`.
+  Current result against both rust-a and rust-b callees: `run()`,
+  `run-values()`, and `run-resources()` all → `ok`. (Three values checks used
+  to fail to a backend bug — byte-width payloads corrupted on lift — fixed in
+  `emit.rs` and pinned by `tests/backend_byte_width.rs`.) Checks Wavelet
+  cannot yet express are absent and listed in the header comment of
+  `runner.wvl`.
 
 - **`src/roundtrip.wvl` — the callee role. Does not build; kept as the
   target.** Exporting into a foreign interface is all-or-nothing, and several

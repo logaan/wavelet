@@ -19,11 +19,10 @@ Package "conformance:wavelet@0.1.0"
 //   - points-rt: dep type aliases unsupported by backend.
 //   - option-u8-rt none side: none() missing from the wasm backend.
 //
-// Checks that run but are EXPECTED TO FAIL against a correct callee (they
-// document live backend lift bugs, not callee bugs): list-u8-rt,
-// option-u8-rt some, result-tuple-direction-rt ok — byte-width payloads are
-// corrupted on lift (e.g. head of list<u8> [2 3 4] lifts as 65794, some(8)
-// payload lifts as 0).
+// All present checks pass against a correct callee. (list-u8-rt, option-u8-rt
+// some, and result-tuple-direction-rt ok used to fail to a backend bug —
+// byte-width payloads corrupted on lift — fixed in emit.rs and pinned by
+// tests/backend_byte_width.rs.)
 
 Import {pkg: "roundtrip:suite/values" as: iv}
 Import {pkg: "roundtrip:suite/resources" as: ir}
