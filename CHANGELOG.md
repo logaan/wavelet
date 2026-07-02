@@ -13,6 +13,17 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Byte-width payloads no longer corrupt at the component boundary.** The wasm
+  backend gave every sub-4-byte integer (`u8`/`s8`/`u16`/`s16`) a 4-byte
+  size/alignment and read/wrote it with full `i32` accesses, so any such value
+  the canonical ABI places in linear memory — list elements, record and tuple
+  fields, option/result payloads — was lifted from (and lowered to) the wrong
+  strides and offsets: the head of a `list<u8>` `[1 2 3]` lifted as 197121,
+  `some(7)` as `some(0)`. Compiled components now use the canonical byte-width
+  layout with sign/zero-extending narrow loads, matching the interpreter.
+
 ## [0.9.2] - 2026-06-27
 
 ### Changed

@@ -74,8 +74,8 @@ fn push_zero(fx: &mut FnCtx, vt: ValType) {
 enum WitTy {
     Bool,
     Char, // a Unicode scalar — i32 flat (u32 codepoint), carried in an int box
-    IntS, // s8/s16/s32 — i32 flat, sign-extended into the int box
-    IntU, // u8/u16/u32
+    IntS(u8), // s8/s16/s32 (byte width 1/2/4) — i32 flat, sign-extended into the int box
+    IntU(u8), // u8/u16/u32 (byte width 1/2/4)
     S64,  // s64/u64 — i64 flat
     F64,
     Str,
@@ -249,8 +249,12 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
     Ok(match s {
         "bool" => WitTy::Bool,
         "char" => WitTy::Char,
-        "s8" | "s16" | "s32" => WitTy::IntS,
-        "u8" | "u16" | "u32" => WitTy::IntU,
+        "s8" => WitTy::IntS(1),
+        "s16" => WitTy::IntS(2),
+        "s32" => WitTy::IntS(4),
+        "u8" => WitTy::IntU(1),
+        "u16" => WitTy::IntU(2),
+        "u32" => WitTy::IntU(4),
         "s64" | "u64" => WitTy::S64,
         "f64" => WitTy::F64,
         "string" => WitTy::Str,
@@ -376,8 +380,8 @@ fn flat_len(ty: &WitTy) -> usize {
     match ty {
         WitTy::Bool
         | WitTy::Char
-        | WitTy::IntS
-        | WitTy::IntU
+        | WitTy::IntS(_)
+        | WitTy::IntU(_)
         | WitTy::S64
         | WitTy::F64
         | WitTy::Handle
@@ -403,8 +407,8 @@ fn flat_checked(ty: &WitTy) -> Result<Vec<ValType>, String> {
     Ok(match ty {
         WitTy::Bool
         | WitTy::Char
-        | WitTy::IntS
-        | WitTy::IntU
+        | WitTy::IntS(_)
+        | WitTy::IntU(_)
         | WitTy::Handle
         | WitTy::Enum(_)
         | WitTy::Flags(_) => vec![ValType::I32],
@@ -447,7 +451,7 @@ fn align_of(ty: &WitTy) -> u64 {
     match ty {
         WitTy::Bool => 1,
         WitTy::Char | WitTy::Handle => 4,
-        WitTy::IntS | WitTy::IntU => 4, // s8/s16 widen to 4 here (we only box i32)
+        WitTy::IntS(w) | WitTy::IntU(w) => *w as u64,
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 4, // (ptr, len), pointer-aligned
         WitTy::Record(fields) => fields.iter().map(|(_, t)| align_of(t)).max().unwrap_or(1),
@@ -499,7 +503,7 @@ fn size_of(ty: &WitTy) -> u64 {
     match ty {
         WitTy::Bool => 1,
         WitTy::Char | WitTy::Handle => 4,
-        WitTy::IntS | WitTy::IntU => 4,
+        WitTy::IntS(w) | WitTy::IntU(w) => *w as u64,
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 8,
         WitTy::Enum(cases) => disc_size(cases.len()),
@@ -567,13 +571,14 @@ fn record_field_offsets(ty: &WitTy) -> Vec<(u64, WitTy)> {
 /// is made at runtime on the value's box tag, so a real list still builds
 /// element-by-element; only a string value takes the zero-copy bytes path.
 fn is_byte_elem(ty: &WitTy) -> bool {
-    matches!(ty, WitTy::IntU | WitTy::IntS)
+    matches!(ty, WitTy::IntU(1) | WitTy::IntS(1))
 }
 
 fn elem_size(ty: &WitTy) -> u64 {
     match ty {
         WitTy::Bool => 1,
-        WitTy::Char | WitTy::IntS | WitTy::IntU | WitTy::Handle => 4,
+        WitTy::Char | WitTy::Handle => 4,
+        WitTy::IntS(w) | WitTy::IntU(w) => *w as u64,
         WitTy::S64 | WitTy::F64 | WitTy::Str | WitTy::List(_) => 8,
         WitTy::Enum(_) | WitTy::Flags(_) => size_of(ty),
         WitTy::Record(_)
@@ -818,7 +823,7 @@ package wavelet:meta@0.1.0 {\n\
 /// incoming `tree` and lowering an outgoing one through the generic boundary
 /// bridge. Mirrors `wit/meta/code.wit` exactly.
 fn meta_node_wit_ty() -> WitTy {
-    let nid = WitTy::IntU; // node-id = u32
+    let nid = WitTy::IntU(4); // node-id = u32
     WitTy::Variant(vec![
         ("bool-val".into(), Some(WitTy::Bool)),
         ("int-val".into(), Some(WitTy::S64)),
@@ -841,10 +846,10 @@ fn meta_node_wit_ty() -> WitTy {
 fn meta_tree_wit_ty() -> WitTy {
     WitTy::Record(vec![
         ("nodes".into(), WitTy::List(Box::new(meta_node_wit_ty()))),
-        ("root".into(), WitTy::IntU),
+        ("root".into(), WitTy::IntU(4)),
         (
             "spans".into(),
-            WitTy::List(Box::new(WitTy::Tuple(vec![WitTy::IntU, WitTy::IntU]))),
+            WitTy::List(Box::new(WitTy::Tuple(vec![WitTy::IntU(4), WitTy::IntU(4)]))),
         ),
     ])
 }
@@ -2427,7 +2432,7 @@ impl<'a> Emitter<'a> {
                         }
                         _ => {
                             fx.op(I::Call(fns.size)); // -> i32 u32
-                            self.lift(fx, &WitTy::IntU);
+                            self.lift(fx, &WitTy::IntU(4));
                         }
                     }
                 }
@@ -2529,7 +2534,7 @@ impl<'a> Emitter<'a> {
     fn lower(&mut self, fx: &mut FnCtx, ty: &WitTy) -> Result<(), String> {
         match ty {
             WitTy::Bool => fx.op(I::Call(self.h.truthy)),
-            WitTy::Char | WitTy::IntS | WitTy::IntU | WitTy::Handle => {
+            WitTy::Char | WitTy::IntS(_) | WitTy::IntU(_) | WitTy::Handle => {
                 fx.op(I::Call(self.h.unbox_int));
                 fx.op(I::I32WrapI64);
             }
@@ -2852,11 +2857,11 @@ impl<'a> Emitter<'a> {
     fn lift(&mut self, fx: &mut FnCtx, ty: &WitTy) {
         match ty {
             WitTy::Bool => fx.op(I::Call(self.h.box_bool)),
-            WitTy::IntS => {
+            WitTy::IntS(_) => {
                 fx.op(I::I64ExtendI32S);
                 fx.op(I::Call(self.h.box_int));
             }
-            WitTy::Char | WitTy::IntU | WitTy::Handle => {
+            WitTy::Char | WitTy::IntU(_) | WitTy::Handle => {
                 fx.op(I::I64ExtendI32U);
                 fx.op(I::Call(self.h.box_int));
             }
@@ -3099,12 +3104,24 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.truthy));
                 fx.op(I::I32Store8(ma(off, 0)));
             }
-            WitTy::Char | WitTy::IntS | WitTy::IntU | WitTy::Handle => {
+            WitTy::Char | WitTy::Handle => {
                 fx.op(I::LocalGet(dst));
                 fx.op(I::LocalGet(src));
                 fx.op(I::Call(self.h.unbox_int));
                 fx.op(I::I32WrapI64);
                 fx.op(I::I32Store(ma(off, 2)));
+            }
+            WitTy::IntS(w) | WitTy::IntU(w) => {
+                let w = *w;
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(src));
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::I32WrapI64);
+                match w {
+                    1 => fx.op(I::I32Store8(ma(off, 0))),
+                    2 => fx.op(I::I32Store16(ma(off, 1))),
+                    _ => fx.op(I::I32Store(ma(off, 2))),
+                }
             }
             WitTy::S64 => {
                 fx.op(I::LocalGet(dst));
@@ -3282,13 +3299,27 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Load8U(ma(off, 0)));
                 fx.op(I::Call(self.h.box_bool));
             }
-            WitTy::IntS => {
+            WitTy::IntS(w) => {
                 fx.op(I::LocalGet(src));
-                fx.op(I::I32Load(ma(off, 2)));
+                match *w {
+                    1 => fx.op(I::I32Load8S(ma(off, 0))),
+                    2 => fx.op(I::I32Load16S(ma(off, 1))),
+                    _ => fx.op(I::I32Load(ma(off, 2))),
+                }
                 fx.op(I::I64ExtendI32S);
                 fx.op(I::Call(self.h.box_int));
             }
-            WitTy::Char | WitTy::IntU | WitTy::Handle => {
+            WitTy::IntU(w) => {
+                fx.op(I::LocalGet(src));
+                match *w {
+                    1 => fx.op(I::I32Load8U(ma(off, 0))),
+                    2 => fx.op(I::I32Load16U(ma(off, 1))),
+                    _ => fx.op(I::I32Load(ma(off, 2))),
+                }
+                fx.op(I::I64ExtendI32U);
+                fx.op(I::Call(self.h.box_int));
+            }
+            WitTy::Char | WitTy::Handle => {
                 fx.op(I::LocalGet(src));
                 fx.op(I::I32Load(ma(off, 2)));
                 fx.op(I::I64ExtendI32U);
@@ -6236,7 +6267,7 @@ fn mc_manifest(em: &mut Emitter, macros: &[MacroDef]) -> Result<(u32, Function),
         fx.op(I::I32Store(ma(8 + 4 * i as u64, 2)));
     }
     // lower list<tuple<string,u32>> → (ptr,len) parked in an 8-byte area
-    let list_ty = WitTy::List(Box::new(WitTy::Tuple(vec![WitTy::Str, WitTy::IntU])));
+    let list_ty = WitTy::List(Box::new(WitTy::Tuple(vec![WitTy::Str, WitTy::IntU(4)])));
     let lp = fx.local(I32);
     let ll = fx.local(I32);
     let area = fx.local(I32);
@@ -8396,7 +8427,7 @@ world app {
 
     #[test]
     fn set_bodies_dedup_and_membership_s32() {
-        let bytes = componentize(&WitTy::IntS).expect("componentize + validate");
+        let bytes = componentize(&WitTy::IntS(4)).expect("componentize + validate");
         let mut c = HostComponent::from_bytes(&bytes).expect("instantiate");
 
         // constructor() -> own<set>
