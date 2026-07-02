@@ -382,12 +382,26 @@ fn run_resources(fails: &mut Vec<String>) {
     );
 }
 
+fn finish(fails: Vec<String>) -> Result<(), Vec<String>> {
+    if fails.is_empty() { Ok(()) } else { Err(fails) }
+}
+
 impl RunnerGuest for Component {
     fn run() -> Result<(), Vec<String>> {
         let mut fails = Vec::new();
         run_values(&mut fails);
         run_resources(&mut fails);
-        if fails.is_empty() { Ok(()) } else { Err(fails) }
+        finish(fails)
+    }
+    fn run_values() -> Result<(), Vec<String>> {
+        let mut fails = Vec::new();
+        self::run_values(&mut fails);
+        finish(fails)
+    }
+    fn run_resources() -> Result<(), Vec<String>> {
+        let mut fails = Vec::new();
+        self::run_resources(&mut fails);
+        finish(fails)
     }
 }
 
