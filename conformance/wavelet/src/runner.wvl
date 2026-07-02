@@ -1,0 +1,114 @@
+Package "conformance:wavelet@0.1.0"
+
+// Wavelet as the CALLER of the roundtrip:suite conformance world: imports
+// values + resources, exports the runner. Seeds and expected responses are
+// both literals (chosen within wavelet's expressible range).
+//
+// Checks that wavelet cannot express today are ABSENT and recorded as
+// shortcomings on the LoT task instead:
+//   - shape-rt / direction-rt / option-shape-rt and the err side of
+//     result-tuple-direction-rt: dep variant/enum cases are not constructible
+//     (unbound names).
+//   - result-rt and the payload-less sides of result-u32-rt /
+//     result-string-err-rt: lowering a payload-less ok()/err() panics the
+//     compiler (emit.rs "never a single flat value").
+//   - permissions-rt: flag literals are not supported by the wasm backend.
+//   - char-rt: lowering/lifting a char at the boundary traps at runtime
+//     (wasm unreachable) — excluded so the rest of the run survives.
+//   - f32-rt and every-primitive-rt (f32 field): f32 unsupported by backend.
+//   - points-rt: dep type aliases unsupported by backend.
+//   - option-u8-rt none side: none() missing from the wasm backend.
+//
+// Checks that run but are EXPECTED TO FAIL against a correct callee (they
+// document live backend lift bugs, not callee bugs): list-u8-rt,
+// option-u8-rt some, result-tuple-direction-rt ok — byte-width payloads are
+// corrupted on lift (e.g. head of list<u8> [2 3 4] lifts as 65794, some(8)
+// payload lifts as 0).
+
+Import {pkg: "roundtrip:suite/values" as: iv}
+Import {pkg: "roundtrip:suite/resources" as: ir}
+
+// A check yields "" on pass or its name on failure; collect keeps the names.
+Def check Fn {name pass}
+  If pass "" name
+
+Def collect Fn {xs acc}
+  If eq(xs [])
+     acc
+     Let {h: head(xs)
+          acc2: If eq(h "") acc str-cat(str-cat(acc " ") h)}
+       collect(tail(xs) acc2)
+
+Def values-fails Fn {}
+  Let {u1: iv/no-result(5)
+       u2: iv/no-params-no-result()}
+    collect([check("bool-rt" eq(iv/bool-rt(true) false))
+             check("s8-rt" eq(iv/s8-rt(-5) -4))
+             check("s16-rt" eq(iv/s16-rt(-300) -299))
+             check("s32-rt" eq(iv/s32-rt(-70000) -69999))
+             check("s64-rt" eq(iv/s64-rt(-5000000000) -4999999999))
+             check("u8-rt" eq(iv/u8-rt(250) 251))
+             check("u16-rt" eq(iv/u16-rt(65000) 65001))
+             check("u32-rt" eq(iv/u32-rt(4000000000) 4000000001))
+             check("u64-rt" eq(iv/u64-rt(9007199254740991) 9007199254740992))
+             check("f64-rt" eq(iv/f64-rt(-0.75) 0.25))
+             check("string-rt" eq(iv/string-rt("wave") "wave!"))
+             check("list-u8-rt" eq(iv/list-u8-rt([1 2 3]) [2 3 4]))
+             check("list-string-rt" eq(iv/list-string-rt(["a" ""]) ["a!" "!"]))
+             check("list-list-u8-rt" eq(iv/list-list-u8-rt([[1] []]) [[2] []]))
+             check("option-u8-rt some" eq(iv/option-u8-rt(some(7)) some(8)))
+             check("result-u32-rt ok" eq(iv/result-u32-rt(ok(3)) ok(4)))
+             check("result-string-err-rt err"
+                   eq(iv/result-string-err-rt(err("bad")) err("bad!")))
+             check("result-u32-string-rt ok"
+                   eq(iv/result-u32-string-rt(ok(9)) ok(10)))
+             check("result-u32-string-rt err"
+                   eq(iv/result-u32-string-rt(err("no")) err("no!")))
+             check("result-tuple-direction-rt ok"
+                   eq(iv/result-tuple-direction-rt(ok(Quote (1 2))) ok(Quote (2 3))))
+             check("tuple-rt" eq(iv/tuple-rt(Quote (1 "x" true)) Quote (2 "x!" false)))
+             check("tuple-nested-rt"
+                   eq(iv/tuple-nested-rt(Quote ({x: 1 y: 2} [3])) Quote ({x: 2 y: 3} [4])))
+             check("point-rt" eq(iv/point-rt({x: 3 y: 4}) {x: 4 y: 5}))
+             check("awkward-rt" eq(iv/awkward-rt({record: 1 list: "r"})
+                                   {record: 2 list: "r!"}))
+             check("no-params" eq(iv/no-params() 42))
+             check("multi-param" eq(iv/multi-param(1 2 3 4) 11))]
+            "")
+
+Def resources-fails Fn {}
+  Let {c: ir/counter(5)
+       n1: ir/next(c)
+       n2: ir/next(c)
+       n3: ir/value(c)
+       c2: ir/counter(5)
+       b1: ir/bump-counter(c2)
+       b2: ir/value(c2)}
+    collect([check("counter.next 1st" eq(n1 5))
+             check("counter.next 2nd" eq(n2 6))
+             check("counter.value" eq(n3 7))
+             check("counter.sum" eq(ir/value(ir/sum([1 2 3])) 6))
+             check("make-counter" eq(ir/value(ir/make-counter(5)) 5))
+             check("bump-counter" eq(b1 6))
+             check("bump-counter state" eq(b2 6))
+             check("take-counter" eq(ir/take-counter(ir/counter(5)) 5))
+             check("counter-round-trip"
+                   eq(ir/value(ir/counter-round-trip(ir/counter(5))) 6))
+             check("counter-to-point"
+                   eq(ir/counter-to-point(ir/counter(5)) {x: 5 y: 6}))]
+            "")
+
+Def report Fn {fails}
+  If eq(fails "") ok(true) err([fails])
+
+Export {name: run iface: "roundtrip:suite/runner" params: {} result: result(bool list(string))}
+Def run Fn {}
+  report(str-cat(values-fails() resources-fails()))
+
+Export {name: run-values iface: "roundtrip:suite/runner" params: {} result: result(bool list(string))}
+Def run-values Fn {}
+  report(values-fails())
+
+Export {name: run-resources iface: "roundtrip:suite/runner" params: {} result: result(bool list(string))}
+Def run-resources Fn {}
+  report(resources-fails())
