@@ -1,2 +1,3 @@
 [vault]
 path=".lot-vault"
+auto-commit=false
