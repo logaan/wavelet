@@ -3,8 +3,10 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 Wavelet is a homoiconic language for the WebAssembly Component Model, written in
-Rust (edition 2024). See `README.md` for the project overview and CLI, and
-`dev-notes/design.md` for the full language design (draft 0.1).
+Rust (edition 2024). See `README.md` for the project overview and CLI, and the
+docs site under `docs/docs/` for the language documentation. (The old
+`dev-notes/` directory has been deleted; design and planning discussion now
+lives in the LoT vault at `.lot-vault/`.)
 
 The helper scripts (build, test, release, install) and how the release/docs
 pipelines fit together are documented in `scripts/README.md`; the rules below
