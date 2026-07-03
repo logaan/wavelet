@@ -1436,8 +1436,10 @@ impl<'a> Emitter<'a> {
             }
             Node::Lst(items) => return self.list_box(fx, &items),
             Node::Rec(fields) => return self.rec_box(fx, &fields),
-            Node::Flg(_) => {
-                return Err("flag literals not supported by the wasm backend yet".into());
+            Node::Flg(names) => {
+                // A flags literal IS the interpreter's `Value::Flg(names)`:
+                // a TAG_FLG box over the set names, in source order (5.4).
+                self.flg_box(fx, &names);
             }
             Node::Qsym(a, n) => {
                 // A dep-declared nullary variant/enum case referenced through
@@ -2928,7 +2930,11 @@ impl<'a> Emitter<'a> {
                 self.lower_enum_chain(fx, b, cases, resty, 0)?;
             }
             WitTy::Flags(names) => {
-                // flags record box → bitset i32: OR `1<<i` for each set flag.
+                // flags value box (TAG_FLG: the set names, like the
+                // interpreter's `Value::Flg`) → bitset i32: OR `1<<i` for
+                // each declared member present in the box. Names the type
+                // does not declare contribute no bit (the checker rejects
+                // them statically for typed literals).
                 let b = fx.local(ValType::I32);
                 let acc = fx.local(ValType::I32);
                 fx.op(I::LocalSet(b));
@@ -2936,11 +2942,11 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalSet(acc));
                 for (i, name) in names.iter().enumerate() {
                     let kaddr = self.intern_str(name);
-                    fx.op(I::LocalGet(acc));
-                    fx.op(I::LocalGet(b));
+                    let needle = fx.local(ValType::I32);
                     fx.op(I::I32Const(kaddr as i32));
-                    fx.op(I::Call(self.h.rec_get));
-                    fx.op(I::Call(self.h.truthy));
+                    fx.op(I::LocalSet(needle));
+                    fx.op(I::LocalGet(acc));
+                    emit_list_contains(self, fx, b, needle);
                     fx.op(I::I32Const(i as i32));
                     fx.op(I::I32Shl);
                     fx.op(I::I32Or);
@@ -3242,34 +3248,49 @@ impl<'a> Emitter<'a> {
         fx.op(I::End);
     }
 
-    /// bitset in local `v` → record box `{name: bool …}`, one field per flag set
-    /// to `(v >> i) & 1`.
+    /// bitset in local `v` → flags value box (TAG_FLG: the names of the set
+    /// bits, in declaration order — the interpreter's `Value::Flg`).
     fn lift_flags(&mut self, fx: &mut FnCtx, v: u32, names: &[String]) {
         let n = names.len();
         let p = fx.local(ValType::I32);
-        fx.op(I::I32Const(8 + 8 * n as i32));
+        let idx = fx.local(ValType::I32);
+        // allocate for the worst case (all bits set); the bump allocator
+        // wastes the unset slots, which die with the arena
+        fx.op(I::I32Const(8 + 4 * n as i32));
         fx.op(I::Call(self.h.alloc));
         fx.op(I::LocalSet(p));
         fx.op(I::LocalGet(p));
-        fx.op(I::I32Const(TAG_REC));
+        fx.op(I::I32Const(TAG_FLG));
         fx.op(I::I32Store(ma(0, 2)));
-        fx.op(I::LocalGet(p));
-        fx.op(I::I32Const(n as i32));
-        fx.op(I::I32Store(ma(4, 2)));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(idx));
         for (i, name) in names.iter().enumerate() {
             let kaddr = self.intern_str(name);
-            fx.op(I::LocalGet(p));
-            fx.op(I::I32Const(kaddr as i32));
-            fx.op(I::I32Store(ma(8 + 8 * i as u64, 2)));
-            fx.op(I::LocalGet(p));
+            // if (v >> i) & 1 { box[8 + 4*idx] = name; idx += 1 }
             fx.op(I::LocalGet(v));
             fx.op(I::I32Const(i as i32));
             fx.op(I::I32ShrU);
             fx.op(I::I32Const(1));
             fx.op(I::I32And);
-            fx.op(I::Call(self.h.box_bool));
-            fx.op(I::I32Store(ma(12 + 8 * i as u64, 2)));
+            fx.op(I::If(BlockType::Empty));
+            fx.op(I::LocalGet(p));
+            fx.op(I::I32Const(8));
+            fx.op(I::I32Add);
+            fx.op(I::LocalGet(idx));
+            fx.op(I::I32Const(2));
+            fx.op(I::I32Shl);
+            fx.op(I::I32Add);
+            fx.op(I::I32Const(kaddr as i32));
+            fx.op(I::I32Store(ma(0, 2)));
+            fx.op(I::LocalGet(idx));
+            fx.op(I::I32Const(1));
+            fx.op(I::I32Add);
+            fx.op(I::LocalSet(idx));
+            fx.op(I::End);
         }
+        fx.op(I::LocalGet(p));
+        fx.op(I::LocalGet(idx));
+        fx.op(I::I32Store(ma(4, 2)));
         fx.op(I::LocalGet(p));
     }
 

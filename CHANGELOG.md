@@ -25,6 +25,14 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **Flags values work in compiled components.** A flags literal (`{read
+  write}`) evaluates in the wasm backend to the same value the interpreter
+  produces (`Value::Flg` — the set names), crosses boundaries as the
+  canonical i32 bitset, and lifts back with the set names in declaration
+  order; `eq` over flags matches the interpreter exactly. The conformance
+  runner's `permissions-rt` checks are restored — every caller-role check
+  the suite defines is now present and green against both Rust callees.
+
 - **`f32` is supported by the wasm backend.** Exports and imports may use
   `f32` in any position — flat params/results, record/tuple fields, list
   elements, variant/option/result payloads. Internally every float remains an

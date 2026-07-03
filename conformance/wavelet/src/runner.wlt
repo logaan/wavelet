@@ -4,9 +4,7 @@ Package "conformance:wavelet@0.1.0"
 // values + resources, exports the runner. Seeds and expected responses are
 // both literals (chosen within wavelet's expressible range).
 //
-// Checks that wavelet cannot express today are ABSENT and recorded as
-// shortcomings on the LoT task instead:
-//   - permissions-rt: flag literals are not supported by the wasm backend.
+// Every check the suite defines for the caller role is present below.
 //
 // All present checks pass against a correct callee. (list-u8-rt, option-u8-rt
 // some, and result-tuple-direction-rt ok used to fail to a backend bug —
@@ -82,6 +80,10 @@ Def values-fails Fn {}
              check("tuple-nested-rt"
                    eq(iv/tuple-nested-rt(Quote ({x: 1 y: 2} [3])) Quote ({x: 2 y: 3} [4])))
              check("point-rt" eq(iv/point-rt({x: 3 y: 4}) {x: 4 y: 5}))
+             check("permissions-rt"
+                   eq(iv/permissions-rt({read exec}) {write admin}))
+             check("permissions-rt empty"
+                   eq(iv/permissions-rt({read write exec admin}) {}))
              check("every-primitive-rt"
                    eq(iv/every-primitive-rt({a: true b: -5 c: -300 d: -70000
                                              e: -5000000000 f: 250 g: 65000
