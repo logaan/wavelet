@@ -1270,6 +1270,13 @@ struct FnSig {
 /// Interning keeps [`Repr`] (and so [`Binding`]) `Copy`.
 type MemTy = u32;
 
+/// Where a 5.3 eligibility scan resolves names: the live emission scopes,
+/// or the simulated scopes of a pre-emission def-signature prediction.
+enum MemLookup<'a> {
+    Fx(&'a FnCtx),
+    Sim(&'a Vec<HashMap<String, WitTy>>),
+}
+
 /// The representation of one value slot (a local, parameter, or result) in
 /// goal-5 typed code: a box pointer (the uniform fallback), an unboxed
 /// scalar on the wasm stack (5.2), or a pointer to the value's canonical
@@ -1312,25 +1319,6 @@ impl FnSig {
 
     fn param_vts(&self) -> Vec<ValType> {
         self.params.iter().map(|&p| repr_vt(p)).collect()
-    }
-}
-
-/// Compute a def's representation signature from its declared parameter
-/// types and the checker's recorded type for its body (5.2). Anything the
-/// checker left gradual stays a boxed slot.
-fn def_sig(
-    arena: &Arena,
-    node_types: &crate::check::NodeTypes,
-    params_id: NodeId,
-    body: NodeId,
-) -> FnSig {
-    let ptys = crate::check::parse_params(arena, params_id);
-    FnSig {
-        params: ptys
-            .iter()
-            .map(|(_, t)| Repr::of_scalar(Scalar::of(t)))
-            .collect(),
-        result: Repr::of_scalar(node_types.get(&body).and_then(Scalar::of)),
     }
 }
 
@@ -2228,11 +2216,19 @@ impl<'a> Emitter<'a> {
             }
         }
         // the uniform wrapper returns a box: a typed result boxes at the seam
-        if let Repr::Scalar(k) = sig.result {
-            fx.op(I::Call(fidx));
-            self.box_scalar(&mut fx, k);
-        } else {
-            fx.op(I::ReturnCall(fidx));
+        match sig.result {
+            Repr::Scalar(k) => {
+                fx.op(I::Call(fidx));
+                self.box_scalar(&mut fx, k);
+            }
+            Repr::Mem(t) => {
+                fx.op(I::Call(fidx));
+                let l = fx.local(ValType::I32);
+                fx.op(I::LocalSet(l));
+                let ty = self.mem_tys[t as usize].clone();
+                self.load_from_mem(&mut fx, &ty, l, 0)?;
+            }
+            Repr::Boxed => fx.op(I::ReturnCall(fidx)),
         }
         let t = self.ty_idx(vec![ValType::I32; 2], vec![ValType::I32]);
         self.closure_bodies.push((t, fx.finish()));
@@ -2554,7 +2550,7 @@ impl<'a> Emitter<'a> {
                 // 5.3: a record binding whose construction is provably
                 // faithful to its static type lives in canonical layout;
                 // boxed consumers rebuild the box at the reference seam
-                self.expr_mem(fx, *v, t)?;
+                self.expr_mem(fx, *v, t, false)?;
                 Binding {
                     local: fx.local(ValType::I32),
                     repr: Repr::Mem(t),
@@ -2594,7 +2590,7 @@ impl<'a> Emitter<'a> {
         let scrut_kind = self.node_scalar(scrut_form);
         let scrut_mem = self.node_mem(fx, scrut_form);
         match scrut_mem {
-            Some(t) => self.expr_mem(fx, scrut_form, t)?,
+            Some(t) => self.expr_mem(fx, scrut_form, t, false)?,
             None => self.expr(fx, scrut_form, false)?,
         }
         let scrut = fx.local(ValType::I32);
@@ -4547,20 +4543,30 @@ impl<'a> Emitter<'a> {
     /// positionally), so only a record literal whose field order matches the
     /// layout's — with losslessly-storable fields — or a binding already
     /// carrying this layout qualifies. Everything else stays boxed.
-    fn can_mem_as(&self, fx: &FnCtx, id: NodeId, ty: &WitTy) -> bool {
+    fn can_mem_as(&self, look: &MemLookup, id: NodeId, ty: &WitTy) -> bool {
         match (self.arena.node(id), ty) {
             (Node::Rec(fields), WitTy::Record(tfs)) if !fields.is_empty() => {
                 fields.len() == tfs.len()
                     && fields
                         .iter()
                         .zip(tfs)
-                        .all(|((k, v), (tk, tf))| k == tk && self.mem_field_ok(fx, *v, tf))
+                        .all(|((k, v), (tk, tf))| k == tk && self.mem_field_ok(look, *v, tf))
             }
-            (Node::Sym(name), _) => matches!(
-                fx.lookup(name).map(|b| b.repr),
-                Some(Repr::Mem(t)) if self.mem_tys[t as usize] == *ty
-            ),
+            (Node::Sym(name), _) => self.lookup_mem(look, name).is_some_and(|t| t == *ty),
             _ => false,
+        }
+    }
+
+    /// The canonical-layout type a name is bound at, if any — through the
+    /// live emission scopes, or through the simulated scopes a def-signature
+    /// prediction walks ([`Self::predict_body_mem`]) before any body exists.
+    fn lookup_mem(&self, look: &MemLookup, name: &str) -> Option<WitTy> {
+        match look {
+            MemLookup::Fx(fx) => match fx.lookup(name)?.repr {
+                Repr::Mem(t) => Some(self.mem_tys[t as usize].clone()),
+                _ => None,
+            },
+            MemLookup::Sim(env) => env.iter().rev().find_map(|scope| scope.get(name)).cloned(),
         }
     }
 
@@ -4569,7 +4575,7 @@ impl<'a> Emitter<'a> {
     /// the interpreter carries: exact kind, lossless width, and
     /// (recursively) faithful field order. Anything else keeps the record
     /// boxed.
-    fn mem_field_ok(&self, fx: &FnCtx, v: NodeId, tf: &WitTy) -> bool {
+    fn mem_field_ok(&self, look: &MemLookup, v: NodeId, tf: &WitTy) -> bool {
         use crate::check::Type as T;
         let vt = self.node_types.get(&v);
         match tf {
@@ -4585,7 +4591,7 @@ impl<'a> Emitter<'a> {
             }
             WitTy::Str => matches!(vt, Some(T::String)),
             WitTy::Record(_) => {
-                matches!(self.arena.node(v), Node::Rec(_)) && self.can_mem_as(fx, v, tf)
+                matches!(self.arena.node(v), Node::Rec(_)) && self.can_mem_as(look, v, tf)
             }
             // f32 (demoting would lose the f64 the oracle keeps), lists,
             // options/results/variants, flags, handles: not yet — those
@@ -4594,24 +4600,105 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// The interned canonical layout for `id` when 5.3 admits one: a known
-    /// non-empty record type whose construction here is provably faithful.
-    fn node_mem(&mut self, fx: &FnCtx, id: NodeId) -> Option<MemTy> {
+    /// The canonical layout for `id` when 5.3 admits one: a known non-empty
+    /// record type whose construction here is provably faithful.
+    fn node_mem_ty(&self, look: &MemLookup, id: NodeId) -> Option<WitTy> {
         let t = self.node_types.get(&id)?.clone();
         let ty = self.wit_of_check_type(&t)?;
         if !matches!(&ty, WitTy::Record(fs) if !fs.is_empty()) {
             return None;
         }
-        if !self.can_mem_as(fx, id, &ty) {
+        if !self.can_mem_as(look, id, &ty) {
             return None;
         }
+        Some(ty)
+    }
+
+    /// [`Self::node_mem_ty`], interned.
+    fn node_mem(&mut self, fx: &FnCtx, id: NodeId) -> Option<MemTy> {
+        let ty = self.node_mem_ty(&MemLookup::Fx(fx), id)?;
         Some(self.mem_ty(&ty))
     }
 
+    /// Compute a def's representation signature from its declared parameter
+    /// types and the checker's recorded type for its body (5.2), plus the
+    /// 5.3 canonical-layout prediction for record-typed bodies. Anything
+    /// the checker left gradual stays a boxed slot.
+    fn def_sig(&mut self, params_id: NodeId, body: NodeId) -> FnSig {
+        let ptys = crate::check::parse_params(self.arena, params_id);
+        let params = ptys
+            .iter()
+            .map(|(_, t)| Repr::of_scalar(Scalar::of(t)))
+            .collect();
+        let result = if let Some(k) = self.node_types.get(&body).and_then(Scalar::of) {
+            Repr::Scalar(k)
+        } else if let Some(ty) = self.predict_body_mem(body, &mut Vec::new()) {
+            Repr::Mem(self.mem_ty(&ty))
+        } else {
+            Repr::Boxed
+        };
+        FnSig { params, result }
+    }
+
+    /// Predict whether a def BODY will be emitted natively in canonical
+    /// layout, and of which type. A def's result representation is fixed
+    /// before any body is emitted, so this walks the same form kinds
+    /// [`Self::expr_mem`] can route (record literals, Mem-bound names,
+    /// If/Do/Let/the), simulating exactly the binding decisions `let_form`
+    /// makes; anything else predicts boxed. `env` carries the simulated
+    /// `Let` scopes.
+    fn predict_body_mem(&self, id: NodeId, env: &mut Vec<HashMap<String, WitTy>>) -> Option<WitTy> {
+        match self.arena.node(id).clone() {
+            Node::Rec(_) => self.node_mem_ty(&MemLookup::Sim(env), id),
+            Node::Sym(name) => env.iter().rev().find_map(|s| s.get(&name)).cloned(),
+            Node::Tup(items) if !items.is_empty() => {
+                let Node::Sym(head) = self.arena.node(items[0]).clone() else {
+                    return None;
+                };
+                let args = &items[1..];
+                match (head.as_str(), args) {
+                    ("if-MACRO", [_c, t, e]) => {
+                        let a = self.predict_body_mem(*t, env)?;
+                        let b = self.predict_body_mem(*e, env)?;
+                        (a == b).then_some(a)
+                    }
+                    ("do-MACRO", [list]) => match self.arena.node(*list).clone() {
+                        Node::Lst(items) if !items.is_empty() => {
+                            self.predict_body_mem(*items.last().unwrap(), env)
+                        }
+                        _ => None,
+                    },
+                    ("let-MACRO", [bindings, body]) => {
+                        let Node::Rec(fields) = self.arena.node(*bindings).clone() else {
+                            return None;
+                        };
+                        env.push(HashMap::new());
+                        for (k, v) in &fields {
+                            // mirror let_form: scalar wins, then Mem, else boxed
+                            if self.node_scalar(*v).is_none()
+                                && let Some(ty) = self.node_mem_ty(&MemLookup::Sim(env), *v)
+                            {
+                                env.last_mut().unwrap().insert(k.clone(), ty);
+                            }
+                        }
+                        let r = self.predict_body_mem(*body, env);
+                        env.pop();
+                        r
+                    }
+                    ("the-MACRO", [_ty, expr]) => self.predict_body_mem(*expr, env),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Emit `id` as a pointer to its canonical layout of type `t`
-    /// ([`Repr::Mem`]). Callers must have established eligibility via
-    /// [`Self::can_mem_as`] / [`Self::node_mem`].
-    fn expr_mem(&mut self, fx: &mut FnCtx, id: NodeId, t: MemTy) -> Result<(), String> {
+    /// ([`Repr::Mem`]). Control forms thread the Mem want through their
+    /// result positions (mirroring the scalar path); leaf callers must have
+    /// established eligibility via [`Self::can_mem_as`] /
+    /// [`Self::node_mem`] / [`Self::predict_body_mem`].
+    fn expr_mem(&mut self, fx: &mut FnCtx, id: NodeId, t: MemTy, tail: bool) -> Result<(), String> {
         let ty = self.mem_tys[t as usize].clone();
         match self.arena.node(id).clone() {
             // a binding already in this layout: alias it (values are
@@ -4636,6 +4723,24 @@ impl<'a> Emitter<'a> {
                 self.expr_mem_into(fx, id, &ty, p, 0)?;
                 fx.op(I::LocalGet(p));
                 Ok(())
+            }
+            Node::Tup(items) if !items.is_empty() => {
+                if let Node::Sym(head) = self.arena.node(items[0]).clone() {
+                    let args = &items[1..];
+                    match head.as_str() {
+                        "if-MACRO" => return self.if_form(fx, args, Repr::Mem(t), tail),
+                        "do-MACRO" => return self.do_form(fx, args, Repr::Mem(t), tail),
+                        "let-MACRO" => return self.let_form(fx, args, Repr::Mem(t), tail),
+                        "match-MACRO" => return self.match_form(fx, args, Repr::Mem(t), tail),
+                        "the-MACRO" => {
+                            if let [_ty, expr] = *args {
+                                return self.expr_mem(fx, expr, t, tail);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Err("internal: expression is not Mem-eligible (5.3)".into())
             }
             _ => Err("internal: expression is not Mem-eligible (5.3)".into()),
         }
@@ -4745,7 +4850,7 @@ impl<'a> Emitter<'a> {
         match want {
             Repr::Boxed => self.expr(fx, id, tail),
             Repr::Scalar(k) => self.expr_scalar_t(fx, id, k, tail),
-            Repr::Mem(t) => self.expr_mem(fx, id, t),
+            Repr::Mem(t) => self.expr_mem(fx, id, t, tail),
         }
     }
 
@@ -5726,14 +5831,14 @@ fn emit_core_module(
     for name in &internal_order {
         let (params_id, body) = info.defs[name];
         let params = param_names(arena, params_id)?;
-        let sig = def_sig(arena, &em.node_types, params_id, body);
+        let sig = em.def_sig(params_id, body);
         em.funcs.insert(name.clone(), (take(), params, sig));
     }
     // Mangled overload members get their own internal-function indices.
     for mangled in &overload_order {
         let (params_id, body) = info.overload_bodies[mangled];
         let params = param_names(arena, params_id)?;
-        let sig = def_sig(arena, &em.node_types, params_id, body);
+        let sig = em.def_sig(params_id, body);
         em.funcs.insert(mangled.clone(), (take(), params, sig));
     }
 
@@ -5910,8 +6015,25 @@ fn emit_core_module(
                 flat(&t)
             }
             FlatRes::Retptr => {
-                // compound results are boxed; a (mismatched) typed scalar
-                // result boxes at the seam first
+                let ty = wit_ty(sig.result.as_deref().unwrap(), &em.type_env)?;
+                // 5.3 fast path: the def's result already lives in canonical
+                // layout of exactly the boundary type — the pointer on the
+                // stack IS the callee-owned result area. No box, no copy.
+                if matches!(res_kind, Repr::Mem(mt) if em.mem_tys[mt as usize] == ty) {
+                    let t = em.ty_idx(fparams, vec![I32]);
+                    em.bodies.push((t, fx.finish()));
+                    let own_iface = if is_external_iface(&sig.iface) {
+                        external_versioned_in(&sig.iface, deps)
+                    } else {
+                        versioned_iface(&info.package, &sig.iface)
+                    };
+                    let export_name = format!("{own_iface}#{}", sig.name);
+                    post_returns.push((export_name.clone(), vec![I32]));
+                    exports.push((export_name, take()));
+                    continue;
+                }
+                // compound results are boxed; a (mismatched) typed scalar or
+                // canonical result reboxes at the seam first
                 match res_kind {
                     Repr::Boxed => {}
                     Repr::Scalar(k) => em.box_scalar(&mut fx, k),
@@ -5922,7 +6044,6 @@ fn emit_core_module(
                         em.load_from_mem(&mut fx, &mty, l, 0)?;
                     }
                 }
-                let ty = wit_ty(sig.result.as_deref().unwrap(), &em.type_env)?;
                 let area = fx.local(I32);
                 if matches!(
                     ty,

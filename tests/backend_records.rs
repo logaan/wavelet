@@ -63,6 +63,15 @@ Def not-a-variant Fn {}
   Let {p: {x: 1 y: 2}}
     Match p [((some q) 0) (other 1)]
 
+Export {name: pick-point params: {c: bool a: s32 b: s32} result: point}
+Def pick-point Fn {c: bool a: s32 b: s32}
+  If c {x: a y: b} {x: b y: a}
+
+Def mk Fn {a: s32 b: s32} Let {p: {x: a y: b}} p
+
+Export {name: use-internal params: {} result: bool}
+Def use-internal Fn {} eq(mk(1 2) {x: 1 y: 2})
+
 Export {name: through-closure params: {} result: bool}
 Def through-closure Fn {}
   Let {p: {x: 1 y: 2}}
@@ -163,6 +172,40 @@ fn canonical_record_pattern_fallthrough_matches_the_oracle() {
 fn non_record_pattern_falls_through_on_canonical_scrutinee() {
     let mut c = component();
     assert_eq!(ok(&mut c, "not-a-variant", &[]), Val::S64(1));
+}
+
+#[test]
+// A def whose BODY is provably canonical carries a Mem result signature:
+// the export wrapper returns the canonical pointer directly when the
+// layout equals the boundary type (the 5.3 retptr fast path), and an If
+// threads the Mem want through both branches.
+fn mem_result_def_through_if_lowers_correctly() {
+    let mut c = component();
+    for (cond, want) in [(true, (7, -3)), (false, (-3, 7))] {
+        let got = ok(
+            &mut c,
+            "pick-point",
+            &[Val::Bool(cond), Val::S32(7), Val::S32(-3)],
+        );
+        let Val::Record(fields) = got else {
+            panic!("pick-point should return a record, got {got:?}");
+        };
+        assert_eq!(
+            fields,
+            vec![
+                ("x".to_string(), Val::S32(want.0)),
+                ("y".to_string(), Val::S32(want.1)),
+            ]
+        );
+    }
+}
+
+#[test]
+// An internal caller of a Mem-result def reboxes at the call seam: the
+// rebuilt box is exactly the interpreter's record value.
+fn internal_call_of_mem_result_def_reboxes_faithfully() {
+    let mut c = component();
+    assert_eq!(ok(&mut c, "use-internal", &[]), Val::Bool(true));
 }
 
 #[test]
