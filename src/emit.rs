@@ -4648,6 +4648,9 @@ impl<'a> Emitter<'a> {
                         .zip(tfs)
                         .all(|((k, v), (tk, tf))| k == tk && self.mem_field_ok(look, *v, tf))
             }
+            (Node::Lst(items), WitTy::List(elem)) => items
+                .iter()
+                .all(|&v| self.mem_field_ok(look, v, elem)),
             (Node::Sym(name), _) => self.lookup_mem(look, name).is_some_and(|t| t == *ty),
             // A dep call whose declared result IS this layout: the retptr
             // area arrives in canonical form, in declared field order —
@@ -4723,9 +4726,12 @@ impl<'a> Emitter<'a> {
             WitTy::Record(_) => {
                 matches!(self.arena.node(v), Node::Rec(_)) && self.can_mem_as(look, v, tf)
             }
-            // f32 (demoting would lose the f64 the oracle keeps), lists,
+            WitTy::List(_) => {
+                matches!(self.arena.node(v), Node::Lst(_)) && self.can_mem_as(look, v, tf)
+            }
+            // f32 (demoting would lose the f64 the oracle keeps),
             // options/results/variants, flags, handles: not yet — those
-            // representations ride 5.4/5.5
+            // representations ride 5.4
             _ => false,
         }
     }
@@ -4783,7 +4789,7 @@ impl<'a> Emitter<'a> {
     /// `Let` scopes.
     fn predict_body_mem(&self, id: NodeId, env: &mut Vec<HashMap<String, WitTy>>) -> Option<WitTy> {
         match self.arena.node(id).clone() {
-            Node::Rec(_) => self.node_mem_ty(&MemLookup::Sim(env), id),
+            Node::Rec(_) | Node::Lst(_) => self.node_mem_ty(&MemLookup::Sim(env), id),
             Node::Sym(name) => env.iter().rev().find_map(|s| s.get(&name)).cloned(),
             Node::Tup(items) if !items.is_empty() => {
                 if matches!(self.arena.node(items[0]), Node::Qsym(..)) {
@@ -4858,6 +4864,17 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.alloc));
                 fx.op(I::LocalSet(p));
                 self.expr_mem_into(fx, id, &ty, p, 0)?;
+                fx.op(I::LocalGet(p));
+                Ok(())
+            }
+            Node::Lst(_) => {
+                // the canonical list VALUE is a pointer to its (ptr, len)
+                // pair; the elements pack into their own buffer (5.5)
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                self.mem_field_into(fx, id, &ty, p, 0)?;
                 fx.op(I::LocalGet(p));
                 Ok(())
             }
@@ -4958,6 +4975,28 @@ impl<'a> Emitter<'a> {
                 self.store_to_mem(fx, tf, l, dst, off)?;
             }
             WitTy::Record(_) => self.expr_mem_into(fx, v, tf, dst, off)?,
+            WitTy::List(elem) => {
+                // a list literal packs its elements at their canonical
+                // stride into a fresh buffer; the field itself is the
+                // (ptr, len) pair (5.5)
+                let Node::Lst(items) = self.arena.node(v).clone() else {
+                    return Err("internal: canonical list store expects a list literal".into());
+                };
+                let esz = elem_size(elem);
+                let buf = fx.local(ValType::I32);
+                fx.op(I::I32Const((items.len() as u64 * esz) as i32));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(buf));
+                for (i, &it) in items.iter().enumerate() {
+                    self.mem_field_into(fx, it, elem, buf, i as u64 * esz)?;
+                }
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(buf));
+                fx.op(I::I32Store(ma(off, 2)));
+                fx.op(I::LocalGet(dst));
+                fx.op(I::I32Const(items.len() as i32));
+                fx.op(I::I32Store(ma(off + 4, 2)));
+            }
             _ => return Err("internal: field type not Mem-storable yet (5.3)".into()),
         }
         Ok(())

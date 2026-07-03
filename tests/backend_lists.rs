@@ -184,3 +184,117 @@ fn list_field_inside_canonical_record_destructures() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "field", &[]), Val::S64(15));
 }
+
+// ---- construction slice: canonical list literals (5.5, no dep needed) ----
+
+fn constructed() -> HostComponent {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("wavelet-memlstc-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+
+    let app = r#"Package "demo:app@0.1.0"
+
+Export {name: mk params: {a: s32 b: s32} result: list(s32)}
+Def mk Fn {a: s32 b: s32} Let {t: [a b]} t
+
+Export {name: c-same params: {} result: bool}
+Def c-same Fn {} Let {t: [1 2 3]} eq(t [1 2 3])
+
+Export {name: c-diff params: {} result: bool}
+Def c-diff Fn {} Let {t: [1 2 3]} eq(t [3 2 1])
+
+Export {name: c-pts params: {} result: bool}
+Def c-pts Fn {}
+  Let {t: [{x: 1 y: 2} {x: 3 y: 4}]} eq(t [{x: 1 y: 2} {x: 3 y: 4}])
+
+Export {name: c-nested params: {} result: s64}
+Def c-nested Fn {}
+  Let {t: [[1 2] [3]]}
+    Match t [([[a b] [c]] add(a add(b c))) (other 0)]
+
+Export {name: c-strs params: {} result: string}
+Def c-strs Fn {}
+  Let {t: ["x" "y"]} Match t [([a b] str-cat(a b)) (other "no")]
+
+Export {name: c-rec-field params: {} result: bool}
+Def c-rec-field Fn {}
+  Let {r: {data: [7 8] tag: "w"}}
+    eq(r {data: [7 8] tag: "w"})
+"#;
+    let app_path = src.join("app.wlt");
+    std::fs::write(&app_path, app).unwrap();
+    let out = dir.join("out");
+    let outputs = wavelet::build::build_files(
+        &[app_path.to_str().unwrap().to_string()],
+        out.to_str().unwrap(),
+    )
+    .expect("build the canonical-lists app");
+    let bytes = std::fs::read(&outputs[0]).expect("read built component");
+    let _ = std::fs::remove_dir_all(&dir);
+    HostComponent::from_bytes(&bytes).expect("instantiate")
+}
+
+const APP_IFACE: &str = "demo:app/api@0.1.0";
+
+fn okc(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
+    c.call_instance(APP_IFACE, f, args)
+        .unwrap_or_else(|e| panic!("`{f}` should succeed: {e}"))[0]
+        .clone()
+}
+
+#[test]
+// A Let-bound list literal of declared-scalar names constructs canonically
+// (packed s32 elements) and its export takes the retptr fast path (the
+// layout equals the boundary type).
+fn constructed_list_exports_through_the_fast_path() {
+    let mut c = constructed();
+    assert_eq!(
+        okc(&mut c, "mk", &[Val::S32(4), Val::S32(9)]),
+        Val::List(vec![Val::S32(4), Val::S32(9)])
+    );
+}
+
+#[test]
+// The rebuilt box is exactly the interpreter's Value::Lst: element order
+// preserved, int literals in the full Value::Int domain (s64 layout).
+fn constructed_list_rebuild_preserves_elements() {
+    let mut c = constructed();
+    assert_eq!(okc(&mut c, "c-same", &[]), Val::Bool(true));
+    assert_eq!(okc(&mut c, "c-diff", &[]), Val::Bool(false));
+}
+
+#[test]
+// Record elements pack in place inside the buffer (records-inside-lists —
+// the recorded 5.3 residue — now constructs canonically too).
+fn record_elements_pack_and_rebuild_faithfully() {
+    let mut c = constructed();
+    assert_eq!(okc(&mut c, "c-pts", &[]), Val::Bool(true));
+}
+
+#[test]
+// Nested list literals pack (ptr, len) pairs as elements; nested list
+// patterns destructure them through interior pointers.
+fn nested_list_literals_pack_and_destructure() {
+    let mut c = constructed();
+    assert_eq!(okc(&mut c, "c-nested", &[]), Val::S64(6));
+}
+
+#[test]
+// String elements store as (ptr, len) into the literal's interned bytes
+// and rebox only where consumed.
+fn string_elements_store_and_rebox() {
+    let mut c = constructed();
+    assert_eq!(okc(&mut c, "c-strs", &[]), Val::String("xy".into()));
+}
+
+#[test]
+// A list field inside a canonical record literal packs its buffer in
+// place; the whole record reboxes faithfully at the eq seam.
+fn list_field_inside_record_literal_constructs() {
+    let mut c = constructed();
+    assert_eq!(okc(&mut c, "c-rec-field", &[]), Val::Bool(true));
+}
