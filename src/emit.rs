@@ -3057,6 +3057,20 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalSet(v));
                 self.lift_flags(fx, v, names);
             }
+            // A variant whose every case is payload-less (e.g. a bare
+            // `result`, 4.2) flattens to its lone i32 discriminant — exactly
+            // an enum's shape, so lift it the same way.
+            WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) if flat_len(ty) == 1 => {
+                let cases: Vec<String> = ty
+                    .variant_cases()
+                    .expect("variant-shaped type has cases")
+                    .iter()
+                    .map(|(n, _)| n.to_string())
+                    .collect();
+                let d = fx.local(ValType::I32);
+                fx.op(I::LocalSet(d));
+                self.lift_enum(fx, d, &cases, 0);
+            }
             WitTy::Str
             | WitTy::List(_)
             | WitTy::Record(_)
@@ -4226,7 +4240,17 @@ fn emit_core_module(
         let iface = import_iface(&imp.path);
         // Same op-name resolution as `dep_call`, so a resource operation's
         // core import is declared under its mangled WIT name (`sig.name`).
-        let sig = resolve_dep_func(dep, &iface, fname)?;
+        // A dep *case constructor* call (`t/circle(…)`, 4.1) is not a runtime
+        // import — the variant box is built locally — so it declares nothing.
+        let sig = match resolve_dep_func(dep, &iface, fname) {
+            Ok(sig) => sig,
+            Err(e) => {
+                if dep_case(dep, fname).is_some() {
+                    continue;
+                }
+                return Err(e);
+            }
+        };
         let mut p = Vec::new();
         for (_, t) in &sig.params {
             p.extend_from_slice(&flat_checked(&wit_ty(t, &em.type_env)?)?);

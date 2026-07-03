@@ -242,6 +242,14 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
         (FloatLit, t) | (t, FloatLit) if t.is_float() => Some(t.clone()),
         (FloatLit, FloatLit) => Some(FloatLit),
 
+        // A quoted form (`tree`) where a tuple or list is expected: the docs
+        // bless `Quote (1 2)` as the literal-tuple spelling ("a literal tuple
+        // value comes from Quote"), and a quoted tuple/list IS a runtime
+        // tuple/list, so this unifies gradually toward the concrete side
+        // rather than falsely rejecting a boundary call.
+        (Tree, t @ Tuple(_)) | (t @ Tuple(_), Tree) => Some(t.clone()),
+        (Tree, t @ List(_)) | (t @ List(_), Tree) => Some(t.clone()),
+
         // Containers unify element-wise.
         (List(x), List(y)) => Some(List(Box::new(unify(tbl, x, y)?))),
         (Option(x), Option(y)) => Some(Option(Box::new(unify(tbl, x, y)?))),
