@@ -131,7 +131,18 @@ pub fn eval_snippet(src: &str) -> EvalOutcome {
     // when the bad code is never reached at runtime. `resolve_overloads` checks
     // the program, then rewrites overload sets to uniquely-named defs so the
     // interpreter sees no overloading. With no overload set it is an identity.
-    let (arena, roots) = match check::resolve_overloads(arena, &roots) {
+    // Under strict mode the *source* pass stays gradual: unexpanded macro
+    // calls make pre-expansion strictness meaningless, and the post-expansion
+    // check below re-checks the fully expanded program strictly.
+    let was_strict = check::strict();
+    if was_strict {
+        check::set_strict(false);
+    }
+    let resolved = check::resolve_overloads(arena, &roots);
+    if was_strict {
+        check::set_strict(true);
+    }
+    let (arena, roots) = match resolved {
         Ok(pair) => pair,
         Err(msg) => {
             return EvalOutcome {

@@ -15,6 +15,13 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **`--strict` mode (opt-in).** `wavelet run|build|wit --strict` makes
+  `Type::Unknown` a compile error: every expression must have a concrete
+  static type. Strict ships opt-in while the remaining gradual holes
+  (chiefly untyped function values and higher-order builtins) are burned
+  down; the plan flips it to the default — and deletes gradual mode — once
+  the documented example suite and the conformance suite pass under it.
+
 - **Pattern exhaustiveness checking.** Every `Match` whose scrutinee's type is
   known must now be total, at compile time: `bool`, `option`, `result`, and
   `DefType` variant scrutinees must cover every case, and types that cannot

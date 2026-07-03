@@ -111,7 +111,7 @@ E['sf-unquote'] = `Let {name: Quote(ada)}
 E['sf-splice'] = `Let {middle: [2 3 4]}
   Quasi [1 Splice(middle) 5]`;
 E['sf-defmacro'] = `DefMacro unless {cond body}
-  Quasi If Unquote(cond) {} Unquote(body)
+  Quasi If Unquote(cond) "" Unquote(body)
 Let {x: 10}
   Unless gt(x 100) "x is not huge"`;
 E['sf-the-ok'] = `The s8 100`;
@@ -211,7 +211,7 @@ E['std-apply'] = `apply(Fn {a b} add(a b) [20 22])`;
 // runtime variant with a payload ('ok(1)') still reports "call".
 E['std-form-kind'] = `[form-kind(42)  form-kind("hi")  form-kind(Quote foo)  form-kind(Quote foo(1))  form-kind(ok(1))  form-kind([1 2])]`;
 E['std-rec-key-val'] = `Let {b: {text: "hello"}}
-  [rec-key(b) rec-val(b)]`;
+  {key: rec-key(b) val: rec-val(b)}`;
 E['std-constructors'] = `{options: [some(1) none] results: [ok("yes") err("nope")]}`;
 E['std-cells'] = `Let {c: cell-new(0)}
   Do [cell-set(c 41)

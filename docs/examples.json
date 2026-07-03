@@ -181,7 +181,7 @@
     "output": ""
   },
   "sf-defmacro": {
-    "code": "DefMacro unless {cond body}\n  Quasi If Unquote(cond) {} Unquote(body)\nLet {x: 10}\n  Unless gt(x 100) \"x is not huge\"",
+    "code": "DefMacro unless {cond body}\n  Quasi If Unquote(cond) \"\" Unquote(body)\nLet {x: 10}\n  Unless gt(x 100) \"x is not huge\"",
     "value": "\"x is not huge\"",
     "output": ""
   },
@@ -371,8 +371,8 @@
     "output": ""
   },
   "std-rec-key-val": {
-    "code": "Let {b: {text: \"hello\"}}\n  [rec-key(b) rec-val(b)]",
-    "value": "[text, \"hello\"]",
+    "code": "Let {b: {text: \"hello\"}}\n  {key: rec-key(b) val: rec-val(b)}",
+    "value": "{key: text, val: \"hello\"}",
     "output": ""
   },
   "std-constructors": {

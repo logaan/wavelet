@@ -72,6 +72,9 @@ pub enum Type {
     /// `tree` record). `Quote`/`Quasi` produce it; macro templates map it to
     /// itself; the form accessors consume it (3.7).
     Tree,
+    /// A flags literal `{read write}`: its member names. Unifies with itself
+    /// and with a nominal flags `DefType` declaring the same members.
+    Flags(Vec<String>),
     /// The unit type (`{}`), e.g. the result of a `Def`.
     Unit,
     /// An unconstrained integer literal: compatible with any int or float type
@@ -252,6 +255,20 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             Some(Named(n.clone()))
         }
 
+        // A flags literal against a nominal flags type declaring a superset
+        // of members.
+        (Named(n), Flags(ms)) | (Flags(ms), Named(n)) => match tbl.get(n) {
+            Some(TypeDef::Flags(decl)) => {
+                if ms.iter().all(|m| decl.contains(m)) {
+                    Some(Named(n.clone()))
+                } else {
+                    None
+                }
+            }
+            Some(_) => None,
+            None => Some(Named(n.clone())),
+        },
+
         // A structural record literal against a nominal record type: resolve
         // the name and unify field-wise; the nominal name wins. An unresolved
         // nominal name (e.g. a type declared in another component) stays
@@ -335,6 +352,12 @@ struct Checker<'a> {
     sigs: HashMap<String, Vec<Sig>>,
     /// Module-level `Def` names (functions and values both bind a name).
     defs: std::collections::HashSet<String>,
+    /// Module-level *value* defs (`Def name expr` where expr is not an Fn):
+    /// name -> expr, for typing references to them.
+    value_defs: HashMap<String, NodeId>,
+    /// Memoised value-def types, with an in-progress guard for recursion.
+    value_def_types: RefCell<HashMap<String, Type>>,
+    value_defs_in_progress: RefCell<std::collections::HashSet<String>>,
     /// `DefType` declarations: nominal name -> structure (3.3).
     types: TypeTable,
     /// Variant-case index: case name -> (owning `DefType` name, payload types).
@@ -359,6 +382,24 @@ struct Checker<'a> {
     /// inference gets `Unknown` for the recursive call, exactly like the
     /// `visiting` guard in [`crate::wit`]'s inference.
     sig_in_progress: RefCell<std::collections::HashSet<NodeId>>,
+}
+
+/// Strict mode (3.9): when set, `Type::Unknown` is an **error** rather than a
+/// gradual top — every expression must have a concrete static type. Shipped
+/// opt-in (`--strict` on the CLI); the failure list under strict is the
+/// burn-down backlog toward flipping the default, after which the gradual
+/// mode is deleted (accepted option-1 gate: flip when the documented example
+/// suite and the conformance suite pass under strict).
+static STRICT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turn strict mode on or off for subsequent checks (process-wide).
+pub fn set_strict(on: bool) {
+    STRICT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether strict mode is on.
+pub fn strict() -> bool {
+    STRICT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The checker-facing signature of one imported function: its parameters
@@ -521,7 +562,7 @@ pub(crate) fn type_to_wit(t: &Type) -> Option<String> {
         }
         Type::Named(n) => Some(n.clone()),
         Type::Tree => None,
-        Type::Record(_) | Type::Unit | Type::Unknown => None,
+        Type::Flags(_) | Type::Record(_) | Type::Unit | Type::Unknown => None,
     }
 }
 
@@ -534,6 +575,7 @@ impl<'a> Checker<'a> {
         let mut defs = std::collections::HashSet::new();
         let mut types: TypeTable = HashMap::new();
         let mut variant_cases: HashMap<String, (String, Vec<Type>)> = HashMap::new();
+        let mut value_defs: HashMap<String, NodeId> = HashMap::new();
         for &root in roots {
             if let Some((name, expr)) = as_def(arena, root) {
                 defs.insert(name.to_string());
@@ -542,6 +584,8 @@ impl<'a> Checker<'a> {
                     sigs.entry(name.to_string())
                         .or_default()
                         .push(Sig { params, body });
+                } else {
+                    value_defs.insert(name.to_string(), expr);
                 }
             }
             if let Some((name, def)) = as_deftype(arena, root) {
@@ -560,6 +604,9 @@ impl<'a> Checker<'a> {
             defs,
             types,
             variant_cases,
+            value_defs,
+            value_def_types: RefCell::new(HashMap::new()),
+            value_defs_in_progress: RefCell::new(std::collections::HashSet::new()),
             import_sigs: HashMap::new(),
             resolved: RefCell::new(HashMap::new()),
             sig_result_cache: RefCell::new(HashMap::new()),
@@ -877,7 +924,70 @@ impl<'a> Checker<'a> {
         {
             return Err(self.type_error(id, exp, &ty));
         }
+        // Strict mode (3.9): an expression the checker cannot give a concrete
+        // type is an error. Top-level declaration forms and unexpanded macro
+        // calls are exempt — declarations carry no value, and macro output is
+        // checked post-expansion.
+        if matches!(ty, Type::Unknown) && strict() && !self.strict_exempt(id) {
+            return Err(
+                "eval error: cannot infer a static type for this expression (strict mode)"
+                    .to_string(),
+            );
+        }
         Ok(ty)
+    }
+
+    /// The inferred type of a module-level value def, memoised. Recursive
+    /// references contribute `Unknown`.
+    fn value_def_type(&self, name: &str, expr: NodeId) -> Type {
+        if let Some(t) = self.value_def_types.borrow().get(name) {
+            return t.clone();
+        }
+        if !self
+            .value_defs_in_progress
+            .borrow_mut()
+            .insert(name.to_string())
+        {
+            return Type::Unknown;
+        }
+        let mut scope: Scope = Vec::new();
+        let t = self.infer(expr, None, &mut scope).unwrap_or(Type::Unknown);
+        self.value_defs_in_progress.borrow_mut().remove(name);
+        self.value_def_types
+            .borrow_mut()
+            .insert(name.to_string(), t.clone());
+        t
+    }
+
+    /// Forms strict mode does not require a concrete type for: top-level
+    /// declaration heads and (not-yet-expanded) macro calls.
+    fn strict_exempt(&self, id: NodeId) -> bool {
+        let Node::Tup(items) = self.arena.node(id) else {
+            return false;
+        };
+        let Some(&head) = items.first() else {
+            return false;
+        };
+        let Node::Sym(h) = self.arena.node(head) else {
+            return false;
+        };
+        matches!(
+            h.as_str(),
+            "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO"
+        ) || (h.ends_with("-MACRO")
+            && !matches!(
+                h.as_str(),
+                "fn-MACRO"
+                    | "if-MACRO"
+                    | "let-MACRO"
+                    | "do-MACRO"
+                    | "match-MACRO"
+                    | "the-MACRO"
+                    | "quote-MACRO"
+                    | "quasi-MACRO"
+                    | "def-MACRO"
+                    | "defmacro-MACRO"
+            ))
     }
 
     fn type_error(&self, _id: NodeId, expected: &Type, actual: &Type) -> String {
@@ -925,7 +1035,7 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Type::Record(out))
             }
-            Node::Flg(_) => Ok(Type::Unknown),
+            Node::Flg(names) => Ok(Type::Flags(names.clone())),
             Node::Tup(items) => self.infer_tup(id, items, expected, scope),
         }
     }
@@ -938,8 +1048,12 @@ impl<'a> Checker<'a> {
             return Ok(t.clone());
         }
         if self.defs.contains(name) {
-            // A reference to a module-level def. As a value its type is the
-            // function/value itself, which we don't model — gradual.
+            // A module-level *value* def types as its expression's inferred
+            // type (memoised, recursion-guarded). A function def used as a
+            // value stays gradual — function types are future work.
+            if let Some(&expr) = self.value_defs.get(name) {
+                return Ok(self.value_def_type(name, expr));
+            }
             return Ok(Type::Unknown);
         }
         if name == "none" {
@@ -1699,6 +1813,12 @@ impl<'a> Checker<'a> {
             // symbol form. (`rec-val` yields the field's *value*, which on a
             // runtime record can be anything — it stays gradual.)
             "gensym" | "expand" | "rec-key" => Ok(Type::Tree),
+            // `rec-val` projects a record's *first field's value*: typed when
+            // the record's static type knows that field.
+            "rec-val" => match arg_tys.first() {
+                Some(Type::Record(fs)) if !fs.is_empty() => Ok(fs[0].1.clone()),
+                _ => Ok(Type::Unknown),
+            },
             // Numeric conversions: the result is the named concrete type. A
             // literal argument is range-checked at compile time with the SAME
             // message the runtime conversion produces (3.4).
@@ -1884,6 +2004,7 @@ impl<'a> Checker<'a> {
             | Type::List(_)
             | Type::Tuple(_)
             | Type::Record(_)
+            | Type::Flags(_)
             | Type::Tree => Err(non_exhaustive_catch_all()),
             // Gradual or unenforceable.
             Type::Unit | Type::Unknown => Ok(()),
