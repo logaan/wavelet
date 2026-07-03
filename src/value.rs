@@ -25,6 +25,42 @@ pub enum Value {
     Macro(Rc<Closure>),
     Builtin(&'static str),
     Cell(Rc<RefCell<Value>>),
+    /// A live handle to a user-declared resource (`DefResource`, 4.5). Two
+    /// handles are equal iff they are the same instance (identity equality);
+    /// it prints opaquely as `<name>` and is not form-serializable.
+    Resource(Rc<ResourceInstance>),
+    /// The constructor of a user-declared resource: applying it runs the `New`
+    /// member and wraps the resulting rep in a fresh handle.
+    ResourceCtor(Rc<ResourceCtor>),
+    /// An instance method of a user-declared resource: applying it unwraps the
+    /// receiver handle to its rep, binds `self`, and runs the method body.
+    ResourceMethod(Rc<ResourceMethod>),
+}
+
+/// A live user-declared resource instance (4.5). `rep` is the value the `New`
+/// member returned (e.g. a `cell` for the counter). Inside the defining
+/// component the resource type denotes this rep; the handle wrapper carries the
+/// nominal type name (for opaque printing) and identity.
+pub struct ResourceInstance {
+    pub name: String,
+    pub rep: Value,
+    /// Set once the handle has been moved through an `own`-typed parameter; a
+    /// later use traps (reserved for own-consumption modelling).
+    pub consumed: std::cell::Cell<bool>,
+}
+
+/// The constructor of a user-declared resource: the `New` member's closure plus
+/// the resource type name to stamp onto each fresh handle.
+pub struct ResourceCtor {
+    pub name: String,
+    pub ctor: Rc<Closure>,
+}
+
+/// An instance method of a user-declared resource: the method's closure (whose
+/// first parameter is `self`) plus the resource type name it belongs to.
+pub struct ResourceMethod {
+    pub name: String,
+    pub method: Rc<Closure>,
 }
 
 pub struct Closure {
@@ -84,6 +120,11 @@ impl PartialEq for Value {
             (Builtin(a), Builtin(b)) => a == b,
             (CaseCtor(a), CaseCtor(b)) => a == b,
             (Cell(a), Cell(b)) => Rc::ptr_eq(a, b),
+            // Resources are identity-equal: same instance (4.5). Constructors
+            // and methods compare by closure identity like other callables.
+            (Resource(a), Resource(b)) => Rc::ptr_eq(a, b),
+            (ResourceCtor(a), ResourceCtor(b)) => Rc::ptr_eq(a, b),
+            (ResourceMethod(a), ResourceMethod(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -184,7 +225,13 @@ pub fn value_to_form(value: &Value, arena: &mut Arena) -> Result<NodeId, String>
         // macro can emit a constructor reference (it re-reads as the same
         // constructor when the DefType is in scope).
         Value::CaseCtor(name) => sym_node(name),
-        Value::Closure(_) | Value::Macro(_) | Value::Builtin(_) | Value::Cell(_) => {
+        Value::Closure(_)
+        | Value::Macro(_)
+        | Value::Builtin(_)
+        | Value::Cell(_)
+        | Value::Resource(_)
+        | Value::ResourceCtor(_)
+        | Value::ResourceMethod(_) => {
             return Err("this value cannot appear in code".into());
         }
     };
@@ -273,6 +320,26 @@ fn write_value(v: &Value, out: &mut String) {
             out.push_str("cell(");
             write_value(&c.borrow(), out);
             out.push(')');
+        }
+        // A resource handle prints opaquely as `<name>` (4.6): the nominal type
+        // only, following the closure/case-constructor angle-bracket convention.
+        // A resource type is not `Show`-derivable, so well-typed code never
+        // reaches this; it is here for the repl/debug and to stay a faithful
+        // oracle.
+        Value::Resource(r) => {
+            out.push('<');
+            out.push_str(&r.name);
+            out.push('>');
+        }
+        Value::ResourceCtor(c) => {
+            out.push_str("<constructor ");
+            out.push_str(&c.name);
+            out.push('>');
+        }
+        Value::ResourceMethod(m) => {
+            out.push_str("<method ");
+            out.push_str(&m.name);
+            out.push('>');
         }
     }
 }

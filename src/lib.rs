@@ -376,6 +376,58 @@ mod tests {
         value::print_value(&last)
     }
 
+    // The `DefResource` interpreter semantics (4.5) — the oracle. The
+    // constructor is the bare type name applied; methods and statics are
+    // qualified calls; `self` binds to the rep.
+    const COUNTER: &str = "DefResource counter {\n\
+        New: Fn {start: s64} cell-new(start)\n\
+        next: Fn {self: counter} Do [cell-set(self add(cell-get(self) 1)) cell-get(self)]\n\
+        value: Fn {self: counter} cell-get(self)\n\
+        sum: Static Fn {values: list(s64)} counter(fold(add 0 values))\n\
+      }\n";
+
+    #[test]
+    fn eval_defresource_constructor_and_methods() {
+        // A method mutates the rep through `self` and returns the new value;
+        // the handle threads through repeated method calls.
+        assert_eq!(
+            eval_str(&format!(
+                "{COUNTER}Def c counter(5)\n                 Do [counter/next(c) counter/next(c) counter/value(c)]"
+            )),
+            "7"
+        );
+    }
+
+    #[test]
+    fn eval_defresource_static_alt_constructor() {
+        // A `Static` member takes no `self` and may itself construct the
+        // resource (an alternative constructor).
+        assert_eq!(
+            eval_str(&format!(
+                "{COUNTER}counter/value(counter/sum([1 2 3 4]))"
+            )),
+            "10"
+        );
+    }
+
+    #[test]
+    fn eval_defresource_identity_and_opaque_to_string() {
+        // Equality is identity: a handle equals itself, two fresh handles do not.
+        assert_eq!(
+            eval_str(&format!("{COUNTER}Def c counter(1)\neq(c c)")),
+            "true"
+        );
+        assert_eq!(
+            eval_str(&format!("{COUNTER}eq(counter(1) counter(1))")),
+            "false"
+        );
+        // A resource handle prints opaquely as `<counter>`.
+        assert_eq!(
+            eval_str(&format!("{COUNTER}to-string(counter(9))")),
+            "\"<counter>\""
+        );
+    }
+
     #[test]
     fn eval_expand_builtin() {
         let src = "DefMacro unless {c e} Quasi If Unquote(c) {} Unquote(e)\n\
