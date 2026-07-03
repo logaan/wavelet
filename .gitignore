@@ -11,3 +11,5 @@
 
 # pdfs are temporary
 *.pdf
+
+/.lot-vault/.obsidian/
