@@ -28,6 +28,14 @@ Def writable Fn {} {write}
 
 Export {name: same params: {p: perms} result: bool}
 Def same Fn {p: perms} eq(p {read exec})
+
+Export {name: label params: {p: perms} result: string}
+Def label Fn {p: perms}
+  Match p [
+    ({} "empty")
+    ({write} "write-only")
+    (other "other")
+  ]
 "#;
     let app_path = src.join("app.wlt");
     std::fs::write(&app_path, app).unwrap();
@@ -87,5 +95,28 @@ fn flags_eq_is_the_interpreters_value_flg_equality() {
     assert_eq!(
         ok(&mut c, "same", &[Val::Flags(vec!["read".into()])]),
         Val::Bool(false)
+    );
+}
+
+/// Flags literals work as Match patterns in compiled code (5.9): structural
+/// equality over the set names, exactly the interpreter's `match_pattern`.
+#[test]
+fn flags_literals_match_as_patterns() {
+    let mut c = component();
+    assert_eq!(
+        ok(&mut c, "label", &[Val::Flags(vec![])]),
+        Val::String("empty".into())
+    );
+    assert_eq!(
+        ok(&mut c, "label", &[Val::Flags(vec!["write".into()])]),
+        Val::String("write-only".into())
+    );
+    assert_eq!(
+        ok(
+            &mut c,
+            "label",
+            &[Val::Flags(vec!["read".into(), "write".into()])]
+        ),
+        Val::String("other".into())
     );
 }
