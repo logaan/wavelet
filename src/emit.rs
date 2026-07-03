@@ -2590,7 +2590,16 @@ impl<'a> Emitter<'a> {
                     .insert(name, Binding::boxed(l));
                 Ok(())
             }
-            Node::Int(_) | Node::Dec(_) | Node::Bool(_) | Node::Str(_) => {
+            // Literal patterns match by structural equality — the same
+            // eq_raw the `eq` builtin uses, so char (codepoint) and flags
+            // (set-name list) literals match exactly like the interpreter's
+            // `match_pattern` (5.9).
+            Node::Int(_)
+            | Node::Dec(_)
+            | Node::Bool(_)
+            | Node::Str(_)
+            | Node::Char(_)
+            | Node::Flg(_) => {
                 fx.op(I::LocalGet(v));
                 self.expr(fx, pat, false)?;
                 fx.op(I::Call(self.h.eq_raw));
@@ -2598,6 +2607,8 @@ impl<'a> Emitter<'a> {
                 fx.op(I::BrIf(fail));
                 Ok(())
             }
+            // the interpreter's exact wording, for error parity
+            Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             Node::Lst(pats) => self.seq_pattern(fx, &pats, v, fail, TAG_LIST),
             // A tuple pattern is disambiguated by its first element: a `Sym`
             // head is a variant-case pattern (`ok(x)`, `some(x)`, `none`, …);
@@ -2671,9 +2682,6 @@ impl<'a> Emitter<'a> {
                 }
                 Ok(())
             }
-            _ => Err("pattern not supported by the wasm backend yet \
-                      (literals, names, list/tuple, record, and variant patterns)"
-                .into()),
         }
     }
 
@@ -2932,10 +2940,16 @@ impl<'a> Emitter<'a> {
         let arg_nodes = match self.bind_args(args, &param_names)? {
             BoundArgs::PerParam(nodes) => nodes,
             BoundArgs::Bundle => {
-                return Err(format!(
-                    "imported `{alias}/{fname}`: bundling multiple arguments into a single \
-                     tuple parameter is not supported by the wasm backend"
-                ));
+                // 5.10: several arguments bundle into the sole parameter as a
+                // tuple value — exactly how the interpreter binds a call's
+                // payload to one parameter. Build the tuple box and lower it
+                // against the parameter's (tuple) WIT type here; the empty
+                // node list below then has nothing left to lower.
+                self.seq_box(fx, args, TAG_TUP)?;
+                let (_, t) = &sig.params[0];
+                let ty = wit_ty(t, &self.type_env)?;
+                self.lower(fx, &ty)?;
+                Vec::new()
             }
         };
         for (a, (_, t)) in arg_nodes.iter().zip(&sig.params) {

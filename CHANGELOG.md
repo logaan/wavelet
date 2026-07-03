@@ -25,6 +25,18 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **Match pattern coverage in compiled code is complete.** Char and flags
+  literals now work as patterns in the wasm backend (matching by codepoint /
+  set names, like the interpreter), and a qualified name in pattern position
+  reports the interpreter's exact error. Every pattern form the interpreter
+  accepts now compiles.
+
+- **Multiple arguments bundle into a sole tuple parameter, imports
+  included.** Calling `f(1 "x" true)` where `f` takes one `tuple<...>`
+  parameter binds the arguments as the tuple payload — the checker and the
+  wasm backend now model the same §4.2 call shape the interpreter has always
+  bound, so bundled calls to imported functions compile and run.
+
 - **The numeric conversion builtins work in compiled components.**
   `to-u8`…`to-s64`, `to-f32`/`to-f64`, and `to-char` compile for
   statically-typed operands, with the interpreter's exact semantics: range

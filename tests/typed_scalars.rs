@@ -327,3 +327,44 @@ Def run Fn {n: u64} countdown(n 0)
         .expect("a million-deep tail recursion must not overflow");
     assert_eq!(got[0], Val::U64(1_000_000));
 }
+
+/// Char literals work as Match patterns in compiled code (5.9), matching by
+/// codepoint like the interpreter.
+#[test]
+fn char_literals_match_as_patterns() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("wavelet-charpat-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let app = r#"Package "demo:app@0.1.0"
+
+Export {name: kind params: {c: char} result: string}
+Def kind Fn {c: char}
+  Match c [
+    ('a' "first")
+    ('w' "double-u")
+    (other "other")
+  ]
+"#;
+    let app_path = src.join("app.wlt");
+    std::fs::write(&app_path, app).unwrap();
+    let out = dir.join("out");
+    let outputs = wavelet::build::build_files(
+        &[app_path.to_str().unwrap().to_string()],
+        out.to_str().unwrap(),
+    )
+    .expect("build the char-pattern app");
+    let bytes = std::fs::read(&outputs[0]).expect("read built component");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut c = HostComponent::from_bytes(&bytes).expect("instantiate");
+    let iface = "demo:app/api@0.1.0";
+    let call = |c: &mut HostComponent, ch: char| {
+        c.call_instance(iface, "kind", &[Val::Char(ch)]).unwrap()[0].clone()
+    };
+    assert_eq!(call(&mut c, 'a'), Val::String("first".into()));
+    assert_eq!(call(&mut c, 'w'), Val::String("double-u".into()));
+    assert_eq!(call(&mut c, 'z'), Val::String("other".into()));
+}

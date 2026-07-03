@@ -77,6 +77,7 @@ Def values-fails Fn {}
              check("result-tuple-direction-rt err"
                    eq(iv/result-tuple-direction-rt(err(t/south)) err(t/west)))
              check("tuple-rt" eq(iv/tuple-rt(Quote (1 "x" true)) Quote (2 "x!" false)))
+             check("tuple-rt bundled" eq(iv/tuple-rt(1 "x" true) Quote (2 "x!" false)))
              check("tuple-nested-rt"
                    eq(iv/tuple-nested-rt(Quote ({x: 1 y: 2} [3])) Quote ({x: 2 y: 3} [4])))
              check("point-rt" eq(iv/point-rt({x: 3 y: 4}) {x: 4 y: 5}))

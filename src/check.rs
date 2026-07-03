@@ -1707,6 +1707,23 @@ impl<'a> Checker<'a> {
             }
         }
 
+        // Several arguments to a sole parameter bundle into a tuple payload
+        // (§4.2, the interpreter's `bind_params`; the wasm backend's
+        // `bind_args` mirrors it). Check the bundle against the parameter's
+        // type instead of preempting a call the interpreter runs (5.10).
+        if nparams == 1 && args.len() > 1 {
+            let bundle = Type::Tuple(arg_tys.clone());
+            if !self.param_compatible(&sig_params[0].1, &bundle) {
+                return Err(self.param_type_error(
+                    &sig_params[0].0,
+                    &sig_params[0].1,
+                    &bundle,
+                    name,
+                ));
+            }
+            return Ok(result);
+        }
+
         // Positional call: arity must match.
         if args.len() != nparams {
             return Err(format!(
