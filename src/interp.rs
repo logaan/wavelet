@@ -543,7 +543,10 @@ fn match_pattern(arena: &Rc<Arena>, pat: NodeId, v: &Value, binds: &Env, scope: 
     match arena.node(pat) {
         Node::Bool(b) => Ok(matches!(v, Value::Bool(x) if x == b)),
         Node::Int(n) => Ok(matches!(v, Value::Int(x) if x == n)),
-        Node::Dec(f) => Ok(matches!(v, Value::Dec(x) if x == f)),
+        // Float literals are rejected as patterns at check time (2.1 proposal
+        // 2); the interpreter refuses them too so it stays a faithful oracle
+        // when run standalone. Int/bool/char/string literals are exact and fine.
+        Node::Dec(_) => err("a float literal cannot be a Match pattern"),
         Node::Char(c) => Ok(matches!(v, Value::Char(x) if x == c)),
         Node::Str(s) => Ok(matches!(v, Value::Str(x) if x == s)),
         Node::Flg(names) => Ok(matches!(v, Value::Flg(x) if x == names)),

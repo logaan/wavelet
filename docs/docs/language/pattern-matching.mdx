@@ -27,6 +27,8 @@ A `(…)` pattern is both the variant-case shape and the tuple shape, so it is *
 
 A bare name matches anything and binds it — the idiomatic catch-all.
 
+Integer, boolean, character, and string literals match by exact equality. A **float literal is rejected as a pattern** at check time: float equality is unreliable (`0.1 + 0.2` never equals `0.3`; a `nan` pattern matches nothing) and no set of float literals can ever be exhaustive. Compare floats explicitly instead — e.g. `If eq(x 0.5) …` — rather than matching on them.
+
 <Playground id="pm-catch-all" />
 
 ## Destructuring variants
