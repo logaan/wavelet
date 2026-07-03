@@ -821,6 +821,62 @@ fn call_param_type(
     None
 }
 
+/// Build checker import signatures (3.1) for one resolved import: every
+/// function the dependency exports in `iface`, keyed `alias/name`, its WIT
+/// param/result texts parsed into checker types.
+pub fn import_sigs_for(
+    alias: &str,
+    funcs: &[FuncSig],
+    iface: &str,
+) -> crate::check::ImportSigs {
+    let mut out = crate::check::ImportSigs::new();
+    for f in funcs.iter().filter(|f| f.iface == iface) {
+        let params: Vec<(String, crate::check::Type)> = f
+            .params
+            .iter()
+            .map(|(n, t)| (n.clone(), crate::check::type_from_wit(t)))
+            .collect();
+        let result = match &f.result {
+            Some(t) => crate::check::type_from_wit(t),
+            None => crate::check::Type::Unit,
+        };
+        out.insert(format!("{alias}/{}", f.name), (params, result));
+    }
+    out
+}
+
+/// Build checker import signatures (3.1) for each functor instantiation's ops
+/// (`alias/new`, `alias/add`, …), derived from the same `SET_OPS` descriptor
+/// that drives inference and the emitted WIT.
+pub fn functor_import_sigs(functors: &[FunctorInst]) -> crate::check::ImportSigs {
+    use crate::check::Type;
+    let mut out = crate::check::ImportSigs::new();
+    for f in functors {
+        match f.kind {
+            FunctorKind::Set => {
+                let handle = Type::Named(format!("{}.set", f.iface));
+                let elem = crate::check::type_from_wit(&f.elem);
+                for op in SET_OPS {
+                    let mut params: Vec<(String, Type)> = Vec::new();
+                    if !matches!(op.result, SetOpResult::Handle) {
+                        params.push(("self".to_string(), handle.clone()));
+                    }
+                    if op.takes_value {
+                        params.push(("value".to_string(), elem.clone()));
+                    }
+                    let result = match op.result {
+                        SetOpResult::Handle => handle.clone(),
+                        SetOpResult::Ty(t) => crate::check::type_from_wit(t),
+                        SetOpResult::Unit => Type::Unit,
+                    };
+                    out.insert(format!("{}/{}", f.alias, op.name), (params, result));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Synthesize WIT text for a file (§6.1), as shown by `wavelet wit`.
 pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
     let info = collect(arena, roots)?;

@@ -140,6 +140,28 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                 deps.insert(pkg.to_string(), dep);
             }
         }
+        // Re-check with the resolved imports' WIT signatures (3.1): qualified
+        // calls are typed against their declared signatures, so a cross-
+        // component type error is rejected here rather than surfacing as an
+        // emit failure or a runtime trap. (The pure local check already ran
+        // right after expansion.)
+        let mut import_sigs = crate::check::ImportSigs::new();
+        for imp in &u.info.imports {
+            if wit::is_macro_only(imp) {
+                continue;
+            }
+            if let Some(dep) = deps.get(&imp.package) {
+                let iface = imp
+                    .path
+                    .split_once('/')
+                    .map(|(_, i)| i)
+                    .unwrap_or("api");
+                import_sigs.extend(wit::import_sigs_for(&imp.alias, &dep.funcs, iface));
+            }
+        }
+        import_sigs.extend(wit::functor_import_sigs(&u.info.functors));
+        crate::check::check_program_with_imports(&u.arena, &u.roots, &import_sigs)
+            .map_err(|e| format!("{}: {e}", u.path))?;
         let bytes = emit::emit_component(&u.arena, &u.roots, &u.info, &deps)
             .map_err(|e| format!("{}: {e}", u.path))?;
         let out = format!("{out_dir}/{}.wasm", u.info.package_path.replace(':', "-"));

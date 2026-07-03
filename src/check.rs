@@ -187,6 +187,8 @@ pub enum TypeDef {
     Variant(Vec<(String, Vec<Type>)>),
     /// `DefType name {a b c}` — flags.
     Flags(Vec<String>),
+    /// `DefType name <type>` — a transparent type alias.
+    Alias(Type),
 }
 
 /// The nominal type table, keyed by `DefType` name.
@@ -236,6 +238,18 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
                 .map(|(x, y)| unify(tbl, x, y))
                 .collect();
             Some(Tuple(elems?))
+        }
+
+        // A nominal alias is transparent: unify the other side against its
+        // target, keeping the nominal name in the result.
+        (Named(n), t) | (t, Named(n))
+            if matches!(tbl.get(n), Some(TypeDef::Alias(_))) =>
+        {
+            let Some(TypeDef::Alias(target)) = tbl.get(n) else {
+                unreachable!("guard matched an alias")
+            };
+            unify(tbl, target, t)?;
+            Some(Named(n.clone()))
         }
 
         // A structural record literal against a nominal record type: resolve
@@ -327,6 +341,9 @@ struct Checker<'a> {
     /// Lets a constructor call like `days(30)` (or a bare nullary case) type as
     /// its nominal variant.
     variant_cases: HashMap<String, (String, Vec<Type>)>,
+    /// Resolved import signatures, keyed by the qualified spelling
+    /// `alias/name` (3.1). Empty on paths with no import resolution.
+    import_sigs: ImportSigs,
     /// For each *overloaded* call site (keyed by the call `Tup`'s `NodeId`), the
     /// index of the chosen candidate within its overload set. Filled in while
     /// checking; read back by [`resolve_overloads`] to rewrite the program.
@@ -344,12 +361,39 @@ struct Checker<'a> {
     sig_in_progress: RefCell<std::collections::HashSet<NodeId>>,
 }
 
+/// The checker-facing signature of one imported function: its parameters
+/// (name, type) and result type (`Type::Unit` for none). Keyed in an import
+/// table by the qualified call spelling `alias/name` (3.1).
+pub type ImportSig = (Vec<(String, Type)>, Type);
+
+/// An import-signature table: `alias/name` -> signature.
+pub type ImportSigs = HashMap<String, ImportSig>;
+
 /// Check a whole program (the top-level roots). Returns `Err(msg)` on the first
 /// type error, where `msg` is already in the `eval error: …` surface form so it
 /// can be returned directly as [`crate::EvalOutcome::error`].
 pub fn check_program(arena: &Arena, roots: &[NodeId]) -> Result<(), String> {
     let checker = Checker::collect(arena, roots);
     checker.check_roots(roots)
+}
+
+/// [`check_program`] with the WIT signatures of the file's resolved imports
+/// (3.1): qualified calls (`alias/fn`) are checked against — and typed by —
+/// their declared signatures instead of staying gradual.
+pub fn check_program_with_imports(
+    arena: &Arena,
+    roots: &[NodeId],
+    imports: &ImportSigs,
+) -> Result<(), String> {
+    let mut checker = Checker::collect(arena, roots);
+    checker.import_sigs = imports.clone();
+    checker.check_roots(roots)
+}
+
+/// Parse WIT type text into a checker [`Type`] — the bridge used when feeding
+/// declared import signatures into the checker (3.1).
+pub fn type_from_wit(text: &str) -> Type {
+    type_from_wit_text(text)
 }
 
 /// A WIT-rendered inference outcome, for [`infer_wit_result`]. Mirrors the
@@ -516,6 +560,7 @@ impl<'a> Checker<'a> {
             defs,
             types,
             variant_cases,
+            import_sigs: HashMap::new(),
             resolved: RefCell::new(HashMap::new()),
             sig_result_cache: RefCell::new(HashMap::new()),
             sig_in_progress: RefCell::new(std::collections::HashSet::new()),
@@ -751,7 +796,10 @@ fn as_deftype(arena: &Arena, id: NodeId) -> Option<(&str, TypeDef)> {
             TypeDef::Variant(out)
         }
         Node::Flg(names) => TypeDef::Flags(names.clone()),
-        _ => return None,
+        // `DefType name <type-form>` — a transparent alias (`DefType nums
+        // list(s32)`). `from_form` yields Unknown for anything unmodelled, so
+        // this stays gradual for exotic targets.
+        _ => TypeDef::Alias(Type::from_form(arena, *decl)),
     };
     Some((name, def))
 }
@@ -832,8 +880,9 @@ impl<'a> Checker<'a> {
             Node::Char(_) => Ok(Type::Char),
             Node::Str(_) => Ok(Type::String),
             Node::Sym(name) => self.infer_name(name, scope),
-            // A qualified name (`alias/fn`) reaches into an imported component we
-            // do not model here.
+            // A qualified name (`alias/fn`) used as a *value* is the imported
+            // function itself, which we do not model (function types are Phase
+            // D); calls through it are typed in `infer_tup`.
             Node::Qsym(..) => Ok(Type::Unknown),
             Node::Lst(items) => self.infer_list(items, expected, scope),
             // A record literal in value position types structurally (3.3): its
@@ -943,8 +992,17 @@ impl<'a> Checker<'a> {
             // A call to a known builtin or module-level def.
             return self.infer_call(id, h, args, expected, scope);
         }
-        // Head is not a plain symbol (e.g. a Qsym, or a computed head): check
-        // the arguments and yield Unknown.
+        // A qualified call `alias/fn(args…)`: when the import's WIT signature
+        // is resolved (3.1), check the call against it and type the result;
+        // otherwise stay gradual.
+        if let Node::Qsym(alias, fname) = self.arena.node(head) {
+            let qname = format!("{alias}/{fname}");
+            if let Some((params, result)) = self.import_sigs.get(&qname).cloned() {
+                return self.check_call_shape(&qname, &params, result, args, scope);
+            }
+        }
+        // Head is not a plain symbol (e.g. a computed head): check the
+        // arguments and yield Unknown.
         for &a in args {
             self.check(a, None, scope)?;
         }
@@ -1346,18 +1404,31 @@ impl<'a> Checker<'a> {
         args: &[NodeId],
         scope: &mut Scope,
     ) -> Result<Type, String> {
+        // The call's result type: inferred from the def's body exactly as
+        // return-type-directed overload resolution does (3.2 — calling a def no
+        // longer erases type information).
+        let result = self.infer_sig_result(sig);
+        self.check_call_shape(name, &sig.params, result, args, scope)
+    }
+
+    /// Check a call against a known signature, in every §4.2 call shape:
+    /// by-name record payload, single bundled payload, and positional.
+    /// Shared by local def calls and resolved qualified imports (3.1).
+    fn check_call_shape(
+        &self,
+        name: &str,
+        sig_params: &[(String, Type)],
+        result: Type,
+        args: &[NodeId],
+        scope: &mut Scope,
+    ) -> Result<Type, String> {
         // First, infer the argument types (also checks their subexpressions).
         let arg_tys: Vec<Type> = args
             .iter()
             .map(|&a| self.check(a, None, scope))
             .collect::<Result<_, _>>()?;
 
-        let nparams = sig.params.len();
-
-        // The call's result type: inferred from the def's body exactly as
-        // return-type-directed overload resolution does (3.2 — calling a def no
-        // longer erases type information).
-        let result = self.infer_sig_result(sig);
+        let nparams = sig_params.len();
 
         // The single-record-arg-by-name form: `f({a: … b: …})` binds by field
         // name when the field names are exactly the parameter names — check
@@ -1366,17 +1437,16 @@ impl<'a> Checker<'a> {
         if args.len() == 1 {
             if let Type::Record(fs) = &arg_tys[0] {
                 let mut fnames: Vec<&str> = fs.iter().map(|(n, _)| n.as_str()).collect();
-                let mut pnames: Vec<&str> = sig.params.iter().map(|(n, _)| n.as_str()).collect();
+                let mut pnames: Vec<&str> = sig_params.iter().map(|(n, _)| n.as_str()).collect();
                 fnames.sort_unstable();
                 pnames.sort_unstable();
                 if fnames == pnames {
                     for (fname, ft) in fs {
-                        let (_pn, pt) = sig
-                            .params
+                        let (_pn, pt) = sig_params
                             .iter()
                             .find(|(pn, _)| pn == fname)
                             .expect("field names equal param names");
-                        if !compatible(&self.types, pt, ft) {
+                        if !self.param_compatible(pt, ft) {
                             return Err(self.param_type_error(fname, pt, ft, name));
                         }
                     }
@@ -1391,10 +1461,10 @@ impl<'a> Checker<'a> {
             }
             // A single argument to a single parameter taking the whole payload.
             if nparams == 1 {
-                if !compatible(&self.types, &sig.params[0].1, &arg_tys[0]) {
+                if !self.param_compatible(&sig_params[0].1, &arg_tys[0]) {
                     return Err(self.param_type_error(
-                        &sig.params[0].0,
-                        &sig.params[0].1,
+                        &sig_params[0].0,
+                        &sig_params[0].1,
                         &arg_tys[0],
                         name,
                     ));
@@ -1410,12 +1480,26 @@ impl<'a> Checker<'a> {
                 args.len()
             ));
         }
-        for ((pn, pt), at) in sig.params.iter().zip(&arg_tys) {
-            if !compatible(&self.types, pt, at) {
+        for ((pn, pt), at) in sig_params.iter().zip(&arg_tys) {
+            if !self.param_compatible(pt, at) {
                 return Err(self.param_type_error(pn, pt, at, name));
             }
         }
         Ok(result)
+    }
+
+    /// Parameter compatibility for a call shape: ordinary gradual
+    /// compatibility, plus the boundary widening the generic bridge performs —
+    /// a Wavelet `string` lowers as `list<u8>` (see tests/generic_bridge.rs),
+    /// so a `list<u8>` parameter accepts a string.
+    fn param_compatible(&self, pt: &Type, at: &Type) -> bool {
+        if compatible(&self.types, pt, at) {
+            return true;
+        }
+        matches!(
+            (pt, at),
+            (Type::List(e), Type::String) if **e == Type::U8
+        )
     }
 
     /// The error for an argument that does not fit its parameter. An integer

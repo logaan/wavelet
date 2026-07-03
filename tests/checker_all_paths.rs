@@ -232,3 +232,89 @@ Def run Fn {} Do [show(5) ok(0)]
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---------------------------------------------------------------------------
+// 3.1 — qualified imports are typed from their WIT signatures on the build path
+// ---------------------------------------------------------------------------
+
+#[test]
+fn build_rejects_a_cross_component_type_error() {
+    let dir = scratch("build-xcomp-bad");
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    let provider = write_src(
+        &src,
+        "shout.wlt",
+        r#"Package "demo:shout@0.1.0"
+Export shout
+Def shout Fn {phrase: string} upper(phrase)
+"#,
+    );
+    // `sh/shout` takes `phrase: string`; passing an s64 literal is a compile
+    // error even though `run` is never called.
+    let consumer = write_src(
+        &src,
+        "main.wlt",
+        r#"Package "demo:main@0.1.0"
+Import {pkg: "demo:shout/api" as: sh}
+Export {name: run result: string}
+Def run Fn {} sh/shout(42)
+"#,
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_wavelet"))
+        .arg("build")
+        .arg(&consumer)
+        .arg(&provider)
+        .output()
+        .expect("run wavelet build");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "`wavelet build` accepted a cross-component type error\nstderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("phrase") || stderr.contains("wrong type"),
+        "error should point at the mistyped argument; got:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn build_accepts_a_well_typed_cross_component_call() {
+    let dir = scratch("build-xcomp-ok");
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).expect("mkdir src");
+    let provider = write_src(
+        &src,
+        "shout.wlt",
+        r#"Package "demo:shout@0.1.0"
+Export shout
+Def shout Fn {phrase: string} upper(phrase)
+"#,
+    );
+    let consumer = write_src(
+        &src,
+        "main.wlt",
+        r#"Package "demo:main@0.1.0"
+Import {pkg: "demo:shout/api" as: sh}
+Export {name: run result: string}
+Def run Fn {} sh/shout("hi")
+"#,
+    );
+
+    let out = Command::new(env!("CARGO_BIN_EXE_wavelet"))
+        .arg("build")
+        .arg(&consumer)
+        .arg(&provider)
+        .output()
+        .expect("run wavelet build");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "well-typed cross-component call rejected:\n{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
