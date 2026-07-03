@@ -994,12 +994,34 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
     out.push_str(&format!("package {};\n", info.package));
 
     let ifaces = iface_order(&info.exports, !info.types.is_empty());
+
+    // Hoisted local types (4.7), mirroring `emit::synthesize_world_wit`: when
+    // an export references a functor handle whose element is a local type, the
+    // element's declaration moves into a shared `types` interface so `api` and
+    // the functor interface need not `use` each other (a WIT cycle).
+    let hoisted = hoisted_types(arena, info)?;
+    if !hoisted.is_empty() {
+        out.push_str("\ninterface types {\n");
+        for name in &hoisted {
+            let (_, ty) = info
+                .types
+                .iter()
+                .find(|(n, _)| n == name)
+                .expect("hoisted names come from info.types");
+            out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
+        }
+        out.push_str("}\n");
+    }
+
     // External interfaces (e.g. wasi:http/incoming-handler) are defined by the
     // host's WIT; we only export them by name, never re-declare them.
     for iface in ifaces.iter().filter(|i| !is_external_iface(i)) {
         out.push_str(&format!("\ninterface {iface} {{\n"));
         if iface == "api" {
-            for (name, ty) in &info.types {
+            if !hoisted.is_empty() {
+                out.push_str(&format!("  use types.{{{}}};\n", hoisted.join(", ")));
+            }
+            for (name, ty) in info.types.iter().filter(|(n, _)| !hoisted.contains(n)) {
                 out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
             }
         }
@@ -1013,7 +1035,14 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
     // (Steps 10–11). `Instantiate {pkg: "wavelet:coll/set" with: {elem: T} as: …}` produces a
     // `T-set` interface holding the element-specialized `set` resource (fig-wit).
     for f in &info.functors {
-        out.push_str(&functor_interface(arena, f, &info.types)?);
+        let elem_iface = if hoisted.contains(&f.elem) {
+            Some("types")
+        } else if info.types.iter().any(|(name, _)| name == &f.elem) {
+            Some("api")
+        } else {
+            None
+        };
+        out.push_str(&functor_interface(arena, f, elem_iface)?);
     }
 
     out.push_str(&format!("\nworld {} {{\n", info.world));
@@ -1031,6 +1060,9 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
         } else if !host_only {
             out.push_str(&format!("  import {};\n", imp.path));
         }
+    }
+    if !hoisted.is_empty() && !host_only {
+        out.push_str("  export types;\n");
     }
     for iface in &ifaces {
         if is_external_iface(iface) {
@@ -1055,24 +1087,24 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
 /// SAME interface text from the SAME `SET_OPS` source as `wavelet wit` does —
 /// the resource the wasm backend implements and the WIT the encoder validates
 /// against cannot drift.
-/// `local_types` are the file's own `DefType` names (those that land in the
-/// `api` interface). When the element type is one of them, the specialized
-/// functor interface must `use api.{<elem>};` to bring the record into scope —
-/// a primitive element (`s32`, `string`, …) needs no `use`.
+/// `elem_iface` is the interface that *declares* the element type, when the
+/// element is a locally-defined type: the specialized functor interface then
+/// `use`s it (`use api.{point};`, or `use types.{point};` once the element has
+/// been hoisted to break a cycle — 4.7). `None` for a primitive element
+/// (`s32`, `string`, …), which needs no `use`.
 pub(crate) fn functor_interface(
     _arena: &Arena,
     f: &FunctorInst,
-    local_types: &[(String, NodeId)],
+    elem_iface: Option<&str>,
 ) -> Result<String, String> {
     match f.kind {
         FunctorKind::Set => {
             let t = &f.elem;
-            // The element references a locally-defined record (it appears in the
-            // `api` interface): bring it into scope with a `use`.
-            let uses = if local_types.iter().any(|(name, _)| name == t) {
-                format!("  use api.{{{t}}};\n")
-            } else {
-                String::new()
+            // The element references a locally-defined record: bring it into
+            // scope with a `use` from its declaring interface.
+            let uses = match elem_iface {
+                Some(iface) => format!("  use {iface}.{{{t}}};\n"),
+                None => String::new(),
             };
             // Build the resource members from `SET_OPS`, the same descriptor that
             // drives the inference op-table, so the two cannot drift.
@@ -1103,6 +1135,59 @@ pub(crate) fn functor_interface(
             ))
         }
     }
+}
+
+/// The local types to hoist into a shared `types` interface (4.7): the element
+/// types of every functor whose handle some export signature references (as
+/// the dotted `<iface>.set` text), plus — transitively — any local types those
+/// declarations reference. Hoisting breaks the `api ↔ <elem>-set` WIT
+/// interface cycle: both sides `use types.{…}` instead of each other. Shared
+/// by [`synthesize_info`] and `emit::synthesize_world_wit` so the two
+/// renderers cannot disagree. Empty when no export returns/takes a handle
+/// over a local element.
+pub(crate) fn hoisted_types(arena: &Arena, info: &FileInfo) -> Result<Vec<String>, String> {
+    let handle_referenced = |f: &FunctorInst| {
+        let dotted = format!("{}.set", f.iface);
+        info.exports.iter().any(|s| {
+            s.result.as_deref() == Some(dotted.as_str())
+                || s.params.iter().any(|(_, t)| t == &dotted)
+        })
+    };
+    let mut hoisted: Vec<String> = Vec::new();
+    for f in info.functors.iter().filter(|f| handle_referenced(f)) {
+        if info.types.iter().any(|(n, _)| n == &f.elem) && !hoisted.contains(&f.elem) {
+            hoisted.push(f.elem.clone());
+        }
+    }
+    // Transitively pull in local types the hoisted declarations reference.
+    let mut i = 0;
+    while i < hoisted.len() {
+        let name = hoisted[i].clone();
+        i += 1;
+        let Some((_, ty)) = info.types.iter().find(|(n, _)| n == &name) else {
+            continue;
+        };
+        let text = type_decl(arena, &name, *ty)?;
+        for (other, _) in &info.types {
+            if !hoisted.contains(other)
+                && text
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                    .any(|tok| tok == other)
+            {
+                hoisted.push(other.clone());
+            }
+        }
+    }
+    if !hoisted.is_empty()
+        && (info.exports.iter().any(|s| s.iface == "types")
+            || info.functors.iter().any(|f| f.iface == "types"))
+    {
+        return Err(
+            "cannot hoist functor element types: the interface name `types` is already taken"
+                .into(),
+        );
+    }
+    Ok(hoisted)
 }
 
 /// An interface that names an external WIT interface directly — it contains a

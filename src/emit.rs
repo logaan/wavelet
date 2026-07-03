@@ -8468,6 +8468,48 @@ fn synthesize_world_wit(
     let mut out = format!("package {};\n\n", info.package);
 
     let ifaces = crate::wit::iface_order(&info.exports, !info.types.is_empty());
+
+    // Hoisted local types (4.7). An export that returns (or takes) a functor
+    // handle makes its interface `use` the functor interface; when that
+    // functor's element is a local record, the functor interface would `use`
+    // the record back from `api` — a WIT interface cycle, which WIT cannot
+    // express. Break it by hoisting the element record (and any local types
+    // its declaration references, transitively) into a shared `types`
+    // interface that both `api` and the functor interface `use`.
+    let hoisted = crate::wit::hoisted_types(arena, info)?;
+    if !hoisted.is_empty() {
+        out.push_str("interface types {\n");
+        let mut texts: Vec<String> = Vec::new();
+        for name in &hoisted {
+            let (_, ty) = info
+                .types
+                .iter()
+                .find(|(n, _)| n == name)
+                .expect("hoisted names come from info.types");
+            let d = type_decl(arena, name, *ty)?;
+            texts.push(d.clone());
+            out.push_str(&format!("  {d}\n"));
+        }
+        // …their declarations may themselves reference dep types (4.3).
+        // (Re-rendered inside the loop; collect first to emit uses on top.)
+        let uses = dep_type_uses(&texts, info, deps);
+        if !uses.is_empty() {
+            // `use` lines must be re-emitted before the decls: rebuild.
+            let mut body = String::new();
+            for (use_path, names) in &uses {
+                body.push_str(&format!("  use {use_path}.{{{}}};\n", names.join(", ")));
+            }
+            for t in &texts {
+                body.push_str(&format!("  {t}\n"));
+            }
+            let start = out.rfind("interface types {\n").expect("just pushed");
+            out.truncate(start);
+            out.push_str("interface types {\n");
+            out.push_str(&body);
+        }
+        out.push_str("}\n\n");
+    }
+
     // External interfaces (e.g. wasi:http/incoming-handler, wasi:cli/run) are
     // defined by the dependency's WIT; we only export them by name, never
     // re-declare them here.
@@ -8493,48 +8535,6 @@ fn synthesize_world_wit(
             })
             .map(|f| f.iface.as_str())
             .collect();
-        // WIT forbids interface cycles. An export in `api` that *returns* (or
-        // takes) a functor handle makes `api` depend on the functor interface
-        // (`use point-set.{set}`); when that functor's element is a local record,
-        // the functor interface already depends back on `api` (`use api.{point}`).
-        // That `api ↔ point-set` cycle is not expressible in WIT — the encoder
-        // rejects it. This is the `nearest-set: func(..) -> point-set.set` shape
-        // in the docs example. Surface it as an honest, specific error rather than
-        // emitting WIT that fails to parse deep in the encoder. (An export whose
-        // result/params are ordinary types — e.g. `-> u32`/`-> bool` derived from
-        // set ops — has no such cycle and builds + validates fine. Lifting this
-        // limitation is future work, likely by hoisting the element record into a
-        // shared interface; tracked for step 04.)
-        for funct in &used {
-            if let Some(f) = info.functors.iter().find(|f| f.iface == *funct)
-                && info.types.iter().any(|(name, _)| name == &f.elem)
-            {
-                return Err(format!(
-                    "export `{}` in interface `{iface}` references the functor \
-                         handle `{}.set`, whose element type `{}` is a local record. \
-                         That makes `{iface}` and `{}` mutually depend (`{iface}` \
-                         `use`s the handle, `{}` `use`s the record) — a WIT interface \
-                         cycle, which the component model cannot express. An export \
-                         returning a `set` handle over a local record type is not yet \
-                         supported by the wasm backend; an export deriving an ordinary \
-                         result (e.g. `size`/`contains`) from the set works. \
-                         (Resource emission + routing of the handle return is tracked \
-                         for the functor build follow-up.)",
-                    sigs.iter()
-                        .find(|s| {
-                            let d = format!("{funct}.set");
-                            s.result.as_deref() == Some(d.as_str())
-                                || s.params.iter().any(|(_, t)| t == &d)
-                        })
-                        .map(|s| s.name.as_str())
-                        .unwrap_or("?"),
-                    funct,
-                    f.elem,
-                    funct,
-                    funct,
-                ));
-            }
-        }
         out.push_str(&format!("interface {iface} {{\n"));
         // Each functor interface names its resource `set`, so an interface that
         // references *two* functor handles (two instantiations, both returned or
@@ -8563,7 +8563,12 @@ fn synthesize_world_wit(
         }
         let mut api_decls: Vec<String> = Vec::new();
         if iface == "api" {
-            for (name, ty) in &info.types {
+            // Hoisted element types (4.7) are declared in `types` and brought
+            // back into scope here; the rest declare in place as before.
+            if !hoisted.is_empty() {
+                out.push_str(&format!("  use types.{{{}}};\n", hoisted.join(", ")));
+            }
+            for (name, ty) in info.types.iter().filter(|(n, _)| !hoisted.contains(n)) {
                 let d = type_decl(arena, name, *ty)?;
                 texts.push(d.clone());
                 api_decls.push(d);
@@ -8590,7 +8595,16 @@ fn synthesize_world_wit(
     // (`wit::functor_interface`) so the WIT the encoder validates against and the
     // resource the wasm backend implements cannot drift.
     for f in &info.functors {
-        out.push_str(crate::wit::functor_interface(arena, f, &info.types)?.trim_start());
+        // The element's declaring interface: `types` once hoisted (4.7), `api`
+        // for an un-hoisted local type, none for a primitive element.
+        let elem_iface = if hoisted.contains(&f.elem) {
+            Some("types")
+        } else if info.types.iter().any(|(n, _)| n == &f.elem) {
+            Some("api")
+        } else {
+            None
+        };
+        out.push_str(crate::wit::functor_interface(arena, f, elem_iface)?.trim_start());
         out.push('\n');
     }
 
@@ -8613,6 +8627,11 @@ fn synthesize_world_wit(
             "  import {};\n",
             versioned_iface(&dep.package, &iface)
         ));
+    }
+    // The hoisted `types` interface (4.7) is exported so the interfaces that
+    // `use` it resolve in the encoded component.
+    if !hoisted.is_empty() {
+        out.push_str("  export types;\n");
     }
     for iface in &ifaces {
         if is_external_iface(iface) {

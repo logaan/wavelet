@@ -298,3 +298,56 @@ Def build-words Fn {}
     c.drop_resource(handle)
         .expect("dropping the returned set handle should run the dtor cleanly");
 }
+
+#[test]
+// 4.7 — a set handle RETURNED over a locally-declared record element. This is
+// the shape the emitter used to reject as a WIT interface cycle (`api` uses
+// `point-set.{set}` while `point-set` uses `api.{point}`): the element record
+// is now hoisted into a shared `types` interface both sides `use`, so the
+// component encodes, validates, and behaves like the interpreter (dedup by
+// structural equality on the record).
+fn record_element_handle_return_hoists_the_element() {
+    const SRC: &str = r#"Package "demo:app@0.1.0"
+DefType point {x: s32 y: s32}
+Derive {Eq Ord Show} point
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
+Export build-points
+Def build-points Fn {}
+  Let {s: pts/new()}
+    Do [ pts/add(s {x: 1 y: 2})
+         pts/add(s {x: 1 y: 2})
+         pts/add(s {x: 3 y: 4})
+         s ]"#;
+    const IFACE: &str = "demo:app/point-set@0.1.0";
+    const API: &str = "demo:app/api@0.1.0";
+
+    let mut c = build_component(SRC);
+    let handle = match one(&mut c, API, "build-points", &[]) {
+        v @ Val::Resource(_) => v,
+        other => panic!("`build-points` should return a set resource, got {other:?}"),
+    };
+
+    // size(self): {1,2} added twice dedups — 2 distinct points.
+    let size = c
+        .call_instance(IFACE, "[method]set.size", std::slice::from_ref(&handle))
+        .expect("size call should succeed");
+    assert_eq!(size, vec![Val::U32(2)], "deduped size should be 2");
+
+    // contains(self, value) over the hoisted record type.
+    let point = |x: i32, y: i32| {
+        Val::Record(vec![
+            ("x".to_string(), Val::S32(x)),
+            ("y".to_string(), Val::S32(y)),
+        ])
+    };
+    let has = |c: &mut HostComponent, p: Val| {
+        c.call_instance(IFACE, "[method]set.contains", &[handle.clone(), p])
+            .expect("contains call should succeed")
+    };
+    assert_eq!(has(&mut c, point(1, 2)), vec![Val::Bool(true)]);
+    assert_eq!(has(&mut c, point(3, 4)), vec![Val::Bool(true)]);
+    assert_eq!(has(&mut c, point(9, 9)), vec![Val::Bool(false)]);
+
+    c.drop_resource(handle)
+        .expect("dropping the returned set handle should run the dtor cleanly");
+}
