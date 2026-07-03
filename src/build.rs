@@ -50,12 +50,15 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
         .map_err(|e| format!("{path}: {e}"))?;
         // Type-check the expanded program before emit, so an ill-typed build is
         // rejected with the same error the playground/`run` report — the static
-        // guarantee now holds on the build path, not just in the playground. We
-        // run the *pure* checker (`check_program`), NOT the overload-rewrite:
-        // exported overload sets are emitted by keying on the intact overload
-        // sets (`info.fn_defs`/`info.overload_bodies`), so the forms must stay
-        // un-rewritten for `wit::collect`/`emit`.
-        crate::check::check_program(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
+        // guarantee holds on the build path, not just in the playground. This
+        // also resolves and rewrites every *non-exported* overload set (3.14),
+        // so internal calls dispatch to the member the checker chose rather
+        // than last-wins. *Exported* sets are kept intact: they are emitted
+        // per-member through `wit::collect`'s boundary mangling, which keys on
+        // the un-rewritten sets (`info.fn_defs`/`info.overload_bodies`).
+        let exported = wit::export_names(&arena, &roots);
+        let (arena, roots) = crate::check::resolve_overloads_excluding(arena, &roots, &exported)
+            .map_err(|e| format!("{path}: {e}"))?;
         let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
         units.push(Unit {
             path: path.clone(),

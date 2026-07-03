@@ -627,10 +627,26 @@ impl<'a> Checker<'a> {
 /// this; Phase D should revisit it if derived/functor ops are ever passed by
 /// value.
 pub fn resolve_overloads(arena: Arena, roots: &[NodeId]) -> Result<(Arena, Vec<NodeId>), String> {
+    resolve_overloads_excluding(arena, roots, &std::collections::HashSet::new())
+}
+
+/// [`resolve_overloads`] for the **build** path (3.14): overload sets whose
+/// name is in `keep` (the file's exported names) are left intact — their
+/// members are emitted per-member through `wit::collect`'s boundary mangling
+/// (`info.overload_bodies`), which keys on the un-rewritten sets. Every
+/// *other* (non-exported) overload set is resolved and rewritten exactly as on
+/// the run path, so internal calls dispatch to the member the checker chose
+/// rather than to the last definition.
+pub fn resolve_overloads_excluding(
+    arena: Arena,
+    roots: &[NodeId],
+    keep: &std::collections::HashSet<String>,
+) -> Result<(Arena, Vec<NodeId>), String> {
     let checker = Checker::collect(&arena, roots);
     checker.check_roots(roots)?;
 
-    let overloads = checker.overload_names();
+    let mut overloads = checker.overload_names();
+    overloads.retain(|n| !keep.contains(n));
     if overloads.is_empty() {
         // Identity: nothing to rewrite, hand the program back as-is.
         return Ok((arena, roots.to_vec()));
@@ -701,6 +717,7 @@ impl<'a> Rewriter<'a> {
                 if let Some(&chosen) = self.resolved.get(&id)
                     && let Some(&head) = items.first()
                     && let Node::Sym(name) = self.arena.node(head)
+                    && self.overloads.contains(name)
                 {
                     let unique = mangled_def_name(name, chosen);
                     let new_head = self.out.add(Node::Sym(unique), self.arena.span(head));

@@ -821,6 +821,39 @@ fn call_param_type(
     None
 }
 
+/// The names a file's `Export` declarations export (bare or record form),
+/// without running full collection. Used by the build path to keep exported
+/// overload sets intact through `check::resolve_overloads_excluding` (3.14).
+pub fn export_names(arena: &Arena, roots: &[NodeId]) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for &root in roots {
+        let Node::Tup(items) = arena.node(root) else {
+            continue;
+        };
+        let Some(&head) = items.first() else { continue };
+        if !matches!(arena.node(head), Node::Sym(s) if s == "export-MACRO") {
+            continue;
+        }
+        let Some(&p) = items.get(1) else { continue };
+        match arena.node(p) {
+            Node::Sym(s) => {
+                out.insert(s.clone());
+            }
+            Node::Rec(fields) => {
+                for (k, v) in fields {
+                    if k == "name"
+                        && let Node::Sym(s) = arena.node(*v)
+                    {
+                        out.insert(s.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Build checker import signatures (3.1) for one resolved import: every
 /// function the dependency exports in `iface`, keyed `alias/name`, its WIT
 /// param/result texts parsed into checker types.
