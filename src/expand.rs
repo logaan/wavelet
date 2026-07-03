@@ -110,10 +110,10 @@ pub fn expand_file(
 }
 
 fn is_def_macro(arena: &Arena, id: NodeId) -> bool {
-    if let Node::Tup(items) = arena.node(id) {
-        if let Some(&head) = items.first() {
-            return matches!(arena.node(head), Node::Sym(s) if s == "defmacro-MACRO");
-        }
+    if let Node::Tup(items) = arena.node(id)
+        && let Some(&head) = items.first()
+    {
+        return matches!(arena.node(head), Node::Sym(s) if s == "defmacro-MACRO");
     }
     false
 }
@@ -134,8 +134,12 @@ fn derive_roots(
     root: NodeId,
     out: &mut Arena,
 ) -> Result<Option<Vec<NodeId>>, String> {
-    let Node::Tup(items) = arena.node(root) else { return Ok(None) };
-    let Some(&head) = items.first() else { return Ok(None) };
+    let Node::Tup(items) = arena.node(root) else {
+        return Ok(None);
+    };
+    let Some(&head) = items.first() else {
+        return Ok(None);
+    };
     if !matches!(arena.node(head), Node::Sym(s) if s == "derive-MACRO") {
         return Ok(None);
     }
@@ -199,7 +203,9 @@ fn derived_op(
             let body = the_int(out, "u32", 0, span);
             Ok(("hash", params, body))
         }
-        other => Err(format!("unknown derive class `{other}` (expected Eq, Ord, Show, or Hash)")),
+        other => Err(format!(
+            "unknown derive class `{other}` (expected Eq, Ord, Show, or Hash)"
+        )),
     }
 }
 
@@ -241,80 +247,62 @@ fn expand_form(
     out: &mut Arena,
     foreign: &mut Option<&mut dyn ForeignExpander>,
 ) -> Result<NodeId, String> {
-    if let Node::Tup(items) = arena.node(id) {
-        if let Some(&head) = items.first() {
-            if let Node::Sym(name) = arena.node(head) {
-                // forms quoted at runtime are not expanded at compile time —
-                // for both local and foreign macros (the call form under a
-                // quote is data, not a macro use).
-                if name == "quote-MACRO" || name == "quasi-MACRO" {
-                    return Ok(copy_form(arena, id, out));
-                }
-                // (1) Local macro: a `DefMacro` in this file. On the native path
-                // a `ForeignExpander` is present and owns the file's compiled
-                // local-macro component (strategy B), so the macro expands as
-                // wasm — no interpreter. The wasm playground passes no expander,
-                // so it falls through to `Interp::expand_once` (which also stays
-                // the differential oracle).
-                if let Some(Value::Macro(mac)) = env.lookup(name) {
-                    let bare = name.trim_end_matches("-MACRO");
-                    if let Some(fx) = foreign.as_deref_mut() {
-                        if let Some(result) = fx.expand_call(None, bare, arena, id) {
-                            let (expanded_arena, expanded) =
-                                result.map_err(|e| format!("expanding `{bare}`: {e}"))?;
-                            let expanded_arena = Rc::new(expanded_arena);
-                            return expand_form(
-                                interp, env, &expanded_arena, expanded, out, foreign,
-                            );
-                        }
-                    }
-                    let (expanded_arena, expanded) = interp
-                        .expand_once(&mac, arena, &items[1..])
-                        .map_err(|e| format!("expanding `{bare}`: {e}"))?;
+    if let Node::Tup(items) = arena.node(id)
+        && let Some(&head) = items.first()
+    {
+        if let Node::Sym(name) = arena.node(head) {
+            // forms quoted at runtime are not expanded at compile time —
+            // for both local and foreign macros (the call form under a
+            // quote is data, not a macro use).
+            if name == "quote-MACRO" || name == "quasi-MACRO" {
+                return Ok(copy_form(arena, id, out));
+            }
+            // (1) Local macro: a `DefMacro` in this file. On the native path
+            // a `ForeignExpander` is present and owns the file's compiled
+            // local-macro component (strategy B), so the macro expands as
+            // wasm — no interpreter. The wasm playground passes no expander,
+            // so it falls through to `Interp::expand_once` (which also stays
+            // the differential oracle).
+            if let Some(Value::Macro(mac)) = env.lookup(name) {
+                let bare = name.trim_end_matches("-MACRO");
+                if let Some(fx) = foreign.as_deref_mut()
+                    && let Some(result) = fx.expand_call(None, bare, arena, id)
+                {
+                    let (expanded_arena, expanded) =
+                        result.map_err(|e| format!("expanding `{bare}`: {e}"))?;
+                    let expanded_arena = Rc::new(expanded_arena);
                     return expand_form(interp, env, &expanded_arena, expanded, out, foreign);
                 }
-                // (2) Foreign macro (bare head): exported by an imported macro
-                // component. The whole call form (head + args) is shipped across
-                // the boundary; the component's `expand` rewrites it. Recurse so
-                // the expansion is itself expanded to fixpoint.
-                if let Some(fx) = foreign.as_deref_mut() {
-                    let macro_name = name.trim_end_matches("-MACRO");
-                    if let Some(result) = fx.expand_call(None, macro_name, arena, id) {
-                        let (expanded_arena, expanded) = result.map_err(|e| {
-                            format!("expanding `{macro_name}`: {e}")
-                        })?;
-                        let expanded_arena = Rc::new(expanded_arena);
-                        return expand_form(
-                            interp,
-                            env,
-                            &expanded_arena,
-                            expanded,
-                            out,
-                            foreign,
-                        );
-                    }
+                let (expanded_arena, expanded) = interp
+                    .expand_once(&mac, arena, &items[1..])
+                    .map_err(|e| format!("expanding `{bare}`: {e}"))?;
+                return expand_form(interp, env, &expanded_arena, expanded, out, foreign);
+            }
+            // (2) Foreign macro (bare head): exported by an imported macro
+            // component. The whole call form (head + args) is shipped across
+            // the boundary; the component's `expand` rewrites it. Recurse so
+            // the expansion is itself expanded to fixpoint.
+            if let Some(fx) = foreign.as_deref_mut() {
+                let macro_name = name.trim_end_matches("-MACRO");
+                if let Some(result) = fx.expand_call(None, macro_name, arena, id) {
+                    let (expanded_arena, expanded) =
+                        result.map_err(|e| format!("expanding `{macro_name}`: {e}"))?;
+                    let expanded_arena = Rc::new(expanded_arena);
+                    return expand_form(interp, env, &expanded_arena, expanded, out, foreign);
                 }
-            } else if let Node::Qsym(alias, name) = arena.node(head) {
-                // (3) Qualified foreign macro (`Alias/Name`): route to the import
-                // bound to `alias` specifically — this resolves even when the
-                // bare name is ambiguous across imports (§6.3). Qualified heads
-                // are never local (`DefMacro` registers a bare symbol).
-                if let Some(fx) = foreign.as_deref_mut() {
-                    let macro_name = name.trim_end_matches("-MACRO");
-                    if let Some(result) = fx.expand_call(Some(alias), macro_name, arena, id) {
-                        let (expanded_arena, expanded) = result.map_err(|e| {
-                            format!("expanding `{alias}/{macro_name}`: {e}")
-                        })?;
-                        let expanded_arena = Rc::new(expanded_arena);
-                        return expand_form(
-                            interp,
-                            env,
-                            &expanded_arena,
-                            expanded,
-                            out,
-                            foreign,
-                        );
-                    }
+            }
+        } else if let Node::Qsym(alias, name) = arena.node(head) {
+            // (3) Qualified foreign macro (`Alias/Name`): route to the import
+            // bound to `alias` specifically — this resolves even when the
+            // bare name is ambiguous across imports (§6.3). Qualified heads
+            // are never local (`DefMacro` registers a bare symbol).
+            if let Some(fx) = foreign.as_deref_mut() {
+                let macro_name = name.trim_end_matches("-MACRO");
+                if let Some(result) = fx.expand_call(Some(alias), macro_name, arena, id) {
+                    let (expanded_arena, expanded) =
+                        result.map_err(|e| format!("expanding `{alias}/{macro_name}`: {e}"))?;
+                    let expanded_arena = Rc::new(expanded_arena);
+                    return expand_form(interp, env, &expanded_arena, expanded, out, foreign);
                 }
             }
         }

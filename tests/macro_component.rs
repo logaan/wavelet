@@ -41,7 +41,10 @@ fn manifest_lists_compiled_macros() {
     let mut m = component(LIB);
     let mut got = m.manifest().expect("manifest call");
     got.sort();
-    assert_eq!(got, vec![("identity".to_string(), 1u32), ("unless".to_string(), 2u32)]);
+    assert_eq!(
+        got,
+        vec![("identity".to_string(), 1u32), ("unless".to_string(), 2u32)]
+    );
 }
 
 #[test]

@@ -24,7 +24,7 @@
 //! cargo test --test type_system
 //! ```
 
-use wavelet::{eval_snippet, expand, print, read_file, wit, EvalOutcome};
+use wavelet::{EvalOutcome, eval_snippet, expand, print, read_file, wit};
 
 /// Interpreter path: read every form and evaluate in order, like the docs
 /// playground and `wavelet run`. The type checker is expected to run here too,
@@ -63,7 +63,11 @@ fn expand_forms(src: &str) -> Result<Vec<String>, String> {
 // that a static checker runs at all.
 fn illtyped_uncalled_def_is_a_compile_error() {
     let r = run(r#"Def bad Fn {} add("a" "b")"#);
-    assert!(!r.ok, "expected a compile-time type error, got value {:?}", r.value);
+    assert!(
+        !r.ok,
+        "expected a compile-time type error, got value {:?}",
+        r.value
+    );
 }
 
 #[test]
@@ -142,7 +146,10 @@ fn float_literal_where_int_expected_is_a_compile_error() {
 fn call_argument_type_mismatch_is_a_compile_error() {
     let r = run(r#"Def g Fn {x: s32} x
 Def f Fn {} g("str")"#);
-    assert!(!r.ok, "string argument to an s32 parameter must be rejected");
+    assert!(
+        !r.ok,
+        "string argument to an s32 parameter must be rejected"
+    );
 }
 
 #[test]
@@ -179,8 +186,14 @@ Export shout
 Def shout Fn {phrase} str-cat(upper(phrase) "!")"#,
     )
     .expect("a fully-inferable export should synthesize");
-    assert!(wit.contains("phrase: string"), "param type not inferred:\n{wit}");
-    assert!(wit.contains("-> string"), "result type not inferred:\n{wit}");
+    assert!(
+        wit.contains("phrase: string"),
+        "param type not inferred:\n{wit}"
+    );
+    assert!(
+        wit.contains("-> string"),
+        "result type not inferred:\n{wit}"
+    );
 }
 
 #[test]
@@ -194,7 +207,10 @@ Export rev
 Def rev Fn {xs: list(s32)} reverse(xs)"#,
     )
     .expect("list result should be inferable");
-    assert!(wit.contains("-> list<s32>"), "list result not inferred:\n{wit}");
+    assert!(
+        wit.contains("-> list<s32>"),
+        "list result not inferred:\n{wit}"
+    );
 }
 
 // ===========================================================================
@@ -256,7 +272,10 @@ fn return_type_overload_without_context_is_a_compile_error() {
     let r = run(r#"Def make Fn {} 1
 Def make Fn {} "x"
 make()"#);
-    assert!(!r.ok, "return-type overload with no context must be rejected");
+    assert!(
+        !r.ok,
+        "return-type overload with no context must be rejected"
+    );
 }
 
 // --- Step 8: name-mangling at the boundary for exported overload sets ---------
@@ -273,8 +292,14 @@ Def eq Fn {a: string b: string} true
 Export eq"#,
     )
     .expect("exported overload set should synthesize");
-    assert!(wit.contains("eq-point"), "missing mangled name eq-point:\n{wit}");
-    assert!(wit.contains("eq-string"), "missing mangled name eq-string:\n{wit}");
+    assert!(
+        wit.contains("eq-point"),
+        "missing mangled name eq-point:\n{wit}"
+    );
+    assert!(
+        wit.contains("eq-string"),
+        "missing mangled name eq-string:\n{wit}"
+    );
 }
 
 #[test]
@@ -306,7 +331,10 @@ Def get Fn {xs: list(s32)} xs
 Export get"#,
     )
     .expect("a lone library-named export should synthesize");
-    assert!(wit.contains("get: func("), "expected an un-mangled `get`:\n{wit}");
+    assert!(
+        wit.contains("get: func("),
+        "expected an un-mangled `get`:\n{wit}"
+    );
     assert!(
         !wit.contains("get-"),
         "lone `get` was wrongly name-mangled:\n{wit}"
@@ -474,7 +502,10 @@ Export has
 Def has Fn {p: point} pts/contains(pts/new() p)"#,
     )
     .expect("a functor instantiation should synthesize");
-    assert!(wit.contains("point-set"), "no specialized point-set interface:\n{wit}");
+    assert!(
+        wit.contains("point-set"),
+        "no specialized point-set interface:\n{wit}"
+    );
 }
 
 #[test]
@@ -559,9 +590,15 @@ Def nearest-set Fn {ps: list(point)}
     .expect("the worked example should compile to a WIT world");
     assert!(wit.contains("record point"), "missing record point:\n{wit}");
     assert!(wit.contains("eq-point"), "missing derived eq-point:\n{wit}");
-    assert!(wit.contains("point-set"), "missing specialized Set interface:\n{wit}");
+    assert!(
+        wit.contains("point-set"),
+        "missing specialized Set interface:\n{wit}"
+    );
     assert!(wit.contains("nearest-set"), "missing the export:\n{wit}");
-    assert!(wit.contains("list<point>"), "export param not concrete:\n{wit}");
+    assert!(
+        wit.contains("list<point>"),
+        "export param not concrete:\n{wit}"
+    );
 }
 
 // ===========================================================================

@@ -1,6 +1,6 @@
 //! Step 1 of the WASI-decoupling plan: an `Import` can be satisfied by an
 //! external WIT package vendored under a project's `wit/deps` directory, as a
-//! fallback after sibling-`.wvl` resolution, and the resulting `Dep` has the
+//! fallback after sibling-`.wlt` resolution, and the resulting `Dep` has the
 //! same shape the emitter already consumes for a Wavelet dependency.
 
 use std::path::Path;
@@ -66,14 +66,14 @@ fn external_wit_dep_matches_wavelet_dep_shape() {
         .expect("acme:greet found in wit/deps");
 
     // The equivalent Wavelet dependency file.
-    let from_wvl = dep_from_wavelet(
+    let from_wlt = dep_from_wavelet(
         "Package \"acme:greet@0.1.0\"\n\n\
          Export greet\n\
          Def greet Fn {name: string}\n  \
            str-cat(\"Hello, \" name \"!\")\n",
     );
 
-    assert_same_dep(&from_wit, &from_wvl);
+    assert_same_dep(&from_wit, &from_wlt);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -150,7 +150,7 @@ fn resolve_dep_absent_returns_none() {
 }
 
 /// End to end: an importer whose dependency lives only in `wit/deps` (no
-/// sibling `.wvl`) resolves against it. Resolution is the Step 1 concern, so we
+/// sibling `.wlt`) resolves against it. Resolution is the Step 1 concern, so we
 /// assert the build gets *past* import resolution — it must not fail with the
 /// "not satisfied" error. (Lowering a call into a dep is a later step.)
 #[test]
@@ -168,7 +168,7 @@ fn build_resolves_import_from_wit_deps() {
     )
     .unwrap();
 
-    let app = src.join("app.wvl");
+    let app = src.join("app.wlt");
     std::fs::write(
         &app,
         "Package \"demo:app@0.1.0\"\n\n\
@@ -179,10 +179,8 @@ fn build_resolves_import_from_wit_deps() {
     .unwrap();
 
     let out = dir.join("out");
-    let res = wavelet::build::build_files(
-        &[app.to_str().unwrap().to_string()],
-        out.to_str().unwrap(),
-    );
+    let res =
+        wavelet::build::build_files(&[app.to_str().unwrap().to_string()], out.to_str().unwrap());
 
     // The build may still fail in later codegen (lowering a dep call is a
     // future step), but it must not fail at *import resolution*: the dependency
@@ -202,9 +200,15 @@ fn build_resolves_import_from_wit_deps() {
 /// directory. This mirrors the layout `wavelet new` scaffolds.
 #[test]
 fn wit_deps_is_sibling_of_src() {
-    // src/app.wvl -> ../wit/deps
-    let p = Path::new("/proj/src/app.wvl");
+    // src/app.wlt -> ../wit/deps
+    let p = Path::new("/proj/src/app.wlt");
     let expected = Path::new("/proj/wit/deps");
-    let derived = p.parent().unwrap().parent().unwrap().join("wit").join("deps");
+    let derived = p
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("wit")
+        .join("deps");
     assert_eq!(derived, expected);
 }

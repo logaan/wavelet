@@ -113,7 +113,7 @@ pub struct EvalOutcome {
 /// change that breaks a documented example breaks `cargo test`.
 pub fn eval_snippet(src: &str) -> EvalOutcome {
     use std::rc::Rc;
-    use value::{print_value, unit, Env, Value};
+    use value::{Env, Value, print_value, unit};
 
     let (arena, roots) = match read_file(src) {
         Ok(pair) => pair,
@@ -243,7 +243,10 @@ mod tests {
         // with whitespace, the name and the record are two separate forms
         assert_eq!(
             read_all(r#"delete-file {path: "foo.md" force: true}"#),
-            vec!["delete-file".to_string(), r#"{path: "foo.md", force: true}"#.to_string()]
+            vec![
+                "delete-file".to_string(),
+                r#"{path: "foo.md", force: true}"#.to_string()
+            ]
         );
     }
 
@@ -315,10 +318,7 @@ mod tests {
 
     #[test]
     fn comments_and_newlines() {
-        assert_eq!(
-            read1("// leading comment\nf(x) // trailing"),
-            "(f, x)"
-        );
+        assert_eq!(read1("// leading comment\nf(x) // trailing"), "(f, x)");
     }
 
     #[test]
@@ -358,7 +358,9 @@ mod tests {
         // a nested Quasi protects its Unquotes; Unquote(Unquote(x)) fires the
         // innermost one level down
         assert_eq!(
-            eval_str("Quasi [Unquote(add(1 2)) Quasi Unquote(add(1 2)) Quasi Unquote(Unquote(add(1 2)))]"),
+            eval_str(
+                "Quasi [Unquote(add(1 2)) Quasi Unquote(add(1 2)) Quasi Unquote(Unquote(add(1 2)))]"
+            ),
             "[3, (quasi-MACRO, (unquote-MACRO, (add, 1, 2))), (quasi-MACRO, (unquote-MACRO, 3))]"
         );
     }
@@ -375,7 +377,10 @@ mod tests {
     fn eval_def_fn_and_payload_binding() {
         // record payload binds by name, positional args by order (§4.2)
         let src = "Def f Fn {path force} [path force]";
-        assert_eq!(eval_str(&format!("{src} f({{path: \"a\" force: true}})")), "[\"a\", true]");
+        assert_eq!(
+            eval_str(&format!("{src} f({{path: \"a\" force: true}})")),
+            "[\"a\", true]"
+        );
         assert_eq!(eval_str(&format!("{src} f(\"a\" true)")), "[\"a\", true]");
         // a sole parameter receives the bundled payload directly
         assert_eq!(eval_str("Def id Fn {x} x id([1 2 3])"), "[1, 2, 3]");
@@ -384,7 +389,10 @@ mod tests {
 
     #[test]
     fn eval_typed_params() {
-        assert_eq!(eval_str("Def s Fn {phrase: string} upper(phrase) s(\"hi\")"), "\"HI\"");
+        assert_eq!(
+            eval_str("Def s Fn {phrase: string} upper(phrase) s(\"hi\")"),
+            "\"HI\""
+        );
         let (arena, roots) = read_file("Def s Fn {phrase: string} phrase s(42)").unwrap();
         let arena = std::rc::Rc::new(arena);
         let env = value::Env::root();
@@ -404,10 +412,7 @@ mod tests {
     fn eval_let_do_match() {
         assert_eq!(eval_str("Let {x: 2 y: mul(x 3)} add(x y)"), "8");
         assert_eq!(eval_str("Do [drop(\"\") 7]"), "7");
-        assert_eq!(
-            eval_str("Match ok(5) [ (ok(n) add(n 1)) (err(e) 0) ]"),
-            "6"
-        );
+        assert_eq!(eval_str("Match ok(5) [ (ok(n) add(n 1)) (err(e) 0) ]"), "6");
         assert_eq!(
             eval_str("Match err(\"boom\") [ (ok(n) n) (err(e) e) ]"),
             "\"boom\""
@@ -439,7 +444,10 @@ mod tests {
     #[test]
     fn eval_quote_quasi_macro() {
         assert_eq!(eval_str("Quote add(1 2)"), "(add, 1, 2)");
-        assert_eq!(eval_str("Let {x: 2} Quasi add(1 Unquote(x))"), "(add, 1, 2)");
+        assert_eq!(
+            eval_str("Let {x: 2} Quasi add(1 Unquote(x))"),
+            "(add, 1, 2)"
+        );
         assert_eq!(eval_str("Quasi [1 Splice([2 3]) 4]"), "[1, 2, 3, 4]");
         assert_eq!(
             eval_str(
@@ -478,7 +486,10 @@ Def quarter Fn {n}
 
     #[test]
     fn eval_cells_and_misc() {
-        assert_eq!(eval_str("Let {c: cell-new(1)} Do [cell-set(c 5) cell-get(c)]"), "5");
+        assert_eq!(
+            eval_str("Let {c: cell-new(1)} Do [cell-set(c 5) cell-get(c)]"),
+            "5"
+        );
         assert_eq!(eval_str("fold(Fn {a b} add(a b) 0 range(1 5))"), "10");
         assert_eq!(eval_str("to-string({a: 1})"), "\"{a: 1}\"");
         assert_eq!(eval_str("read(\"ok(5)\")"), "ok((ok, 5))");
@@ -486,7 +497,7 @@ Def quarter Fn {n}
 
     #[test]
     fn wit_synthesis_matches_spec() {
-        // §6.1: the exact WIT the design doc shows for shout.wvl
+        // §6.1: the exact WIT the design doc shows for shout.wlt
         let src = "Package \"demo:shout@0.1.0\"\n\
                    Export shout\n\
                    Def shout Fn {phrase: string}\n\
@@ -548,8 +559,7 @@ world shout {
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
-            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
-                .unwrap();
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
         assert!(bytes.starts_with(b"\0asm"));
     }
 
@@ -572,8 +582,7 @@ world shout {
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
-            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
-                .unwrap();
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
         assert!(bytes.starts_with(b"\0asm"));
     }
 
@@ -591,8 +600,7 @@ world shout {
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
-            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
-                .unwrap();
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
         assert!(bytes.starts_with(b"\0asm"));
     }
 
@@ -610,8 +618,7 @@ world shout {
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
-            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
-                .unwrap();
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
         assert!(bytes.starts_with(b"\0asm"));
     }
 
@@ -629,8 +636,7 @@ world shout {
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
-            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
-                .unwrap();
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
         assert!(bytes.starts_with(b"\0asm"));
     }
 
@@ -652,8 +658,7 @@ world shout {
         assert!(info.exports.iter().any(|s| s.name == "eq-point"));
         assert!(info.exports.iter().any(|s| s.name == "eq-string"));
         let bytes =
-            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
-                .unwrap();
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
         assert!(bytes.starts_with(b"\0asm"));
     }
 
@@ -661,8 +666,10 @@ world shout {
     fn eval_record_construct_and_match() {
         // the interpreter and wasm backend agree on this program's result
         assert_eq!(
-            eval_str("Let {p: {x: 3 y: 7 label: \"pt\"}}\n\
-                      Match p [({x: a y: b label: l} l) (other \"no\")]"),
+            eval_str(
+                "Let {p: {x: 3 y: 7 label: \"pt\"}}\n\
+                      Match p [({x: a y: b label: l} l) (other \"no\")]"
+            ),
             "\"pt\""
         );
     }
@@ -688,21 +695,23 @@ world shout {
         let (arena, roots) = read_file(src).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
-            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new())
-                .unwrap();
+            emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
         assert!(bytes.starts_with(b"\0asm"));
     }
 
     #[test]
     fn eval_variant_and_tuple_match() {
         // interpreter reference for the wasm-backend behavior above
+        assert_eq!(eval_str("Match ok(42) [(ok(n) n) (err(e) 0)]"), "42");
         assert_eq!(
-            eval_str("Match ok(42) [(ok(n) n) (err(e) 0)]"),
-            "42"
+            eval_str("Match none [(none \"y\") (some(x) \"n\")]"),
+            "\"y\""
         );
-        assert_eq!(eval_str("Match none [(none \"y\") (some(x) \"n\")]"), "\"y\"");
         // a tuple value (from Quote) destructures element-wise
-        assert_eq!(eval_str("Match Quote (10 20) [((a b) add(a b)) (other 0)]"), "30");
+        assert_eq!(
+            eval_str("Match Quote (10 20) [((a b) add(a b)) (other 0)]"),
+            "30"
+        );
     }
 
     #[test]
@@ -732,8 +741,14 @@ world shout {
                    Def ping Fn {} \"pong\"";
         let (arena, roots) = read_file(src).unwrap();
         let got = wit::synthesize(&arena, &roots).unwrap();
-        assert!(got.contains("interface render {\n  frame: func(label: string) -> string;"), "{got}");
-        assert!(got.contains("interface api {\n  ping: func() -> string;"), "{got}");
+        assert!(
+            got.contains("interface render {\n  frame: func(label: string) -> string;"),
+            "{got}"
+        );
+        assert!(
+            got.contains("interface api {\n  ping: func() -> string;"),
+            "{got}"
+        );
         assert!(got.contains("export render;"), "{got}");
         assert!(got.contains("export api;"), "{got}");
     }
@@ -751,7 +766,10 @@ world shout {
         let (arena, roots) = read_file(src).unwrap();
         let got = wit::synthesize(&arena, &roots).unwrap();
         assert!(got.contains("double: func(n: s64) -> s64;"), "{got}");
-        assert!(got.contains("greet: func(name: string) -> string;"), "{got}");
+        assert!(
+            got.contains("greet: func(name: string) -> string;"),
+            "{got}"
+        );
     }
 
     #[test]
@@ -768,15 +786,15 @@ world shout {
 
     #[test]
     fn emit_components_for_spec_demo() {
-        // shout.wvl: no deps, exports api#shout
-        let (sa, sr) = read_file(include_str!("../examples/shout.wvl")).unwrap();
+        // shout.wlt: no deps, exports api#shout
+        let (sa, sr) = read_file(include_str!("../examples/shout.wlt")).unwrap();
         let sinfo = wit::collect(&sa, &sr).unwrap();
         let bytes = emit::emit_component(&sa, &sr, &sinfo, &Default::default())
             .expect("shout componentizes");
         assert_eq!(&bytes[0..4], b"\0asm");
 
-        // main.wvl: imports demo:shout/api, exports run
-        let (ma, mr) = read_file(include_str!("../examples/main.wvl")).unwrap();
+        // main.wlt: imports demo:shout/api, exports run
+        let (ma, mr) = read_file(include_str!("../examples/main.wlt")).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
         deps.insert(
@@ -789,8 +807,7 @@ world shout {
                 type_defs: Vec::new(),
             },
         );
-        let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
-            .expect("main componentizes");
+        let bytes = emit::emit_component(&ma, &mr, &minfo, &deps).expect("main componentizes");
         assert_eq!(&bytes[0..4], b"\0asm");
     }
 
@@ -833,8 +850,8 @@ world shout {
                 type_defs: Vec::new(),
             },
         );
-        let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
-            .expect("list consumer componentizes");
+        let bytes =
+            emit::emit_component(&ma, &mr, &minfo, &deps).expect("list consumer componentizes");
         assert_eq!(&bytes[0..4], b"\0asm");
     }
 
@@ -875,8 +892,8 @@ world shout {
                 type_defs: Vec::new(),
             },
         );
-        let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)
-            .expect("record consumer componentizes");
+        let bytes =
+            emit::emit_component(&ma, &mr, &minfo, &deps).expect("record consumer componentizes");
         assert_eq!(&bytes[0..4], b"\0asm");
     }
 
@@ -965,7 +982,10 @@ world shout {
         // the DefMacro form is gone and the call site is rewritten
         let printed: Vec<String> = roots.iter().map(|&r| print(&arena, r)).collect();
         assert!(printed.iter().all(|s| !s.contains("def-macro")));
-        assert!(printed.iter().any(|s| s.contains("(mul, 2, n)")), "{printed:?}");
+        assert!(
+            printed.iter().any(|s| s.contains("(mul, 2, n)")),
+            "{printed:?}"
+        );
         // and the expanded tree compiles to a component
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes = emit::emit_component(&arena, &roots, &info, &Default::default())
@@ -1029,7 +1049,9 @@ world shout {
             "unless should be expanded away: {printed:?}"
         );
         assert!(
-            printed.iter().any(|s| s.contains("(if-MACRO, (gt, n, 0), {}, 42)")),
+            printed
+                .iter()
+                .any(|s| s.contains("(if-MACRO, (gt, n, 0), {}, 42)")),
             "unless must expand into its If form, args spliced in: {printed:?}"
         );
     }
@@ -1092,8 +1114,7 @@ world shout {
         // actionable expand error naming the macro.
         let src = src_using_fixture("Boom");
         let root = env!("CARGO_MANIFEST_DIR");
-        let (arena, roots) =
-            macrodep::read_file_with_macros(&src, root).expect("read");
+        let (arena, roots) = macrodep::read_file_with_macros(&src, root).expect("read");
         let mut foreign = macrodep::FileExpander::for_file(root, &arena, &roots);
         let err = expand::expand_file(
             arena,

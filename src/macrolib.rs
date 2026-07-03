@@ -1,7 +1,7 @@
 //! One-step interpreter macro expansion, retained as the differential **oracle**
 //! (`CLAUDE.md`) the compiled macro components are validated against.
 //!
-//! A macro library written in Wavelet is a `.wvl` file whose top level is a
+//! A macro library written in Wavelet is a `.wlt` file whose top level is a
 //! `Package` declaration plus `DefMacro`s (and nothing the file exports as a
 //! runtime function — see [`crate::macrobuild`] for the build trigger). Producing
 //! one now **compiles each macro body to wasm** (strategy B, via
@@ -64,10 +64,10 @@ fn macro_env(src: &str) -> Result<(Env, Rc<Arena>), String> {
 }
 
 fn is_def_macro(arena: &Arena, id: NodeId) -> bool {
-    if let Node::Tup(items) = arena.node(id) {
-        if let Some(&head) = items.first() {
-            return matches!(arena.node(head), Node::Sym(s) if s == "defmacro-MACRO");
-        }
+    if let Node::Tup(items) = arena.node(id)
+        && let Some(&head) = items.first()
+    {
+        return matches!(arena.node(head), Node::Sym(s) if s == "defmacro-MACRO");
     }
     false
 }
@@ -87,15 +87,21 @@ pub fn manifest(src: &str) -> Result<Vec<(String, u32)>, String> {
     for &root in &roots {
         // A top-level `DefMacro name {params} body` reads as the 4-tuple
         // `Tup[defmacro-MACRO, name, params, body]` (mirrors the reader).
-        let Node::Tup(items) = arena.node(root) else { continue };
+        let Node::Tup(items) = arena.node(root) else {
+            continue;
+        };
         if items.len() != 4 {
             continue;
         }
-        let Node::Sym(h) = arena.node(items[0]) else { continue };
+        let Node::Sym(h) = arena.node(items[0]) else {
+            continue;
+        };
         if h != "defmacro-MACRO" {
             continue;
         }
-        let Node::Sym(name) = arena.node(items[1]) else { continue };
+        let Node::Sym(name) = arena.node(items[1]) else {
+            continue;
+        };
         let arity = match arena.node(items[2]) {
             Node::Flg(names) => names.len(),
             Node::Rec(fields) => fields.len(),

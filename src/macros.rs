@@ -83,9 +83,7 @@ pub fn node_to_val(node: &Node) -> Val {
             Val::List(
                 fields
                     .iter()
-                    .map(|(k, v)| {
-                        Val::Tuple(vec![Val::String(k.clone()), Val::U32(*v)])
-                    })
+                    .map(|(k, v)| Val::Tuple(vec![Val::String(k.clone()), Val::U32(*v)]))
                     .collect(),
             ),
         ),
@@ -202,7 +200,10 @@ pub fn val_to_tree(val: &Val) -> Result<Tree, String> {
                     parts.len()
                 ));
             }
-            Ok((expect_u32(&parts[0], "span.start")?, expect_u32(&parts[1], "span.end")?))
+            Ok((
+                expect_u32(&parts[0], "span.start")?,
+                expect_u32(&parts[1], "span.end")?,
+            ))
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -305,10 +306,7 @@ fn expect_string_list(v: &Val, ctx: &str) -> Result<Vec<String>, String> {
     items.iter().map(|i| expect_string(i, ctx)).collect()
 }
 
-fn expect_rec_fields(
-    v: &Val,
-    ctx: &str,
-) -> Result<Vec<(String, crate::form::NodeId)>, String> {
+fn expect_rec_fields(v: &Val, ctx: &str) -> Result<Vec<(String, crate::form::NodeId)>, String> {
     let Val::List(items) = v else {
         return Err(format!("`{ctx}` payload is not a list, got {v:?}"));
     };
@@ -376,9 +374,7 @@ impl MacroComponent {
 
     /// Call `manifest()` and return the published `(name, arity)` pairs.
     pub fn manifest(&mut self) -> Result<Vec<(String, u32)>, String> {
-        let out = self
-            .host
-            .call_instance(MACROS_INTERFACE, "manifest", &[])?;
+        let out = self.host.call_instance(MACROS_INTERFACE, "manifest", &[])?;
         let [Val::List(items)] = out.as_slice() else {
             return Err(format!(
                 "`manifest` returned an unexpected result shape: {out:?}"
@@ -530,7 +526,7 @@ mod tests {
         assert_node_roundtrips(Node::BoolVal(false));
         assert_node_roundtrips(Node::IntVal(-7));
         assert_node_roundtrips(Node::IntVal(i64::MAX));
-        assert_node_roundtrips(Node::DecVal(3.14));
+        assert_node_roundtrips(Node::DecVal(2.75));
         assert_node_roundtrips(Node::CharVal('☃'));
         assert_node_roundtrips(Node::StrVal("hi\tthere".to_string()));
         assert_node_roundtrips(Node::Sym("foo-bar".to_string()));
@@ -538,14 +534,8 @@ mod tests {
         assert_node_roundtrips(Node::Tup(vec![0, 1, 2]));
         assert_node_roundtrips(Node::Tup(vec![])); // nullary tup (leaf case)
         assert_node_roundtrips(Node::Lst(vec![3, 4]));
-        assert_node_roundtrips(Node::Rec(vec![
-            ("a".to_string(), 0),
-            ("b".to_string(), 1),
-        ]));
-        assert_node_roundtrips(Node::Flg(vec![
-            "read".to_string(),
-            "write".to_string(),
-        ]));
+        assert_node_roundtrips(Node::Rec(vec![("a".to_string(), 0), ("b".to_string(), 1)]));
+        assert_node_roundtrips(Node::Flg(vec!["read".to_string(), "write".to_string()]));
         assert_node_roundtrips(Node::Flg(vec![])); // empty flags
     }
 

@@ -1,6 +1,6 @@
 //! `wavelet new` — scaffold a fresh Wavelet project.
 //!
-//! A project is just a directory of `.wvl` files plus the small amount of glue
+//! A project is just a directory of `.wlt` files plus the small amount of glue
 //! (a `.gitignore`, build/run scripts, a README) that makes it pleasant to work
 //! on. Two templates exist: `cli` (the default) lays down a `wasi:cli/command`
 //! program plus the domain model it imports; `http` lays down a web app whose
@@ -25,7 +25,9 @@ impl ProjectKind {
         match s {
             "cli" => Ok(ProjectKind::Cli),
             "http" => Ok(ProjectKind::Http),
-            other => Err(format!("unknown project type `{other}` (supported: cli, http)")),
+            other => Err(format!(
+                "unknown project type `{other}` (supported: cli, http)"
+            )),
         }
     }
 }
@@ -47,7 +49,8 @@ pub fn create(name: &str, kind: ProjectKind) -> Result<(PathBuf, Vec<PathBuf>), 
     let mut write = |rel: &str, contents: String, exec: bool| -> Result<(), String> {
         let path = root.join(rel);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("creating {}: {e}", parent.display()))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("creating {}: {e}", parent.display()))?;
         }
         fs::write(&path, contents).map_err(|e| format!("writing {}: {e}", path.display()))?;
         if exec {
@@ -62,15 +65,15 @@ pub fn create(name: &str, kind: ProjectKind) -> Result<(PathBuf, Vec<PathBuf>), 
     match kind {
         ProjectKind::Cli => {
             write("README.md", cli_readme(name), false)?;
-            write("src/greeting.wvl", greeting_wvl(&slug), false)?;
-            write("src/main.wvl", main_wvl(&slug), false)?;
+            write("src/greeting.wlt", greeting_wlt(&slug), false)?;
+            write("src/main.wlt", main_wlt(&slug), false)?;
             write("scripts/build.sh", cli_build_sh(&slug), true)?;
             write("scripts/run.sh", RUN_SH.to_string(), true)?;
         }
         ProjectKind::Http => {
             write("README.md", http_readme(name), false)?;
-            write("src/greeting.wvl", greeting_wvl(&slug), false)?;
-            write("src/app.wvl", app_wvl(&slug), false)?;
+            write("src/greeting.wlt", greeting_wlt(&slug), false)?;
+            write("src/app.wlt", app_wlt(&slug), false)?;
             write("scripts/build.sh", http_build_sh(&slug), true)?;
             write("scripts/serve.sh", SERVE_SH.to_string(), true)?;
         }
@@ -107,7 +110,11 @@ fn slugify(name: &str) -> Result<String, String> {
     let slug = match slug.chars().next() {
         Some(c) if c.is_ascii_alphabetic() => slug,
         Some(_) => format!("app-{slug}"),
-        None => return Err(format!("`{name}` has no letters or digits to name a package after")),
+        None => {
+            return Err(format!(
+                "`{name}` has no letters or digits to name a package after"
+            ));
+        }
     };
     Ok(slug)
 }
@@ -169,7 +176,7 @@ set -euo pipefail
 here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
 cd \"$here\"
 
-wavelet build src/*.wvl -o out
+wavelet build src/*.wlt -o out
 echo \"built out/app.wasm\"
 "
     .to_string()
@@ -190,17 +197,17 @@ scripts/run.sh           # greets the world
 scripts/run.sh Ada       # greets Ada
 ```
 
-`scripts/build.sh` compiles `src/*.wvl` into the git-ignored `out/` directory
+`scripts/build.sh` compiles `src/*.wlt` into the git-ignored `out/` directory
 and links them into `out/app.wasm`; `scripts/run.sh` does that and then runs the
 component with [`wasmtime`](https://docs.wasmtime.dev/).
 
 ## Layout
 
-- `src/main.wvl` — the entry point. Implements the `wasi:cli/run` interface and
+- `src/main.wlt` — the entry point. Implements the `wasi:cli/run` interface and
   exports `run`, reading its arguments from `wasi:cli/environment` and writing
   to `wasi:cli/stdout`.
-- `src/greeting.wvl` — the domain model. The pure `greet` function, imported by
-  `main.wvl` across the component boundary.
+- `src/greeting.wlt` — the domain model. The pure `greet` function, imported by
+  `main.wlt` across the component boundary.
 
 ## Learn more
 
@@ -210,13 +217,13 @@ documentation at <https://logaan.github.io/wavelet/>.
     )
 }
 
-fn greeting_wvl(slug: &str) -> String {
+fn greeting_wlt(slug: &str) -> String {
     format!(
         "\
-// greeting.wvl — the domain model.
+// greeting.wlt — the domain model.
 //
 // Pure logic with no knowledge of the command line: just how to phrase a
-// greeting. Keeping it in its own component means main.wvl is only plumbing, and
+// greeting. Keeping it in its own component means main.wlt is only plumbing, and
 // the same logic could back an HTTP front end, a test, or a library unchanged.
 Package \"{slug}:greeting@0.1.0\"
 
@@ -228,10 +235,10 @@ Def greet Fn {{name: string}}
     )
 }
 
-fn main_wvl(slug: &str) -> String {
+fn main_wlt(slug: &str) -> String {
     format!(
         "\
-// main.wvl — the command-line entry point.
+// main.wlt — the command-line entry point.
 //
 // This component implements the `wasi:cli/run` interface: a CLI host (here,
 // `wasmtime`) calls `run` on startup. The interface is exported by name via
@@ -286,7 +293,7 @@ set -euo pipefail
 here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
 cd \"$here\"
 
-wavelet build src/*.wvl -o out
+wavelet build src/*.wlt -o out
 echo \"built out/app.wasm\"
 "
     .to_string()
@@ -308,18 +315,18 @@ scripts/serve.sh
 
 Then open <http://localhost:8080> (try a path like `/hello`). Each request lands
 in `handle`, which builds the page — the greeting wording comes from the
-`greet` function in `src/greeting.wvl`, across the component boundary.
+`greet` function in `src/greeting.wlt`, across the component boundary.
 
-`scripts/build.sh` compiles `src/*.wvl` into the git-ignored `out/` directory
+`scripts/build.sh` compiles `src/*.wlt` into the git-ignored `out/` directory
 and links them into `out/app.wasm`; `scripts/serve.sh` does that and then runs
 the component with [`wasmtime serve`](https://docs.wasmtime.dev/).
 
 ## Layout
 
-- `src/app.wvl` — the web front end. Implements the `wasi:http/incoming-handler`
+- `src/app.wlt` — the web front end. Implements the `wasi:http/incoming-handler`
   interface: every request lands in `handle`, which renders the page.
-- `src/greeting.wvl` — the domain model. The pure `greet` function, with no
-  knowledge of HTTP, imported by `app.wvl` across the component boundary.
+- `src/greeting.wlt` — the domain model. The pure `greet` function, with no
+  knowledge of HTTP, imported by `app.wlt` across the component boundary.
 
 ## Learn more
 
@@ -329,10 +336,10 @@ documentation at <https://logaan.github.io/wavelet/>.
     )
 }
 
-fn app_wvl(slug: &str) -> String {
+fn app_wlt(slug: &str) -> String {
     format!(
         "\
-// app.wvl — the HTTP front end.
+// app.wlt — the HTTP front end.
 //
 // This component implements the `wasi:http/incoming-handler` interface: an HTTP
 // host (here, `wasmtime serve`) calls `handle` for every request. The interface
@@ -417,10 +424,8 @@ mod tests {
 
     /// A fresh temp directory unique to this test, cleaned on entry and exit.
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "wavelet-scaffold-{}-{tag}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("wavelet-scaffold-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
     }
@@ -437,8 +442,8 @@ mod tests {
         for rel in [
             ".gitignore",
             "README.md",
-            "src/main.wvl",
-            "src/greeting.wvl",
+            "src/main.wlt",
+            "src/greeting.wlt",
             "scripts/build.sh",
             "scripts/run.sh",
         ] {
@@ -447,14 +452,20 @@ mod tests {
         assert_eq!(files.len(), 6);
 
         // The slug derived from the directory name lands in the package ids.
-        let main = fs::read_to_string(root.join("src/main.wvl")).unwrap();
+        let main = fs::read_to_string(root.join("src/main.wlt")).unwrap();
         assert!(main.contains("Package \"widgets:main@0.1.0\""), "{main}");
         // The cli entry exports wasi:cli/run generically and drops `Target`.
         assert!(main.contains("wasi:cli/run"), "{main}");
-        assert!(!main.contains("Target"), "cli template should not use Target: {main}");
+        assert!(
+            !main.contains("Target"),
+            "cli template should not use Target: {main}"
+        );
         assert!(main.contains("widgets:greeting/api"), "{main}");
-        let greeting = fs::read_to_string(root.join("src/greeting.wvl")).unwrap();
-        assert!(greeting.contains("Package \"widgets:greeting@0.1.0\""), "{greeting}");
+        let greeting = fs::read_to_string(root.join("src/greeting.wlt")).unwrap();
+        assert!(
+            greeting.contains("Package \"widgets:greeting@0.1.0\""),
+            "{greeting}"
+        );
 
         // The run script is executable.
         #[cfg(unix)]
@@ -485,8 +496,8 @@ mod tests {
         for rel in [
             ".gitignore",
             "README.md",
-            "src/app.wvl",
-            "src/greeting.wvl",
+            "src/app.wlt",
+            "src/greeting.wlt",
             "scripts/build.sh",
             "scripts/serve.sh",
         ] {
@@ -494,17 +505,23 @@ mod tests {
         }
         assert_eq!(files.len(), 6);
 
-        let app = fs::read_to_string(root.join("src/app.wvl")).unwrap();
+        let app = fs::read_to_string(root.join("src/app.wlt")).unwrap();
         assert!(app.contains("Package \"widgets:app@0.1.0\""), "{app}");
         // The http front end exports the handler interface generically and
         // imports wasi:http/types + wasi:io/streams directly — no `Target`.
         assert!(app.contains("wasi:http/incoming-handler"), "{app}");
         assert!(app.contains("wasi:http/types"), "{app}");
         assert!(app.contains("wasi:io/streams"), "{app}");
-        assert!(!app.contains("Target"), "http template should not use Target: {app}");
+        assert!(
+            !app.contains("Target"),
+            "http template should not use Target: {app}"
+        );
         assert!(app.contains("widgets:greeting/api"), "{app}");
-        let greeting = fs::read_to_string(root.join("src/greeting.wvl")).unwrap();
-        assert!(greeting.contains("Package \"widgets:greeting@0.1.0\""), "{greeting}");
+        let greeting = fs::read_to_string(root.join("src/greeting.wlt")).unwrap();
+        assert!(
+            greeting.contains("Package \"widgets:greeting@0.1.0\""),
+            "{greeting}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

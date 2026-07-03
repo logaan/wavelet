@@ -212,7 +212,7 @@ fn imported_completions(
     items
 }
 
-/// A `.wvl` source lives in a project's `src/`; its external WIT dependencies
+/// A `.wlt` source lives in a project's `src/`; its external WIT dependencies
 /// sit beside that in `<project-root>/wit/deps`. Derive that directory from the
 /// document path, matching `build.rs`'s `wit_deps_dir`. Returns `None` for a
 /// path with no parent chain to a project root.
@@ -427,7 +427,7 @@ mod tests {
         )
         .unwrap();
 
-        let file = src.join("main.wvl");
+        let file = src.join("main.wlt");
         let text = "Package \"demo:app@0.1.0\"\n\
                     Import {pkg: \"acme:greet/api\" as: greeting}\n";
 

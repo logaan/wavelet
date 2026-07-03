@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::builtins;
 use crate::form::{Arena, Node, NodeId};
-use crate::value::{form_to_value, unit, value_to_form, Closure, Env, Param, Value};
+use crate::value::{Closure, Env, Param, Value, form_to_value, unit, value_to_form};
 
 #[derive(Debug)]
 pub struct EvalError {
@@ -43,7 +43,9 @@ impl Default for Interp {
 
 impl Interp {
     pub fn new() -> Self {
-        Self { gensym: Cell::new(0) }
+        Self {
+            gensym: Cell::new(0),
+        }
     }
 
     pub fn eval(&self, arena: &Rc<Arena>, id: NodeId, env: &Env) -> R<Value> {
@@ -191,10 +193,12 @@ impl Interp {
                 match self.eval(arena, c, env)? {
                     Value::Bool(true) => Step::Jump(arena.clone(), t, env.clone()),
                     Value::Bool(false) => Step::Jump(arena.clone(), e, env.clone()),
-                    v => return err(format!(
-                        "If condition must be a bool, got {}",
-                        crate::value::print_value(&v)
-                    )),
+                    v => {
+                        return err(format!(
+                            "If condition must be a bool, got {}",
+                            crate::value::print_value(&v)
+                        ));
+                    }
                 }
             }
             "let-MACRO" => {
@@ -279,13 +283,13 @@ impl Interp {
             "the-MACRO" => {
                 let [ty, expr] = args2(args, "The")?;
                 let v = self.eval(arena, expr, env)?;
-                if let Node::Sym(t) = arena.node(ty) {
-                    if !check_type(t, &v) {
-                        return err(format!(
-                            "The: {} does not conform to type `{t}`",
-                            crate::value::print_value(&v)
-                        ));
-                    }
+                if let Node::Sym(t) = arena.node(ty)
+                    && !check_type(t, &v)
+                {
+                    return err(format!(
+                        "The: {} does not conform to type `{t}`",
+                        crate::value::print_value(&v)
+                    ));
                 }
                 Step::Done(v)
             }
@@ -353,30 +357,24 @@ impl Interp {
             // specially (all arity 1, so a 2-element tuple); every other tuple
             // is rebuilt element-wise as a tuple value.
             Node::Tup(items) => {
-                if items.len() == 2 {
-                    if let Node::Sym(name) = arena.node(items[0]) {
-                        let arg = items[1];
-                        match name.as_str() {
-                            "unquote-MACRO" if depth == 1 => return self.eval(arena, arg, env),
-                            "splice-MACRO" if depth == 1 => {
-                                return err("Splice must appear inside a sequence");
-                            }
-                            "unquote-MACRO" | "splice-MACRO" if depth > 1 => {
-                                let inner = self.quasi(arena, arg, env, depth - 1)?;
-                                return Ok(Value::Tup(vec![
-                                    Value::Variant(name.clone(), None),
-                                    inner,
-                                ]));
-                            }
-                            "quasi-MACRO" => {
-                                let inner = self.quasi(arena, arg, env, depth + 1)?;
-                                return Ok(Value::Tup(vec![
-                                    Value::Variant(name.clone(), None),
-                                    inner,
-                                ]));
-                            }
-                            _ => {}
+                if items.len() == 2
+                    && let Node::Sym(name) = arena.node(items[0])
+                {
+                    let arg = items[1];
+                    match name.as_str() {
+                        "unquote-MACRO" if depth == 1 => return self.eval(arena, arg, env),
+                        "splice-MACRO" if depth == 1 => {
+                            return err("Splice must appear inside a sequence");
                         }
+                        "unquote-MACRO" | "splice-MACRO" if depth > 1 => {
+                            let inner = self.quasi(arena, arg, env, depth - 1)?;
+                            return Ok(Value::Tup(vec![Value::Variant(name.clone(), None), inner]));
+                        }
+                        "quasi-MACRO" => {
+                            let inner = self.quasi(arena, arg, env, depth + 1)?;
+                            return Ok(Value::Tup(vec![Value::Variant(name.clone(), None), inner]));
+                        }
+                        _ => {}
                     }
                 }
                 Ok(Value::Tup(self.quasi_seq(arena, items, env, depth)?))
@@ -404,23 +402,21 @@ impl Interp {
         for &item in items {
             if depth == 1 {
                 // A splice is `(Splice expr)` ⇒ the tuple `[splice-MACRO, expr]`.
-                if let Node::Tup(tup) = arena.node(item) {
-                    if tup.len() == 2 {
-                        if let Node::Sym(s) = arena.node(tup[0]) {
-                            if s == "splice-MACRO" {
-                                match self.eval(arena, tup[1], env)? {
-                                    Value::Lst(vs) => out.extend(vs),
-                                    v => {
-                                        return err(format!(
-                                            "Splice expects a list, got {}",
-                                            crate::value::print_value(&v)
-                                        ))
-                                    }
-                                }
-                                continue;
-                            }
+                if let Node::Tup(tup) = arena.node(item)
+                    && tup.len() == 2
+                    && let Node::Sym(s) = arena.node(tup[0])
+                    && s == "splice-MACRO"
+                {
+                    match self.eval(arena, tup[1], env)? {
+                        Value::Lst(vs) => out.extend(vs),
+                        v => {
+                            return err(format!(
+                                "Splice expects a list, got {}",
+                                crate::value::print_value(&v)
+                            ));
                         }
                     }
+                    continue;
                 }
             }
             out.push(self.quasi(arena, item, env, depth)?);
@@ -476,14 +472,14 @@ fn bind_params(c: &Closure, arg: Value) -> R<Env> {
 }
 
 fn bind_one(env: &Env, p: &Param, v: Value) -> R<()> {
-    if let Some(ty) = &p.ty {
-        if !check_type(ty, &v) {
-            return err(format!(
-                "parameter `{}`: {} does not conform to type `{ty}`",
-                p.name,
-                crate::value::print_value(&v)
-            ));
-        }
+    if let Some(ty) = &p.ty
+        && !check_type(ty, &v)
+    {
+        return err(format!(
+            "parameter `{}`: {} does not conform to type `{ty}`",
+            p.name,
+            crate::value::print_value(&v)
+        ));
     }
     env.define(p.name.clone(), v);
     Ok(())
@@ -493,7 +489,10 @@ fn parse_params(arena: &Arena, id: NodeId) -> R<Vec<Param>> {
     match arena.node(id) {
         Node::Flg(names) => Ok(names
             .iter()
-            .map(|n| Param { name: n.clone(), ty: None })
+            .map(|n| Param {
+                name: n.clone(),
+                ty: None,
+            })
             .collect()),
         Node::Rec(fields) => Ok(fields
             .iter()
@@ -527,13 +526,7 @@ fn check_type(ty: &str, v: &Value) -> bool {
 /// §4.2 patterns: literals match by equality, a bare name binds (unless it is
 /// bound to a payload-less variant case, which matches by equality), call
 /// shapes destructure variant cases, sequences destructure their counterparts.
-fn match_pattern(
-    arena: &Rc<Arena>,
-    pat: NodeId,
-    v: &Value,
-    binds: &Env,
-    scope: &Env,
-) -> R<bool> {
+fn match_pattern(arena: &Rc<Arena>, pat: NodeId, v: &Value, binds: &Env, scope: &Env) -> R<bool> {
     match arena.node(pat) {
         Node::Bool(b) => Ok(matches!(v, Value::Bool(x) if x == b)),
         Node::Int(n) => Ok(matches!(v, Value::Int(x) if x == n)),
@@ -542,10 +535,10 @@ fn match_pattern(
         Node::Str(s) => Ok(matches!(v, Value::Str(x) if x == s)),
         Node::Flg(names) => Ok(matches!(v, Value::Flg(x) if x == names)),
         Node::Sym(name) => {
-            if let Some(Value::Variant(case, None)) = scope.lookup(name) {
-                if case == *name {
-                    return Ok(matches!(v, Value::Variant(c, None) if *c == case));
-                }
+            if let Some(Value::Variant(case, None)) = scope.lookup(name)
+                && case == *name
+            {
+                return Ok(matches!(v, Value::Variant(c, None) if *c == case));
             }
             binds.define(name.clone(), v.clone());
             Ok(true)
@@ -556,8 +549,7 @@ fn match_pattern(
         // value it destructures element-wise.
         Node::Tup(pats) => match v {
             Value::Variant(cval, payload)
-                if !pats.is_empty()
-                    && matches!(arena.node(pats[0]), Node::Sym(c) if c == cval) =>
+                if !pats.is_empty() && matches!(arena.node(pats[0]), Node::Sym(c) if c == cval) =>
             {
                 let rest = &pats[1..];
                 match (rest.len(), payload) {
@@ -574,15 +566,11 @@ fn match_pattern(
                     (_, None) => Ok(false),
                 }
             }
-            Value::Tup(vs) if vs.len() == pats.len() => {
-                match_all(arena, pats, vs, binds, scope)
-            }
+            Value::Tup(vs) if vs.len() == pats.len() => match_all(arena, pats, vs, binds, scope),
             _ => Ok(false),
         },
         Node::Lst(pats) => match v {
-            Value::Lst(vs) if vs.len() == pats.len() => {
-                match_all(arena, pats, vs, binds, scope)
-            }
+            Value::Lst(vs) if vs.len() == pats.len() => match_all(arena, pats, vs, binds, scope),
             _ => Ok(false),
         },
         Node::Rec(fields) => match v {

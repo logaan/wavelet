@@ -73,9 +73,8 @@ impl HostComponent {
     /// `wasmtime`.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         let engine = Engine::default();
-        let component = Component::from_binary(&engine, bytes).map_err(|e| {
-            format!("not a valid WebAssembly component: {e:#}")
-        })?;
+        let component = Component::from_binary(&engine, bytes)
+            .map_err(|e| format!("not a valid WebAssembly component: {e:#}"))?;
         Self::instantiate(engine, component)
     }
 
@@ -85,8 +84,7 @@ impl HostComponent {
     /// failure is reported with the path; a decode/instantiate failure carries
     /// `wasmtime`'s diagnostic.
     pub fn from_file(path: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(path)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         Self::from_bytes(&bytes)
     }
 
@@ -101,7 +99,11 @@ impl HostComponent {
         let instance = linker
             .instantiate(&mut store, &component)
             .map_err(|e| format!("failed to instantiate component: {e:#}"))?;
-        Ok(HostComponent { engine, store, instance })
+        Ok(HostComponent {
+            engine,
+            store,
+            instance,
+        })
     }
 
     /// The underlying `wasmtime` engine, for callers that need to construct
@@ -149,20 +151,14 @@ impl HostComponent {
         let inst_idx = self
             .instance
             .get_export_index(&mut self.store, None, instance)
-            .ok_or_else(|| {
-                format!("component does not export the interface `{instance}`")
-            })?;
+            .ok_or_else(|| format!("component does not export the interface `{instance}`"))?;
         let func_idx = self
             .instance
             .get_export_index(&mut self.store, Some(&inst_idx), func)
-            .ok_or_else(|| {
-                format!("interface `{instance}` has no function `{func}`")
-            })?;
+            .ok_or_else(|| format!("interface `{instance}` has no function `{func}`"))?;
         self.instance
-            .get_func(&mut self.store, &func_idx)
-            .ok_or_else(|| {
-                format!("export `{func}` of `{instance}` is not a function")
-            })
+            .get_func(&mut self.store, func_idx)
+            .ok_or_else(|| format!("export `{func}` of `{instance}` is not a function"))
     }
 
     /// Call a function exported inside an exported interface instance (the
@@ -222,8 +218,7 @@ mod tests {
 
     #[test]
     fn instantiates_and_calls_export() {
-        let mut comp = HostComponent::from_bytes(&add_fixture())
-            .expect("fixture instantiates");
+        let mut comp = HostComponent::from_bytes(&add_fixture()).expect("fixture instantiates");
         let out = comp
             .call("add", &[Val::S32(2), Val::S32(40)])
             .expect("add call succeeds");

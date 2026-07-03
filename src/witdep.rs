@@ -1,7 +1,7 @@
 //! Resolve an `Import` against external WIT vendored under a project's
-//! `wit/deps` directory (populated by `wkg`, see `dev-notes/decouple-wasi.md`).
+//! `wit/deps` directory (populated by `wkg`).
 //!
-//! This is the generic, registry-fed counterpart to a sibling-`.wvl`
+//! This is the generic, registry-fed counterpart to a sibling-`.wlt`
 //! dependency: instead of synthesizing a [`Dep`] from another Wavelet file in
 //! the build set, we parse a WIT package with `wit-parser` and project it into
 //! the *same* [`Dep`] shape the emitter already consumes. The emitter therefore
@@ -11,9 +11,7 @@
 
 use std::path::Path;
 
-use wit_parser::{
-    Function, Handle, Resolve, Type, TypeDefKind, UnresolvedPackageGroup,
-};
+use wit_parser::{Function, Handle, Resolve, Type, TypeDefKind, UnresolvedPackageGroup};
 
 use crate::emit::{Dep, TypeDef};
 use crate::wit::FuncSig;
@@ -44,8 +42,8 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
     // package can't find `wasi:io`. `push_groups` topologically sorts the whole
     // set and resolves the cross-references in one shot.
     let mut groups: Vec<UnresolvedPackageGroup> = Vec::new();
-    let entries = std::fs::read_dir(deps_dir)
-        .map_err(|e| format!("{}: {e}", deps_dir.display()))?;
+    let entries =
+        std::fs::read_dir(deps_dir).map_err(|e| format!("{}: {e}", deps_dir.display()))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("{}: {e}", deps_dir.display()))?;
         let path = entry.path();
@@ -58,8 +56,8 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
             if !matches!(ext, "wit" | "wasm" | "wat") {
                 continue;
             }
-            let contents = std::fs::read_to_string(&path)
-                .map_err(|e| format!("{}: {e}", path.display()))?;
+            let contents =
+                std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             UnresolvedPackageGroup::parse(&path, &contents)
                 .map_err(|e| format!("{}: {e:#}", path.display()))?
         };
@@ -164,15 +162,17 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
 
     let package_wit = package_wit_text(&resolve, pkg_id)?;
 
-    Ok(Some(Dep { package: full_package, funcs, package_wit, types, type_defs }))
+    Ok(Some(Dep {
+        package: full_package,
+        funcs,
+        package_wit,
+        types,
+        type_defs,
+    }))
 }
 
 /// Project one parsed WIT [`Function`] into the [`FuncSig`] the emitter expects.
-fn func_sig(
-    resolve: &Resolve,
-    iface_name: &str,
-    func: &Function,
-) -> Result<FuncSig, String> {
+fn func_sig(resolve: &Resolve, iface_name: &str, func: &Function) -> Result<FuncSig, String> {
     let params = func
         .params
         .iter()
@@ -182,7 +182,12 @@ fn func_sig(
         Some(t) => Some(type_string(resolve, t)?),
         None => None,
     };
-    Ok(FuncSig { name: func.name.clone(), iface: iface_name.to_string(), params, result })
+    Ok(FuncSig {
+        name: func.name.clone(),
+        iface: iface_name.to_string(),
+        params,
+        result,
+    })
 }
 
 /// Render a `wit-parser` [`Type`] as the WIT type *string* Wavelet's emitter
@@ -281,10 +286,7 @@ fn structural_type_string(resolve: &Resolve, kind: &TypeDefKind) -> Result<Strin
 /// exactly the project's `wit/deps`, so this is `pkg` plus its transitive
 /// dependency packages (`wasi:http` → `wasi:io`, `wasi:clocks`, …); they are all
 /// needed for the package to type-check at encode time.
-fn package_wit_text(
-    resolve: &Resolve,
-    pkg_id: wit_parser::PackageId,
-) -> Result<String, String> {
+fn package_wit_text(resolve: &Resolve, pkg_id: wit_parser::PackageId) -> Result<String, String> {
     use wit_component::{Output, WitPrinter};
 
     // Print the dependency package first, then every other package as a nested

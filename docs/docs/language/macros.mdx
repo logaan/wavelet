@@ -126,7 +126,7 @@ DefMacro unless {cond body}
 ```
 
 ```console
-$ wavelet build src/html.wvl -o out      # emits out/acme-html.wasm
+$ wavelet build src/html.wlt -o out      # emits out/acme-html.wasm
 ```
 
 Drop `out/acme-html.wasm` at `wit/macros/acme-html.wasm` (or point `from:` at it) and another file can `Import {pkg: "acme:html/dsl" macros: true}` and use `Element`/`Unless` as if they were local. The library bundles the Wavelet interpreter and runs your `DefMacro`s inside the sandbox at the consumer's build time.

@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use crate::interp::Interp;
 use crate::reader::MacroTable;
-use crate::value::{print_value, Env};
+use crate::value::{Env, print_value};
 
 pub fn repl() -> Result<(), String> {
     let interp = Interp::new();

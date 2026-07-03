@@ -19,7 +19,7 @@
 
 use wavelet::host::{HostComponent, Val};
 
-/// Build one `.wvl` source through the real `wavelet build` path in a throwaway
+/// Build one `.wlt` source through the real `wavelet build` path in a throwaway
 /// dir, returning the bytes of the single output component.
 ///
 /// The per-call dir is keyed on `(pid, seq)`, not pid alone: two concurrent
@@ -33,7 +33,7 @@ fn build_component(src_text: &str) -> HostComponent {
     let _ = std::fs::remove_dir_all(&dir);
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
-    let path = src.join("app.wvl");
+    let path = src.join("app.wlt");
     std::fs::write(&path, src_text).unwrap();
     let out = dir.join("out");
     let bytes = wavelet::build::build_files(
@@ -53,7 +53,11 @@ fn one(c: &mut HostComponent, iface: &str, name: &str, args: &[Val]) -> Val {
     let out = c
         .call_instance(iface, name, args)
         .unwrap_or_else(|e| panic!("`{iface}#{name}` should run: {e}"));
-    assert_eq!(out.len(), 1, "`{name}` should return one value, got {out:?}");
+    assert_eq!(
+        out.len(),
+        1,
+        "`{name}` should return one value, got {out:?}"
+    );
     out.into_iter().next().unwrap()
 }
 
@@ -113,14 +117,18 @@ Def build-ints Fn {}
 
     // size(self): deduped count is 2.
     let size = c
-        .call_instance(IFACE, "[method]set.size", &[handle.clone()])
+        .call_instance(IFACE, "[method]set.size", std::slice::from_ref(&handle))
         .expect("size call should succeed");
     assert_eq!(size, vec![Val::U32(2)], "deduped size should be 2");
 
     // contains(self, value): 1 and 2 present, 9 absent.
     let has = |c: &mut HostComponent, v: i32| {
-        c.call_instance(IFACE, "[method]set.contains", &[handle.clone(), Val::S32(v)])
-            .expect("contains call should succeed")
+        c.call_instance(
+            IFACE,
+            "[method]set.contains",
+            &[handle.clone(), Val::S32(v)],
+        )
+        .expect("contains call should succeed")
     };
     assert_eq!(has(&mut c, 1), vec![Val::Bool(true)], "1 should be present");
     assert_eq!(has(&mut c, 2), vec![Val::Bool(true)], "2 should be present");
@@ -162,7 +170,7 @@ Def build-words Fn {}
         other => panic!("`build-ints` should return a set resource, got {other:?}"),
     };
     let ints_size = c
-        .call_instance(INTS_IFACE, "[method]set.size", &[ints.clone()])
+        .call_instance(INTS_IFACE, "[method]set.size", std::slice::from_ref(&ints))
         .expect("ints size call should succeed");
     assert_eq!(ints_size, vec![Val::U32(1)], "1 added twice dedups to 1");
     c.drop_resource(ints)
@@ -174,9 +182,17 @@ Def build-words Fn {}
         other => panic!("`build-words` should return a set resource, got {other:?}"),
     };
     let words_size = c
-        .call_instance(WORDS_IFACE, "[method]set.size", &[words.clone()])
+        .call_instance(
+            WORDS_IFACE,
+            "[method]set.size",
+            std::slice::from_ref(&words),
+        )
         .expect("words size call should succeed");
-    assert_eq!(words_size, vec![Val::U32(2)], "\"a\",\"b\",\"a\" dedups to 2");
+    assert_eq!(
+        words_size,
+        vec![Val::U32(2)],
+        "\"a\",\"b\",\"a\" dedups to 2"
+    );
     c.drop_resource(words)
         .expect("dropping the words set handle should run the dtor cleanly");
 }
@@ -254,7 +270,7 @@ Def build-words Fn {}
 
     // size(self): "hi","yo","hi" dedups to 2.
     let size = c
-        .call_instance(IFACE, "[method]set.size", &[handle.clone()])
+        .call_instance(IFACE, "[method]set.size", std::slice::from_ref(&handle))
         .expect("size call should succeed");
     assert_eq!(size, vec![Val::U32(2)], "deduped size should be 2");
 

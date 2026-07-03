@@ -17,13 +17,13 @@ use std::collections::HashMap;
 
 use wasm_encoder::{
     BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType,
-    ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType,
-    ImportSection, Instruction as I, MemArg, MemorySection, MemoryType, Module, RefType,
-    TableSection, TableType, TypeSection, ValType,
+    ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
+    Instruction as I, MemArg, MemorySection, MemoryType, Module, RefType, TableSection, TableType,
+    TypeSection, ValType,
 };
 
 use crate::form::{Arena, Node, NodeId};
-use crate::wit::{type_decl, FileInfo, FuncSig};
+use crate::wit::{FileInfo, FuncSig, type_decl};
 
 /// What the build step knows about a dependency component in the build set.
 pub struct Dep {
@@ -56,7 +56,11 @@ const TAG_FLG: i32 = 9; // a flags *form* (Node::Flg): n i32 @4, name str boxes 
 const TAG_CHAR: i32 = 10; // a char value/form: i64 Unicode scalar @8 (TAG_INT layout)
 
 fn ma(offset: u64, align: u32) -> MemArg {
-    MemArg { offset, align, memory_index: 0 }
+    MemArg {
+        offset,
+        align,
+        memory_index: 0,
+    }
 }
 
 /// Push a zero of the given flat type (variant payload padding).
@@ -73,10 +77,10 @@ fn push_zero(fx: &mut FnCtx, vt: ValType) {
 #[derive(Clone, PartialEq)]
 enum WitTy {
     Bool,
-    Char, // a Unicode scalar — i32 flat (u32 codepoint), carried in an int box
+    Char,     // a Unicode scalar — i32 flat (u32 codepoint), carried in an int box
     IntS(u8), // s8/s16/s32 (byte width 1/2/4) — i32 flat, sign-extended into the int box
     IntU(u8), // u8/u16/u32 (byte width 1/2/4)
-    S64,  // s64/u64 — i64 flat
+    S64,      // s64/u64 — i64 flat
     F64,
     Str,
     List(Box<WitTy>),
@@ -115,9 +119,12 @@ impl WitTy {
         match self {
             WitTy::Option(t) => Some(vec![("none", None), ("some", Some(t))]),
             WitTy::Result(t, e) => Some(vec![("ok", Some(t)), ("err", Some(e))]),
-            WitTy::Variant(cases) => {
-                Some(cases.iter().map(|(n, p)| (n.as_str(), p.as_ref())).collect())
-            }
+            WitTy::Variant(cases) => Some(
+                cases
+                    .iter()
+                    .map(|(n, p)| (n.as_str(), p.as_ref()))
+                    .collect(),
+            ),
             WitTy::Enum(cases) => Some(cases.iter().map(|n| (n.as_str(), None)).collect()),
             _ => None,
         }
@@ -214,7 +221,11 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
         // still resolves. The canonical-ABI flattening is identical.
         let arm = |a: &str| -> Result<Option<WitTy>, String> {
             let a = a.trim();
-            if a.is_empty() || a == "_" { Ok(None) } else { Ok(Some(wit_ty(a, env)?)) }
+            if a.is_empty() || a == "_" {
+                Ok(None)
+            } else {
+                Ok(Some(wit_ty(a, env)?))
+            }
         };
         let (ok, err) = match args.len() {
             1 => (arm(&args[0])?, None),
@@ -228,9 +239,7 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
                 (ok, err)
             }
             _ => {
-                return Err(format!(
-                    "`{s}`: a result takes at most two type arguments"
-                ));
+                return Err(format!("`{s}`: a result takes at most two type arguments"));
             }
         };
         return Ok(WitTy::Variant(vec![
@@ -292,7 +301,9 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
                 // builds, so `eq_raw` dedups these structurally just like records.
                 return wit_ty(target, env);
             } else {
-                return Err(format!("type `{other}` not supported by the wasm backend yet"));
+                return Err(format!(
+                    "type `{other}` not supported by the wasm backend yet"
+                ));
             }
         }
     })
@@ -542,7 +553,7 @@ fn flags_size(n: usize) -> u64 {
 }
 
 fn align_up(off: u64, align: u64) -> u64 {
-    (off + align - 1) / align * align
+    off.div_ceil(align) * align
 }
 
 /// (offset, field-type) for each field of a record or element of a tuple, in
@@ -601,7 +612,11 @@ fn flat_result(sig: &FuncSig, env: &TypeEnv) -> Result<FlatRes, String> {
         Some(t) => {
             let ty = wit_ty(t, env)?;
             // count flats (always defined); retptr never needs the variant-join
-            if flat_len(&ty) > 1 { Ok(FlatRes::Retptr) } else { Ok(FlatRes::One(ty)) }
+            if flat_len(&ty) > 1 {
+                Ok(FlatRes::Retptr)
+            } else {
+                Ok(FlatRes::One(ty))
+            }
         }
     }
 }
@@ -627,12 +642,12 @@ fn scan(arena: &Arena, id: NodeId, feats: &mut Features) {
         // A call is a tuple whose head (items[0]) may be a cross-component
         // (Qsym) dependency; recurse over every element either way.
         Node::Tup(items) => {
-            if let Some(&head) = items.first() {
-                if let Node::Qsym(alias, name) = arena.node(head) {
-                    let key = (alias.clone(), name.clone());
-                    if !feats.dep_calls.contains(&key) {
-                        feats.dep_calls.push(key);
-                    }
+            if let Some(&head) = items.first()
+                && let Node::Qsym(alias, name) = arena.node(head)
+            {
+                let key = (alias.clone(), name.clone());
+                if !feats.dep_calls.contains(&key) {
+                    feats.dep_calls.push(key);
                 }
             }
             for &x in items {
@@ -664,7 +679,12 @@ struct FnCtx {
 
 impl FnCtx {
     fn new(n_params: u32) -> Self {
-        FnCtx { instrs: Vec::new(), n_params, extra_locals: Vec::new(), scopes: vec![] }
+        FnCtx {
+            instrs: Vec::new(),
+            n_params,
+            extra_locals: Vec::new(),
+            scopes: vec![],
+        }
     }
     fn local(&mut self, ty: ValType) -> u32 {
         let idx = self.n_params + self.extra_locals.len() as u32;
@@ -748,7 +768,9 @@ pub fn emit_component(
     let mut resolve = wit_parser::Resolve::default();
     let pkg = resolve
         .push_str("wavelet-synthesized.wit", &wit)
-        .map_err(|e| format!("internal: synthesized WIT did not parse: {e:#}\n--- WIT ---\n{wit}"))?;
+        .map_err(|e| {
+            format!("internal: synthesized WIT did not parse: {e:#}\n--- WIT ---\n{wit}")
+        })?;
     let world = resolve
         .select_world(&[pkg], Some(&info.world))
         .map_err(|e| format!("internal: world selection failed: {e:#}"))?;
@@ -817,7 +839,7 @@ package wavelet:meta@0.1.0 {\n\
     expand: func(name: string, args: tree) -> result<tree, string>;\n\
   }\n\
 }\n"
-        .to_string()
+    .to_string()
 }
 
 /// The `wavelet:meta` `node` variant as a backend [`WitTy`], for lifting an
@@ -832,12 +854,18 @@ fn meta_node_wit_ty() -> WitTy {
         ("char-val".into(), Some(WitTy::Char)),
         ("str-val".into(), Some(WitTy::Str)),
         ("sym".into(), Some(WitTy::Str)),
-        ("qsym".into(), Some(WitTy::Tuple(vec![WitTy::Str, WitTy::Str]))),
+        (
+            "qsym".into(),
+            Some(WitTy::Tuple(vec![WitTy::Str, WitTy::Str])),
+        ),
         ("tup".into(), Some(WitTy::List(Box::new(nid.clone())))),
         ("lst".into(), Some(WitTy::List(Box::new(nid.clone())))),
         (
             "rec".into(),
-            Some(WitTy::List(Box::new(WitTy::Tuple(vec![WitTy::Str, nid.clone()])))),
+            Some(WitTy::List(Box::new(WitTy::Tuple(vec![
+                WitTy::Str,
+                nid.clone(),
+            ])))),
         ),
         ("flg".into(), Some(WitTy::List(Box::new(WitTy::Str)))),
     ])
@@ -891,7 +919,7 @@ pub fn emit_macro_component(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, 
 
 fn features_of(arena: &Arena, info: &FileInfo) -> Features {
     let mut feats = Features::default();
-    for (_, (params, body)) in &info.defs {
+    for (params, body) in info.defs.values() {
         let _ = params;
         scan(arena, *body, &mut feats);
     }
@@ -982,12 +1010,21 @@ fn local_non_record_types(
                                 [] => resolved.push((case.clone(), None)),
                                 [one] => match crate::wit::type_text(arena, *one) {
                                     Ok(t) => resolved.push((case.clone(), Some(t))),
-                                    Err(_) => { ok = false; break; }
+                                    Err(_) => {
+                                        ok = false;
+                                        break;
+                                    }
                                 },
-                                _ => { ok = false; break; }
+                                _ => {
+                                    ok = false;
+                                    break;
+                                }
                             }
                         }
-                        _ => { ok = false; break; }
+                        _ => {
+                            ok = false;
+                            break;
+                        }
                     }
                 }
                 if ok {
@@ -1160,7 +1197,7 @@ struct Emitter<'a> {
     info: &'a FileInfo,
     deps: &'a HashMap<String, Dep>,
     type_env: TypeEnv, // record types in scope (local + deps), for boundary ABI
-    data: Vec<u8>, // segment contents, lives at DATA_BASE
+    data: Vec<u8>,     // segment contents, lives at DATA_BASE
     str_cache: HashMap<String, u32>,
     types: Vec<(Vec<ValType>, Vec<ValType>)>,
     imports: Vec<(String, String, u32)>, // module, field, type idx
@@ -1197,7 +1234,11 @@ impl<'a> Emitter<'a> {
     }
 
     fn ty_idx(&mut self, params: Vec<ValType>, results: Vec<ValType>) -> u32 {
-        if let Some(i) = self.types.iter().position(|t| t.0 == params && t.1 == results) {
+        if let Some(i) = self
+            .types
+            .iter()
+            .position(|t| t.0 == params && t.1 == results)
+        {
             return i as u32;
         }
         self.types.push((params, results));
@@ -1205,7 +1246,7 @@ impl<'a> Emitter<'a> {
     }
 
     fn align8(&mut self) {
-        while (DATA_BASE as usize + self.data.len()) % 8 != 0 {
+        while !(DATA_BASE as usize + self.data.len()).is_multiple_of(8) {
             self.data.push(0);
         }
     }
@@ -1273,7 +1314,9 @@ impl<'a> Emitter<'a> {
                 return Err("flag literals not supported by the wasm backend yet".into());
             }
             Node::Qsym(a, n) => {
-                return Err(format!("`{a}/{n}` used as a value (only calls are supported)"));
+                return Err(format!(
+                    "`{a}/{n}` used as a value (only calls are supported)"
+                ));
             }
         }
         Ok(())
@@ -1300,7 +1343,9 @@ impl<'a> Emitter<'a> {
             ));
         };
         if self.compiling_values.iter().any(|v| v == name) {
-            return Err(format!("module-level value `{name}` is defined in terms of itself"));
+            return Err(format!(
+                "module-level value `{name}` is defined in terms of itself"
+            ));
         }
         let init = self
             .info
@@ -1439,7 +1484,12 @@ impl<'a> Emitter<'a> {
             Node::Tup(items) => return self.quote_seq(fx, &items, TAG_TUP),
             Node::Lst(items) => return self.quote_seq(fx, &items, TAG_LIST),
             Node::Rec(fields) => return self.quote_rec(fx, &fields),
-            Node::Flg(names) => return Ok(self.flg_box(fx, &names)),
+            Node::Flg(names) => {
+                return {
+                    self.flg_box(fx, &names);
+                    Ok(())
+                };
+            }
             Node::Char(c) => {
                 fx.op(I::I64Const(c as u32 as i64));
                 self.box_char(fx);
@@ -1548,22 +1598,22 @@ impl<'a> Emitter<'a> {
             Node::Tup(items) => {
                 // The arity-1 special heads read as 2-element tuples
                 // `[head-MACRO, arg]`; everything else is a sequence.
-                if items.len() == 2 {
-                    if let Node::Sym(name) = self.arena.node(items[0]).clone() {
-                        let arg = items[1];
-                        match name.as_str() {
-                            "unquote-MACRO" if depth == 1 => return self.expr(fx, arg, false),
-                            "splice-MACRO" if depth == 1 => {
-                                return Err("Splice must appear inside a sequence".into());
-                            }
-                            "unquote-MACRO" | "splice-MACRO" if depth > 1 => {
-                                return self.quasi_rebuild_head(fx, &name, arg, depth - 1);
-                            }
-                            "quasi-MACRO" => {
-                                return self.quasi_rebuild_head(fx, &name, arg, depth + 1);
-                            }
-                            _ => {}
+                if items.len() == 2
+                    && let Node::Sym(name) = self.arena.node(items[0]).clone()
+                {
+                    let arg = items[1];
+                    match name.as_str() {
+                        "unquote-MACRO" if depth == 1 => return self.expr(fx, arg, false),
+                        "splice-MACRO" if depth == 1 => {
+                            return Err("Splice must appear inside a sequence".into());
                         }
+                        "unquote-MACRO" | "splice-MACRO" if depth > 1 => {
+                            return self.quasi_rebuild_head(fx, &name, arg, depth - 1);
+                        }
+                        "quasi-MACRO" => {
+                            return self.quasi_rebuild_head(fx, &name, arg, depth + 1);
+                        }
+                        _ => {}
                     }
                 }
                 self.quasi_seq(fx, &items, TAG_TUP, depth)
@@ -1645,17 +1695,14 @@ impl<'a> Emitter<'a> {
         // recognised at depth 1, matching the interpreter.
         let mut segs: Vec<(bool, NodeId)> = Vec::with_capacity(items.len());
         for &item in items {
-            if depth == 1 {
-                if let Node::Tup(t) = self.arena.node(item).clone() {
-                    if t.len() == 2 {
-                        if let Node::Sym(s) = self.arena.node(t[0]).clone() {
-                            if s == "splice-MACRO" {
-                                segs.push((true, t[1]));
-                                continue;
-                            }
-                        }
-                    }
-                }
+            if depth == 1
+                && let Node::Tup(t) = self.arena.node(item).clone()
+                && t.len() == 2
+                && let Node::Sym(s) = self.arena.node(t[0]).clone()
+                && s == "splice-MACRO"
+            {
+                segs.push((true, t[1]));
+                continue;
             }
             segs.push((false, item));
         }
@@ -1996,9 +2043,15 @@ impl<'a> Emitter<'a> {
         fx.op(I::I32Load(ma(4, 2))); // table slot
         let t = self.ty_idx(vec![ValType::I32; 2], vec![ValType::I32]);
         fx.op(if tail {
-            I::ReturnCallIndirect { type_index: t, table_index: 0 }
+            I::ReturnCallIndirect {
+                type_index: t,
+                table_index: 0,
+            }
         } else {
-            I::CallIndirect { type_index: t, table_index: 0 }
+            I::CallIndirect {
+                type_index: t,
+                table_index: 0,
+            }
         });
         Ok(())
     }
@@ -2027,7 +2080,7 @@ impl<'a> Emitter<'a> {
             Node::Qsym(alias, fname) => {
                 // Every imported call goes through the generic canonical-ABI
                 // bridge, driven by the import's parsed WIT signature (from a
-                // sibling `.wvl` or a `wit/deps` package — host `wasi:*`
+                // sibling `.wlt` or a `wit/deps` package — host `wasi:*`
                 // packages included).
                 self.dep_call(fx, &alias, &fname, args)
             }
@@ -2314,19 +2367,19 @@ impl<'a> Emitter<'a> {
     /// `args` are the call's argument forms (`Tup[head, …args]`).
     fn bind_args(&self, args: &[NodeId], params: &[String]) -> Result<BoundArgs, String> {
         // named: a single record arg whose keys are exactly the parameters
-        if let [only] = args {
-            if let Node::Rec(fields) = self.arena.node(*only) {
-                let mut keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
-                let mut want: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
-                keys.sort();
-                want.sort();
-                if keys == want {
-                    let map: HashMap<&str, NodeId> =
-                        fields.iter().map(|(k, v)| (k.as_str(), *v)).collect();
-                    return Ok(BoundArgs::PerParam(
-                        params.iter().map(|p| map[p.as_str()]).collect(),
-                    ));
-                }
+        if let [only] = args
+            && let Node::Rec(fields) = self.arena.node(*only)
+        {
+            let mut keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+            let mut want: Vec<&str> = params.iter().map(|s| s.as_str()).collect();
+            keys.sort();
+            want.sort();
+            if keys == want {
+                let map: HashMap<&str, NodeId> =
+                    fields.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+                return Ok(BoundArgs::PerParam(
+                    params.iter().map(|p| map[p.as_str()]).collect(),
+                ));
             }
         }
         // positional: one arg per parameter (covers the scalar 1/1 and 0/0 cases)
@@ -2359,7 +2412,11 @@ impl<'a> Emitter<'a> {
             }
             BoundArgs::Bundle => self.seq_box(fx, args, TAG_TUP)?,
         }
-        fx.op(if tail { I::ReturnCall(idx) } else { I::Call(idx) });
+        fx.op(if tail {
+            I::ReturnCall(idx)
+        } else {
+            I::Call(idx)
+        });
         Ok(())
     }
 
@@ -2452,10 +2509,10 @@ impl<'a> Emitter<'a> {
             .iter()
             .find(|i| i.alias == alias)
             .ok_or(format!("unknown import alias `{alias}`"))?;
-        let dep = self
-            .deps
-            .get(&imp.package)
-            .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
+        let dep = self.deps.get(&imp.package).ok_or(format!(
+            "dependency `{}` is not in the build set",
+            imp.package
+        ))?;
         let iface = import_iface(&imp.path);
         // Resolve freestanding names directly, and resource operations
         // (`[method]`/`[static]`/`[constructor]`/`[resource-drop]`) by their
@@ -2495,7 +2552,11 @@ impl<'a> Emitter<'a> {
                 let rty = wit_ty(sig.result.as_deref().unwrap(), &self.type_env)?;
                 if matches!(
                     rty,
-                    WitTy::Record(_) | WitTy::Tuple(_) | WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_)
+                    WitTy::Record(_)
+                        | WitTy::Tuple(_)
+                        | WitTy::Option(_)
+                        | WitTy::Result(..)
+                        | WitTy::Variant(_)
                 ) {
                     // allocate a result area sized to the value, pass it as the
                     // canonical retptr, then read the value back out of it
@@ -2806,7 +2867,13 @@ impl<'a> Emitter<'a> {
     }
 
     /// canonical (ptr, len) in the given locals → list box on stack
-    fn lift_list(&mut self, fx: &mut FnCtx, ptr: u32, len: u32, elem: &WitTy) -> Result<(), String> {
+    fn lift_list(
+        &mut self,
+        fx: &mut FnCtx,
+        ptr: u32,
+        len: u32,
+        elem: &WitTy,
+    ) -> Result<(), String> {
         use ValType::I32;
         let size = elem_size(elem);
         let lst = fx.local(I32);
@@ -3070,8 +3137,7 @@ impl<'a> Emitter<'a> {
                 // each joined-typed local back to the payload's flat type into a
                 // fresh contiguous block, then lift from that block. When no slot
                 // needs narrowing this is a straight copy.
-                let needs_narrowing =
-                    pflat.iter().zip(joined).any(|(have, want)| have != want);
+                let needs_narrowing = pflat.iter().zip(joined).any(|(have, want)| have != want);
                 if needs_narrowing {
                     // Allocate the payload-typed block contiguously.
                     let block: Vec<u32> = pflat.iter().map(|&vt| fx.local(vt)).collect();
@@ -3632,7 +3698,10 @@ impl<'a> Emitter<'a> {
             if items.len() == want {
                 Ok(())
             } else {
-                Err(format!("`{name}` expects {want} argument(s), got {}", items.len()))
+                Err(format!(
+                    "`{name}` expects {want} argument(s), got {}",
+                    items.len()
+                ))
             }
         };
         match name {
@@ -3824,26 +3893,52 @@ impl<'a> Emitter<'a> {
                         fx.op(I::Call(idx));
                     }
                     None => {
-                        return Err(
-                            "`expand` is only available inside a macro library \
+                        return Err("`expand` is only available inside a macro library \
                              (a file whose top level is DefMacros)"
-                                .into(),
-                        );
+                            .into());
                     }
                 }
             }
-            other => return Err(format!("builtin `{other}` not supported by the wasm backend yet")),
+            other => {
+                return Err(format!(
+                    "builtin `{other}` not supported by the wasm backend yet"
+                ));
+            }
         }
         Ok(())
     }
 }
 
 const BUILTINS: &[&str] = &[
-    "eq", "not", "lt", "le", "gt", "ge", "add", "sub", "mul", "div", "rem", "neg", "len",
-    "head", "tail", "str-cat", "upper", "lower", "to-string", "to-char",
-    "some", "ok", "err",
+    "eq",
+    "not",
+    "lt",
+    "le",
+    "gt",
+    "ge",
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "rem",
+    "neg",
+    "len",
+    "head",
+    "tail",
+    "str-cat",
+    "upper",
+    "lower",
+    "to-string",
+    "to-char",
+    "some",
+    "ok",
+    "err",
     // compile-time form machinery (macro bodies)
-    "form-kind", "rec-key", "rec-val", "gensym", "expand",
+    "form-kind",
+    "rec-key",
+    "rec-val",
+    "gensym",
+    "expand",
 ];
 
 // --------------------------------------------------------- helper bodies
@@ -3973,13 +4068,14 @@ fn emit_core_module(
 
     // ---- imports (function index space starts here)
     let mut n_imports = 0u32;
-    let mut add_import = |em: &mut Emitter, module: &str, field: &str, p: Vec<ValType>, r: Vec<ValType>| {
-        let t = em.ty_idx(p, r);
-        em.imports.push((module.to_string(), field.to_string(), t));
-        em.import_fn
-            .insert((module.to_string(), field.to_string()), n_imports);
-        n_imports += 1;
-    };
+    let mut add_import =
+        |em: &mut Emitter, module: &str, field: &str, p: Vec<ValType>, r: Vec<ValType>| {
+            let t = em.ty_idx(p, r);
+            em.imports.push((module.to_string(), field.to_string(), t));
+            em.import_fn
+                .insert((module.to_string(), field.to_string()), n_imports);
+            n_imports += 1;
+        };
 
     use ValType::{F64, I32, I64};
     let _ = (I32, I64, F64);
@@ -3997,9 +4093,10 @@ fn emit_core_module(
             .iter()
             .find(|i| &i.alias == alias)
             .ok_or(format!("unknown import alias `{alias}`"))?;
-        let dep = deps
-            .get(&imp.package)
-            .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
+        let dep = deps.get(&imp.package).ok_or(format!(
+            "dependency `{}` is not in the build set",
+            imp.package
+        ))?;
         let iface = import_iface(&imp.path);
         // Same op-name resolution as `dep_call`, so a resource operation's
         // core import is declared under its mangled WIT name (`sig.name`).
@@ -4138,19 +4235,15 @@ fn emit_core_module(
     // ---- assign internal function indices (file order)
     let mut internal_order: Vec<String> = Vec::new();
     for &root in roots {
-        if let Node::Tup(items) = arena.node(root) {
-            if items.len() >= 2
-                && matches!(arena.node(items[0]), Node::Sym(s) if s == "def-MACRO")
-            {
-                if let Node::Sym(name) = arena.node(items[1]) {
-                    if info.defs.contains_key(name)
-                        && !overloaded_origins.contains(name)
-                        && !internal_order.contains(name)
-                    {
-                        internal_order.push(name.clone());
-                    }
-                }
-            }
+        if let Node::Tup(items) = arena.node(root)
+            && items.len() >= 2
+            && matches!(arena.node(items[0]), Node::Sym(s) if s == "def-MACRO")
+            && let Node::Sym(name) = arena.node(items[1])
+            && info.defs.contains_key(name)
+            && !overloaded_origins.contains(name)
+            && !internal_order.contains(name)
+        {
+            internal_order.push(name.clone());
         }
     }
     for (i, (name, _)) in info.value_defs.iter().enumerate() {
@@ -4269,7 +4362,11 @@ fn emit_core_module(
                 let area = fx.local(I32);
                 if matches!(
                     ty,
-                    WitTy::Record(_) | WitTy::Tuple(_) | WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_)
+                    WitTy::Record(_)
+                        | WitTy::Tuple(_)
+                        | WitTy::Option(_)
+                        | WitTy::Result(..)
+                        | WitTy::Variant(_)
                 ) {
                     // store the value's canonical layout into a callee-owned area
                     let rbox = fx.local(I32);
@@ -4313,7 +4410,7 @@ fn emit_core_module(
         exports.push((format!("{own_iface}#{}", sig.name), take()));
     }
 
-    drop(take); // `next`/`take` are done; the resource bodies were emitted above.
+    let _ = take; // `next`/`take` are done; the resource bodies were emitted above.
 
     // ---- functor `set` resource EXPORTS (canonical names) — one per instantiation
     //
@@ -4390,12 +4487,20 @@ fn emit_core_module(
 
     let mut gs = GlobalSection::new();
     gs.global(
-        GlobalType { val_type: I32, mutable: true, shared: false },
+        GlobalType {
+            val_type: I32,
+            mutable: true,
+            shared: false,
+        },
         &ConstExpr::i32_const(heap_base as i32),
     );
     for _ in &info.value_defs {
         gs.global(
-            GlobalType { val_type: I32, mutable: true, shared: false },
+            GlobalType {
+                val_type: I32,
+                mutable: true,
+                shared: false,
+            },
             &ConstExpr::i32_const(0),
         );
     }
@@ -4404,7 +4509,11 @@ fn emit_core_module(
     // expansion in one component instance. Index = 1 + value_defs.len() (global
     // 0 is the heap pointer, then one i32 per value def).
     gs.global(
-        GlobalType { val_type: ValType::I64, mutable: true, shared: false },
+        GlobalType {
+            val_type: ValType::I64,
+            mutable: true,
+            shared: false,
+        },
         &ConstExpr::i64_const(0),
     );
     module.section(&gs);
@@ -4418,8 +4527,9 @@ fn emit_core_module(
     module.section(&es);
 
     if !em.closure_bodies.is_empty() {
-        let idxs: Vec<u32> =
-            (0..em.closure_bodies.len() as u32).map(|k| closure_base + k).collect();
+        let idxs: Vec<u32> = (0..em.closure_bodies.len() as u32)
+            .map(|k| closure_base + k)
+            .collect();
         let mut els = ElementSection::new();
         els.active(
             Some(0),
@@ -4439,7 +4549,11 @@ fn emit_core_module(
     module.section(&cs);
 
     let mut ds = DataSection::new();
-    ds.active(0, &ConstExpr::i32_const(DATA_BASE as i32), em.data.iter().copied());
+    ds.active(
+        0,
+        &ConstExpr::i32_const(DATA_BASE as i32),
+        em.data.iter().copied(),
+    );
     module.section(&ds);
 
     Ok(module.finish())
@@ -4784,17 +4898,27 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     // Collect the file's DefMacros: `Tup[defmacro-MACRO, name, {params}, body]`.
     let mut macros: Vec<MacroDef> = Vec::new();
     for &root in roots {
-        let Node::Tup(items) = arena.node(root) else { continue };
+        let Node::Tup(items) = arena.node(root) else {
+            continue;
+        };
         if items.len() != 4 {
             continue;
         }
-        let Node::Sym(h) = arena.node(items[0]) else { continue };
+        let Node::Sym(h) = arena.node(items[0]) else {
+            continue;
+        };
         if h != "defmacro-MACRO" {
             continue;
         }
-        let Node::Sym(name) = arena.node(items[1]) else { continue };
+        let Node::Sym(name) = arena.node(items[1]) else {
+            continue;
+        };
         let params = param_names(arena, items[2])?;
-        macros.push(MacroDef { name: name.clone(), params, body: items[3] });
+        macros.push(MacroDef {
+            name: name.clone(),
+            params,
+            body: items[3],
+        });
     }
 
     // A minimal FileInfo: a macro library has no runtime defs/exports of its
@@ -4940,7 +5064,10 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     em.bodies.push(b);
 
     let exports: Vec<(String, u32)> = vec![
-        ("wavelet:meta/macros@0.1.0#manifest".to_string(), manifest_idx),
+        (
+            "wavelet:meta/macros@0.1.0#manifest".to_string(),
+            manifest_idx,
+        ),
         ("wavelet:meta/macros@0.1.0#expand".to_string(), expand_idx),
     ];
 
@@ -4992,12 +5119,20 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
 
     let mut gs = GlobalSection::new();
     gs.global(
-        GlobalType { val_type: I32, mutable: true, shared: false },
+        GlobalType {
+            val_type: I32,
+            mutable: true,
+            shared: false,
+        },
         &ConstExpr::i32_const(heap_base as i32),
     );
     // gensym counter (index 1, since there are no value defs)
     gs.global(
-        GlobalType { val_type: ValType::I64, mutable: true, shared: false },
+        GlobalType {
+            val_type: ValType::I64,
+            mutable: true,
+            shared: false,
+        },
         &ConstExpr::i64_const(0),
     );
     module.section(&gs);
@@ -5011,10 +5146,15 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     module.section(&es);
 
     if !em.closure_bodies.is_empty() {
-        let idxs: Vec<u32> =
-            (0..em.closure_bodies.len() as u32).map(|k| closure_base + k).collect();
+        let idxs: Vec<u32> = (0..em.closure_bodies.len() as u32)
+            .map(|k| closure_base + k)
+            .collect();
         let mut els = ElementSection::new();
-        els.active(Some(0), &ConstExpr::i32_const(0), Elements::Functions(idxs.into()));
+        els.active(
+            Some(0),
+            &ConstExpr::i32_const(0),
+            Elements::Functions(idxs.into()),
+        );
         module.section(&els);
     }
 
@@ -5028,7 +5168,11 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     module.section(&cs);
 
     let mut ds = DataSection::new();
-    ds.active(0, &ConstExpr::i32_const(DATA_BASE as i32), em.data.iter().copied());
+    ds.active(
+        0,
+        &ConstExpr::i32_const(DATA_BASE as i32),
+        em.data.iter().copied(),
+    );
     module.section(&ds);
 
     Ok(module.finish())
@@ -5552,7 +5696,15 @@ fn mc_count_nodes(em: &mut Emitter, count_idx: u32) -> Result<(u32, Function), S
 /// Copy `sublen` bytes from `src[8 + start ..]` into a fresh `[TAG_STR, sublen,
 /// bytes…]` box left in `out`. `start`/`sublen` are locals; `j` is a scratch
 /// loop local.
-fn emit_substr(em: &mut Emitter, fx: &mut FnCtx, src: u32, start: u32, sublen: u32, out: u32, j: u32) {
+fn emit_substr(
+    em: &mut Emitter,
+    fx: &mut FnCtx,
+    src: u32,
+    start: u32,
+    sublen: u32,
+    out: u32,
+    j: u32,
+) {
     fx.op(I::LocalGet(sublen));
     fx.op(I::I32Const(8));
     fx.op(I::I32Add);
@@ -6470,10 +6622,8 @@ fn mc_expand(
             em.wrap_variant(&mut fx, "ok");
             fx.op(I::LocalSet(res));
         } else {
-            let msg = em.intern_str(&format!(
-                "macro `{}` expects {arity} arguments",
-                m.name
-            )) as i32;
+            let msg =
+                em.intern_str(&format!("macro `{}` expects {arity} arguments", m.name)) as i32;
             fx.op(I::I32Const(msg));
             em.wrap_variant(&mut fx, "err");
             fx.op(I::LocalSet(res));
@@ -6714,7 +6864,10 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::LocalGet(p));
         fx.op(I::LocalGet(0));
         fx.op(I::LocalGet(1));
-        fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+        fx.op(I::MemoryCopy {
+            src_mem: 0,
+            dst_mem: 0,
+        });
         fx.op(I::End);
         fx.op(I::LocalGet(p));
         let t = em.ty_idx(vec![I32, I32, I32, I32], vec![I32]);
@@ -6787,7 +6940,10 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Add);
         fx.op(I::LocalGet(0));
         fx.op(I::LocalGet(1));
-        fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+        fx.op(I::MemoryCopy {
+            src_mem: 0,
+            dst_mem: 0,
+        });
         fx.op(I::LocalGet(p));
         let t = em.ty_idx(vec![I32, I32], vec![I32]);
         em.bodies.push((t, fx.finish()));
@@ -7337,7 +7493,10 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Const(8));
         fx.op(I::I32Add);
         fx.op(I::LocalGet(la));
-        fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+        fx.op(I::MemoryCopy {
+            src_mem: 0,
+            dst_mem: 0,
+        });
         fx.op(I::LocalGet(p));
         fx.op(I::I32Const(8));
         fx.op(I::I32Add);
@@ -7347,7 +7506,10 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Const(8));
         fx.op(I::I32Add);
         fx.op(I::LocalGet(lb));
-        fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+        fx.op(I::MemoryCopy {
+            src_mem: 0,
+            dst_mem: 0,
+        });
         fx.op(I::LocalGet(p));
         let t = em.ty_idx(vec![I32, I32], vec![I32]);
         em.bodies.push((t, fx.finish()));
@@ -8090,8 +8252,7 @@ fn synthesize_world_wit(
         // each, rewriting the dotted occurrences in the signatures to bare `set`.
         // (The functor interface is declared later in the same package; WIT `use`
         // resolves forward references within a package.)
-        let sigs: Vec<&FuncSig> =
-            info.exports.iter().filter(|s| &s.iface == iface).collect();
+        let sigs: Vec<&FuncSig> = info.exports.iter().filter(|s| &s.iface == iface).collect();
         let used: Vec<&str> = info
             .functors
             .iter()
@@ -8117,10 +8278,11 @@ fn synthesize_world_wit(
         // limitation is future work, likely by hoisting the element record into a
         // shared interface; tracked for step 04.)
         for funct in &used {
-            if let Some(f) = info.functors.iter().find(|f| f.iface == *funct) {
-                if info.types.iter().any(|(name, _)| name == &f.elem) {
-                    return Err(format!(
-                        "export `{}` in interface `{iface}` references the functor \
+            if let Some(f) = info.functors.iter().find(|f| f.iface == *funct)
+                && info.types.iter().any(|(name, _)| name == &f.elem)
+            {
+                return Err(format!(
+                    "export `{}` in interface `{iface}` references the functor \
                          handle `{}.set`, whose element type `{}` is a local record. \
                          That makes `{iface}` and `{}` mutually depend (`{iface}` \
                          `use`s the handle, `{}` `use`s the record) — a WIT interface \
@@ -8130,20 +8292,19 @@ fn synthesize_world_wit(
                          result (e.g. `size`/`contains`) from the set works. \
                          (Resource emission + routing of the handle return is tracked \
                          for the functor build follow-up.)",
-                        sigs.iter()
-                            .find(|s| {
-                                let d = format!("{funct}.set");
-                                s.result.as_deref() == Some(d.as_str())
-                                    || s.params.iter().any(|(_, t)| t == &d)
-                            })
-                            .map(|s| s.name.as_str())
-                            .unwrap_or("?"),
-                        funct,
-                        f.elem,
-                        funct,
-                        funct,
-                    ));
-                }
+                    sigs.iter()
+                        .find(|s| {
+                            let d = format!("{funct}.set");
+                            s.result.as_deref() == Some(d.as_str())
+                                || s.params.iter().any(|(_, t)| t == &d)
+                        })
+                        .map(|s| s.name.as_str())
+                        .unwrap_or("?"),
+                    funct,
+                    f.elem,
+                    funct,
+                    funct,
+                ));
             }
         }
         out.push_str(&format!("interface {iface} {{\n"));
@@ -8193,14 +8354,21 @@ fn synthesize_world_wit(
             continue;
         }
         let iface = import_iface(&imp.path);
-        let dep = deps
-            .get(&imp.package)
-            .ok_or(format!("dependency `{}` is not in the build set", imp.package))?;
-        out.push_str(&format!("  import {};\n", versioned_iface(&dep.package, &iface)));
+        let dep = deps.get(&imp.package).ok_or(format!(
+            "dependency `{}` is not in the build set",
+            imp.package
+        ))?;
+        out.push_str(&format!(
+            "  import {};\n",
+            versioned_iface(&dep.package, &iface)
+        ));
     }
     for iface in &ifaces {
         if is_external_iface(iface) {
-            out.push_str(&format!("  export {};\n", external_versioned_in(iface, deps)));
+            out.push_str(&format!(
+                "  export {};\n",
+                external_versioned_in(iface, deps)
+            ));
         } else {
             out.push_str(&format!("  export {iface};\n"));
         }
@@ -8349,10 +8517,27 @@ world app {
             imports: Vec::new(),
             import_fn: HashMap::new(),
             h: Helpers {
-                alloc: 0, realloc: 0, box_int: 0, box_bool: 0, box_dec: 0,
-                box_str: 0, truthy: 0, unbox_int: 0, unbox_char: 0, unbox_dec: 0, eq_raw: 0,
-                len_raw: 0, head_h: 0, tail_h: 0, strcat2: 0, case_h: 0,
-                to_str: 0, rec_get: 0, as_f64: 0, arith_raw: 0, cmp_raw: 0,
+                alloc: 0,
+                realloc: 0,
+                box_int: 0,
+                box_bool: 0,
+                box_dec: 0,
+                box_str: 0,
+                truthy: 0,
+                unbox_int: 0,
+                unbox_char: 0,
+                unbox_dec: 0,
+                eq_raw: 0,
+                len_raw: 0,
+                head_h: 0,
+                tail_h: 0,
+                strcat2: 0,
+                case_h: 0,
+                to_str: 0,
+                rec_get: 0,
+                as_f64: 0,
+                arith_raw: 0,
+                cmp_raw: 0,
                 neg_raw: 0,
             },
             funcs: HashMap::new(),
@@ -8380,14 +8565,14 @@ world app {
         // ---- imports: the three resource intrinsics, declared up front so the
         // function index space is imports-first (exactly emit_component's order).
         let mut n_imports = 0u32;
-        let mut add_import =
-            |em: &mut Emitter, field: &str, p: Vec<ValType>, r: Vec<ValType>| {
-                let t = em.ty_idx(p, r);
-                em.imports.push((EXPORT_MOD.to_string(), field.to_string(), t));
-                em.import_fn
-                    .insert((EXPORT_MOD.to_string(), field.to_string()), n_imports);
-                n_imports += 1;
-            };
+        let mut add_import = |em: &mut Emitter, field: &str, p: Vec<ValType>, r: Vec<ValType>| {
+            let t = em.ty_idx(p, r);
+            em.imports
+                .push((EXPORT_MOD.to_string(), field.to_string(), t));
+            em.import_fn
+                .insert((EXPORT_MOD.to_string(), field.to_string()), n_imports);
+            n_imports += 1;
+        };
         add_import(&mut em, "[resource-new]set", vec![I32], vec![I32]);
         add_import(&mut em, "[resource-rep]set", vec![I32], vec![I32]);
         add_import(&mut em, "[resource-drop]set", vec![I32], vec![]);
@@ -8476,7 +8661,11 @@ world app {
         // heap pointer global (global 0), same as the real assembly.
         let mut gs = GlobalSection::new();
         gs.global(
-            GlobalType { val_type: I32, mutable: true, shared: false },
+            GlobalType {
+                val_type: I32,
+                mutable: true,
+                shared: false,
+            },
             &ConstExpr::i32_const(heap_base as i32),
         );
         module.section(&gs);
@@ -8484,10 +8673,26 @@ world app {
         let mut es = ExportSection::new();
         es.export("memory", ExportKind::Memory, 0);
         es.export("cabi_realloc", ExportKind::Func, em.h.realloc);
-        es.export(&format!("{IFACE}#[constructor]set"), ExportKind::Func, fns.ctor);
-        es.export(&format!("{IFACE}#[method]set.add"), ExportKind::Func, fns.add);
-        es.export(&format!("{IFACE}#[method]set.contains"), ExportKind::Func, fns.contains);
-        es.export(&format!("{IFACE}#[method]set.size"), ExportKind::Func, fns.size);
+        es.export(
+            &format!("{IFACE}#[constructor]set"),
+            ExportKind::Func,
+            fns.ctor,
+        );
+        es.export(
+            &format!("{IFACE}#[method]set.add"),
+            ExportKind::Func,
+            fns.add,
+        );
+        es.export(
+            &format!("{IFACE}#[method]set.contains"),
+            ExportKind::Func,
+            fns.contains,
+        );
+        es.export(
+            &format!("{IFACE}#[method]set.size"),
+            ExportKind::Func,
+            fns.size,
+        );
         es.export(&format!("{IFACE}#[dtor]set"), ExportKind::Func, fns.dtor);
         module.section(&es);
 
@@ -8498,7 +8703,11 @@ world app {
         module.section(&cs);
 
         let mut ds = DataSection::new();
-        ds.active(0, &ConstExpr::i32_const(DATA_BASE as i32), em.data.iter().copied());
+        ds.active(
+            0,
+            &ConstExpr::i32_const(DATA_BASE as i32),
+            em.data.iter().copied(),
+        );
         module.section(&ds);
 
         Ok(module.finish())
@@ -8551,7 +8760,10 @@ world app {
         };
 
         let size = |c: &mut HostComponent, h: &Val| -> u32 {
-            match c.call_instance(IFACE, "[method]set.size", &[h.clone()]).unwrap()[..] {
+            match c
+                .call_instance(IFACE, "[method]set.size", std::slice::from_ref(h))
+                .unwrap()[..]
+            {
                 [Val::U32(n)] => n,
                 ref other => panic!("size returned {other:?}"),
             }
@@ -8578,7 +8790,11 @@ world app {
         add(&mut c, &handle, 7);
         add(&mut c, &handle, 42);
         add(&mut c, &handle, 7); // duplicate: must NOT grow the set
-        assert_eq!(size(&mut c, &handle), 2, "duplicate add is deduped by eq_raw");
+        assert_eq!(
+            size(&mut c, &handle),
+            2,
+            "duplicate add is deduped by eq_raw"
+        );
 
         // membership is exact
         assert!(contains(&mut c, &handle, 7), "7 is present");

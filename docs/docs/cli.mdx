@@ -10,12 +10,12 @@ The `wavelet` binary is built with `cargo build` (see [Getting started](./gettin
 
 ```text
 wavelet new <name> [--type=cli|http]                        # scaffold a new project
-wavelet read [file.wvl]                                      # parse → canonical WAVE tree (stdin if no file)
-wavelet expand <file.wvl>                                    # run macros to fixpoint
-wavelet wit <file.wvl>                                       # synthesized WIT world
+wavelet read [file.wlt]                                      # parse → canonical WAVE tree (stdin if no file)
+wavelet expand <file.wlt>                                    # run macros to fixpoint
+wavelet wit <file.wlt>                                       # synthesized WIT world
 wavelet repl                                                 # interactive read-eval-print loop
-wavelet run <file.wvl>... [-- <args>...]                     # interpret directly (no codegen)
-wavelet build <file.wvl>... [-o <dir>]                       # compile each file to a .wasm component
+wavelet run <file.wlt>... [-- <args>...]                     # interpret directly (no codegen)
+wavelet build <file.wlt>... [-o <dir>]                       # compile each file to a .wasm component
 wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
 ```
 
@@ -30,9 +30,9 @@ imports across the component boundary, build/run scripts, and a short README.
 
 ### `--type=cli` (default)
 
-A command-line program: `src/main.wvl` adopts the CLI world by exporting
+A command-line program: `src/main.wlt` adopts the CLI world by exporting
 [`wasi:cli/run`](./language/special-forms#export) and greets its first argument,
-delegating the wording to the pure `greet` function in `src/greeting.wvl`. Its
+delegating the wording to the pure `greet` function in `src/greeting.wlt`. Its
 output and argument reading go through imported WASI interfaces
 (`wasi:cli/stdout`, `wasi:io/streams`, `wasi:cli/environment`), whose WIT is
 fetched into `wit/` by `wkg`.
@@ -42,8 +42,8 @@ $ wavelet new my-app
 created my-app/
   my-app/.gitignore
   my-app/README.md
-  my-app/src/greeting.wvl
-  my-app/src/main.wvl
+  my-app/src/greeting.wlt
+  my-app/src/main.wlt
   my-app/scripts/build.sh
   my-app/scripts/run.sh
 
@@ -54,15 +54,15 @@ Hello, Ada!
 
 `new` also runs `wkg wit fetch` to populate the project's `wit/deps/` with the
 dependency WIT and write a `wkg.lock`, so a fresh project has its WASI
-dependencies pinned. `scripts/build.sh` compiles `src/*.wvl` into a git-ignored
+dependencies pinned. `scripts/build.sh` compiles `src/*.wlt` into a git-ignored
 `out/` and composes them into `out/app.wasm`; `scripts/run.sh` does that and then
 runs it with `wasmtime`, passing through any extra arguments.
 
 ### `--type=http`
 
-A web app whose front end, `src/app.wvl`, implements the
+A web app whose front end, `src/app.wlt`, implements the
 [`wasi:http/incoming-handler`](https://github.com/WebAssembly/wasi-http)
-interface and renders a stateless HTML page: it greets via `src/greeting.wvl`
+interface and renders a stateless HTML page: it greets via `src/greeting.wlt`
 (the pure `greet` function, imported across the component boundary) and echoes
 the request path. `scripts/serve.sh` serves the component with `wasmtime serve`.
 The front end needs no special language support — it imports `wasi:http/types`
@@ -75,7 +75,7 @@ component implements any WIT interface.
 Parse a file and print the **canonical WAVE form tree** — every piece of [reader sugar](./language/syntax#desugaring) resolved. With no path argument it reads from stdin.
 
 ```console
-$ wavelet read shout.wvl
+$ wavelet read shout.wlt
 $ echo 'shout("hi")' | wavelet read
 ```
 
@@ -86,7 +86,7 @@ Use this to see exactly how the attachment rule, qualified calls, and TitleCase 
 Run macros to fixpoint and print the resulting forms. `DefMacro` definitions are evaluated (registering the macro) and dropped; every macro use is rewritten to its expansion.
 
 ```console
-$ wavelet expand program.wvl
+$ wavelet expand program.wlt
 ```
 
 This is `read` plus the [macro expander](./language/macros) — what the analyzer and emitter actually see.
@@ -96,7 +96,7 @@ This is `read` plus the [macro expander](./language/macros) — what the analyze
 Print the **WIT world** synthesized from a file's typed `Fn` params, `Export` records, and `DefType`s.
 
 ```console
-$ wavelet wit shout.wvl
+$ wavelet wit shout.wlt
 package demo:shout@0.1.0;
 
 interface api {
@@ -130,7 +130,7 @@ The [in-browser playgrounds](./intro.mdx#try-it) throughout these docs are this 
 Interpret a set of files together — **no code generation**. Resolves `Import`s by package id, honours `Export`/`as:`/`open:`, and calls the entry file's exported `run`. The fastest way to exercise a program's logic.
 
 ```console
-$ wavelet run main.wvl shout.wvl
+$ wavelet run main.wlt shout.wlt
 ```
 
 The interpreter evaluates **pure** programs: it has no host interfaces, so a `run` that calls into `wasi:*` only works in a built component on a wasm runtime. Use `run` to validate cross-component logic; build the component for anything that touches the world. The first file listed is the entry component. (Anything after `--` is still accepted and ignored, for compatibility with the build flow.)
@@ -140,7 +140,7 @@ The interpreter evaluates **pure** programs: it has no host interfaces, so a `ru
 Compile each file to a real `.wasm` component — core wasm (linear-memory value boxes, `return_call` tail calls) wrapped with canonical-ABI lift/lower and componentized via `wasm-tools` — **and compose them into a single `out/app.wasm`**. Each cross-component import is wired to the sibling that exports it via a generated `out/app.wac` run through `wac`; host imports (`wasi:*`) are left unsatisfied for the runtime. Output goes to `out/` by default, or `-o <dir>`.
 
 ```console
-$ wavelet build src/*.wvl -o out
+$ wavelet build src/*.wlt -o out
 built out/app.wasm
 $ wasmtime run out/app.wasm
 ```

@@ -16,7 +16,7 @@
 
 use wavelet::builtins;
 use wavelet::interp::Interp;
-use wavelet::value::{unit, Value};
+use wavelet::value::{Value, unit};
 
 /// Call a `set-*` builtin with positional args, as the interpreter does after
 /// bundling a call's arguments.
@@ -105,9 +105,8 @@ fn element_equality_matches_eq_for_records() {
     );
 
     // Cross-check: the set's "same element" agrees with the `eq` builtin.
-    let eq = |a: Value, b: Value| {
-        builtins::call(&interp, "eq", Value::Tup(vec![a, b]), None).unwrap()
-    };
+    let eq =
+        |a: Value, b: Value| builtins::call(&interp, "eq", Value::Tup(vec![a, b]), None).unwrap();
     assert_eq!(eq(point(1, 2), point(1, 2)), Value::Bool(true));
     assert_eq!(eq(point(1, 2), point(3, 4)), Value::Bool(false));
 }
@@ -126,7 +125,7 @@ fn distinct_handles_are_independent() {
 
 // ---- end-to-end through `wavelet run` (`runner::run_files`) ----------------
 
-/// Run one `.wvl` source through the real `wavelet run` path and return the
+/// Run one `.wlt` source through the real `wavelet run` path and return the
 /// outcome. The program is written to a temp file because `run_files` reads
 /// files (it is the interpreter stand-in for `wavelet compose`).
 fn run_source(src: &str) -> Result<(), String> {
@@ -137,7 +136,7 @@ fn run_source(src: &str) -> Result<(), String> {
         RUN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("src.wvl");
+    let path = dir.join("src.wlt");
     std::fs::write(&path, src).unwrap();
     let res = wavelet::runner::run_files(&[path.to_string_lossy().into_owned()]);
     let _ = std::fs::remove_dir_all(&dir);
@@ -194,7 +193,7 @@ fn each_is_not_yet_defined() {
     assert!(err.contains("each"), "unexpected error: {err}");
 }
 
-/// Build one `.wvl` source through `wavelet build` in a throwaway dir, returning
+/// Build one `.wlt` source through `wavelet build` in a throwaway dir, returning
 /// the build result and (on success) the bytes of the single output component.
 fn build_source(src_text: &str) -> Result<Vec<u8>, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -206,7 +205,7 @@ fn build_source(src_text: &str) -> Result<Vec<u8>, String> {
     ));
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
-    let path = src.join("app.wvl");
+    let path = src.join("app.wlt");
     std::fs::write(&path, src_text).unwrap();
 
     let out = dir.join("out");
@@ -245,10 +244,19 @@ Def count-distinct Fn {ps: list(point)}
     let bytes = build_source(SRC).expect("a functor program now builds");
     let wit = wasm_tools_component_wit(&bytes);
     // The specialized interface and its `set` resource with all four ops.
-    assert!(wit.contains("interface point-set"), "WIT missing point-set: {wit}");
-    assert!(wit.contains("resource set"), "WIT missing the set resource: {wit}");
+    assert!(
+        wit.contains("interface point-set"),
+        "WIT missing point-set: {wit}"
+    );
+    assert!(
+        wit.contains("resource set"),
+        "WIT missing the set resource: {wit}"
+    );
     for op in ["constructor()", "add:", "contains:", "size:"] {
-        assert!(wit.contains(op), "WIT missing `{op}` on the set resource: {wit}");
+        assert!(
+            wit.contains(op),
+            "WIT missing `{op}` on the set resource: {wit}"
+        );
     }
 }
 
@@ -294,7 +302,10 @@ fn wasm_tools_component_wit(bytes: &[u8]) -> String {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("c.wasm");
-    std::fs::File::create(&path).unwrap().write_all(bytes).unwrap();
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(bytes)
+        .unwrap();
     let out = std::process::Command::new("wasm-tools")
         .args(["component", "wit"])
         .arg(&path)

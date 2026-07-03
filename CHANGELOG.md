@@ -13,6 +13,14 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Changed
+
+- **The official file extension is now `.wlt`** (was `.wvl`). The CLI usage
+  text, `wavelet new` scaffolding, the macro-library build pipeline, the
+  examples, the conformance suite, the docs, and the editor tooling (VS Code
+  extension, `wavelet.nvim`, `wavelet-lsp`) all use `.wlt`. Rename existing
+  `.wvl` sources to `.wlt`.
+
 ## [0.10.0] - 2026-07-02
 
 ### Added

@@ -10,7 +10,7 @@
 //! not guaranteed in CI. So, exactly like the Step 3 hand fixture
 //! (`tests/fixtures/macros/README.md`), a **prebuilt** component is checked in at
 //! `tests/fixtures/produced-macros.wasm` (built from
-//! `tests/fixtures/produced-macros.wvl`), and the default tests consume *that* —
+//! `tests/fixtures/produced-macros.wlt`), and the default tests consume *that* —
 //! no toolchain required, so `cargo test` stays green everywhere.
 //!
 //! The regeneration test (`reproduce_component_from_source`) actually runs the
@@ -31,13 +31,15 @@ use wavelet::printer::print;
 use wavelet::reader::read_file;
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
 }
 
 /// The macro-library source the checked-in component was produced from.
 fn lib_source() -> String {
-    std::fs::read_to_string(fixtures().join("produced-macros.wvl"))
-        .expect("produced-macros.wvl fixture present")
+    std::fs::read_to_string(fixtures().join("produced-macros.wlt"))
+        .expect("produced-macros.wlt fixture present")
 }
 
 /// Load the checked-in produced component through the consumer runtime.
@@ -113,7 +115,7 @@ fn expand_unknown_macro_is_an_error() {
 /// the result matches local expansion of the same macro.
 #[test]
 fn consumer_path_uses_produced_macro() {
-    use wavelet::macrodep::{read_file_with_macros, FileExpander};
+    use wavelet::macrodep::{FileExpander, read_file_with_macros};
 
     let comp = fixtures().join("produced-macros.wasm");
     let src = format!(
@@ -136,7 +138,7 @@ fn consumer_path_uses_produced_macro() {
 }
 
 /// **The Step 10 worked end-to-end build.** This is the user-facing story top to
-/// bottom: a macro library *written in Wavelet* (`produced-macros.wvl`, compiled
+/// bottom: a macro library *written in Wavelet* (`produced-macros.wlt`, compiled
 /// to the checked-in `produced-macros.wasm`) dropped at the conventional
 /// `wit/macros/<ns>-<name>.wasm` location, imported by another file with
 /// `Import {… macros: true}` (no `from:` — resolution is by convention), and its
@@ -156,7 +158,7 @@ fn consumer_path_uses_produced_macro() {
 /// `wac`/`wkg` toolchain needed — the build stays hermetic.
 #[test]
 fn worked_e2e_build_through_conventional_location() {
-    // A throwaway project root: src/app.wvl + wit/macros/demo-macros.wasm.
+    // A throwaway project root: src/app.wlt + wit/macros/demo-macros.wasm.
     let root = std::env::temp_dir().join(format!("wavelet-macro-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let src_dir = root.join("src");
@@ -185,7 +187,7 @@ fn worked_e2e_build_through_conventional_location() {
         Export {name: echo-qual params: {n: s32} result: s32}\n\
         Def echo-qual Fn {n: s32}\n  \
           lib/Identity n\n";
-    let app_path = src_dir.join("app.wvl");
+    let app_path = src_dir.join("app.wlt");
     std::fs::write(&app_path, app).unwrap();
 
     let out = root.join("out");

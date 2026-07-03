@@ -103,7 +103,10 @@ struct EnvInner {
 
 impl Env {
     pub fn root() -> Env {
-        Env(Rc::new(EnvInner { vars: RefCell::new(HashMap::new()), parent: None }))
+        Env(Rc::new(EnvInner {
+            vars: RefCell::new(HashMap::new()),
+            parent: None,
+        }))
     }
 
     pub fn child(&self) -> Env {
@@ -139,7 +142,10 @@ pub fn form_to_value(arena: &Arena, id: NodeId) -> Value {
         Node::Tup(items) => Value::Tup(items.iter().map(|&i| form_to_value(arena, i)).collect()),
         Node::Lst(items) => Value::Lst(items.iter().map(|&i| form_to_value(arena, i)).collect()),
         Node::Rec(fields) => Value::Rec(
-            fields.iter().map(|(k, v)| (k.clone(), form_to_value(arena, *v))).collect(),
+            fields
+                .iter()
+                .map(|(k, v)| (k.clone(), form_to_value(arena, *v)))
+                .collect(),
         ),
         Node::Flg(names) => Value::Flg(names.clone()),
     }

@@ -6,13 +6,13 @@ transforms, and harness). The suite's WIT is vendored under
 
 ## Two roles, one buildable today
 
-- **`src/runner.wvl` — the caller role. Builds and runs.** Imports
+- **`src/runner.wlt` — the caller role. Builds and runs.** Imports
   `roundtrip:suite/values` + `resources`, exports `roundtrip:suite/runner`,
   drives every check Wavelet can express with literal seeds and literal
   expected values:
 
   ```console
-  wavelet build src/runner.wvl -o out
+  wavelet build src/runner.wlt -o out
   wac plug ../dist/roundtrip-a.wasm --plug ../dist/stub.wasm -o callee.wasm
   wac plug out/conformance-wavelet.wasm --plug callee.wasm -o composed.wasm
   wasmtime run --invoke 'run()' composed.wasm          # or run-values() / run-resources()
@@ -23,9 +23,9 @@ transforms, and harness). The suite's WIT is vendored under
   to fail to a backend bug — byte-width payloads corrupted on lift — fixed in
   `emit.rs` and pinned by `tests/backend_byte_width.rs`.) Checks Wavelet
   cannot yet express are absent and listed in the header comment of
-  `runner.wvl`.
+  `runner.wlt`.
 
-- **`src/roundtrip.wvl` — the callee role. Does not build; kept as the
+- **`src/roundtrip.wlt` — the callee role. Does not build; kept as the
   target.** Exporting into a foreign interface is all-or-nothing, and several
   of the world's types/functions are not yet expressible in Wavelet source
   (variant/enum case construction, f32, flags literals, dep type aliases,

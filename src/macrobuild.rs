@@ -2,7 +2,7 @@
 //! (design.md §6.3; **strategy B: compile the bodies**).
 //!
 //! The payoff of the macro-component feature is that a macro library can be
-//! *written in Wavelet itself*: a `.wvl` file whose top level is `DefMacro`s is
+//! *written in Wavelet itself*: a `.wlt` file whose top level is `DefMacro`s is
 //! compiled into a component exporting `wavelet:meta/macros`, which the Step 1–8
 //! consumer then imports with `macros: true` and uses exactly like a hand-built
 //! macro component. Wavelet thereby dogfoods its own macro system.
@@ -43,9 +43,15 @@ pub fn is_macro_library(arena: &Arena, roots: &[NodeId]) -> bool {
     let mut saw_macro = false;
     let mut saw_package = false;
     for &root in roots {
-        let Node::Tup(items) = arena.node(root) else { return false };
-        let Some(&head) = items.first() else { return false };
-        let Node::Sym(head_name) = arena.node(head) else { return false };
+        let Node::Tup(items) = arena.node(root) else {
+            return false;
+        };
+        let Some(&head) = items.first() else {
+            return false;
+        };
+        let Node::Sym(head_name) = arena.node(head) else {
+            return false;
+        };
         match head_name.as_str() {
             "package-MACRO" => saw_package = true,
             "defmacro-MACRO" => saw_macro = true,
