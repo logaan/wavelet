@@ -48,6 +48,21 @@ Def narrow Fn {a: u8 b: u16}
   Let {p: {lo: a hi: b}}
     Match p [({lo: l hi: h} add(l h))]
 
+Export {name: destructure params: {} result: s64}
+Def destructure Fn {}
+  Let {r: {a: {x: 5 y: 7} n: 300}}
+    Match r [({a: {x: xx} n: nn} add(xx nn)) (other 0)]
+
+Export {name: fallthrough params: {} result: s64}
+Def fallthrough Fn {}
+  Let {p: {x: 1 y: 2}}
+    Match p [({z: q} 0) ({x: 9} 1) ({x: 1} 2) (other 3)]
+
+Export {name: not-a-variant params: {} result: s64}
+Def not-a-variant Fn {}
+  Let {p: {x: 1 y: 2}}
+    Match p [((some q) 0) (other 1)]
+
 Export {name: through-closure params: {} result: bool}
 Def through-closure Fn {}
   Let {p: {x: 1 y: 2}}
@@ -122,6 +137,32 @@ fn narrow_int_fields_roundtrip_losslessly() {
         ok(&mut c, "narrow", &[Val::U8(200), Val::U16(60000)]),
         Val::S64(60200)
     );
+}
+
+#[test]
+// Record patterns destructure canonical layout at despec offsets: nested
+// record patterns recurse in place, scalar binders load typed locals.
+fn canonical_record_patterns_destructure_by_offset() {
+    let mut c = component();
+    assert_eq!(ok(&mut c, "destructure", &[]), Val::S64(305));
+}
+
+#[test]
+// Clause fallthrough matches the oracle: a statically-absent field fails
+// the clause, a literal field pattern compares structurally, and the first
+// matching clause wins.
+fn canonical_record_pattern_fallthrough_matches_the_oracle() {
+    let mut c = component();
+    assert_eq!(ok(&mut c, "fallthrough", &[]), Val::S64(2));
+}
+
+#[test]
+// A non-record pattern (variant case) against a canonical record scrutinee
+// fails that clause — the rebuilt-box fallback preserves the uniform
+// matcher's semantics — and the bare-binder clause matches.
+fn non_record_pattern_falls_through_on_canonical_scrutinee() {
+    let mut c = component();
+    assert_eq!(ok(&mut c, "not-a-variant", &[]), Val::S64(1));
 }
 
 #[test]

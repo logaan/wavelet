@@ -2587,11 +2587,16 @@ impl<'a> Emitter<'a> {
         let Node::Lst(clauses) = self.arena.node(clauses_form).clone() else {
             return Err("Match expects a list of (pattern result) clauses".into());
         };
-        // The scrutinee stays boxed (patterns walk boxes), but its scalar
-        // kind — when known — lets a bare-name clause bind a TYPED local
-        // (5.2 Match-binding typed locals).
+        // The scrutinee's representation drives the pattern path: a scalar
+        // kind lets a bare-name clause bind a TYPED local (5.2); a canonical
+        // record (5.3) destructures by despec offsets with no boxes; the
+        // boxed fallback walks boxes as before.
         let scrut_kind = self.node_scalar(scrut_form);
-        self.expr(fx, scrut_form, false)?;
+        let scrut_mem = self.node_mem(fx, scrut_form);
+        match scrut_mem {
+            Some(t) => self.expr_mem(fx, scrut_form, t)?,
+            None => self.expr(fx, scrut_form, false)?,
+        }
         let scrut = fx.local(ValType::I32);
         fx.op(I::LocalSet(scrut));
         fx.op(I::Block(BlockType::Result(repr_vt(want))));
@@ -2602,9 +2607,11 @@ impl<'a> Emitter<'a> {
             };
             fx.op(I::Block(BlockType::Empty));
             fx.scopes.push(HashMap::new());
-            let r = self
-                .pattern_top(fx, pair[0], scrut, scrut_kind)
-                .and_then(|()| self.expr_repr(fx, pair[1], want, tail));
+            let r = match scrut_mem {
+                Some(t) => self.pattern_top_mem(fx, pair[0], scrut, t),
+                None => self.pattern_top(fx, pair[0], scrut, scrut_kind),
+            }
+            .and_then(|()| self.expr_repr(fx, pair[1], want, tail));
             fx.scopes.pop();
             r?;
             fx.op(I::Br(1));
@@ -2613,6 +2620,186 @@ impl<'a> Emitter<'a> {
         fx.op(I::Unreachable);
         fx.op(I::End);
         Ok(())
+    }
+
+    /// A clause's top-level pattern over a canonical-layout scrutinee (5.3):
+    /// a bare binder aliases the pointer (a `Repr::Mem` binding), a record
+    /// pattern destructures at despec offsets, and any other pattern
+    /// rebuilds the box once and delegates to the uniform matcher (where a
+    /// non-record pattern against a record value fails, like the oracle).
+    fn pattern_top_mem(
+        &mut self,
+        fx: &mut FnCtx,
+        pat: NodeId,
+        v: u32,
+        t: MemTy,
+    ) -> Result<(), String> {
+        let ty = self.mem_tys[t as usize].clone();
+        match self.arena.node(pat).clone() {
+            Node::Sym(name) if name != "none" && self.local_cases.get(&name) != Some(&false) => {
+                fx.scopes.last_mut().unwrap().insert(
+                    name,
+                    Binding {
+                        local: v,
+                        repr: Repr::Mem(t),
+                    },
+                );
+                Ok(())
+            }
+            Node::Rec(fields) => self.pattern_mem_rec(fx, &fields, &ty, v, 0, 0),
+            Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
+            _ => {
+                let l = fx.local(ValType::I32);
+                self.load_from_mem(fx, &ty, v, 0)?;
+                fx.op(I::LocalSet(l));
+                self.pattern(fx, pat, l, 0)
+            }
+        }
+    }
+
+    /// A record pattern over canonical layout: each named sub-pattern
+    /// destructures at its despec offset (a subset of fields, like the boxed
+    /// path). A field the static type lacks can never match — the clause
+    /// branches out, exactly where the interpreter's match fails.
+    fn pattern_mem_rec(
+        &mut self,
+        fx: &mut FnCtx,
+        pats: &[(String, NodeId)],
+        ty: &WitTy,
+        v: u32,
+        off: u64,
+        fail: u32,
+    ) -> Result<(), String> {
+        let WitTy::Record(tfs) = ty else {
+            return Err("internal: record pattern over a non-record layout".into());
+        };
+        let offsets = record_field_offsets(ty);
+        for (k, p) in pats {
+            let Some(i) = tfs.iter().position(|(n, _)| n == k) else {
+                // statically absent field: this clause cannot match
+                fx.op(I::Br(fail));
+                return Ok(());
+            };
+            let (o, tf) = &offsets[i];
+            self.pattern_mem_field(fx, *p, tf, v, off + o, fail)?;
+        }
+        Ok(())
+    }
+
+    /// One canonical field against a sub-pattern: a bare binder binds the
+    /// field at its natural representation (typed scalar / interior record
+    /// pointer / rebuilt box), a nested record pattern recurses in place,
+    /// and any other pattern reboxes just this field and delegates to the
+    /// uniform matcher.
+    fn pattern_mem_field(
+        &mut self,
+        fx: &mut FnCtx,
+        pat: NodeId,
+        tf: &WitTy,
+        v: u32,
+        off: u64,
+        fail: u32,
+    ) -> Result<(), String> {
+        match self.arena.node(pat).clone() {
+            Node::Sym(name) if name != "none" && self.local_cases.get(&name) != Some(&false) => {
+                let b = self.mem_field_binding(fx, tf, v, off)?;
+                fx.scopes.last_mut().unwrap().insert(name, b);
+                Ok(())
+            }
+            Node::Rec(fields) if matches!(tf, WitTy::Record(_)) => {
+                self.pattern_mem_rec(fx, &fields, tf, v, off, fail)
+            }
+            Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
+            _ => {
+                let l = fx.local(ValType::I32);
+                self.load_from_mem(fx, tf, v, off)?;
+                fx.op(I::LocalSet(l));
+                self.pattern(fx, pat, l, fail)
+            }
+        }
+    }
+
+    /// Bind one canonical field at its natural representation: scalar fields
+    /// load unboxed into typed locals (widening to the interpreter's value
+    /// domains), a nested record binds an interior pointer (headerless
+    /// layout — 5.1), everything else rebuilds its box.
+    fn mem_field_binding(
+        &mut self,
+        fx: &mut FnCtx,
+        tf: &WitTy,
+        v: u32,
+        off: u64,
+    ) -> Result<Binding, String> {
+        let scalar = |fx: &mut FnCtx, vt: ValType, kind: Scalar| {
+            let l = fx.local(vt);
+            fx.op(I::LocalSet(l));
+            Binding {
+                local: l,
+                repr: Repr::Scalar(kind),
+            }
+        };
+        Ok(match tf {
+            WitTy::Bool => {
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load8U(ma(off, 0)));
+                scalar(fx, ValType::I32, Scalar::Bool)
+            }
+            WitTy::Char => {
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::I64ExtendI32U);
+                scalar(fx, ValType::I64, Scalar::Char)
+            }
+            WitTy::IntS(w) => {
+                fx.op(I::LocalGet(v));
+                match *w {
+                    1 => fx.op(I::I32Load8S(ma(off, 0))),
+                    2 => fx.op(I::I32Load16S(ma(off, 1))),
+                    _ => fx.op(I::I32Load(ma(off, 2))),
+                }
+                fx.op(I::I64ExtendI32S);
+                scalar(fx, ValType::I64, Scalar::Int)
+            }
+            WitTy::IntU(w) => {
+                fx.op(I::LocalGet(v));
+                match *w {
+                    1 => fx.op(I::I32Load8U(ma(off, 0))),
+                    2 => fx.op(I::I32Load16U(ma(off, 1))),
+                    _ => fx.op(I::I32Load(ma(off, 2))),
+                }
+                fx.op(I::I64ExtendI32U);
+                scalar(fx, ValType::I64, Scalar::Int)
+            }
+            WitTy::S64 => {
+                fx.op(I::LocalGet(v));
+                fx.op(I::I64Load(ma(off, 3)));
+                scalar(fx, ValType::I64, Scalar::Int)
+            }
+            WitTy::F64 => {
+                fx.op(I::LocalGet(v));
+                fx.op(I::F64Load(ma(off, 3)));
+                scalar(fx, ValType::F64, Scalar::Float)
+            }
+            WitTy::Record(_) => {
+                fx.op(I::LocalGet(v));
+                if off > 0 {
+                    fx.op(I::I32Const(off as i32));
+                    fx.op(I::I32Add);
+                }
+                let l = fx.local(ValType::I32);
+                fx.op(I::LocalSet(l));
+                Binding {
+                    local: l,
+                    repr: Repr::Mem(self.mem_ty(tf)),
+                }
+            }
+            _ => {
+                let l = fx.local(ValType::I32);
+                self.load_from_mem(fx, tf, v, off)?;
+                fx.op(I::LocalSet(l));
+                Binding::boxed(l)
+            }
+        })
     }
 
     /// A clause's top-level pattern: like [`Self::pattern`], except a bare
