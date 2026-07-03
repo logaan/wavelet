@@ -145,7 +145,9 @@ fn eval_module(
         };
         let payload = items.get(1).copied();
         match (head_name, payload) {
-            ("package-MACRO" | "target-MACRO" | "deftype-MACRO", _) => {}
+            // `DefType` is NOT skipped: evaluating it binds the declaration's
+            // variant case constructors into the module env (4.1).
+            ("package-MACRO" | "target-MACRO", _) => {}
             ("export-MACRO", Some(payload)) => {
                 let entry =
                     export_entry(&arena, payload).ok_or(format!("{path}: malformed Export"))?;
@@ -196,6 +198,19 @@ fn eval_module(
                         modules[idx].env.define(name, v);
                     }
                 }
+                // The dep's `DefType` variant cases are part of its type
+                // surface: bind each case constructor under the import alias
+                // (`alias/case`) so dep-defined cases are constructible (4.1).
+                for case in deftype_case_names(&modules[dep].arena, &modules[dep].roots) {
+                    if let Some(v) = dep_env.lookup(&case) {
+                        modules[idx]
+                            .env
+                            .define(format!("{}/{case}", spec.alias), v.clone());
+                        if spec.open {
+                            modules[idx].env.define(case, v);
+                        }
+                    }
+                }
             }
             _ => {
                 interp
@@ -221,6 +236,38 @@ fn project_root(paths: &[String]) -> std::path::PathBuf {
         Some(r) if !r.as_os_str().is_empty() => r.to_path_buf(),
         _ => std::path::PathBuf::from("."),
     }
+}
+
+/// Every variant/enum case name declared by a module's `DefType`s (4.1).
+fn deftype_case_names(arena: &Arena, roots: &[NodeId]) -> Vec<String> {
+    let mut out = Vec::new();
+    for &root in roots {
+        let Node::Tup(items) = arena.node(root) else {
+            continue;
+        };
+        if items.len() != 3
+            || !matches!(arena.node(items[0]), Node::Sym(s) if s == "deftype-MACRO")
+        {
+            continue;
+        }
+        let Node::Lst(cases) = arena.node(items[2]) else {
+            continue;
+        };
+        for &c in cases {
+            match arena.node(c) {
+                Node::Sym(case) => out.push(case.clone()),
+                Node::Tup(case_items) => {
+                    if let Some(&h) = case_items.first()
+                        && let Node::Sym(case) = arena.node(h)
+                    {
+                        out.push(case.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
 }
 
 fn find_package(arena: &Arena, roots: &[NodeId]) -> Option<String> {

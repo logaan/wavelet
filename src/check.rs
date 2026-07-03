@@ -1071,11 +1071,13 @@ impl<'a> Checker<'a> {
             return Ok(Type::Unknown);
         }
         // A nullary case of a `DefType` variant used as a value: its nominal
-        // variant type (3.3).
-        if let Some((tyname, payload)) = self.variant_cases.get(name)
-            && payload.is_empty()
-        {
-            return Ok(Type::Named(tyname.clone()));
+        // variant type (3.3). A *payloaded* case used as a value is the case's
+        // constructor function — first-class functions are gradual (Phase D).
+        if let Some((tyname, payload)) = self.variant_cases.get(name) {
+            if payload.is_empty() {
+                return Ok(Type::Named(tyname.clone()));
+            }
+            return Ok(Type::Unknown);
         }
         Err(format!("eval error: unbound name `{name}`"))
     }
