@@ -48,6 +48,13 @@ impl MacroTable {
             ("instantiate-MACRO", 1),
             ("export-MACRO", 1),
             ("deftype-MACRO", 2),
+            // `DefResource <name> { … }` — a user-declared resource type (4.5).
+            // Arity 2: the type name and the member braces.
+            ("defresource-MACRO", 2),
+            // `Static Fn {…} body` — the static-member marker inside a
+            // DefResource (4.5). Arity 1: it wraps the member's whole `Fn` form.
+            // Not a real evaluator macro; the DefResource handlers destructure it.
+            ("static-MACRO", 1),
             ("def-MACRO", 2),
             ("fn-MACRO", 2),
             ("if-MACRO", 3),
@@ -547,6 +554,22 @@ impl Parser {
                         let value = self.parse_form()?;
                         fields.push((name, value));
                     }
+                    // A TitleCase record key: the lexer turns e.g. `New` into a
+                    // `Title("new-MACRO")` token. Recover its spelling so
+                    // capitalized member keys — the `New:`/`Drop:` markers a
+                    // `DefResource` uses (4.5) — parse as ordinary record fields.
+                    // The reader stays context-free; the checker enforces where
+                    // capitalized keys are meaningful.
+                    (Tok::Title(name), _) => {
+                        match self.next()? {
+                            (Tok::Colon, _) => {}
+                            (_, s) => {
+                                return self.err("expected `:` after record field name", s.start);
+                            }
+                        }
+                        let value = self.parse_form()?;
+                        fields.push((title_flag_name(&name), value));
+                    }
                     (_, s) => return self.err("expected a record field name", s.start),
                 }
             }
@@ -695,5 +718,40 @@ mod title_flags_scope_tests {
             "unexpected error message: {}",
             err.msg
         );
+    }
+
+    /// A `DefResource` form reads as `Tup[defresource-MACRO, Sym(name), Rec{…}]`
+    /// with capitalized `New`/`Drop` keys recovered and `Static Fn {…}` wrapped
+    /// (4.5).
+    #[test]
+    fn defresource_reads_members() {
+        let src = "DefResource counter {
+  New: Fn {start: u32} cell-new(start)
+  next: Fn {self: counter} cell-get(self)
+  sum: Static Fn {values: list(u32)} counter(0)
+  Drop: Fn {self: counter} unit()
+}";
+        let (arena, roots) = read_file(src).expect("DefResource should read");
+        assert_eq!(roots.len(), 1);
+        let Node::Tup(items) = arena.node(roots[0]) else {
+            panic!("expected a Tup for the DefResource form");
+        };
+        assert!(matches!(arena.node(items[0]), Node::Sym(s) if s == "defresource-MACRO"));
+        assert!(matches!(arena.node(items[1]), Node::Sym(s) if s == "counter"));
+        let Node::Rec(fields) = arena.node(items[2]) else {
+            panic!("expected a record of members");
+        };
+        let keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["New", "next", "sum", "Drop"]);
+        // The `sum` value is `Tup[static-MACRO, Tup[fn-MACRO, params, body]]`.
+        let sum = fields.iter().find(|(k, _)| k == "sum").unwrap().1;
+        let Node::Tup(st) = arena.node(sum) else {
+            panic!("expected the static marker tuple");
+        };
+        assert!(matches!(arena.node(st[0]), Node::Sym(s) if s == "static-MACRO"));
+        let Node::Tup(fnf) = arena.node(st[1]) else {
+            panic!("expected the wrapped Fn form");
+        };
+        assert!(matches!(arena.node(fnf[0]), Node::Sym(s) if s == "fn-MACRO"));
     }
 }
