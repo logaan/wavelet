@@ -26,7 +26,10 @@ fn absent_arms_synthesize_wit() {
                Def check Fn {v} Match v [((ok) err([\"flipped\"])) ((err e) err(e))]";
     let (arena, roots) = wavelet::reader::read_file(src).unwrap();
     let wit = wavelet::wit::synthesize(&arena, &roots).unwrap();
-    assert!(wit.contains("check: func(v: result) -> result<_, list<string>>;"), "{wit}");
+    assert!(
+        wit.contains("check: func(v: result) -> result<_, list<string>>;"),
+        "{wit}"
+    );
 }
 
 fn results_component() -> HostComponent {

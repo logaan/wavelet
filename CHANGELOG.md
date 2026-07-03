@@ -15,6 +15,36 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **Variant/enum case constructors are bound values.** A `DefType name
+  [case case(t) …]` declaration now binds each case in the value namespace:
+  nullary cases as payload-less variant values (like `none`), payloaded cases
+  as first-class constructor functions. Dep-declared cases are reachable
+  through the import alias (`t/circle(1.0)`, `t/north`), on the interpreter
+  and build paths alike. Calling a nullary case (`north()`) is a compile
+  error pointing at the bare name.
+
+- **Payload-less results are spellable and constructible.** A standalone `_`
+  lexes as the absent-arm placeholder, so `result`, `result(t)`, and
+  `result(_ e)` are all writable type text; `ok()`/`err()` with no arguments
+  construct genuinely payload-less cases, and the sub-pattern-less call
+  shapes `(ok)`/`(err)` match them.
+
+- **`Instantiate` — functor application is its own form.**
+  `Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}`
+  replaces the parameterized-`Import` spelling; functor arguments are passed
+  by name in `with:`. `Import` only brings unparameterized dependencies into
+  scope, and importing a functor package is an actionable error.
+
+- **Cross-package type references in signatures.** A local export signature
+  (or a local `DefType` field) can name a type an imported package defines;
+  the synthesized WIT brings it into scope with a
+  `use <pkg>/<iface>@<ver>.{name};`, versioned from the resolved dependency.
+
+- **Dep type aliases resolve.** A dependency's named alias
+  (`type points = list<point>`) now expands at the boundary like a local
+  `DefType` alias, and sibling `.wlt` dependencies carry their full type
+  surface (variants, enums, flags, aliases) on the build path.
+
 - **`--strict` mode (opt-in).** `wavelet run|build|wit --strict` makes
   `Type::Unknown` a compile error: every expression must have a concrete
   static type. Strict ships opt-in while the remaining gradual holes
@@ -60,6 +90,16 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- **All-payload-less `DefType` variants synthesize a WIT `enum`.**
+  `DefType direction [north east south west]` now emits
+  `enum direction { … }` rather than a payload-less `variant` (same
+  single-discriminant ABI).
+
+- **Functor element records hoist to break WIT cycles.** An export returning
+  (or taking) a `set` handle over a locally-declared record no longer fails
+  with an interface-cycle error: the element record is hoisted into a shared
+  `types` interface that both `api` and the functor interface `use`.
+
 - **Lists are `list<t>`.** A list literal's elements must share one type;
   mixing shapes is a compile error. Reach for a record, a `DefType` variant,
   or quoted data (a `tree`) instead.
@@ -91,6 +131,15 @@ you work, and rename it to the new version when you cut a release.
   examples, the conformance suite, the docs, and the editor tooling (VS Code
   extension, `wavelet.nvim`, `wavelet-lsp`) all use `.wlt`. Rename existing
   `.wvl` sources to `.wlt`.
+
+### Fixed
+
+- **Quoted tuples type-check at tuple boundaries.** `Quote (1 2)` (the
+  literal-tuple spelling) is accepted where a `tuple<…>` parameter is
+  expected instead of being rejected as `tree`.
+
+- **`ok()`/`err()` at a bare-`result` boundary no longer panic the compiler**
+  ("internal error: never a single flat value").
 
 ## [0.10.0] - 2026-07-02
 

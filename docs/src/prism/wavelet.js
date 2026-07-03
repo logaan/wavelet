@@ -9,6 +9,7 @@
 //   - "..." strings and '.' chars, both with \u{...}/\n/... escapes
 //   - int / float / inf / nan numbers
 //   - true / false booleans; some / none / ok / err WAVE constructors
+//   - the standalone `_` type placeholder (absent result arm)
 //   - TitleCase macro heads (If, Def, Fn, DefMacro, ...)
 //   - call heads: a name attached (no space) to ( — the attachment rule;
 //     this also covers the name in a chained call `recv.name(...)`
@@ -38,6 +39,12 @@ export const waveletGrammar = {
     alias: 'keyword',
   },
   'keyword': /\b(?:some|none|ok|err)\b/,
+  // The standalone `_` type placeholder (an absent result arm: `result(_ e)`).
+  'placeholder': {
+    pattern: /(^|[^\w-])_(?![\w-])/,
+    lookbehind: true,
+    alias: 'keyword',
+  },
   'number': /-?\b(?:inf|nan|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/,
   // Attachment rule: a (possibly %-escaped, possibly qualified) name immediately
   // followed by ( is a call head. Only `(` attaches now — a name before `[`/`{`

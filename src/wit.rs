@@ -516,9 +516,8 @@ fn parse_instantiate(arena: &Arena, fields: &[(String, NodeId)]) -> Result<Funct
             }
         }
     }
-    let elem = elem.ok_or_else(|| {
-        format!("Instantiate of `{path}` is missing `with: {{elem: …}}`")
-    })?;
+    let elem =
+        elem.ok_or_else(|| format!("Instantiate of `{path}` is missing `with: {{elem: …}}`"))?;
     let alias = alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
     let iface = format!("{elem}-set");
     Ok(FunctorInst {
@@ -1216,10 +1215,7 @@ pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String
             // payloaded case makes it a `variant` (4.1). Same single-i32
             // discriminant ABI either way, but the synthesized WIT now says
             // what a WIT author would say.
-            if cases
-                .iter()
-                .all(|&c| matches!(arena.node(c), Node::Sym(_)))
-            {
+            if cases.iter().all(|&c| matches!(arena.node(c), Node::Sym(_))) {
                 let names: Vec<String> = cases
                     .iter()
                     .map(|&c| match arena.node(c) {

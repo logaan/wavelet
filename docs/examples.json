@@ -81,6 +81,11 @@
     "value": "{options: [some(1), none], results: [ok(\"yes\"), err(\"nope\")]}",
     "output": ""
   },
+  "values-payloadless-results": {
+    "code": "Def flip Fn {v: result}\n  Match v [((ok) err()) ((err) ok())]\nflip(ok())",
+    "value": "err",
+    "output": ""
+  },
   "values-quote-days": {
     "code": "Quote days(30)",
     "value": "(days, 30)",
@@ -124,6 +129,11 @@
   "sf-def": {
     "code": "Def pi-ish 3.14159\nmul(pi-ish 2)",
     "value": "6.28318",
+    "output": ""
+  },
+  "sf-deftype-cases": {
+    "code": "DefType ttl [days(u32) forever]\nDef describe Fn {t: ttl}\n  Match t [((days n) str-cat(\"expires in \" to-string(n) \" days\"))\n           (forever \"never expires\")]\n[describe(days(30)) describe(forever)]",
+    "value": "[\"expires in 30 days\", \"never expires\"]",
     "output": ""
   },
   "sf-fn-adder": {

@@ -255,8 +255,7 @@ fn deftype_case_names(arena: &Arena, roots: &[NodeId]) -> Vec<String> {
         let Node::Tup(items) = arena.node(root) else {
             continue;
         };
-        if items.len() != 3
-            || !matches!(arena.node(items[0]), Node::Sym(s) if s == "deftype-MACRO")
+        if items.len() != 3 || !matches!(arena.node(items[0]), Node::Sym(s) if s == "deftype-MACRO")
         {
             continue;
         }

@@ -11,6 +11,7 @@
     { "include": "#number" },
     { "include": "#boolean" },
     { "include": "#constant" },
+    { "include": "#placeholder" },
     { "include": "#macro" },
     { "include": "#call-head" },
     { "include": "#namespace" },
@@ -48,6 +49,11 @@
       "comment": "WAVE option/result constructors",
       "name": "constant.language.wavelet",
       "match": "\\b(?:some|none|ok|err)\\b"
+    },
+    "placeholder": {
+      "comment": "The standalone `_` type placeholder (an absent result arm: result(_ e))",
+      "name": "constant.language.placeholder.wavelet",
+      "match": "(?<![\\w-])_(?![\\w-])"
     },
     "macro": {
       "comment": "TitleCase macro head: leading capital, at least one lowercase, no hyphen (the lexer's is_title). Reader sugar for a macro call.",

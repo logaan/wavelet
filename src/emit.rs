@@ -1226,7 +1226,10 @@ fn resolve_dep_func<'a>(
 fn dep_case(dep: &Dep, name: &str) -> Option<bool> {
     dep.type_defs.iter().find_map(|(_, def)| match def {
         TypeDef::Enum(cases) => cases.iter().any(|c| c == name).then_some(false),
-        TypeDef::Variant(cases) => cases.iter().find(|(c, _)| c == name).map(|(_, p)| p.is_some()),
+        TypeDef::Variant(cases) => cases
+            .iter()
+            .find(|(c, _)| c == name)
+            .map(|(_, p)| p.is_some()),
         _ => None,
     })
 }
@@ -1239,7 +1242,7 @@ struct Emitter<'a> {
     /// this file's own `DefType` variant/enum cases: case name → whether the
     /// case carries a payload. Bare case names construct variant values (4.1).
     local_cases: HashMap<String, bool>,
-    data: Vec<u8>,     // segment contents, lives at DATA_BASE
+    data: Vec<u8>, // segment contents, lives at DATA_BASE
     str_cache: HashMap<String, u32>,
     types: Vec<(Vec<ValType>, Vec<ValType>)>,
     imports: Vec<(String, String, u32)>, // module, field, type idx
@@ -2307,9 +2310,7 @@ impl<'a> Emitter<'a> {
             // match by equality; every other bare name binds. Mirrors the
             // interpreter, which keys this off names bound to a payload-less
             // variant (`none` builtin, DefType case bindings — 4.1).
-            Node::Sym(name)
-                if name == "none" || self.local_cases.get(&name) == Some(&false) =>
-            {
+            Node::Sym(name) if name == "none" || self.local_cases.get(&name) == Some(&false) => {
                 let naddr = self.intern_str(&name);
                 fx.op(I::LocalGet(v));
                 fx.op(I::I32Load(ma(0, 2)));
@@ -8422,9 +8423,35 @@ fn dep_type_uses(
     /// primitives, type constructors, and declaration keywords that can appear
     /// in rendered WIT type text — never dep type names.
     const RESERVED: &[&str] = &[
-        "bool", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "f32", "f64", "char",
-        "string", "list", "option", "result", "tuple", "own", "borrow", "record", "variant",
-        "enum", "flags", "type", "func", "resource", "static", "constructor", "use",
+        "bool",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "s8",
+        "s16",
+        "s32",
+        "s64",
+        "f32",
+        "f64",
+        "char",
+        "string",
+        "list",
+        "option",
+        "result",
+        "tuple",
+        "own",
+        "borrow",
+        "record",
+        "variant",
+        "enum",
+        "flags",
+        "type",
+        "func",
+        "resource",
+        "static",
+        "constructor",
+        "use",
     ];
     let local: std::collections::HashSet<&str> =
         info.types.iter().map(|(n, _)| n.as_str()).collect();

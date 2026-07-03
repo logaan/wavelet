@@ -829,8 +829,8 @@ world shout {
                 package_wit: emit::dep_package_wit(&sa, &sinfo).unwrap(),
                 types: emit::dep_record_types(&sa, &sinfo),
                 type_defs: Vec::new(),
-            aliases: Vec::new(),
-            type_ifaces: Vec::new(),
+                aliases: Vec::new(),
+                type_ifaces: Vec::new(),
             },
         );
         let bytes = emit::emit_component(&ma, &mr, &minfo, &deps).expect("main componentizes");
@@ -874,8 +874,8 @@ world shout {
                 package_wit: emit::dep_package_wit(&pa, &pinfo).unwrap(),
                 types: emit::dep_record_types(&pa, &pinfo),
                 type_defs: Vec::new(),
-            aliases: Vec::new(),
-            type_ifaces: Vec::new(),
+                aliases: Vec::new(),
+                type_ifaces: Vec::new(),
             },
         );
         let bytes =
@@ -918,8 +918,8 @@ world shout {
                 package_wit: emit::dep_package_wit(&pa, &pinfo).unwrap(),
                 types: emit::dep_record_types(&pa, &pinfo),
                 type_defs: Vec::new(),
-            aliases: Vec::new(),
-            type_ifaces: Vec::new(),
+                aliases: Vec::new(),
+                type_ifaces: Vec::new(),
             },
         );
         let bytes =
@@ -960,8 +960,8 @@ world shout {
                 package_wit: emit::dep_package_wit(&pa, &pinfo).unwrap(),
                 types: emit::dep_record_types(&pa, &pinfo),
                 type_defs: Vec::new(),
-            aliases: Vec::new(),
-            type_ifaces: Vec::new(),
+                aliases: Vec::new(),
+                type_ifaces: Vec::new(),
             },
         );
         let bytes = emit::emit_component(&ma, &mr, &minfo, &deps)

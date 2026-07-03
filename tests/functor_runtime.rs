@@ -279,8 +279,8 @@ Def nearest-set Fn {ps: list(point)}
     Do [ pts/add(s {x: 1 y: 2})
          s ]"#;
 
-    let bytes = build_source(SRC)
-        .expect("a handle-returning export over a local record now builds (4.7)");
+    let bytes =
+        build_source(SRC).expect("a handle-returning export over a local record now builds (4.7)");
     let wit = wasm_tools_component_wit(&bytes);
     assert!(
         wit.contains("interface types"),

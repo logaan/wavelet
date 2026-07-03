@@ -60,6 +60,11 @@ E['values-heterogeneous'] = `// A list has exactly one element type; mixing shap
 // Reach for a record, a variant, or quoted data (a tree) instead.
 [1 "two" true 'x']`;
 E['values-options-results'] = `{options: [some(1) none] results: [ok("yes") err("nope")]}`;
+// Payload-less results (goal 4.2): ok()/err() construct genuinely payload-less
+// cases; the sub-pattern-less call shapes (ok)/(err) match them.
+E['values-payloadless-results'] = `Def flip Fn {v: result}
+  Match v [((ok) err()) ((err) ok())]
+flip(ok())`;
 E['values-quote-days'] = `Quote days(30)`;
 E['values-eq'] = `eq({a: 1 b: [2 3]} {a: 1 b: [2 3]})`;
 E['values-unit-def'] = `Def x 10`;
@@ -82,6 +87,13 @@ apply(get(ops 1) 21)`;
 
 E['sf-def'] = `Def pi-ish 3.14159
 mul(pi-ish 2)`;
+// DefType binds its variant/enum case constructors (goal 4.1): nullary cases
+// are values (like none), payloaded cases are first-class constructors.
+E['sf-deftype-cases'] = `DefType ttl [days(u32) forever]
+Def describe Fn {t: ttl}
+  Match t [((days n) str-cat("expires in " to-string(n) " days"))
+           (forever "never expires")]
+[describe(days(30)) describe(forever)]`;
 E['sf-fn-adder'] = `Def adder Fn {by}
   Fn {n} add(n by)
 Def add5 adder(5)

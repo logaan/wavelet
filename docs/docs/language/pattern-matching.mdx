@@ -16,6 +16,7 @@ Patterns are just **forms**, interpreted structurally:
 | a bare name (`x`) | anything — and **binds** the name |
 | a payload-less variant case in scope (`none`, an enum case) | that exact case, by equality |
 | a `(case …)` form whose head is a name (`ok(n)`, `point({x: a})`) | a variant case with that label, recursing into the payload |
+| a sub-pattern-less `(case)` form (`(ok)`, `(err)`) | that case with **no payload** (payload-less results) |
 | a tuple `(a b)` | a tuple of the same length, element-wise |
 | a list `[a b c]` | a list of the same length, element-wise |
 | a record `{k: p}` | a record containing key `k` whose value matches `p` |

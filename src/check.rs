@@ -138,10 +138,9 @@ impl Type {
                     // has no err payload, `result(_ e)` no ok payload. An absent
                     // arm is carried as `Type::Unit` (the language has no unit
                     // value, so Unit-in-a-result-arm is unambiguous: no payload).
-                    ("result", [ok]) => Type::Result(
-                        Box::new(Self::result_arm(arena, *ok)),
-                        Box::new(Type::Unit),
-                    ),
+                    ("result", [ok]) => {
+                        Type::Result(Box::new(Self::result_arm(arena, *ok)), Box::new(Type::Unit))
+                    }
                     ("result", [ok, err]) => Type::Result(
                         Box::new(Self::result_arm(arena, *ok)),
                         Box::new(Self::result_arm(arena, *err)),
@@ -1016,8 +1015,11 @@ impl<'a> Checker<'a> {
         };
         matches!(
             h.as_str(),
-            "package-MACRO" | "import-MACRO" | "instantiate-MACRO" | "export-MACRO"
-            | "deftype-MACRO"
+            "package-MACRO"
+                | "import-MACRO"
+                | "instantiate-MACRO"
+                | "export-MACRO"
+                | "deftype-MACRO"
         ) || (h.ends_with("-MACRO")
             && !matches!(
                 h.as_str(),
@@ -1331,9 +1333,7 @@ impl<'a> Checker<'a> {
             // carry annotations, not value expressions: opaque to the value
             // checker.
             "package-MACRO" | "import-MACRO" | "instantiate-MACRO" | "export-MACRO"
-            | "deftype-MACRO" => {
-                Ok(Type::Unknown)
-            }
+            | "deftype-MACRO" => Ok(Type::Unknown),
             // Any other `-MACRO` head is a user (or foreign) macro call that
             // `eval_snippet` expands at runtime. We cannot statically see
             // through it, so check nothing and stay gradual. Crucially we do NOT
@@ -2034,10 +2034,7 @@ impl<'a> Checker<'a> {
                     t => vec![t.clone()],
                 };
                 self.check_cases_covered(
-                    &[
-                        ("ok".to_string(), arm(o)),
-                        ("err".to_string(), arm(e)),
-                    ],
+                    &[("ok".to_string(), arm(o)), ("err".to_string(), arm(e))],
                     pats,
                 )
             }
