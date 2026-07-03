@@ -2394,7 +2394,7 @@ impl<'a> Emitter<'a> {
                 // bridge, driven by the import's parsed WIT signature (from a
                 // sibling `.wlt` or a `wit/deps` package — host `wasi:*`
                 // packages included).
-                self.dep_call(fx, &alias, &fname, args)
+                self.dep_call(fx, &alias, &fname, args, None)
             }
             Node::Sym(name) => match name.as_str() {
                 "if-MACRO" => self.if_form(fx, args, Repr::Boxed, tail),
@@ -3110,6 +3110,7 @@ impl<'a> Emitter<'a> {
         alias: &str,
         fname: &str,
         args: &[NodeId],
+        want_mem: Option<MemTy>,
     ) -> Result<(), String> {
         // A functor op (`pts/new`, `pts/add`, `pts/contains`, `pts/size`) is not a
         // runtime import: it routes to the locally-emitted `set` resource's core
@@ -3249,6 +3250,9 @@ impl<'a> Emitter<'a> {
             let pty = wit_ty(t, &self.type_env)?;
             self.lower(fx, &pty)?;
         }
+        if want_mem.is_some() && !matches!(flat_result(&sig, &self.type_env), Ok(FlatRes::Retptr)) {
+            return Err("internal: Mem repr requested for a non-retptr dep call (5.3)".into());
+        }
         match flat_result(&sig, &self.type_env)? {
             FlatRes::None => {
                 fx.op(I::Call(fidx));
@@ -3269,14 +3273,33 @@ impl<'a> Emitter<'a> {
                         | WitTy::Variant(_)
                 ) {
                     // allocate a result area sized to the value, pass it as the
-                    // canonical retptr, then read the value back out of it
+                    // canonical retptr, then read the value back out of it —
+                    // or, when the caller wants this canonical layout (5.3),
+                    // the area IS the value: no lift, no boxes
                     let area = fx.local(ValType::I32);
                     fx.op(I::I32Const(size_of(&rty) as i32));
                     fx.op(I::Call(self.h.alloc));
                     fx.op(I::LocalTee(area));
                     fx.op(I::Call(fidx));
-                    self.load_from_mem(fx, &rty, area, 0)?;
+                    match want_mem {
+                        Some(t) if self.mem_tys[t as usize] == rty => {
+                            fx.op(I::LocalGet(area));
+                        }
+                        Some(_) => {
+                            return Err(
+                                "internal: dep call's canonical layout does not match                                  the requested Mem type (5.3)"
+                                    .into(),
+                            );
+                        }
+                        None => self.load_from_mem(fx, &rty, area, 0)?,
+                    }
                 } else {
+                    if want_mem.is_some() {
+                        return Err(
+                            "internal: Mem repr requested for a string/list dep result (5.3)"
+                                .into(),
+                        );
+                    }
                     fx.op(I::I32Const(SCRATCH));
                     fx.op(I::Call(fidx));
                     // (ptr, len) written at the scratch area
@@ -4553,8 +4576,34 @@ impl<'a> Emitter<'a> {
                         .all(|((k, v), (tk, tf))| k == tk && self.mem_field_ok(look, *v, tf))
             }
             (Node::Sym(name), _) => self.lookup_mem(look, name).is_some_and(|t| t == *ty),
+            // A dep call whose declared result IS this layout: the retptr
+            // area arrives in canonical form, in declared field order —
+            // exactly the order the interpreter's boundary lift produces.
+            (Node::Tup(items), WitTy::Record(_)) if !items.is_empty() => {
+                match self.arena.node(items[0]) {
+                    Node::Qsym(alias, fname) => self
+                        .dep_result_mem_ty(alias, fname)
+                        .is_some_and(|t| t == *ty),
+                    _ => false,
+                }
+            }
             _ => false,
         }
+    }
+
+    /// The canonical layout a dep call's result area carries, when it is a
+    /// retptr-lowered non-empty record. `None` for functor ops (they are not
+    /// imports), scalar/One-flat results, and anything unresolvable.
+    fn dep_result_mem_ty(&self, alias: &str, fname: &str) -> Option<WitTy> {
+        let imp = self.info.imports.iter().find(|i| i.alias == alias)?;
+        let dep = self.deps.get(&imp.package)?;
+        let iface = import_iface(&imp.path);
+        let sig = resolve_dep_func(dep, &iface, fname).ok()?.clone();
+        if !matches!(flat_result(&sig, &self.type_env), Ok(FlatRes::Retptr)) {
+            return None;
+        }
+        let rty = wit_ty(sig.result.as_deref()?, &self.type_env).ok()?;
+        matches!(&rty, WitTy::Record(fs) if !fs.is_empty()).then_some(rty)
     }
 
     /// The canonical-layout type a name is bound at, if any — through the
@@ -4652,6 +4701,9 @@ impl<'a> Emitter<'a> {
             Node::Rec(_) => self.node_mem_ty(&MemLookup::Sim(env), id),
             Node::Sym(name) => env.iter().rev().find_map(|s| s.get(&name)).cloned(),
             Node::Tup(items) if !items.is_empty() => {
+                if matches!(self.arena.node(items[0]), Node::Qsym(..)) {
+                    return self.node_mem_ty(&MemLookup::Sim(env), id);
+                }
                 let Node::Sym(head) = self.arena.node(items[0]).clone() else {
                     return None;
                 };
@@ -4725,6 +4777,10 @@ impl<'a> Emitter<'a> {
                 Ok(())
             }
             Node::Tup(items) if !items.is_empty() => {
+                if let Node::Qsym(alias, fname) = self.arena.node(items[0]).clone() {
+                    // gated by can_mem_as: the call's retptr area IS the value
+                    return self.dep_call(fx, &alias, &fname, &items[1..], Some(t));
+                }
                 if let Node::Sym(head) = self.arena.node(items[0]).clone() {
                     let args = &items[1..];
                     match head.as_str() {

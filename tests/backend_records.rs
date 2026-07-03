@@ -215,3 +215,61 @@ fn canonical_record_closure_capture_is_faithful() {
     let mut c = component();
     assert_eq!(ok(&mut c, "through-closure", &[]), Val::Bool(true));
 }
+
+/// Is `bin` runnable (`<bin> --version` succeeds)?
+fn have(bin: &str) -> bool {
+    std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[test]
+// A dep call returning a record consumed by Match: the retptr area the
+// callee wrote is already the canonical layout (declared field order —
+// exactly what the interpreter's boundary lift produces), so the value is
+// born canonical and destructures by offset with no boxes at all.
+fn dep_call_record_result_is_born_canonical() {
+    if !have("wac") {
+        eprintln!("skipping: wac not on PATH");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("wavelet-memdep-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(
+        src.join("pts.wlt"),
+        "Package \"demo:pts@0.1.0\"\n\n\
+         DefType point {x: s32 y: s32}\n\n\
+         Export {name: mk params: {a: s32 b: s32} result: point}\n\
+         Def mk Fn {a: s32 b: s32} {x: a y: b}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("main.wlt"),
+        "Package \"demo:main@0.1.0\"\n\n\
+         Import {pkg: \"demo:pts/api\" as: pts}\n\n\
+         Export {name: run params: {} result: s64}\n\
+         Def run Fn {}\n  \
+           Match pts/mk(4 9) [({x: xx y: yy} add(xx yy)) (other 0)]\n",
+    )
+    .unwrap();
+    let out = dir.join("out");
+    let sources = vec![
+        src.join("pts.wlt").to_str().unwrap().to_string(),
+        src.join("main.wlt").to_str().unwrap().to_string(),
+    ];
+    wavelet::build::build_files(&sources, out.to_str().unwrap())
+        .expect("build the two-component project");
+    let app = out.join("app.wasm");
+    let bytes = std::fs::read(&app).expect("read composed app.wasm");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut c = HostComponent::from_bytes(&bytes).expect("instantiate composed app");
+    let got = c
+        .call_instance("demo:main/api@0.1.0", "run", &[])
+        .expect("call run")[0]
+        .clone();
+    assert_eq!(got, Val::S64(13));
+}
