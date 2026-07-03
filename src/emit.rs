@@ -2647,6 +2647,9 @@ impl<'a> Emitter<'a> {
             Node::Tup(pats) if matches!(ty, WitTy::Tuple(_)) => {
                 self.pattern_mem_tup(fx, &pats, &ty, v, 0, 0)
             }
+            Node::Lst(pats) if matches!(ty, WitTy::List(_)) => {
+                self.pattern_mem_lst(fx, &pats, &ty, v, 0, 0)
+            }
             Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
                 let l = fx.local(ValType::I32);
@@ -2716,6 +2719,39 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// A list pattern over a canonical (ptr, len) list at `v + off` (5.5):
+    /// the length must equal the pattern's arity (checked at runtime — a
+    /// list's length is a value property, unlike a tuple's static arity),
+    /// then each element sub-pattern destructures the packed element at its
+    /// stride offset.
+    fn pattern_mem_lst(
+        &mut self,
+        fx: &mut FnCtx,
+        pats: &[NodeId],
+        ty: &WitTy,
+        v: u32,
+        off: u64,
+        fail: u32,
+    ) -> Result<(), String> {
+        let WitTy::List(elem) = ty else {
+            return Err("internal: list pattern over a non-list layout".into());
+        };
+        fx.op(I::LocalGet(v));
+        fx.op(I::I32Load(ma(off + 4, 2)));
+        fx.op(I::I32Const(pats.len() as i32));
+        fx.op(I::I32Ne);
+        fx.op(I::BrIf(fail));
+        let base = fx.local(ValType::I32);
+        fx.op(I::LocalGet(v));
+        fx.op(I::I32Load(ma(off, 2)));
+        fx.op(I::LocalSet(base));
+        let esz = elem_size(elem);
+        for (i, &p) in pats.iter().enumerate() {
+            self.pattern_mem_field(fx, p, elem, base, i as u64 * esz, fail)?;
+        }
+        Ok(())
+    }
+
     /// One canonical field against a sub-pattern: a bare binder binds the
     /// field at its natural representation (typed scalar / interior record
     /// pointer / rebuilt box), a nested record pattern recurses in place,
@@ -2741,6 +2777,9 @@ impl<'a> Emitter<'a> {
             }
             Node::Tup(pats) if matches!(tf, WitTy::Tuple(_)) => {
                 self.pattern_mem_tup(fx, &pats, tf, v, off, fail)
+            }
+            Node::Lst(pats) if matches!(tf, WitTy::List(_)) => {
+                self.pattern_mem_lst(fx, &pats, tf, v, off, fail)
             }
             Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
@@ -2813,7 +2852,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::F64Load(ma(off, 3)));
                 scalar(fx, ValType::F64, Scalar::Float)
             }
-            WitTy::Record(_) | WitTy::Tuple(_) => {
+            WitTy::Record(_) | WitTy::Tuple(_) | WitTy::Str | WitTy::List(_) => {
                 fx.op(I::LocalGet(v));
                 if off > 0 {
                     fx.op(I::I32Const(off as i32));
@@ -3308,11 +3347,14 @@ impl<'a> Emitter<'a> {
                         | WitTy::Option(_)
                         | WitTy::Result(..)
                         | WitTy::Variant(_)
-                ) {
+                ) || (want_mem.is_some() && matches!(rty, WitTy::Str | WitTy::List(_)))
+                {
                     // allocate a result area sized to the value, pass it as the
                     // canonical retptr, then read the value back out of it —
                     // or, when the caller wants this canonical layout (5.3),
-                    // the area IS the value: no lift, no boxes
+                    // the area IS the value: no lift, no boxes. A string/list
+                    // result's canonical form is the (ptr, len) pair the area
+                    // carries (5.5), so the same fast path applies.
                     let area = fx.local(ValType::I32);
                     fx.op(I::I32Const(size_of(&rty) as i32));
                     fx.op(I::Call(self.h.alloc));
@@ -3331,12 +3373,6 @@ impl<'a> Emitter<'a> {
                         None => self.load_from_mem(fx, &rty, area, 0)?,
                     }
                 } else {
-                    if want_mem.is_some() {
-                        return Err(
-                            "internal: Mem repr requested for a string/list dep result (5.3)"
-                                .into(),
-                        );
-                    }
                     fx.op(I::I32Const(SCRATCH));
                     fx.op(I::Call(fidx));
                     // (ptr, len) written at the scratch area
@@ -4616,7 +4652,10 @@ impl<'a> Emitter<'a> {
             // A dep call whose declared result IS this layout: the retptr
             // area arrives in canonical form, in declared field order —
             // exactly the order the interpreter's boundary lift produces.
-            (Node::Tup(items), WitTy::Record(_) | WitTy::Tuple(_)) if !items.is_empty() => {
+            (
+                Node::Tup(items),
+                WitTy::Record(_) | WitTy::Tuple(_) | WitTy::Str | WitTy::List(_),
+            ) if !items.is_empty() => {
                 match self.arena.node(items[0]) {
                     Node::Qsym(alias, fname) => self
                         .dep_result_mem_ty(alias, fname)
@@ -4629,9 +4668,10 @@ impl<'a> Emitter<'a> {
     }
 
     /// The canonical layout a dep call's result area carries, when it is a
-    /// retptr-lowered non-empty record or tuple. `None` for functor ops
-    /// (they are not imports), scalar/One-flat results, and anything
-    /// unresolvable.
+    /// retptr-lowered non-empty record or tuple, or a string or list (whose
+    /// canonical form is the (ptr, len) pair the area carries — 5.5).
+    /// `None` for functor ops (they are not imports), scalar/One-flat
+    /// results, and anything unresolvable.
     fn dep_result_mem_ty(&self, alias: &str, fname: &str) -> Option<WitTy> {
         let imp = self.info.imports.iter().find(|i| i.alias == alias)?;
         let dep = self.deps.get(&imp.package)?;
@@ -4642,7 +4682,8 @@ impl<'a> Emitter<'a> {
         }
         let rty = wit_ty(sig.result.as_deref()?, &self.type_env).ok()?;
         (matches!(&rty, WitTy::Record(fs) if !fs.is_empty())
-            || matches!(&rty, WitTy::Tuple(es) if !es.is_empty()))
+            || matches!(&rty, WitTy::Tuple(es) if !es.is_empty())
+            || matches!(&rty, WitTy::Str | WitTy::List(_)))
         .then_some(rty)
     }
 
@@ -4689,13 +4730,15 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// The canonical layout for `id` when 5.3 admits one: a known non-empty
-    /// record or tuple type whose construction here is provably faithful.
+    /// The canonical layout for `id` when 5.3/5.5 admit one: a known
+    /// non-empty record or tuple, or a string or list, whose construction
+    /// here is provably faithful.
     fn node_mem_ty(&self, look: &MemLookup, id: NodeId) -> Option<WitTy> {
         let t = self.node_types.get(&id)?.clone();
         let ty = self.wit_of_check_type(&t)?;
         if !(matches!(&ty, WitTy::Record(fs) if !fs.is_empty())
-            || matches!(&ty, WitTy::Tuple(es) if !es.is_empty()))
+            || matches!(&ty, WitTy::Tuple(es) if !es.is_empty())
+            || matches!(&ty, WitTy::Str | WitTy::List(_)))
         {
             return None;
         }
