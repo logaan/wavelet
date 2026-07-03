@@ -636,3 +636,106 @@ fn the_narrow_int_of_a_len_result_is_not_rejected() {
     assert!(r.ok, "The u8 len(...) should run, got: {}", r.error);
     assert_eq!(r.value, "3");
 }
+
+// ===========================================================================
+// Goal 3 — closing the gradual holes
+// ===========================================================================
+
+/// Pure-checker path: read → expand → `check_program`, as `wavelet build`/`wit`
+/// do. Returns the first compile error, if any.
+fn check_src(src: &str) -> Result<(), String> {
+    let (arena, roots) = read_file(src).map_err(|e| e.to_string())?;
+    let (arena, roots) = expand::expand_file(arena, &roots, None)?;
+    wavelet::check::check_program(&arena, &roots)
+}
+
+// --- 3.2: non-overloaded def calls carry their inferred result type ---------
+
+#[test]
+fn def_call_result_type_flows_into_the_caller() {
+    // g() is inferred string; using it as an arithmetic operand must fail.
+    let r = run(r#"Def g Fn {} "s"
+Def f Fn {} add(g() 1)"#);
+    assert!(!r.ok, "string-returning def used as a number must be rejected");
+}
+
+#[test]
+fn recursive_def_call_still_checks() {
+    let r = run("Def count-down Fn {n} If eq(n 0) \"liftoff\" count-down(sub(n 1))\ncount-down(3)");
+    assert!(r.ok, "recursive def failed: {}", r.error);
+}
+
+// --- 3.3: record and variant types are modelled ------------------------------
+
+#[test]
+fn record_literal_field_type_mismatch_against_nominal_param_is_rejected() {
+    let r = check_src(
+        r#"Package "demo:rec@0.1.0"
+DefType point {x: s32 y: s32}
+Def f Fn {p: point} 1
+Def g Fn {} f({x: "a" y: 2})"#,
+    );
+    assert!(
+        r.is_err(),
+        "string field for s32-typed record field must be rejected"
+    );
+}
+
+#[test]
+fn record_literal_matching_nominal_param_is_accepted() {
+    let r = check_src(
+        r#"Package "demo:rec@0.1.0"
+DefType point {x: s32 y: s32}
+Def f Fn {p: point} 1
+Def g Fn {} f({x: 1 y: 2})"#,
+    );
+    assert!(r.is_ok(), "well-typed record literal rejected: {r:?}");
+}
+
+#[test]
+fn variant_ctor_payload_type_is_checked() {
+    let r = check_src(
+        r#"Package "demo:var@0.1.0"
+DefType ttl [days(u32) forever]
+Def f Fn {} days("x")"#,
+    );
+    assert!(r.is_err(), "string payload for days(u32) must be rejected");
+}
+
+#[test]
+fn variant_ctor_and_nullary_case_type_as_the_nominal_variant() {
+    let r = check_src(
+        r#"Package "demo:var@0.1.0"
+DefType ttl [days(u32) forever]
+Def pick Fn {b: bool} If b days(30) forever"#,
+    );
+    assert!(r.is_ok(), "both If branches are `ttl`: {r:?}");
+}
+
+#[test]
+fn match_binds_variant_payload_at_declared_type() {
+    // `d` is bound at u32 by the `days(d)` pattern; using it as a string operand
+    // must be rejected.
+    let r = check_src(
+        r#"Package "demo:var@0.1.0"
+DefType ttl [days(u32) forever]
+Def f Fn {t: ttl}
+  Match t [
+    (days(d) upper(d))
+    (forever "f")]"#,
+    );
+    assert!(r.is_err(), "u32 payload used as a string must be rejected");
+}
+
+#[test]
+fn match_binds_record_fields_at_declared_types() {
+    let r = check_src(
+        r#"Package "demo:rec@0.1.0"
+DefType point {x: s32 y: s32}
+Def f Fn {p: point}
+  Match p [
+    ({x: a y: b} upper(a))
+    (other "no")]"#,
+    );
+    assert!(r.is_err(), "s32 field used as a string must be rejected");
+}

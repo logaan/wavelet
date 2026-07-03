@@ -56,6 +56,16 @@ pub enum Type {
     Char,
     String,
     List(Box<Type>),
+    /// `option<T>`.
+    Option(Box<Type>),
+    /// `result<O, E>`.
+    Result(Box<Type>, Box<Type>),
+    /// `tuple<…>`.
+    Tuple(Vec<Type>),
+    /// A structural (anonymous) record literal's type: its fields and their
+    /// types, in literal order. Unifies with a nominal `Named` record whose
+    /// declared fields match (see [`unify`]).
+    Record(Vec<(String, Type)>),
     /// A `DefType` record/variant, named nominally.
     Named(String),
     /// The unit type (`{}`), e.g. the result of a `Def`.
@@ -113,8 +123,18 @@ impl Type {
                 };
                 match (ctor.as_str(), args) {
                     ("list", [elem]) => Type::List(Box::new(Type::from_form(arena, *elem))),
-                    // option/result/tuple are not modelled in Phase A; treat as
-                    // gradual so nothing downstream is falsely rejected.
+                    ("option", [elem]) => Type::Option(Box::new(Type::from_form(arena, *elem))),
+                    ("result", [ok]) => Type::Result(
+                        Box::new(Type::from_form(arena, *ok)),
+                        Box::new(Type::Unknown),
+                    ),
+                    ("result", [ok, err]) => Type::Result(
+                        Box::new(Type::from_form(arena, *ok)),
+                        Box::new(Type::from_form(arena, *err)),
+                    ),
+                    ("tuple", elems) => Type::Tuple(
+                        elems.iter().map(|&e| Type::from_form(arena, e)).collect(),
+                    ),
                     _ => Type::Unknown,
                 }
             }
@@ -147,10 +167,29 @@ impl Type {
     }
 }
 
+/// A module's `DefType` declarations: how a nominal [`Type::Named`] resolves to
+/// structure. Shared by unification (nominal-vs-structural records), variant
+/// constructor typing, and pattern binding.
+#[derive(Debug, Clone)]
+pub enum TypeDef {
+    /// `DefType name {x: t …}` — a nominal record.
+    Record(Vec<(String, Type)>),
+    /// `DefType name [case case(t) …]` — a nominal variant: each case's name
+    /// and payload types (empty = nullary case).
+    Variant(Vec<(String, Vec<Type>)>),
+    /// `DefType name {a b c}` — flags.
+    Flags(Vec<String>),
+}
+
+/// The nominal type table, keyed by `DefType` name.
+type TypeTable = HashMap<String, TypeDef>;
+
 /// Unify two types, gradually. `Unknown` absorbs anything. Numeric literals
 /// unify with compatible concrete numeric types (and default toward the
-/// concrete one). Two known, incompatible concrete types fail.
-fn unify(a: &Type, b: &Type) -> Option<Type> {
+/// concrete one). A structural record unifies with a nominal record whose
+/// declared fields match (resolved through `tbl`). Two known, incompatible
+/// concrete types fail.
+fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
     use Type::*;
     match (a, b) {
         (Unknown, t) | (t, Unknown) => Some(t.clone()),
@@ -167,32 +206,81 @@ fn unify(a: &Type, b: &Type) -> Option<Type> {
         (FloatLit, t) | (t, FloatLit) if t.is_float() => Some(t.clone()),
         (FloatLit, FloatLit) => Some(FloatLit),
 
-        // Lists unify element-wise.
-        (List(x), List(y)) => Some(List(Box::new(unify(x, y)?))),
+        // Containers unify element-wise.
+        (List(x), List(y)) => Some(List(Box::new(unify(tbl, x, y)?))),
+        (Option(x), Option(y)) => Some(Option(Box::new(unify(tbl, x, y)?))),
+        (Result(xo, xe), Result(yo, ye)) => Some(Result(
+            Box::new(unify(tbl, xo, yo)?),
+            Box::new(unify(tbl, xe, ye)?),
+        )),
+        (Tuple(xs), Tuple(ys)) if xs.len() == ys.len() => {
+            let elems: std::option::Option<Vec<Type>> = xs
+                .iter()
+                .zip(ys)
+                .map(|(x, y)| unify(tbl, x, y))
+                .collect();
+            Some(Tuple(elems?))
+        }
+
+        // A structural record literal against a nominal record type: resolve
+        // the name and unify field-wise; the nominal name wins. An unresolved
+        // nominal name (e.g. a type declared in another component) stays
+        // gradual rather than falsely rejecting.
+        (Named(n), Record(fs)) | (Record(fs), Named(n)) => match tbl.get(n) {
+            Some(TypeDef::Record(dfs)) => {
+                unify_fields(tbl, dfs, fs)?;
+                Some(Named(n.clone()))
+            }
+            Some(_) => None,
+            None => Some(Named(n.clone())),
+        },
+        // Two structural records unify field-wise over the same field-name set.
+        (Record(xs), Record(ys)) => {
+            let fields = unify_fields(tbl, xs, ys)?;
+            Some(Record(fields))
+        }
 
         _ => None,
     }
 }
 
+/// Unify two field lists by name: the field-name *sets* must be equal, and each
+/// same-named pair must unify. Result fields keep `a`'s order.
+fn unify_fields(
+    tbl: &TypeTable,
+    a: &[(String, Type)],
+    b: &[(String, Type)],
+) -> Option<Vec<(String, Type)>> {
+    if a.len() != b.len() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(a.len());
+    for (name, at) in a {
+        let (_n, bt) = b.iter().find(|(n, _)| n == name)?;
+        out.push((name.clone(), unify(tbl, at, bt)?));
+    }
+    Some(out)
+}
+
 /// Whether a value of type `actual` is acceptable where `expected` is required.
 /// Gradual: `Unknown` on either side always passes; numeric literals are
 /// class-compatible; otherwise it is unifiability.
-fn compatible(expected: &Type, actual: &Type) -> bool {
-    unify(expected, actual).is_some()
+fn compatible(tbl: &TypeTable, expected: &Type, actual: &Type) -> bool {
+    unify(tbl, expected, actual).is_some()
 }
 
 /// Whether an overload candidate with parameters `params` is applicable to a
 /// positional call whose static argument types are `arg_tys`: the arity must
 /// match and each parameter type must be compatible with its argument. (The
 /// single-bundled-payload form `f(x)` to a one-parameter `f` also matches.)
-fn args_match(params: &[(String, Type)], arg_tys: &[Type]) -> bool {
+fn args_match(tbl: &TypeTable, params: &[(String, Type)], arg_tys: &[Type]) -> bool {
     if params.len() != arg_tys.len() {
         return false;
     }
     params
         .iter()
         .zip(arg_tys)
-        .all(|((_n, pt), at)| compatible(pt, at))
+        .all(|((_n, pt), at)| compatible(tbl, pt, at))
 }
 
 /// The static signature of a module-level `Def name Fn {params} body`.
@@ -217,6 +305,12 @@ struct Checker<'a> {
     sigs: HashMap<String, Vec<Sig>>,
     /// Module-level `Def` names (functions and values both bind a name).
     defs: std::collections::HashSet<String>,
+    /// `DefType` declarations: nominal name -> structure (3.3).
+    types: TypeTable,
+    /// Variant-case index: case name -> (owning `DefType` name, payload types).
+    /// Lets a constructor call like `days(30)` (or a bare nullary case) type as
+    /// its nominal variant.
+    variant_cases: HashMap<String, (String, Vec<Type>)>,
     /// For each *overloaded* call site (keyed by the call `Tup`'s `NodeId`), the
     /// index of the chosen candidate within its overload set. Filled in while
     /// checking; read back by [`resolve_overloads`] to rewrite the program.
@@ -249,6 +343,8 @@ impl<'a> Checker<'a> {
     fn collect(arena: &'a Arena, roots: &[NodeId]) -> Self {
         let mut sigs: HashMap<String, Vec<Sig>> = HashMap::new();
         let mut defs = std::collections::HashSet::new();
+        let mut types: TypeTable = HashMap::new();
+        let mut variant_cases: HashMap<String, (String, Vec<Type>)> = HashMap::new();
         for &root in roots {
             if let Some((name, expr)) = as_def(arena, root) {
                 defs.insert(name.to_string());
@@ -259,11 +355,22 @@ impl<'a> Checker<'a> {
                         .push(Sig { params, body });
                 }
             }
+            if let Some((name, def)) = as_deftype(arena, root) {
+                if let TypeDef::Variant(cases) = &def {
+                    for (case, payload) in cases {
+                        variant_cases
+                            .insert(case.clone(), (name.to_string(), payload.clone()));
+                    }
+                }
+                types.insert(name.to_string(), def);
+            }
         }
         Checker {
             arena,
             sigs,
             defs,
+            types,
+            variant_cases,
             resolved: RefCell::new(HashMap::new()),
             sig_result_cache: RefCell::new(HashMap::new()),
             sig_in_progress: RefCell::new(std::collections::HashSet::new()),
@@ -453,6 +560,57 @@ fn as_def(arena: &Arena, id: NodeId) -> Option<(&str, NodeId)> {
     Some((name, *expr))
 }
 
+/// If `id` is `DefType name decl`, parse the declaration into a [`TypeDef`].
+fn as_deftype(arena: &Arena, id: NodeId) -> Option<(&str, TypeDef)> {
+    let Node::Tup(items) = arena.node(id) else {
+        return None;
+    };
+    let [head, name_id, decl] = items.as_slice() else {
+        return None;
+    };
+    let Node::Sym(h) = arena.node(*head) else {
+        return None;
+    };
+    if h != "deftype-MACRO" {
+        return None;
+    }
+    let Node::Sym(name) = arena.node(*name_id) else {
+        return None;
+    };
+    let def = match arena.node(*decl) {
+        Node::Rec(fields) => TypeDef::Record(
+            fields
+                .iter()
+                .map(|(k, v)| (k.clone(), Type::from_form(arena, *v)))
+                .collect(),
+        ),
+        Node::Lst(cases) => {
+            let mut out = Vec::with_capacity(cases.len());
+            for &c in cases {
+                match arena.node(c) {
+                    Node::Sym(case) => out.push((case.clone(), Vec::new())),
+                    Node::Tup(case_items) => {
+                        let (&h, payload) = case_items.split_first()?;
+                        let Node::Sym(case) = arena.node(h) else {
+                            return None;
+                        };
+                        let tys = payload
+                            .iter()
+                            .map(|&t| Type::from_form(arena, t))
+                            .collect();
+                        out.push((case.clone(), tys));
+                    }
+                    _ => return None,
+                }
+            }
+            TypeDef::Variant(out)
+        }
+        Node::Flg(names) => TypeDef::Flags(names.clone()),
+        _ => return None,
+    };
+    Some((name, def))
+}
+
 /// If `id` is `Fn {params} body`, return the parsed parameter list.
 fn fn_params(arena: &Arena, id: NodeId) -> Option<Vec<(String, Type)>> {
     let (params_id, _body) = as_fn(arena, id)?;
@@ -505,7 +663,7 @@ impl<'a> Checker<'a> {
     ) -> Result<Type, String> {
         let ty = self.infer(id, expected, scope)?;
         if let Some(exp) = expected
-            && !compatible(exp, &ty)
+            && !compatible(&self.types, exp, &ty)
         {
             return Err(self.type_error(id, exp, &ty));
         }
@@ -533,13 +691,28 @@ impl<'a> Checker<'a> {
             // do not model here.
             Node::Qsym(..) => Ok(Type::Unknown),
             Node::Lst(items) => self.infer_list(items, expected, scope),
-            // A record literal in value position: we don't model record types
-            // structurally in Phase A. Check its fields, yield Unknown.
+            // A record literal in value position types structurally (3.3): its
+            // fields' types, checked against the expected record's declared
+            // field types when the context supplies one (a nominal `Named`
+            // record resolves through the `DefType` table).
             Node::Rec(fields) => {
-                for (_k, v) in fields {
-                    self.check(*v, None, scope)?;
+                let exp_fields: Option<Vec<(String, Type)>> = match expected {
+                    Some(Type::Record(fs)) => Some(fs.clone()),
+                    Some(Type::Named(n)) => match self.types.get(n) {
+                        Some(TypeDef::Record(fs)) => Some(fs.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let mut out = Vec::with_capacity(fields.len());
+                for (k, v) in fields {
+                    let exp = exp_fields.as_ref().and_then(|fs| {
+                        fs.iter().find(|(n, _)| n == k).map(|(_, t)| t.clone())
+                    });
+                    let t = self.check(*v, exp.as_ref(), scope)?;
+                    out.push((k.clone(), t));
                 }
-                Ok(Type::Unknown)
+                Ok(Type::Record(out))
             }
             Node::Flg(_) => Ok(Type::Unknown),
             Node::Tup(items) => self.infer_tup(id, items, expected, scope),
@@ -558,8 +731,18 @@ impl<'a> Checker<'a> {
             // function/value itself, which we don't model — gradual.
             return Ok(Type::Unknown);
         }
+        if name == "none" {
+            return Ok(Type::Option(Box::new(Type::Unknown)));
+        }
         if is_builtin(name) {
             return Ok(Type::Unknown);
+        }
+        // A nullary case of a `DefType` variant used as a value: its nominal
+        // variant type (3.3).
+        if let Some((tyname, payload)) = self.variant_cases.get(name)
+            && payload.is_empty()
+        {
+            return Ok(Type::Named(tyname.clone()));
         }
         Err(format!("eval error: unbound name `{name}`"))
     }
@@ -581,7 +764,7 @@ impl<'a> Checker<'a> {
             if !seeded {
                 elem = t;
                 seeded = true;
-            } else if let Some(u) = unify(&elem, &t) {
+            } else if let Some(u) = unify(&self.types, &elem, &t) {
                 elem = u;
             } else {
                 // Heterogeneous list elements: not modelled as an error in
@@ -649,7 +832,7 @@ impl<'a> Checker<'a> {
                 self.check(c, None, scope)?;
                 let tt = self.check(t, expected, scope)?;
                 let et = self.check(e, expected, scope)?;
-                match unify(&tt, &et) {
+                match unify(&self.types, &tt, &et) {
                     Some(u) => Ok(u),
                     None => Err("eval error: If branches have incompatible types".to_string()),
                 }
@@ -683,7 +866,7 @@ impl<'a> Checker<'a> {
             }
             "match-MACRO" => {
                 let [scrut, clauses] = expect2(args)?;
-                self.check(scrut, None, scope)?;
+                let scrut_ty = self.check(scrut, None, scope)?;
                 let Node::Lst(items) = self.arena.node(clauses) else {
                     return Ok(Type::Unknown);
                 };
@@ -695,15 +878,18 @@ impl<'a> Checker<'a> {
                     if pair.len() != 2 {
                         continue;
                     }
-                    // Bind every variable mentioned in the pattern as Unknown so
-                    // the clause body doesn't see false "unbound" errors.
+                    // Bind the pattern's variables at the types the scrutinee
+                    // implies (3.3): a variant-case pattern binds its payload at
+                    // the declared payload types, a record pattern binds fields
+                    // at their field types, and so on. Anything the scrutinee
+                    // type doesn't determine binds as Unknown.
                     let mark = scope.len();
-                    self.bind_pattern(pair[0], scope);
+                    self.bind_pattern(pair[0], &scrut_ty, scope);
                     let rt = self.check(pair[1], expected, scope)?;
                     scope.truncate(mark);
                     result = Some(match result {
                         None => rt,
-                        Some(prev) => unify(&prev, &rt).ok_or_else(|| {
+                        Some(prev) => unify(&self.types, &prev, &rt).ok_or_else(|| {
                             "eval error: Match clauses have incompatible result types".to_string()
                         })?,
                     });
@@ -798,8 +984,36 @@ impl<'a> Checker<'a> {
             // argument types against the parameters (Phase A behaviour).
             return self.check_def_call(name, &sigs[0], args, scope);
         }
+        // A constructor call of a `DefType` variant case: `days(30)` types as
+        // its nominal variant (3.3).
+        if let Some((tyname, payload)) = self.variant_cases.get(name).cloned() {
+            return self.check_variant_ctor(name, &tyname, &payload, args, scope);
+        }
         // A builtin we model, or one we don't (Unknown).
         self.check_builtin_call(name, args, scope)
+    }
+
+    /// Check a variant-case constructor call `case(args…)` against the case's
+    /// declared payload types; the call's type is the owning nominal variant.
+    fn check_variant_ctor(
+        &self,
+        case: &str,
+        tyname: &str,
+        payload: &[Type],
+        args: &[NodeId],
+        scope: &mut Scope,
+    ) -> Result<Type, String> {
+        if args.len() != payload.len() {
+            return Err(format!(
+                "eval error: variant case `{case}` of `{tyname}` takes {} argument(s), got {}",
+                payload.len(),
+                args.len()
+            ));
+        }
+        for (&a, pt) in args.iter().zip(payload) {
+            self.check(a, Some(pt), scope)?;
+        }
+        Ok(Type::Named(tyname.to_string()))
     }
 
     /// Resolve an overloaded call `name(args…)` to exactly one member of its
@@ -827,7 +1041,7 @@ impl<'a> Checker<'a> {
 
         // Step 1 — argument-directed filtering.
         let mut candidates: Vec<usize> = (0..sigs.len())
-            .filter(|&i| args_match(&sigs[i].params, &arg_tys))
+            .filter(|&i| args_match(&self.types, &sigs[i].params, &arg_tys))
             .collect();
 
         // Step 2 — return-type-directed filtering, only when arguments leave
@@ -842,7 +1056,7 @@ impl<'a> Checker<'a> {
             let by_result: Vec<usize> = candidates
                 .iter()
                 .copied()
-                .filter(|&i| compatible(exp, &self.infer_sig_result(&sigs[i])))
+                .filter(|&i| compatible(&self.types, exp, &self.infer_sig_result(&sigs[i])))
                 .collect();
             if !by_result.is_empty() {
                 candidates = by_result;
@@ -916,14 +1130,40 @@ impl<'a> Checker<'a> {
         let result = self.infer_sig_result(sig);
 
         // The single-record-arg-by-name form: `f({a: … b: …})` binds by field
-        // name. We do not check those field types in Phase A — accept.
+        // name when the field names are exactly the parameter names — check
+        // each field's type against its parameter (3.3). A record whose fields
+        // do NOT match the parameter names is an ordinary single value.
         if args.len() == 1 {
-            if let Node::Rec(_) = self.arena.node(args[0]) {
-                return Ok(result);
+            if let Type::Record(fs) = &arg_tys[0] {
+                let mut fnames: Vec<&str> = fs.iter().map(|(n, _)| n.as_str()).collect();
+                let mut pnames: Vec<&str> = sig.params.iter().map(|(n, _)| n.as_str()).collect();
+                fnames.sort_unstable();
+                pnames.sort_unstable();
+                if fnames == pnames {
+                    for (fname, ft) in fs {
+                        let (_pn, pt) = sig
+                            .params
+                            .iter()
+                            .find(|(pn, _)| pn == fname)
+                            .expect("field names equal param names");
+                        if !compatible(&self.types, pt, ft) {
+                            return Err(format!(
+                                "eval error: argument `{fname}` to `{name}` has the wrong type"
+                            ));
+                        }
+                    }
+                    return Ok(result);
+                }
+                if nparams != 1 {
+                    // Field names don't bind the parameters and the record is
+                    // not a single-parameter payload: the interpreter rejects
+                    // this bind at runtime; stay gradual here.
+                    return Ok(result);
+                }
             }
             // A single argument to a single parameter taking the whole payload.
             if nparams == 1 {
-                if !compatible(&sig.params[0].1, &arg_tys[0]) {
+                if !compatible(&self.types, &sig.params[0].1, &arg_tys[0]) {
                     return Err(format!(
                         "eval error: argument to `{name}` has the wrong type"
                     ));
@@ -940,7 +1180,7 @@ impl<'a> Checker<'a> {
             ));
         }
         for ((_pn, pt), at) in sig.params.iter().zip(&arg_tys) {
-            if !compatible(pt, at) {
+            if !compatible(&self.types, pt, at) {
                 return Err(format!(
                     "eval error: argument to `{name}` has the wrong type"
                 ));
@@ -979,7 +1219,7 @@ impl<'a> Checker<'a> {
                     if !seeded {
                         result = t.clone();
                         seeded = true;
-                    } else if let Some(u) = unify(&result, t) {
+                    } else if let Some(u) = unify(&self.types, &result, t) {
                         result = u;
                     } else {
                         result = Type::Unknown;
@@ -999,7 +1239,7 @@ impl<'a> Checker<'a> {
             "min" | "max" => {
                 let mut result = Type::Unknown;
                 for t in &arg_tys {
-                    result = unify(&result, t).unwrap_or(Type::Unknown);
+                    result = unify(&self.types, &result, t).unwrap_or(Type::Unknown);
                 }
                 Ok(result)
             }
@@ -1027,40 +1267,140 @@ impl<'a> Checker<'a> {
             // unconstrained int literal — not concrete `s64`, which would
             // falsely reject e.g. `The u8 len(xs)` that the interpreter accepts.
             "len" => Ok(Type::IntLit),
+            // Option/result constructors (3.3/3.8): the payload's type flows in;
+            // the other side stays unconstrained until unified against context.
+            // Multiple args bundle to a tuple payload (`some(1 2)`).
+            "some" => Ok(Type::Option(Box::new(ctor_payload(&arg_tys)))),
+            "ok" => Ok(Type::Result(
+                Box::new(ctor_payload(&arg_tys)),
+                Box::new(Type::Unknown),
+            )),
+            "err" => Ok(Type::Result(
+                Box::new(Type::Unknown),
+                Box::new(ctor_payload(&arg_tys)),
+            )),
             // Everything else: result Unknown, args unconstrained (already
             // checked their subexpressions above). Later phases extend this.
             _ => Ok(Type::Unknown),
         }
     }
 
-    /// Bind every variable name appearing in a Match pattern as `Unknown`.
-    fn bind_pattern(&self, pat: NodeId, scope: &mut Scope) {
+    /// Bind every variable name appearing in a Match pattern, at the type the
+    /// scrutinee's type `ty` implies for its position (3.3); `Unknown` wherever
+    /// the scrutinee type does not determine it.
+    fn bind_pattern(&self, pat: NodeId, ty: &Type, scope: &mut Scope) {
         match self.arena.node(pat) {
             Node::Sym(name) => {
-                // A bare symbol pattern binds the name (it may also be a nullary
-                // variant case, but binding it as Unknown is harmless).
-                scope.push((name.clone(), Type::Unknown));
+                // A bare symbol that names a nullary case of the scrutinee's
+                // type matches by equality and binds nothing; any other symbol
+                // binds the whole scrutinee.
+                if self.case_payload(name, ty).is_some_and(|p| p.is_empty()) {
+                    return;
+                }
+                scope.push((name.clone(), ty.clone()));
             }
             Node::Tup(items) => {
-                // `(case rest…)` or element-wise tuple: skip the head if it
-                // looks like a constructor symbol, bind the rest.
+                // A variant-case pattern `(case p…)` against a scrutinee whose
+                // type declares that case: bind the sub-patterns at the payload
+                // types.
+                if let Some((&h, rest)) = items.split_first()
+                    && let Node::Sym(case) = self.arena.node(h)
+                    && let Some(payload) = self.case_payload(case, ty)
+                {
+                    if rest.len() == payload.len() {
+                        for (&p, t) in rest.iter().zip(&payload) {
+                            self.bind_pattern(p, t, scope);
+                        }
+                    } else if rest.len() == 1 && payload.len() > 1 {
+                        // One pattern against a bundled tuple payload.
+                        self.bind_pattern(rest[0], &Type::Tuple(payload), scope);
+                    } else {
+                        for &p in rest {
+                            self.bind_pattern(p, &Type::Unknown, scope);
+                        }
+                    }
+                    return;
+                }
+                // An element-wise tuple pattern against a tuple type.
+                if let Type::Tuple(ts) = ty
+                    && ts.len() == items.len()
+                {
+                    for (&p, t) in items.iter().zip(ts) {
+                        self.bind_pattern(p, t, scope);
+                    }
+                    return;
+                }
                 for &it in items {
-                    self.bind_pattern(it, scope);
+                    self.bind_pattern(it, &Type::Unknown, scope);
                 }
             }
             Node::Lst(items) => {
+                let elem = match ty {
+                    Type::List(e) => (**e).clone(),
+                    _ => Type::Unknown,
+                };
                 for &it in items {
-                    self.bind_pattern(it, scope);
+                    self.bind_pattern(it, &elem, scope);
                 }
             }
             Node::Rec(fields) => {
-                for (_k, v) in fields {
-                    self.bind_pattern(*v, scope);
+                let rec_fields: Option<Vec<(String, Type)>> = match ty {
+                    Type::Record(fs) => Some(fs.clone()),
+                    Type::Named(n) => match self.types.get(n) {
+                        Some(TypeDef::Record(fs)) => Some(fs.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                for (k, v) in fields {
+                    let ft = rec_fields
+                        .as_ref()
+                        .and_then(|fs| fs.iter().find(|(n, _)| n == k).map(|(_, t)| t.clone()))
+                        .unwrap_or(Type::Unknown);
+                    self.bind_pattern(*v, &ft, scope);
                 }
             }
             // Literals in patterns bind nothing.
             _ => {}
         }
+    }
+
+    /// The payload types of variant case `case` under scrutinee type `ty`:
+    /// `Some(payloads)` when `ty` declares that case (a `DefType` variant, an
+    /// `option`, or a `result`), `None` otherwise. A nullary case yields an
+    /// empty payload list.
+    fn case_payload(&self, case: &str, ty: &Type) -> Option<Vec<Type>> {
+        match ty {
+            Type::Named(n) => match self.types.get(n)? {
+                TypeDef::Variant(cases) => cases
+                    .iter()
+                    .find(|(c, _)| c == case)
+                    .map(|(_, p)| p.clone()),
+                _ => None,
+            },
+            Type::Option(t) => match case {
+                "some" => Some(vec![(**t).clone()]),
+                "none" => Some(Vec::new()),
+                _ => None,
+            },
+            Type::Result(o, e) => match case {
+                "ok" => Some(vec![(**o).clone()]),
+                "err" => Some(vec![(**e).clone()]),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+/// The payload type of an option/result constructor call from its bundled
+/// argument types: no argument is unit-ish `Unknown`, one argument is that
+/// value, several bundle into a tuple.
+fn ctor_payload(arg_tys: &[Type]) -> Type {
+    match arg_tys {
+        [] => Type::Unknown,
+        [one] => one.clone(),
+        many => Type::Tuple(many.to_vec()),
     }
 }
 
