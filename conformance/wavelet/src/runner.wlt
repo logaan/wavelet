@@ -8,7 +8,6 @@ Package "conformance:wavelet@0.1.0"
 // shortcomings on the LoT task instead:
 //   - permissions-rt: flag literals are not supported by the wasm backend.
 //   - f32-rt and every-primitive-rt (f32 field): f32 unsupported by backend.
-//   - points-rt: dep type aliases unsupported by backend.
 //   - option-u8-rt none side: none() missing from the wasm backend.
 //
 // All present checks pass against a correct callee. (list-u8-rt, option-u8-rt
@@ -83,6 +82,8 @@ Def values-fails Fn {}
              check("tuple-nested-rt"
                    eq(iv/tuple-nested-rt(Quote ({x: 1 y: 2} [3])) Quote ({x: 2 y: 3} [4])))
              check("point-rt" eq(iv/point-rt({x: 3 y: 4}) {x: 4 y: 5}))
+             check("points-rt" eq(iv/points-rt([{x: 1 y: 2} {x: 3 y: 4}])
+                                  [{x: 2 y: 3} {x: 4 y: 5}]))
              check("awkward-rt" eq(iv/awkward-rt({record: 1 list: "r"})
                                    {record: 2 list: "r!"}))
              check("no-params" eq(iv/no-params() 42))

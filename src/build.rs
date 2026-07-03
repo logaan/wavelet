@@ -96,6 +96,7 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
             // (a) A sibling Wavelet file in the build set satisfies the import.
             if let Some(&di) = index.get(&imp.package) {
                 let d = &units[di];
+                let (type_defs, aliases) = emit::dep_non_record_types(&d.arena, &d.info);
                 deps.insert(
                     imp.package.clone(),
                     Dep {
@@ -103,7 +104,8 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                         funcs: d.info.exports.clone(),
                         package_wit: emit::dep_package_wit(&d.arena, &d.info)?,
                         types: emit::dep_record_types(&d.arena, &d.info),
-                        type_defs: Vec::new(),
+                        type_defs,
+                        aliases,
                     },
                 );
                 continue;

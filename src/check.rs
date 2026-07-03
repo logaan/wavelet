@@ -287,10 +287,14 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             None => Some(Named(n.clone())),
         },
 
+        // An unresolved nominal name (declared by a dependency, not in this
+        // module's table) stays gradual against ANY type — it may be an alias
+        // of anything (`points = list<point>`, 4.4) — rather than falsely
+        // rejecting. Resolved names keep the strict arms below.
+        (Named(n), _) | (_, Named(n)) if !tbl.contains_key(n) => Some(Named(n.clone())),
+
         // A structural record literal against a nominal record type: resolve
-        // the name and unify field-wise; the nominal name wins. An unresolved
-        // nominal name (e.g. a type declared in another component) stays
-        // gradual rather than falsely rejecting.
+        // the name and unify field-wise; the nominal name wins.
         (Named(n), Record(fs)) | (Record(fs), Named(n)) => match tbl.get(n) {
             Some(TypeDef::Record(dfs)) => {
                 unify_fields(tbl, dfs, fs)?;

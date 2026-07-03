@@ -39,6 +39,10 @@ pub struct Dep {
     /// generic bridge can lower/lift values of those kinds at the boundary.
     /// Defaulted empty for Wavelet deps, which only define records today.
     pub type_defs: Vec<(String, TypeDef)>,
+    /// named type *aliases* the dep defines (`type points = list<point>`):
+    /// name → underlying WIT type text, expanded by `wit_ty` before lowering
+    /// exactly like local `DefType` aliases (4.4).
+    pub aliases: Vec<(String, String)>,
 }
 
 const SCRATCH: i32 = 0; // 0..16 reserved as canonical-ABI return area
@@ -961,6 +965,17 @@ fn record_types(arena: &Arena, types: &[(String, NodeId)]) -> Vec<(String, Vec<(
 /// on its [`Dep`].
 pub fn dep_record_types(arena: &Arena, info: &FileInfo) -> Vec<(String, Vec<(String, String)>)> {
     record_types(arena, &info.types)
+}
+
+/// Public: non-record named types a sibling dependency file defines —
+/// variants/enums/flags as [`TypeDef`]s plus name → type-text aliases — so a
+/// sibling `.wlt` dep carries the same type surface a parsed WIT dep does
+/// (4.1/4.4: case constructors and alias expansion across the build set).
+pub fn dep_non_record_types(
+    arena: &Arena,
+    info: &FileInfo,
+) -> (Vec<(String, TypeDef)>, Vec<(String, String)>) {
+    local_non_record_types(arena, &info.types)
 }
 
 /// Non-record local `DefType`s, split into the two `TypeEnv` channels:
@@ -4121,6 +4136,12 @@ fn emit_core_module(
                 .defs
                 .entry(name.clone())
                 .or_insert_with(|| def.clone());
+        }
+        for (name, target) in &dep.aliases {
+            type_env
+                .aliases
+                .entry(name.clone())
+                .or_insert_with(|| target.clone());
         }
     }
     // Each functor instantiation exports a `set` resource. Declaring `set` as a
