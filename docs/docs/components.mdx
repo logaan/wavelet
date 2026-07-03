@@ -96,6 +96,23 @@ The interface's WIT comes from `wit/deps/` (fetched by `wkg`, see [below](#proje
 
 Resources come along for free in the design, because WIT canonicalizes methods as functions whose first parameter is the handle: `kv/open({name: "default"})` returns a handle, and `kv/get(bucket "greeting")` calls a method on it. Owned handles are dropped when their binding scope ends; `drop(h)` forces it.
 
+That is the *consumer* side — calling an imported resource. To declare a resource of your own, use [`DefResource`](./language/type-system#user-declared-resources): a `DefResource counter { … }` form maps one-to-one onto a WIT `resource` block, with a constructor (`New:`), an optional destructor (`Drop:`), instance methods, and statics. Exporting it is like exporting anything else — a bare `Export counter` publishes the whole resource block into `api`, and the record form (`Export {iface: "counters" name: counter}`) groups it into a named interface:
+
+```wavelet
+DefResource counter {
+  New:   Fn {start: u32} cell-new(start)
+  next:  Fn {self: counter} The u32 Do [ cell-set(self add(cell-get(self) 1))
+                                          cell-get(self) ]
+  value: Fn {self: counter} The u32 cell-get(self)
+}
+
+Export counter                                            // the resource block
+Def make-counter Fn {start: u32} The counter counter(start)
+Export make-counter                                       // a free function that hands one out
+```
+
+Handles crossing the boundary carry an **ownership mode**: a bare `counter` is *owned* (`own<counter>` — ownership transfers, the callee drops it), while `borrow(counter)` is a *borrow*, legal only in parameter position. See [ownership at the boundary](./language/type-system#ownership-at-the-boundary) for the full rules, and the [user-declared resources](./language/type-system#user-declared-resources) section for the complete story (member roles, identity equality, opaque `to-string`, and the synthesized WIT).
+
 ## Project layout and external WIT
 
 A Wavelet project carries a `wit/` tree alongside its `src/`:

@@ -183,7 +183,7 @@ which evaluate pure programs only.
 
 ## Cells
 
-A `cell` is the standard library's mutable reference — the one place mutation lives, since [the core has none](./language/evaluation#no-loops-no-mutation-no-early-return).
+A `cell` is the standard library's mutable reference — the one place mutation lives, since [the core has none](./language/evaluation#no-loops-no-mutation-no-early-return). A cell is also the usual **representation** behind a [user-declared resource](./language/type-system#user-declared-resources): a `DefResource`'s `New:` constructor typically returns a `cell`, and its methods mutate through it.
 
 | Function | Shape | Effect |
 |---|---|---|
