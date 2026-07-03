@@ -1,8 +1,7 @@
 //! Thin wrappers around the external Component-Model CLIs the build pipeline
 //! shells out to.
 //!
-//! Two BytecodeAlliance tools become runtime dependencies of `wavelet` (see
-//! `dev-notes/decouple-wasi.md`):
+//! Two BytecodeAlliance tools are runtime dependencies of `wavelet`:
 //!
 //! - **`wkg`** ([wasm-pkg-tools]) — WIT package management. Fetches dependency
 //!   WIT into a project's `wit/` tree and maintains a `wkg.lock` lock file.

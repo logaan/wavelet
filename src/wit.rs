@@ -827,8 +827,7 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
 /// `wkg` *should* fetch into `wit/deps`, and their WIT text here is byte-for-byte
 /// what [`synthesize`] emits, so the world `wkg` parses matches what the emitter
 /// componentizes against. (Sibling packages are kind-(2) dependencies wired by
-/// the build set / `wac`, not kind-(1) WIT fetched by `wkg`; see
-/// `dev-notes/decouple-wasi.md`.)
+/// the build set / `wac`, not kind-(1) WIT fetched by `wkg`.)
 pub fn synthesize_fetch_world(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
     let info = collect(arena, roots)?;
     synthesize_info(arena, &info, true)

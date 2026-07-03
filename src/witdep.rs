@@ -1,5 +1,5 @@
 //! Resolve an `Import` against external WIT vendored under a project's
-//! `wit/deps` directory (populated by `wkg`, see `dev-notes/decouple-wasi.md`).
+//! `wit/deps` directory (populated by `wkg`).
 //!
 //! This is the generic, registry-fed counterpart to a sibling-`.wlt`
 //! dependency: instead of synthesizing a [`Dep`] from another Wavelet file in
