@@ -1075,6 +1075,20 @@ impl<'a> Checker<'a> {
         format!("eval error: type mismatch: expected {expected:?}, got {actual:?}")
     }
 
+    /// The declared member list of a flags type `t` refers to, if any:
+    /// a structural `Flags`, or a nominal name resolving to a `Flags`
+    /// `DefType`. Used to thread a declared flags type onto a flags literal.
+    fn flags_members<'t>(&'t self, t: &'t Type) -> Option<&'t Vec<String>> {
+        match t {
+            Type::Flags(ms) => Some(ms),
+            Type::Named(n) => match self.types.get(n) {
+                Some(TypeDef::Flags(decl)) => Some(decl),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn infer(
         &self,
         id: NodeId,
@@ -1116,7 +1130,26 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Type::Record(out))
             }
-            Node::Flg(names) => Ok(Type::Flags(names.clone())),
+            // A flags literal in a context expecting a declared flags type
+            // takes THAT type (its full declared member set), not its own
+            // narrow set of listed members. This threads the declaration's
+            // bit positions to the construction site: a record field
+            // `perms: permissions` set to `{read exec}` must have the node
+            // type `flags{read write exec}` so the canonical layout uses the
+            // declaration's positions (bit for `exec` = index 2), never the
+            // literal's (`exec` = index 1). When the literal is not a subset
+            // of the declared members the compatibility check below still
+            // rejects it. Absent a flags expectation the literal keeps its
+            // own member set (used only for gradual/boxed flags).
+            Node::Flg(names) => {
+                if let Some(decl) = expected.and_then(|e| self.flags_members(e))
+                    && names.iter().all(|m| decl.contains(m))
+                {
+                    Ok(Type::Flags(decl.clone()))
+                } else {
+                    Ok(Type::Flags(names.clone()))
+                }
+            }
             Node::Tup(items) => self.infer_tup(id, items, expected, scope),
         }
     }

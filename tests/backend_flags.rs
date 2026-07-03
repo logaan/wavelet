@@ -36,6 +36,12 @@ Def label Fn {p: perms}
     ({write} "write-only")
     (other "other")
   ]
+
+DefType access {read write exec admin}
+DefType entry {lead: u8 perms: access trail: u32}
+
+Export {name: mk-entry params: {} result: entry}
+Def mk-entry Fn {} The entry {lead: 7 perms: {read exec} trail: 42}
 "#;
     let app_path = src.join("app.wlt");
     std::fs::write(&app_path, app).unwrap();
@@ -118,5 +124,38 @@ fn flags_literals_match_as_patterns() {
             &[Val::Flags(vec!["read".into(), "write".into()])]
         ),
         Val::String("other".into())
+    );
+}
+
+
+/// DISCRIMINATING test for canonical flags FIELDS in records (5.4). A record
+/// `entry {lead: u8 perms: access trail: u32}` is built with a NON-ADJACENT
+/// flags literal `{read exec}` over declared `access {read write exec admin}`.
+///
+/// This pins two things a mere round-trip would mask:
+///  - BIT POSITIONS: the canonical bitset must use the DECLARED positions
+///    (read=0, exec=2 → 0b101), so the host lifts `{read exec}`. If the
+///    literal's own positions were used (read=0, exec=1 → 0b011) the host
+///    would lift `{read write}`.
+///  - ALIGNMENT: `access` has 4 members → 1-byte flags, so `perms` sits at
+///    offset 1 (right after `lead: u8`) and `trail: u32` at offset 4. A
+///    stale 4-byte flags alignment would shift `trail` and corrupt it.
+#[test]
+fn canonical_flags_field_uses_declared_bit_positions_and_alignment() {
+    let mut c = component();
+    let got = ok(&mut c, "mk-entry", &[]);
+    let Val::Record(fields) = got else {
+        panic!("mk-entry should return a record, got {got:?}");
+    };
+    assert_eq!(
+        fields,
+        vec![
+            ("lead".to_string(), Val::U8(7)),
+            (
+                "perms".to_string(),
+                Val::Flags(vec!["read".into(), "exec".into()])
+            ),
+            ("trail".to_string(), Val::U32(42)),
+        ]
     );
 }

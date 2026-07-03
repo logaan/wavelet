@@ -512,11 +512,18 @@ fn disc_size(n: usize) -> u64 {
     }
 }
 
-/// Canonical-ABI alignment of a `flags` with `n` members: 1 word (i32) for
-/// ≤32 flags, then 4-byte alignment for the multi-word bitset.
+/// Canonical-ABI alignment of a `flags` with `n` members: the size of the
+/// smallest int that holds the bitset (1/2/4 bytes for ≤8/≤16/≤32), then
+/// 4-byte alignment for the multi-word bitset. Matches `flags_size` and the
+/// widths `store_to_mem`/`load_from_mem` read.
 fn flags_align(n: usize) -> u64 {
-    let _ = n;
-    4
+    if n <= 8 {
+        1
+    } else if n <= 16 {
+        2
+    } else {
+        4
+    }
 }
 
 /// Offset of a variant's payload (after the discriminant, padded to the
@@ -568,6 +575,23 @@ fn flags_size(n: usize) -> u64 {
     } else {
         (n as u64).div_ceil(32) * 4
     }
+}
+
+/// Whether `lit` is a duplicate-free subsequence of `decl` in declaration
+/// order — the condition under which a flags literal's canonical bitset
+/// (rebuilt in declaration order at the boundary) round-trips to the same
+/// order-observable value the interpreter's `Value::Flg` holds.
+fn flags_is_ordered_subseq(lit: &[String], decl: &[String]) -> bool {
+    let mut di = 0usize;
+    for name in lit {
+        match decl[di..].iter().position(|d| d == name) {
+            // advance PAST the matched member: enforces strictly increasing
+            // positions, which rejects both reorderings and duplicates.
+            Some(rel) => di += rel + 1,
+            None => return false,
+        }
+    }
+    true
 }
 
 fn align_up(off: u64, align: u64) -> u64 {
@@ -4202,11 +4226,16 @@ impl<'a> Emitter<'a> {
                                 by the wasm backend yet"
                         .into());
                 }
-                // OR the set flags into a bitset word, then store it
+                // OR the set flags into a bitset word, then store it at the
+                // canonical width (1/2/4 bytes for ≤8/≤16/≤32 members).
                 fx.op(I::LocalGet(dst));
                 fx.op(I::LocalGet(src));
                 self.lower(fx, &WitTy::Flags(names.clone()))?;
-                fx.op(I::I32Store(ma(off, 2)));
+                match names.len() {
+                    0..=8 => fx.op(I::I32Store8(ma(off, 0))),
+                    9..=16 => fx.op(I::I32Store16(ma(off, 1))),
+                    _ => fx.op(I::I32Store(ma(off, 2))),
+                }
             }
             WitTy::Str => {
                 // canonical string in memory is (ptr, len); the component adapter
@@ -4687,6 +4716,7 @@ impl<'a> Emitter<'a> {
             T::F64 | T::FloatLit => WitTy::F64,
             T::Char => WitTy::Char,
             T::String => WitTy::Str,
+            T::Flags(names) => WitTy::Flags(names.clone()),
             T::List(e) => WitTy::List(Box::new(self.wit_of_check_type(e)?)),
             T::Option(e) => WitTy::Option(Box::new(self.wit_of_check_type(e)?)),
             T::Result(o, e) => WitTy::Result(
@@ -4905,8 +4935,20 @@ impl<'a> Emitter<'a> {
             WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
                 self.can_mem_as(look, v, tf)
             }
-            // f32 (demoting would lose the f64 the oracle keeps), flags
-            // (order-observable Value::Flg), handles: not yet
+            // A flags literal goes canonical only when its members are a
+            // duplicate-free subsequence of the declared members in
+            // declaration order. The canonical bitset is order-free, but
+            // `load_from_mem`/`lift_flags` rebuild the box in declaration
+            // order, whereas the oracle's `Value::Flg` keeps source order
+            // (its eq/to-string/patterns are order-observable). So a
+            // reordered or duplicated literal (`{exec read}`, `{read read}`)
+            // would round-trip to a different value and must stay boxed.
+            WitTy::Flags(decl) => match self.arena.node(v) {
+                Node::Flg(names) => flags_is_ordered_subseq(names, decl),
+                _ => false,
+            },
+            // f32 (demoting would lose the f64 the oracle keeps), handles:
+            // not yet
             _ => false,
         }
     }
@@ -5246,6 +5288,30 @@ impl<'a> Emitter<'a> {
             WitTy::Record(_) => self.expr_mem_into(fx, v, tf, dst, off)?,
             WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
                 self.mem_var_into(fx, v, tf, dst, off)?;
+            }
+            WitTy::Flags(decl) => {
+                // `mem_field_ok` admits only a flags literal whose members are
+                // an ordered, duplicate-free subsequence of `decl`, so the
+                // bitset is a compile-time constant: set the declared-position
+                // bit for each listed member. Stored at the canonical width.
+                let Node::Flg(names) = self.arena.node(v) else {
+                    unreachable!("mem_field_ok admits only a flags literal here")
+                };
+                let mut bits: i32 = 0;
+                for name in names {
+                    let i = decl
+                        .iter()
+                        .position(|d| d == name)
+                        .expect("subsequence member is declared");
+                    bits |= 1 << i;
+                }
+                fx.op(I::LocalGet(dst));
+                fx.op(I::I32Const(bits));
+                match decl.len() {
+                    0..=8 => fx.op(I::I32Store8(ma(off, 0))),
+                    9..=16 => fx.op(I::I32Store16(ma(off, 1))),
+                    _ => fx.op(I::I32Store(ma(off, 2))),
+                }
             }
             WitTy::List(elem) => {
                 // a list literal packs its elements at their canonical
