@@ -25,6 +25,13 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **The numeric conversion builtins work in compiled components.**
+  `to-u8`…`to-s64`, `to-f32`/`to-f64`, and `to-char` compile for
+  statically-typed operands, with the interpreter's exact semantics: range
+  errors trap, chars convert through their codepoint, whole floats truncate.
+  The next-Unicode-scalar transform (`to-char(add(to-u32(c) 1))`) now
+  compiles.
+
 - **Flags values work in compiled components.** A flags literal (`{read
   write}`) evaluates in the wasm backend to the same value the interpreter
   produces (`Value::Flg` — the set names), crosses boundaries as the

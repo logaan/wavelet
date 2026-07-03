@@ -4212,6 +4212,100 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Eqz);
                 Ok(Some(Bool))
             }
+            // Numeric conversions (5.6): the interpreter accepts an int
+            // (range-checked), a char (its codepoint), or a whole float
+            // (truncated), and yields Value::Int; to-f32/f64 widen to
+            // Value::Dec. Statically-typed operands compile per kind; a
+            // gradual operand keeps the honest "not supported" error.
+            "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32" | "to-s64"
+                if args.len() == 1 =>
+            {
+                match self.node_scalar(args[0]) {
+                    Some(k @ (Int | Char)) => self.expr_scalar(fx, args[0], k)?,
+                    Some(Float) => {
+                        // `Dec(f) if f.fract() == 0.0` — else the interpreter
+                        // errors (NaN included); then Rust's saturating `as`
+                        self.expr_scalar(fx, args[0], Float)?;
+                        let f = fx.local(ValType::F64);
+                        fx.op(I::LocalTee(f));
+                        fx.op(I::LocalGet(f));
+                        fx.op(I::F64Trunc);
+                        fx.op(I::F64Ne); // true for any fraction and for NaN
+                        fx.op(I::If(BlockType::Empty));
+                        fx.op(I::Unreachable);
+                        fx.op(I::End);
+                        fx.op(I::LocalGet(f));
+                        fx.op(I::I64TruncSatF64S);
+                    }
+                    _ => return Ok(None),
+                }
+                // range check, trapping exactly where the interpreter errors
+                let range = match name {
+                    "to-u8" => Some((0, u8::MAX as i64)),
+                    "to-u16" => Some((0, u16::MAX as i64)),
+                    "to-u32" => Some((0, u32::MAX as i64)),
+                    "to-u64" => Some((0, i64::MAX)),
+                    "to-s8" => Some((i8::MIN as i64, i8::MAX as i64)),
+                    "to-s16" => Some((i16::MIN as i64, i16::MAX as i64)),
+                    "to-s32" => Some((i32::MIN as i64, i32::MAX as i64)),
+                    _ => None, // to-s64: every i64 is in range
+                };
+                if let Some((lo, hi)) = range {
+                    let n = fx.local(ValType::I64);
+                    fx.op(I::LocalTee(n));
+                    fx.op(I::I64Const(lo));
+                    fx.op(I::I64LtS);
+                    fx.op(I::LocalGet(n));
+                    fx.op(I::I64Const(hi));
+                    fx.op(I::I64GtS);
+                    fx.op(I::I32Or);
+                    fx.op(I::If(BlockType::Empty));
+                    fx.op(I::Unreachable);
+                    fx.op(I::End);
+                    fx.op(I::LocalGet(n));
+                }
+                Ok(Some(Int))
+            }
+            "to-f32" | "to-f64" if args.len() == 1 => match self.node_scalar(args[0]) {
+                Some(Int | Float) => {
+                    // want_num widening: int → f64, float unchanged
+                    self.expr_scalar(fx, args[0], Float)?;
+                    Ok(Some(Float))
+                }
+                _ => Ok(None),
+            },
+            "to-char" if args.len() == 1 => match self.node_scalar(args[0]) {
+                Some(Char) => {
+                    // a char passes through
+                    self.expr_scalar(fx, args[0], Char)?;
+                    Ok(Some(Char))
+                }
+                Some(Int) => {
+                    // must be a Unicode scalar: ≤ 0x10FFFF (unsigned, catches
+                    // negatives) and not a surrogate
+                    self.expr_scalar(fx, args[0], Int)?;
+                    let n = fx.local(ValType::I64);
+                    fx.op(I::LocalTee(n));
+                    fx.op(I::I64Const(0x10FFFF));
+                    fx.op(I::I64GtU);
+                    fx.op(I::If(BlockType::Empty));
+                    fx.op(I::Unreachable);
+                    fx.op(I::End);
+                    fx.op(I::LocalGet(n));
+                    fx.op(I::I64Const(0xD800));
+                    fx.op(I::I64GeU);
+                    fx.op(I::LocalGet(n));
+                    fx.op(I::I64Const(0xDFFF));
+                    fx.op(I::I64LeU);
+                    fx.op(I::I32And);
+                    fx.op(I::If(BlockType::Empty));
+                    fx.op(I::Unreachable);
+                    fx.op(I::End);
+                    fx.op(I::LocalGet(n));
+                    Ok(Some(Char))
+                }
+                _ => Ok(None),
+            },
             _ => Ok(None),
         }
     }
@@ -4235,6 +4329,17 @@ impl<'a> Emitter<'a> {
                 | "div"
                 | "rem"
                 | "neg"
+                | "to-u8"
+                | "to-u16"
+                | "to-u32"
+                | "to-u64"
+                | "to-s8"
+                | "to-s16"
+                | "to-s32"
+                | "to-s64"
+                | "to-f32"
+                | "to-f64"
+                | "to-char"
         ) && let Some(kind) = self.scalar_op(fx, name, args)?
         {
             self.box_scalar(fx, kind);
@@ -4483,6 +4588,16 @@ const BUILTINS: &[&str] = &[
     "lower",
     "to-string",
     "to-char",
+    "to-u8",
+    "to-u16",
+    "to-u32",
+    "to-u64",
+    "to-s8",
+    "to-s16",
+    "to-s32",
+    "to-s64",
+    "to-f32",
+    "to-f64",
     "some",
     "ok",
     "err",

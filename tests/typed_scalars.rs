@@ -220,3 +220,72 @@ fn typed_bool_conditions_and_not() {
     assert_eq!(ok(&mut c, "pick", &[Val::U32(9), Val::U32(3)]), Val::U32(3));
     assert_eq!(ok(&mut c, "notb", &[Val::Bool(true)]), Val::Bool(false));
 }
+
+/// Numeric conversion builtins compile per-kind (5.6): range checks trap
+/// exactly where the interpreter errors, chars convert through their
+/// codepoint (the char-rt "next scalar" transform), whole floats truncate.
+#[test]
+fn typed_numeric_conversions_match_the_interpreter() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("wavelet-conv-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let app = r#"Package "demo:app@0.1.0"
+
+Export {name: clamp8 params: {a: s64} result: u8}
+Def clamp8 Fn {a: s64} to-u8(a)
+
+Export {name: next-char params: {c: char} result: char}
+Def next-char Fn {c: char} to-char(add(to-u32(c) 1))
+
+Export {name: floor64 params: {x: f64} result: s64}
+Def floor64 Fn {x: f64} to-s64(x)
+
+Export {name: widen params: {a: s64} result: f64}
+Def widen Fn {a: s64} to-f64(a)
+"#;
+    let app_path = src.join("app.wlt");
+    std::fs::write(&app_path, app).unwrap();
+    let out = dir.join("out");
+    let outputs = wavelet::build::build_files(
+        &[app_path.to_str().unwrap().to_string()],
+        out.to_str().unwrap(),
+    )
+    .expect("build the conversions app");
+    let bytes = std::fs::read(&outputs[0]).expect("read built component");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let iface = "demo:app/api@0.1.0";
+    let mut c = HostComponent::from_bytes(&bytes).expect("instantiate");
+    assert_eq!(
+        c.call_instance(iface, "clamp8", &[Val::S64(200)]).unwrap()[0],
+        Val::U8(200)
+    );
+    // the char-rt transform: next Unicode scalar
+    assert_eq!(
+        c.call_instance(iface, "next-char", &[Val::Char('a')])
+            .unwrap()[0],
+        Val::Char('b')
+    );
+    // whole float truncates; s64 result
+    assert_eq!(
+        c.call_instance(iface, "floor64", &[Val::Float64(-3.0)])
+            .unwrap()[0],
+        Val::S64(-3)
+    );
+    assert_eq!(
+        c.call_instance(iface, "widen", &[Val::S64(7)]).unwrap()[0],
+        Val::Float64(7.0)
+    );
+    // traps where the interpreter errors (fresh instances per trap)
+    let mut t1 = HostComponent::from_bytes(&bytes).unwrap();
+    assert!(t1.call_instance(iface, "clamp8", &[Val::S64(256)]).is_err());
+    let mut t2 = HostComponent::from_bytes(&bytes).unwrap();
+    assert!(
+        t2.call_instance(iface, "floor64", &[Val::Float64(1.5)])
+            .is_err()
+    );
+}
