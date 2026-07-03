@@ -153,7 +153,7 @@ static RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 const WORKED_EXAMPLE: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Def assert Fn {cond} If cond {} head([])
 Def run Fn {}
   Let {s: pts/new()}
@@ -234,7 +234,7 @@ fn build_emits_a_validating_set_resource() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export count-distinct
 Def count-distinct Fn {ps: list(point)}
   Let {s: pts/new()}
@@ -272,7 +272,7 @@ fn build_rejects_handle_returning_export_over_local_record() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export nearest-set
 Def nearest-set Fn {ps: list(point)}
   Let {s: pts/new()}

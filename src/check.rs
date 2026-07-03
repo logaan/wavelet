@@ -1016,7 +1016,8 @@ impl<'a> Checker<'a> {
         };
         matches!(
             h.as_str(),
-            "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO"
+            "package-MACRO" | "import-MACRO" | "instantiate-MACRO" | "export-MACRO"
+            | "deftype-MACRO"
         ) || (h.ends_with("-MACRO")
             && !matches!(
                 h.as_str(),
@@ -1329,7 +1330,8 @@ impl<'a> Checker<'a> {
             // Top-level file forms (`Package`/`Import`/`Export`/`DefType`)
             // carry annotations, not value expressions: opaque to the value
             // checker.
-            "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO" => {
+            "package-MACRO" | "import-MACRO" | "instantiate-MACRO" | "export-MACRO"
+            | "deftype-MACRO" => {
                 Ok(Type::Unknown)
             }
             // Any other `-MACRO` head is a user (or foreign) macro call that

@@ -334,7 +334,7 @@ impl Interp {
                 }
                 Step::Done(unit())
             }
-            "package-MACRO" | "import-MACRO" | "export-MACRO" => {
+            "package-MACRO" | "import-MACRO" | "instantiate-MACRO" | "export-MACRO" => {
                 return err(format!(
                     "`{}` is only allowed at the top level of a file",
                     name.trim_end_matches("-MACRO")

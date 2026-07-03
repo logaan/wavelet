@@ -108,11 +108,13 @@ pub struct FunctorImport {
     pub kind: FunctorKind,
 }
 
-/// Recognize an `Import` record payload as a functor instantiation, keyed on its
-/// `pkg:` naming a known functor package (`wit::parse_functor` is the authority
-/// for the WIT side; this mirrors its package test). Returns `None` for any
-/// ordinary import. The `as:` alias defaults to the trailing path segment, as in
-/// `wit`/`runner::parse_import`.
+/// Recognize an `Instantiate` record payload as a functor instantiation, keyed
+/// on its `pkg:` naming a known functor package (`wit::parse_instantiate` is
+/// the authority for the WIT side; this mirrors its package test). Returns
+/// `None` when `pkg:` names no known functor. The element type in `with:` is a
+/// compile-time/WIT concern the interpreter ignores (its set is
+/// element-agnostic). The `as:` alias defaults to the trailing path segment,
+/// as in `wit`/`runner::parse_import`.
 pub fn parse_functor_import(arena: &Arena, payload: NodeId) -> Option<FunctorImport> {
     let Node::Rec(fields) = arena.node(payload) else {
         return None;

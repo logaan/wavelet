@@ -491,13 +491,13 @@ Export eq-point"#,
 
 #[test]
 // Step 10 — a functor is a component instantiated at a concrete element type at
-// compile time. `Import { … elem: point … }` stamps out a monomorphic `Set` and
+// compile time. `Instantiate { … with: {elem: point} … }` stamps out a monomorphic `Set` and
 // synthesizes a concrete `point-set` interface.
 fn functor_instantiation_synthesizes_concrete_interface() {
     let wit = synth(
         r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export has
 Def has Fn {p: point} pts/contains(pts/new() p)"#,
     )
@@ -515,8 +515,8 @@ fn two_functor_instantiations_make_two_interfaces() {
     let wit = synth(
         r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
-Import {pkg: "wavelet:coll/set" elem: string as: strs}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: string} as: strs}
 Export demo
 Def demo Fn {p: point s: string} pts/contains(pts/new() p)"#,
     )
@@ -534,7 +534,7 @@ Def demo Fn {p: point s: string} pts/contains(pts/new() p)"#,
 fn binary_functor_specializes_its_resource_methods() {
     let wit = synth(
         r#"Package "demo:geo@0.1.0"
-Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
 Export build
 Def build Fn {} ints/new()"#,
     )
@@ -543,6 +543,39 @@ Def build Fn {} ints/new()"#,
         wit.contains("size: func() -> u32"),
         "specialized resource methods not emitted:\n{wit}"
     );
+}
+
+#[test]
+// 4.6.1 — functor application is its own form: `Import`ing a functor package
+// is an actionable error pointing at `Instantiate`, and an `Instantiate` whose
+// `with:` names an unknown parameter (or misses `elem:`) errors by name.
+fn functor_application_spelling_is_instantiate() {
+    let err = synth(
+        r#"Package "demo:main@0.1.0"
+Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+Export run
+Def run Fn {} drop("hi")"#,
+    )
+    .expect_err("Import of a functor package must error");
+    assert!(err.contains("Instantiate"), "{err}");
+
+    let err = synth(
+        r#"Package "demo:main@0.1.0"
+Instantiate {pkg: "wavelet:coll/set" with: {element: s32} as: ints}
+Export run
+Def run Fn {} drop("hi")"#,
+    )
+    .expect_err("unknown functor parameter must error");
+    assert!(err.contains("no parameter `element`"), "{err}");
+
+    let err = synth(
+        r#"Package "demo:main@0.1.0"
+Instantiate {pkg: "wavelet:coll/set" as: ints}
+Export run
+Def run Fn {} drop("hi")"#,
+    )
+    .expect_err("missing with: must error");
+    assert!(err.contains("with: {elem:"), "{err}");
 }
 
 #[test]
@@ -580,7 +613,7 @@ fn worked_example_synthesizes_concrete_monomorphic_wit() {
         r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export nearest-set
 Def nearest-set Fn {ps: list(point)}
   Let {s: pts/new()}

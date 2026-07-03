@@ -72,7 +72,7 @@ fn routed_record_set_size_matches_interpreter() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export count-distinct
 Def count-distinct Fn {}
   Let {s: pts/new()}
@@ -98,7 +98,7 @@ Def count-distinct Fn {}
 // `add_is_observed_on_the_same_handle_and_dedups`).
 fn returned_handle_methods_match_interpreter() {
     const SRC: &str = r#"Package "demo:app@0.1.0"
-Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
 Export build-ints
 Def build-ints Fn {}
   Let {s: ints/new()}
@@ -148,8 +148,8 @@ Def build-ints Fn {}
 // same component, matching the interpreter.
 fn two_instantiations_in_one_world_match_interpreter() {
     const SRC: &str = r#"Package "demo:multi@0.1.0"
-Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
-Import {pkg: "wavelet:coll/set" elem: string as: words}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: string} as: words}
 Export build-ints
 Def build-ints Fn {}
   Let {s: ints/new()}
@@ -208,7 +208,7 @@ Def build-words Fn {}
 fn compound_list_element_dedups_like_interpreter() {
     const SRC: &str = r#"Package "demo:cmp@0.1.0"
 DefType nums list(s32)
-Import {pkg: "wavelet:coll/set" elem: nums as: groups}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: nums} as: groups}
 Export count-groups
 Def count-groups Fn {}
   Let {s: groups/new()}
@@ -230,7 +230,7 @@ Def count-groups Fn {}
 // `ints/new()` then `ints/size(s)` with no adds, matching the interpreter.
 fn empty_set_size_is_zero() {
     const SRC: &str = r#"Package "demo:empty@0.1.0"
-Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
 Export count-empty
 Def count-empty Fn {}
   Let {s: ints/new()}
@@ -251,7 +251,7 @@ Def count-empty Fn {}
 // exact. Complements the s32 handle-return test with a non-primitive scalar.
 fn string_element_handle_methods_match_interpreter() {
     const SRC: &str = r#"Package "demo:str@0.1.0"
-Import {pkg: "wavelet:coll/set" elem: string as: words}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: string} as: words}
 Export build-words
 Def build-words Fn {}
   Let {s: words/new()}

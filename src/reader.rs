@@ -45,6 +45,7 @@ impl MacroTable {
         for (name, arity) in [
             ("package-MACRO", 1),
             ("import-MACRO", 1),
+            ("instantiate-MACRO", 1),
             ("export-MACRO", 1),
             ("deftype-MACRO", 2),
             ("def-MACRO", 2),

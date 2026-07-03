@@ -11,11 +11,12 @@ pub struct FileInfo {
     /// world name, e.g. `shout`
     pub world: String,
     pub imports: Vec<ImportInfo>,
-    /// Compile-time functor instantiations: an `Import {pkg: … elem: T as: alias}`
-    /// is not a runtime import but a request to stamp out a monomorphic component
-    /// specialized at element type `T` (Steps 10–11). Recorded here instead of in
-    /// `imports`, so synthesis emits a specialized interface rather than an
-    /// `import` of the (non-existent) functor package.
+    /// Compile-time functor instantiations: an `Instantiate {pkg: … with:
+    /// {elem: T} as: alias}` (4.6.1) is not a runtime import but a request to
+    /// stamp out a monomorphic component specialized at element type `T`
+    /// (Steps 10–11). Recorded here instead of in `imports`, so synthesis
+    /// emits a specialized interface rather than an `import` of the
+    /// (non-existent) functor package.
     pub functors: Vec<FunctorInst>,
     pub exports: Vec<FuncSig>,
     pub types: Vec<(String, NodeId)>,
@@ -74,7 +75,8 @@ pub enum FunctorKind {
     Set,
 }
 
-/// One `Import {pkg: … elem: T as: alias}` functor instantiation (Steps 10–11).
+/// One `Instantiate {pkg: … with: {elem: T} as: alias}` functor instantiation
+/// (Steps 10–11, spelling per 4.6.1).
 pub struct FunctorInst {
     pub kind: FunctorKind,
     /// the `as:` alias used to qualify the functor's ops (`pts/new`, `pts/add`, …)
@@ -181,18 +183,34 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                     package = Some(s.clone());
                 }
             }
+            // `Instantiate {pkg: … with: {elem: t} as: alias}` applies a
+            // compile-time functor (4.6, decision 4.6.1 option 1): stamp out a
+            // monomorphic interface specialized at the `with:` arguments. It is
+            // recorded in `functors` and never reaches the ordinary `imports`
+            // list, so synthesis emits the specialized interface rather than an
+            // `import <functor pkg>;`.
+            "instantiate-MACRO" => {
+                let Some(&p) = items.get(1) else { continue };
+                let Node::Rec(fields) = arena.node(p) else {
+                    return Err("malformed Instantiate (expects a record)".into());
+                };
+                functors.push(parse_instantiate(arena, fields)?);
+            }
             "import-MACRO" => {
                 let Some(&p) = items.get(1) else { continue };
-                // An `Import` carrying `elem:` is a *functor instantiation* (Steps
-                // 10–11), not a runtime import: stamp out a monomorphic component
-                // specialized at that element type. It is recorded in `functors`
-                // and never reaches the ordinary `imports` list, so synthesis emits
-                // a specialized interface rather than `import <functor pkg>;`.
+                // `Import` brings an unparameterized dependency into scope;
+                // functor application moved to its own `Instantiate` form
+                // (4.6.1). Importing a functor package is an actionable error.
                 if let Node::Rec(fields) = arena.node(p)
-                    && let Some(inst) = parse_functor(arena, fields)?
+                    && let Some(pkg) = record_pkg(arena, fields)
+                    && is_functor_pkg(&pkg)
                 {
-                    functors.push(inst);
-                    continue;
+                    return Err(format!(
+                        "`{}` is a functor package: apply it with \
+                         `Instantiate {{pkg: … with: {{elem: t}} as: alias}}`, \
+                         not `Import`",
+                        strip_version(&pkg)
+                    ));
                 }
                 let spec = match arena.node(p) {
                     Node::Str(s) => Some((s.clone(), None, false, None)),
@@ -447,55 +465,68 @@ fn strip_version(s: &str) -> String {
     s.split('@').next().unwrap_or(s).to_string()
 }
 
-/// Parse an `Import` record as a functor instantiation, keyed on the `pkg:`
-/// *package identity* — not on the presence of any particular field. A record
-/// whose `pkg:` is a recognized functor package (currently only
-/// `wavelet:coll/set`) is a functor instantiation; anything else returns
-/// `Ok(None)` so the caller treats it as an ordinary import (whose unknown
-/// fields, such as a generic `elem:`, are simply ignored). Only once the package
-/// is known to be a functor is a missing `elem:` an error, since at that point
-/// the record is a malformed functor instantiation.
-fn parse_functor(
-    arena: &Arena,
-    fields: &[(String, NodeId)],
-) -> Result<Option<FunctorInst>, String> {
-    // Classify on the package, not the fields: read `pkg:` first and bail out as
-    // an ordinary import unless it names a known functor package.
-    let pkg = fields
+/// The `pkg:` field of an `Import`/`Instantiate` record, if present.
+fn record_pkg(arena: &Arena, fields: &[(String, NodeId)]) -> Option<String> {
+    fields
         .iter()
         .find_map(|(k, v)| match (k.as_str(), arena.node(*v)) {
             ("pkg", Node::Str(s)) => Some(s.clone()),
             _ => None,
-        });
-    let Some(pkg) = pkg else { return Ok(None) };
+        })
+}
+
+/// Whether a package id names a compile-time functor the compiler knows
+/// intrinsically (currently only `wavelet:coll/set`).
+fn is_functor_pkg(pkg: &str) -> bool {
+    strip_version(pkg).ends_with("coll/set")
+}
+
+/// Parse an `Instantiate {pkg: … with: {…} as: alias}` record (4.6, decision
+/// 4.6.1): `pkg:` must name a known functor package, and the functor's
+/// parameters are passed *by name* in the `with:` record — for `Set`, the
+/// single parameter `elem:`. The `as:` alias defaults to the trailing path
+/// segment, as for ordinary imports.
+fn parse_instantiate(arena: &Arena, fields: &[(String, NodeId)]) -> Result<FunctorInst, String> {
+    let pkg = record_pkg(arena, fields).ok_or("Instantiate is missing `pkg:`")?;
     let path = strip_version(&pkg);
-    let kind = if path.ends_with("coll/set") {
-        FunctorKind::Set
-    } else {
-        // Not a functor package: an ordinary import that merely shares a field
-        // name (e.g. `elem:`) with the functor form. Leave it for the caller.
-        return Ok(None);
-    };
-    // From here the package *is* a functor, so the instantiation must be
-    // well-formed: an `elem:` is required.
+    if !is_functor_pkg(&pkg) {
+        return Err(format!(
+            "`{path}` is not a functor package (known functors: wavelet:coll/set)"
+        ));
+    }
+    let kind = FunctorKind::Set;
     let mut alias = None;
-    let mut elem = None;
+    let mut with: Vec<(String, NodeId)> = Vec::new();
     for (k, v) in fields {
         match (k.as_str(), arena.node(*v)) {
             ("as", Node::Sym(s)) => alias = Some(s.clone()),
-            ("elem", _) => elem = Some(type_text(arena, *v)?),
+            ("with", Node::Rec(args)) => with = args.clone(),
             _ => {}
         }
     }
-    let elem = elem.ok_or_else(|| format!("functor Import `{path}` is missing `elem:`"))?;
+    // Arguments bind the functor's parameters by name; `Set` takes `elem`.
+    let mut elem = None;
+    for (k, v) in &with {
+        match k.as_str() {
+            "elem" => elem = Some(type_text(arena, *v)?),
+            other => {
+                return Err(format!(
+                    "functor `{path}` has no parameter `{other}` (expected `elem:`)"
+                ));
+            }
+        }
+    }
+    let elem = elem.ok_or_else(|| {
+        format!("Instantiate of `{path}` is missing `with: {{elem: …}}`")
+    })?;
     let alias = alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
     let iface = format!("{elem}-set");
-    Ok(Some(FunctorInst {
+    Ok(FunctorInst {
         kind,
         alias,
         elem,
         iface,
-    }))
+    })
 }
 
 /// The result type of one functor op: `Some(t)` is a Known WIT type, `None` is
@@ -979,7 +1010,7 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
     }
 
     // Functor instantiations stamp out a specialized, monomorphic interface each
-    // (Steps 10–11). `Import {pkg: "wavelet:coll/set" elem: T as: …}` produces a
+    // (Steps 10–11). `Instantiate {pkg: "wavelet:coll/set" with: {elem: T} as: …}` produces a
     // `T-set` interface holding the element-specialized `set` resource (fig-wit).
     for f in &info.functors {
         out.push_str(&functor_interface(arena, f, &info.types)?);

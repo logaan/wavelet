@@ -153,14 +153,24 @@ fn eval_module(
                     export_entry(&arena, payload).ok_or(format!("{path}: malformed Export"))?;
                 modules[idx].exports.push(entry);
             }
+            // `Instantiate {pkg: … with: {…} as: alias}` (4.6): a functor
+            // instantiation is not backed by a sibling module — the compiler
+            // knows the template intrinsically. Bind its ops (`alias/new`,
+            // `alias/add`, …) directly and move on.
+            ("instantiate-MACRO", Some(payload)) => {
+                let functor = builtins::parse_functor_import(&arena, payload)
+                    .ok_or(format!("{path}: malformed Instantiate (unknown functor)"))?;
+                builtins::bind_functor(&modules[idx].env, &functor);
+            }
             ("import-MACRO", Some(payload)) => {
-                // A functor instantiation (`Import {pkg: "wavelet:coll/set"
-                // elem: T as: alias}`) is not backed by a sibling module: the
-                // compiler knows the template intrinsically. Bind its ops
-                // (`alias/new`, `alias/add`, …) directly and move on.
-                if let Some(functor) = builtins::parse_functor_import(&arena, payload) {
-                    builtins::bind_functor(&modules[idx].env, &functor);
-                    continue;
+                // Functor application moved to `Instantiate` (4.6.1): importing
+                // a functor package is an actionable error.
+                if builtins::parse_functor_import(&arena, payload).is_some() {
+                    return Err(format!(
+                        "{path}: functor packages are applied with \
+                         `Instantiate {{pkg: … with: {{elem: t}} as: alias}}`, \
+                         not `Import`"
+                    ));
                 }
                 let spec =
                     parse_import(&arena, payload).ok_or(format!("{path}: malformed Import"))?;

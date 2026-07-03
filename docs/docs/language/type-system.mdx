@@ -110,11 +110,13 @@ the interpreter playground.
 ## Functors
 
 A **functor** specializes a generic data structure to a concrete element type at
-compile time. You instantiate one with a parameterized `Import`, naming the
-package, the element type, and a local alias:
+compile time. You apply one with the dedicated `Instantiate` form, naming the
+package, passing the functor's parameters *by name* in `with:`, and choosing a
+local alias (`Import` stays what it is — bringing an unparameterized dependency
+into scope):
 
 ```wavelet
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 ```
 
 This synthesizes a **concrete, per-element WIT interface** — instantiating `set`
@@ -169,7 +171,7 @@ Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
 
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 
 Export nearest-set
 Def nearest-set Fn {ps: list(point)}
@@ -248,7 +250,7 @@ Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
 
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 
 Export count-distinct
 Def count-distinct Fn {}
@@ -302,7 +304,7 @@ handle for a host to keep and query:
 ```wavelet
 Package "demo:app@0.1.0"
 
-Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
 
 Export build-ints
 Def build-ints Fn {}
