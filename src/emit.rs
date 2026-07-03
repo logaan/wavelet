@@ -89,6 +89,11 @@ enum WitTy {
     IntS(u8), // s8/s16/s32 (byte width 1/2/4) — i32 flat, sign-extended into the int box
     IntU(u8), // u8/u16/u32 (byte width 1/2/4)
     S64,      // s64/u64 — i64 flat
+    /// f32 — a BOUNDARY-ONLY representation (goal 5 / 5.2): one f32 flat,
+    /// stored 4-byte in memory, but carried internally as the interpreter's
+    /// f64 `Value::Dec` (promote on lift, demote on lower), exactly as the
+    /// interpreter models every float as f64.
+    F32,
     F64,
     Str,
     List(Box<WitTy>),
@@ -273,6 +278,7 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
         "u16" => WitTy::IntU(2),
         "u32" => WitTy::IntU(4),
         "s64" | "u64" => WitTy::S64,
+        "f32" => WitTy::F32,
         "f64" => WitTy::F64,
         "string" => WitTy::Str,
         other => {
@@ -402,6 +408,7 @@ fn flat_len(ty: &WitTy) -> usize {
         | WitTy::IntS(_)
         | WitTy::IntU(_)
         | WitTy::S64
+        | WitTy::F32
         | WitTy::F64
         | WitTy::Handle
         | WitTy::Enum(_)
@@ -432,6 +439,7 @@ fn flat_checked(ty: &WitTy) -> Result<Vec<ValType>, String> {
         | WitTy::Enum(_)
         | WitTy::Flags(_) => vec![ValType::I32],
         WitTy::S64 => vec![ValType::I64],
+        WitTy::F32 => vec![ValType::F32],
         WitTy::F64 => vec![ValType::F64],
         WitTy::Str | WitTy::List(_) => vec![ValType::I32, ValType::I32],
         WitTy::Record(fields) => {
@@ -471,6 +479,7 @@ fn align_of(ty: &WitTy) -> u64 {
         WitTy::Bool => 1,
         WitTy::Char | WitTy::Handle => 4,
         WitTy::IntS(w) | WitTy::IntU(w) => *w as u64,
+        WitTy::F32 => 4,
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 4, // (ptr, len), pointer-aligned
         WitTy::Record(fields) => fields.iter().map(|(_, t)| align_of(t)).max().unwrap_or(1),
@@ -523,6 +532,7 @@ fn size_of(ty: &WitTy) -> u64 {
         WitTy::Bool => 1,
         WitTy::Char | WitTy::Handle => 4,
         WitTy::IntS(w) | WitTy::IntU(w) => *w as u64,
+        WitTy::F32 => 4,
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 8,
         WitTy::Enum(cases) => disc_size(cases.len()),
@@ -598,6 +608,7 @@ fn elem_size(ty: &WitTy) -> u64 {
         WitTy::Bool => 1,
         WitTy::Char | WitTy::Handle => 4,
         WitTy::IntS(w) | WitTy::IntU(w) => *w as u64,
+        WitTy::F32 => 4,
         WitTy::S64 | WitTy::F64 | WitTy::Str | WitTy::List(_) => 8,
         WitTy::Enum(_) | WitTy::Flags(_) => size_of(ty),
         WitTy::Record(_)
@@ -2778,6 +2789,11 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32WrapI64);
             }
             WitTy::S64 => fx.op(I::Call(self.h.unbox_int)),
+            WitTy::F32 => {
+                // boundary-only f32: internally an f64 Dec box, demoted here
+                fx.op(I::Call(self.h.unbox_dec));
+                fx.op(I::F32DemoteF64);
+            }
             WitTy::F64 => fx.op(I::Call(self.h.unbox_dec)),
             WitTy::Str => {
                 let t = fx.local(ValType::I32);
@@ -3115,6 +3131,10 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.box_int));
             }
             WitTy::S64 => fx.op(I::Call(self.h.box_int)),
+            WitTy::F32 => {
+                fx.op(I::F64PromoteF32);
+                fx.op(I::Call(self.h.box_dec));
+            }
             WitTy::F64 => fx.op(I::Call(self.h.box_dec)),
             WitTy::Enum(cases) => {
                 // disc i32 on stack → payload-less variant box of the i-th case.
@@ -3398,6 +3418,13 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.unbox_int));
                 fx.op(I::I64Store(ma(off, 3)));
             }
+            WitTy::F32 => {
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(src));
+                fx.op(I::Call(self.h.unbox_dec));
+                fx.op(I::F32DemoteF64);
+                fx.op(I::F32Store(ma(off, 2)));
+            }
             WitTy::F64 => {
                 fx.op(I::LocalGet(dst));
                 fx.op(I::LocalGet(src));
@@ -3604,6 +3631,12 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(src));
                 fx.op(I::I64Load(ma(off, 3)));
                 fx.op(I::Call(self.h.box_int));
+            }
+            WitTy::F32 => {
+                fx.op(I::LocalGet(src));
+                fx.op(I::F32Load(ma(off, 2)));
+                fx.op(I::F64PromoteF32);
+                fx.op(I::Call(self.h.box_dec));
             }
             WitTy::F64 => {
                 fx.op(I::LocalGet(src));

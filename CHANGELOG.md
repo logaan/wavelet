@@ -25,6 +25,14 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **`f32` is supported by the wasm backend.** Exports and imports may use
+  `f32` in any position — flat params/results, record/tuple fields, list
+  elements, variant/option/result payloads. Internally every float remains an
+  `f64` (matching the interpreter, which models all floats as `f64`); `f32`
+  is a boundary-only representation, promoted on lift and demoted on lower.
+  The conformance runner's `f32-rt` and `every-primitive-rt` checks are
+  restored and green against both Rust callees.
+
 - **Variant/enum case constructors are bound values.** A `DefType name
   [case case(t) …]` declaration now binds each case in the value namespace:
   nullary cases as payload-less variant values (like `none`), payloaded cases
