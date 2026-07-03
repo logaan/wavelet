@@ -3940,7 +3940,13 @@ impl<'a> Emitter<'a> {
             }
             "some" | "ok" | "err" => {
                 // the argument(s) bundle into the variant payload, exactly as
-                // the interpreter binds it
+                // the interpreter binds it. `ok()`/`err()` with no arguments
+                // construct the payload-less case (4.2), like the interpreter.
+                if args.is_empty() && name != "some" {
+                    let addr = self.none_like_box(name);
+                    fx.op(I::I32Const(addr as i32));
+                    return Ok(());
+                }
                 return self.var_box(fx, name, args);
             }
             "form-kind" => {

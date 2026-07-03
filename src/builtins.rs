@@ -647,8 +647,14 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             )),
         },
         "some" => Ok(Value::Variant("some".into(), Some(Rc::new(arg)))),
-        "ok" => Ok(Value::Variant("ok".into(), Some(Rc::new(arg)))),
-        "err" => Ok(Value::Variant("err".into(), Some(Rc::new(arg)))),
+        // `ok()`/`err()` with no arguments (the bundled empty tuple) construct
+        // the genuinely payload-less case (4.2) — WIT's `result<_, e>` /
+        // `result<t>` / bare `result` sides. `some` always carries a payload
+        // (WIT options have no payload-less `some`).
+        "ok" | "err" => Ok(match arg {
+            Value::Tup(items) if items.is_empty() => Value::Variant(name.into(), None),
+            payload => Value::Variant(name.into(), Some(Rc::new(payload))),
+        }),
         "cell-new" => Ok(Value::Cell(Rc::new(RefCell::new(arg)))),
         "cell-get" => match &arg {
             Value::Cell(c) => Ok(c.borrow().clone()),
