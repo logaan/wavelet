@@ -201,6 +201,14 @@ you work, and rename it to the new version when you cut a release.
 - **`ok()`/`err()` at a bare-`result` boundary no longer panic the compiler**
   ("internal error: never a single flat value").
 
+- **Flags fields nested in records/tuples use the correct canonical-ABI
+  alignment.** A `flags` value was always given 4-byte alignment; the
+  canonical ABI aligns it to 1/2/4 bytes by member count (≤8/≤16/≤32). The
+  stale alignment (and a matching 4-byte store width) corrupted the layout of
+  any record or tuple containing a flags field when it crossed a component
+  boundary. Standalone flags values were unaffected. Such records now also
+  build in canonical (unboxed) form.
+
 ## [0.10.0] - 2026-07-02
 
 ### Added
