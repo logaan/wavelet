@@ -1050,9 +1050,12 @@ impl<'a> Checker<'a> {
             }
             "if-MACRO" => {
                 let [c, t, e] = expect3(args)?;
-                // Do NOT statically check the condition's bool-ness (a runtime
-                // example relies on a non-bool condition failing at runtime).
-                self.check(c, None, scope)?;
+                // The condition must be a bool, statically (2.2 drop: no
+                // truthiness, no runtime bool check).
+                let ct = self.check(c, None, scope)?;
+                if !matches!(ct, Type::Bool | Type::Unknown) {
+                    return Err("eval error: If condition must be a bool".to_string());
+                }
                 let tt = self.check(t, expected, scope)?;
                 let et = self.check(e, expected, scope)?;
                 match unify(&self.types, &tt, &et) {
@@ -1266,15 +1269,11 @@ impl<'a> Checker<'a> {
                 Ok(ty.clone())
             }
             _ => {
-                // The interpreter only conformance-checks a *bare `Sym`*
-                // annotation against the runtime value (interp `the-MACRO`); a
-                // constructor annotation like `list(s32)` is not checked at all.
-                // Mirror that: propagate the expected type (so return-type-
-                // directed overload resolution still fires) only for a `Sym`
-                // annotation, so we never reject a program the interpreter runs,
-                // e.g. `The list(s32) ["a"]`.
-                let prop = matches!(self.arena.node(ty_form), Node::Sym(_)).then_some(ty);
-                self.check(expr, prop, scope)?;
+                // `The` is a pure static ascription (2.2 drop: no runtime
+                // check survives): the annotated type is the expected type of
+                // the expression, whatever the annotation's shape — a bare
+                // name or a constructor like `list(s32)`.
+                self.check(expr, Some(ty), scope)?;
                 Ok(ty.clone())
             }
         }

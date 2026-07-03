@@ -144,7 +144,7 @@
   },
   "sf-if-nonbool": {
     "code": "If 1 \"yes\" \"no\"",
-    "error": "eval error: If condition must be a bool, got 1"
+    "error": "eval error: If condition must be a bool"
   },
   "sf-let": {
     "code": "Let {radius: 10\n     area: mul(pi mul(radius radius))}\n  str-cat(\"area = \" to-string(area))",

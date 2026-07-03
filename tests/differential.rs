@@ -47,10 +47,6 @@ const PI: &str = "stdlib constant `pi` is not bound in the wasm backend (5.7)";
 const FLAGS: &str = "flag literals rejected on this emit path (5.4)";
 /// On the build path `expand` is confined to macro libraries (6.1.8).
 const EXPAND: &str = "`expand` is only available inside a macro library when building (6.1.8)";
-/// The interpreter checks `If` conditions are bools at runtime; compiled code
-/// applies bare truthiness. Closed when the checker rejects it statically
-/// (goal 3).
-const IF_BOOL: &str = "compiled If skips the interpreter's runtime bool-condition check (goal 3)";
 
 /// Examples the compiled artifact is known to disagree on, with the current
 /// reason. Removing a fixed entry is part of fixing the backend gap.
@@ -74,7 +70,6 @@ const SKIP: &[(&str, &str)] = &[
     ("sf-defmacro", FLAGS), // `{}` in the expansion
     ("sf-fn-shout", TOSTR_STRING),
     ("sf-if", TOSTR_STRING),
-    ("sf-if-nonbool", IF_BOOL),
     ("sf-let", PI),
     ("sf-match", TOSTR_STRING),
     ("sf-quasi", TOSTR_TRAP),         // form result

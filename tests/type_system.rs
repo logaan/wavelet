@@ -618,13 +618,12 @@ fn min_max_on_strings_is_not_rejected() {
 }
 
 #[test]
-// The interpreter only conformance-checks a bare `Sym` `The` annotation; a
-// constructor annotation like `list(s32)` is never checked, so the checker must
-// stay gradual there rather than element-checking the list.
-fn the_with_a_constructor_annotation_is_not_element_checked() {
+// `The` is a pure static ascription (2.2 drop): a constructor annotation like
+// `list(s32)` element-checks the expression, so a string element is rejected
+// at compile time.
+fn the_with_a_constructor_annotation_is_element_checked() {
     let r = run(r#"The list(s32) ["a"]"#);
-    assert!(r.ok, "The list(s32) [\"a\"] should run, got: {}", r.error);
-    assert_eq!(r.value, r#"["a"]"#);
+    assert!(!r.ok, "The list(s32) [\"a\"] must be a compile error");
 }
 
 #[test]
