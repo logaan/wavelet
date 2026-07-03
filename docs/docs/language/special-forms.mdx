@@ -209,3 +209,7 @@ namespace: each payload-less case is a value (like `none`), and each payloaded
 case is a constructor function — first-class, like any other.
 
 <Playground id="sf-deftype-cases" />
+
+`DefType` declares a *data* type — copied by structure across the boundary. To
+declare a type with identity and hidden state instead (a handle-backed WIT
+`resource`), use [`DefResource`](../language/type-system#user-declared-resources).

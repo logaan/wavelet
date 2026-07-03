@@ -350,3 +350,209 @@ is false) and finally drops the handle to run the resource's destructor. This is
 exactly what `tests/backend_functor.rs` does in-process against the wasmtime host
 to prove the built component matches the interpreter — over `s32`, `string`,
 `point` records, and `list` elements, and with two instantiations in one world.
+
+## User-declared resources
+
+A [functor](#functors) hands you a ready-made resource — the `set` above is one,
+and so is a [`cell`](../stdlib#cells). `DefResource` lets you declare **your own**.
+Where `DefType` introduces a *data* type (a record, variant, enum, or alias — a
+value that is copied by structure across the component boundary), a resource is a
+type with **identity and hidden state**: callers hold an opaque *handle*, never
+the bytes behind it, and every use goes through the methods you declare. A
+`DefResource` form maps one-to-one onto a WIT `resource { … }` block.
+
+```wavelet
+DefResource counter {
+  New:   Fn {start: u32} cell-new(start)
+  next:  Fn {self: counter} The u32 Do [ cell-set(self add(cell-get(self) 1))
+                                          cell-get(self) ]
+  value: Fn {self: counter} The u32 cell-get(self)
+  sum:   Static Fn {values: list(u32)} The counter counter(fold(add 0 values))
+}
+```
+
+### Members and their roles
+
+The braces hold the resource's members. Two keys are **reserved and
+capitalized**; everything else is a method or a static.
+
+- **`New:` — the constructor.** It runs when the resource is created and returns
+  **the representation** ("the rep"): an ordinary Wavelet value that holds the
+  instance's private state. It is almost always a [`cell`](../stdlib#cells), since
+  a resource without mutable state has little reason to exist. `New` is *anonymous*
+  in WIT — a resource has exactly one constructor and it is unnamed.
+- **`Drop:` — the destructor (optional).** An `Fn {self: <name>}` returning unit,
+  run when a handle is dropped. It is **not user-callable** — the runtime invokes
+  it — and if you omit it the rep is still freed; a `Drop` is only for extra
+  cleanup (closing a handle you opened, say). Absent `Drop` means "no-op on drop."
+- **`Static Fn {…}` — a static.** Marked with `Static` and taking **no `self`**, a
+  static belongs to the type rather than to an instance. Because it can *return*
+  the resource, a static doubles as an **alternative constructor** — `sum` above
+  builds a `counter` from a list.
+- **any other member — an instance method.** Its first field **must** be
+  `self: <name>`, and inside the body `self` is bound to the rep. `next` and
+  `value` read and mutate through `self`.
+
+The checker enforces the discipline, and each violation is a compile error:
+
+- a `Static` member that declares `self`;
+- a non-static member (other than `New`/`Drop`) that lacks `self: <name>` as its
+  first parameter;
+- `Static` written on `New` or `Drop` (neither may be a static).
+
+:::note[Why the `The` ascriptions]
+`counter`'s rep is a `cell`, and neither `cell-get` nor the `counter(…)`
+constructor call can be told the element type by structure alone — a bare `1` also
+has no fixed type until context pins it (see [`The`](#numeric-literals-and-the)).
+So each member result that flows through one is ascribed: `The u32` on the reads,
+`The counter` on `sum`'s constructed result. A resource whose rep is a default-typed
+`s64` cell can often drop them, but writing the ascription is the habit that keeps
+resource members well-typed.
+:::
+
+### Calling a resource
+
+At the use site a resource reads like the [`set`](#functors) functor's operations,
+because the spellings are the same:
+
+```wavelet
+Def c counter(5)                 // the constructor: the type name, applied
+Do [ counter/next(c)             // a method: `type/method(handle …)`  -> 6
+     counter/next(c)             //                                    -> 7
+     counter/value(c) ]          // -> 7
+```
+
+The **constructor is the type name applied** (`counter(5)`) — anonymous and
+singular, matching WIT's unnamed constructor; extra ways to build one are statics.
+**Methods and statics are qualified** by the type name: `counter/next(c)`,
+`counter/sum([1 2 3 4])`. A method takes the handle as its first argument (the
+`self` field); a static does not.
+
+### Ownership at the boundary
+
+In a type position a resource name carries an **ownership mode**, exactly as WIT's
+`own`/`borrow` do:
+
+- **`counter` (bare) — owned.** Ownership *transfers* to the callee, which is
+  responsible for dropping it. `own(counter)` is the explicit synonym for the bare
+  spelling.
+- **`borrow(counter)` — borrowed.** The callee may use the handle but does not own
+  it. `borrow` is **parameter-position only**: a borrow may not appear in a result
+  or in a stored position (a record field, a list element), and doing so is a
+  compile error.
+
+Passing a handle to an **own** parameter *invalidates the caller's handle* — using
+it again later **traps**. A **borrow** never invalidates: the caller keeps its
+handle. This is WIT's linear-handle discipline surfaced in Wavelet.
+
+Ownership modes only exist at the **component boundary**. Inside a method or static
+body the type name denotes the rep — `self: counter` binds `self` to the `cell`, not
+to a handle — so `own`/`borrow` never appear there.
+
+### Identity, printing, and serialization
+
+A resource is **not** a value with structure, and its observable behaviour reflects
+that:
+
+- **Equality is identity.** Two handles are equal only when they are the *same
+  instance*; two independently constructed counters are never equal, even with
+  equal state. Because there is nothing structural to compare, `Derive {Eq}` (or
+  `Ord`, `Hash`, `Show`) over a resource type is a **compile error** — the derivers
+  work on data, not handles.
+- **`to-string` is opaque.** Printing a handle yields the token `<counter>` (the
+  type name in angle brackets), never its state.
+- **Not form-serializable.** A resource is not a form, so [`read`](../stdlib#conversion)
+  can never produce one and a handle cannot be round-tripped through text.
+
+```wavelet
+eq(counter(1) counter(1))    // false — two distinct instances
+to-string(counter(9))        // "<counter>"
+```
+
+### Exporting a resource
+
+A bare [`Export`](./special-forms#export) publishes the whole resource as one WIT
+`resource` block:
+
+```wavelet
+Export counter
+```
+
+The record form places it in a named interface:
+
+```wavelet
+Export {iface: "counters" name: counter}
+```
+
+A `DefResource` you never export is a perfectly legal **internal** resource — it
+just has no boundary interface hung off it and lives entirely inside the guest.
+
+The methods and statics travel *with* the resource block. **Free functions** that
+pass handles around are ordinary [`Def`](./special-forms#def)s using the
+`own`/`borrow` type spellings, and they are exported individually:
+
+```wavelet
+Export counter
+Def make-counter Fn {start: u32} The counter counter(start)     // hands one out (own)
+Export make-counter
+Def bump-counter Fn {c: borrow(counter)} The u32 counter/next(c) // uses, doesn't consume
+Export bump-counter
+Def take-counter Fn {c: counter} The u32 counter/value(c)        // consumes (own)
+Export take-counter
+```
+
+### Worked example: source to WIT
+
+Putting the pieces together — the `counter` resource, exported alongside the three
+free functions above:
+
+```wavelet
+Package "demo:counters@0.1.0"
+
+DefResource counter {
+  New:   Fn {start: u32} cell-new(start)
+  next:  Fn {self: counter} The u32 Do [ cell-set(self add(cell-get(self) 1))
+                                          cell-get(self) ]
+  value: Fn {self: counter} The u32 cell-get(self)
+  sum:   Static Fn {values: list(u32)} The counter counter(fold(add 0 values))
+}
+
+Export counter
+
+Def make-counter Fn {start: u32} The counter counter(start)
+Export make-counter
+Def bump-counter Fn {c: borrow(counter)} The u32 counter/next(c)
+Export bump-counter
+Def take-counter Fn {c: counter} The u32 counter/value(c)
+Export take-counter
+```
+
+synthesizes a world with a single `resource` block plus the three free functions,
+each carrying its ownership mode straight into the WIT:
+
+```wit
+package demo:counters@0.1.0;
+
+interface api {
+  resource counter {
+    constructor(start: u32);
+    next: func() -> u32;
+    value: func() -> u32;
+    sum: static func(values: list<u32>) -> counter;
+  }
+  make-counter: func(start: u32) -> counter;
+  bump-counter: func(c: borrow<counter>) -> u32;
+  take-counter: func(c: counter) -> u32;
+}
+
+world counters {
+  export api;
+}
+```
+
+Note how each member role lowers: `New` becomes the anonymous `constructor`, the
+instance methods become methods whose implicit receiver is the handle (so
+`next: func() -> u32` — the `self` is the handle the method is called on, not a
+parameter), and `sum` becomes a `static func` that returns the resource. The free
+functions keep their `own`/`borrow` spellings (`c: counter` lowers to an owned
+`counter`, `c: borrow<counter>` to a borrow).
