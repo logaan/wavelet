@@ -6,22 +6,19 @@ Package "conformance:wavelet@0.1.0"
 //
 // Checks that wavelet cannot express today are ABSENT and recorded as
 // shortcomings on the LoT task instead:
-//   - shape-rt / direction-rt / option-shape-rt and the err side of
-//     result-tuple-direction-rt: dep variant/enum cases are not constructible
-//     (unbound names).
-//   - result-rt and the payload-less sides of result-u32-rt /
-//     result-string-err-rt: lowering a payload-less ok()/err() panics the
-//     compiler (emit.rs "never a single flat value").
 //   - permissions-rt: flag literals are not supported by the wasm backend.
 //   - f32-rt and every-primitive-rt (f32 field): f32 unsupported by backend.
-//   - points-rt: dep type aliases unsupported by backend.
 //   - option-u8-rt none side: none() missing from the wasm backend.
 //
 // All present checks pass against a correct callee. (list-u8-rt, option-u8-rt
 // some, and result-tuple-direction-rt ok used to fail to a backend bug —
 // byte-width payloads corrupted on lift — fixed in emit.rs and pinned by
-// tests/backend_byte_width.rs.)
+// tests/backend_byte_width.rs. Goal 4 made dep variant/enum cases
+// constructible (t/circle(1.0), t/north — 4.1) and payload-less results
+// spellable and constructible (result-rt, the err side of result-u32-rt,
+// the ok side of result-string-err-rt — 4.2).)
 
+Import {pkg: "roundtrip:suite/types" as: t}
 Import {pkg: "roundtrip:suite/values" as: iv}
 Import {pkg: "roundtrip:suite/resources" as: ir}
 
@@ -55,7 +52,22 @@ Def values-fails Fn {}
              check("list-string-rt" eq(iv/list-string-rt(["a" ""]) ["a!" "!"]))
              check("list-list-u8-rt" eq(iv/list-list-u8-rt([[1] []]) [[2] []]))
              check("option-u8-rt some" eq(iv/option-u8-rt(some(7)) some(8)))
+             check("option-shape-rt some"
+                   eq(iv/option-shape-rt(some(t/dot)) some(t/circle(1.0))))
+             check("shape-rt circle"
+                   eq(iv/shape-rt(t/circle(1.5)) t/circle(2.5)))
+             check("shape-rt rect"
+                   eq(iv/shape-rt(t/rect({x: 1 y: 2})) t/rect({x: 2 y: 3})))
+             check("shape-rt labelled"
+                   eq(iv/shape-rt(t/labelled("a")) t/labelled("a!")))
+             check("direction-rt" eq(iv/direction-rt(t/north) t/east))
+             check("direction-rt wrap" eq(iv/direction-rt(t/west) t/north))
+             check("result-rt ok->err" eq(iv/result-rt(ok()) err()))
+             check("result-rt err->ok" eq(iv/result-rt(err()) ok()))
              check("result-u32-rt ok" eq(iv/result-u32-rt(ok(3)) ok(4)))
+             check("result-u32-rt err" eq(iv/result-u32-rt(err()) err()))
+             check("result-string-err-rt ok"
+                   eq(iv/result-string-err-rt(ok()) ok()))
              check("result-string-err-rt err"
                    eq(iv/result-string-err-rt(err("bad")) err("bad!")))
              check("result-u32-string-rt ok"
@@ -64,10 +76,14 @@ Def values-fails Fn {}
                    eq(iv/result-u32-string-rt(err("no")) err("no!")))
              check("result-tuple-direction-rt ok"
                    eq(iv/result-tuple-direction-rt(ok(Quote (1 2))) ok(Quote (2 3))))
+             check("result-tuple-direction-rt err"
+                   eq(iv/result-tuple-direction-rt(err(t/south)) err(t/west)))
              check("tuple-rt" eq(iv/tuple-rt(Quote (1 "x" true)) Quote (2 "x!" false)))
              check("tuple-nested-rt"
                    eq(iv/tuple-nested-rt(Quote ({x: 1 y: 2} [3])) Quote ({x: 2 y: 3} [4])))
              check("point-rt" eq(iv/point-rt({x: 3 y: 4}) {x: 4 y: 5}))
+             check("points-rt" eq(iv/points-rt([{x: 1 y: 2} {x: 3 y: 4}])
+                                  [{x: 2 y: 3} {x: 4 y: 5}]))
              check("awkward-rt" eq(iv/awkward-rt({record: 1 list: "r"})
                                    {record: 2 list: "r!"}))
              check("no-params" eq(iv/no-params() 42))
@@ -97,16 +113,16 @@ Def resources-fails Fn {}
             "")
 
 Def report Fn {fails}
-  If eq(fails "") ok(true) err([fails])
+  If eq(fails "") ok() err([fails])
 
-Export {name: run iface: "roundtrip:suite/runner" params: {} result: result(bool list(string))}
+Export {name: run iface: "roundtrip:suite/runner" params: {} result: result(_ list(string))}
 Def run Fn {}
   report(str-cat(values-fails() resources-fails()))
 
-Export {name: run-values iface: "roundtrip:suite/runner" params: {} result: result(bool list(string))}
+Export {name: run-values iface: "roundtrip:suite/runner" params: {} result: result(_ list(string))}
 Def run-values Fn {}
   report(values-fails())
 
-Export {name: run-resources iface: "roundtrip:suite/runner" params: {} result: result(bool list(string))}
+Export {name: run-resources iface: "roundtrip:suite/runner" params: {} result: result(_ list(string))}
 Def run-resources Fn {}
   report(resources-fails())

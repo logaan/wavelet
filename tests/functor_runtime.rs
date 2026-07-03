@@ -153,7 +153,7 @@ static RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 const WORKED_EXAMPLE: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Def assert Fn {cond} If cond {} head([])
 Def run Fn {}
   Let {s: pts/new()}
@@ -234,7 +234,7 @@ fn build_emits_a_validating_set_resource() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export count-distinct
 Def count-distinct Fn {ps: list(point)}
   Let {s: pts/new()}
@@ -261,29 +261,34 @@ Def count-distinct Fn {ps: list(point)}
 }
 
 #[test]
-// An export that *returns* a `set` handle whose element is a *local record*
-// (the docs `nearest-set: func(..) -> point-set.set` shape) makes `api` and the
-// `point-set` interface mutually depend in WIT — `api` `use`s the handle while
-// `point-set` `use`s the record — a cycle the component model cannot express.
-// The backend rejects it with an honest, specific error rather than emitting WIT
-// that fails to parse. (Lifting this is follow-up work; an export deriving an
-// ordinary result from the set, as above, has no cycle and builds.)
-fn build_rejects_handle_returning_export_over_local_record() {
+// 4.7 — an export that *returns* a `set` handle whose element is a *local
+// record* (the docs `nearest-set: func(..) -> point-set.set` shape) used to be
+// rejected as a WIT interface cycle (`api` uses the handle, `point-set` uses
+// the record). The element record is now hoisted into a shared `types`
+// interface both sides `use`, so the shape BUILDS, and the emitted component's
+// WIT shows the hoisting. (Runtime behaviour of the returned handle is locked
+// by tests/backend_functor.rs::record_element_handle_return_hoists_the_element.)
+fn build_hoists_handle_returning_export_over_local_record() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export nearest-set
 Def nearest-set Fn {ps: list(point)}
   Let {s: pts/new()}
     Do [ pts/add(s {x: 1 y: 2})
          s ]"#;
 
-    let err = build_source(SRC)
-        .expect_err("a handle-returning export over a local record must not silently succeed");
+    let bytes =
+        build_source(SRC).expect("a handle-returning export over a local record now builds (4.7)");
+    let wit = wasm_tools_component_wit(&bytes);
     assert!(
-        err.contains("cycle") && err.contains("nearest-set"),
-        "build error should explain the WIT interface cycle, got: {err}"
+        wit.contains("interface types"),
+        "element record should be hoisted into a shared types interface:\n{wit}"
+    );
+    assert!(
+        wit.contains("use types.{point}"),
+        "both api and point-set should use the hoisted record:\n{wit}"
     );
 }
 

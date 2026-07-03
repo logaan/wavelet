@@ -39,6 +39,14 @@ pub struct Dep {
     /// generic bridge can lower/lift values of those kinds at the boundary.
     /// Defaulted empty for Wavelet deps, which only define records today.
     pub type_defs: Vec<(String, TypeDef)>,
+    /// named type *aliases* the dep defines (`type points = list<point>`):
+    /// name → underlying WIT type text, expanded by `wit_ty` before lowering
+    /// exactly like local `DefType` aliases (4.4).
+    pub aliases: Vec<(String, String)>,
+    /// which interface each named type is declared in: type name → interface
+    /// name. Drives `use <pkg>/<iface>.{type};` synthesis when a local export
+    /// signature references a dep-defined type (4.3).
+    pub type_ifaces: Vec<(String, String)>,
 }
 
 const SCRATCH: i32 = 0; // 0..16 reserved as canonical-ABI return area
@@ -963,6 +971,17 @@ pub fn dep_record_types(arena: &Arena, info: &FileInfo) -> Vec<(String, Vec<(Str
     record_types(arena, &info.types)
 }
 
+/// Public: non-record named types a sibling dependency file defines —
+/// variants/enums/flags as [`TypeDef`]s plus name → type-text aliases — so a
+/// sibling `.wlt` dep carries the same type surface a parsed WIT dep does
+/// (4.1/4.4: case constructors and alias expansion across the build set).
+pub fn dep_non_record_types(
+    arena: &Arena,
+    info: &FileInfo,
+) -> (Vec<(String, TypeDef)>, Vec<(String, String)>) {
+    local_non_record_types(arena, &info.types)
+}
+
 /// Non-record local `DefType`s, split into the two `TypeEnv` channels:
 ///   * variants/flags become [`TypeDef`]s (keyed by name) — `Node::Lst` is a
 ///     `variant` (payload-less cases are an enum, the same as a variant with all
@@ -1028,7 +1047,16 @@ fn local_non_record_types(
                     }
                 }
                 if ok {
-                    defs.push((name.clone(), TypeDef::Variant(resolved)));
+                    // All-payload-less cases are a WIT `enum` (matching what
+                    // `wit::type_decl` now synthesizes and what `witdep.rs`
+                    // builds for dep enums); any payload makes it a `variant`.
+                    // The flat ABI (a lone i32 discriminant) is identical.
+                    if resolved.iter().all(|(_, p)| p.is_none()) {
+                        let names = resolved.into_iter().map(|(n, _)| n).collect();
+                        defs.push((name.clone(), TypeDef::Enum(names)));
+                    } else {
+                        defs.push((name.clone(), TypeDef::Variant(resolved)));
+                    }
                 }
             }
             // A bare alias: `list<…>`, `tuple<…>`, `option<…>`, `result<…>`, or a
@@ -1192,12 +1220,29 @@ fn resolve_dep_func<'a>(
     Ok(first)
 }
 
+/// Whether `name` is a case of one of `dep`'s variant/enum types: `Some(true)`
+/// for a payloaded variant case, `Some(false)` for a payload-less variant or
+/// enum case, `None` when no type declares it (4.1).
+fn dep_case(dep: &Dep, name: &str) -> Option<bool> {
+    dep.type_defs.iter().find_map(|(_, def)| match def {
+        TypeDef::Enum(cases) => cases.iter().any(|c| c == name).then_some(false),
+        TypeDef::Variant(cases) => cases
+            .iter()
+            .find(|(c, _)| c == name)
+            .map(|(_, p)| p.is_some()),
+        _ => None,
+    })
+}
+
 struct Emitter<'a> {
     arena: &'a Arena,
     info: &'a FileInfo,
     deps: &'a HashMap<String, Dep>,
     type_env: TypeEnv, // record types in scope (local + deps), for boundary ABI
-    data: Vec<u8>,     // segment contents, lives at DATA_BASE
+    /// this file's own `DefType` variant/enum cases: case name → whether the
+    /// case carries a payload. Bare case names construct variant values (4.1).
+    local_cases: HashMap<String, bool>,
+    data: Vec<u8>, // segment contents, lives at DATA_BASE
     str_cache: HashMap<String, u32>,
     types: Vec<(Vec<ValType>, Vec<ValType>)>,
     imports: Vec<(String, String, u32)>, // module, field, type idx
@@ -1314,6 +1359,16 @@ impl<'a> Emitter<'a> {
                 return Err("flag literals not supported by the wasm backend yet".into());
             }
             Node::Qsym(a, n) => {
+                // A dep-declared nullary variant/enum case referenced through
+                // its import alias (`t/north`) is a payload-less variant box
+                // (4.1); anything else stays call-only.
+                if let Ok(dep) = self.dep_for_alias(&a)
+                    && dep_case(dep, &n) == Some(false)
+                {
+                    let addr = self.none_like_box(&n);
+                    fx.op(I::I32Const(addr as i32));
+                    return Ok(());
+                }
                 return Err(format!(
                     "`{a}/{n}` used as a value (only calls are supported)"
                 ));
@@ -1330,6 +1385,23 @@ impl<'a> Emitter<'a> {
             let addr = self.none_like_box("none");
             fx.op(I::I32Const(addr as i32));
             return Ok(());
+        }
+        // A nullary case of a local `DefType` variant/enum used as a value is
+        // a payload-less variant box, exactly like `none` (4.1). A payloaded
+        // case as a first-class value needs a closure wrapper — not yet.
+        match self.local_cases.get(name) {
+            Some(false) => {
+                let addr = self.none_like_box(name);
+                fx.op(I::I32Const(addr as i32));
+                return Ok(());
+            }
+            Some(true) => {
+                return Err(format!(
+                    "variant case constructor `{name}` used as a value is not \
+                     supported by the wasm backend yet (call it directly)"
+                ));
+            }
+            None => {}
         }
         if self.funcs.contains_key(name) {
             let addr = self.fn_value_box(name)?;
@@ -2119,6 +2191,21 @@ impl<'a> Emitter<'a> {
                         self.internal_call(fx, &name, args, tail)
                     } else if self.value_globals.contains_key(&name) {
                         self.closure_call(fx, head, args, tail)
+                    } else if let Some(&has_payload) = self.local_cases.get(name.as_str()) {
+                        // A `DefType` variant case constructor call (4.1): build
+                        // the variant box, bundling ≥2 payload args as a tuple
+                        // exactly like the interpreter's `CaseCtor`.
+                        if !has_payload || args.is_empty() {
+                            return Err(format!(
+                                "variant case `{name}` {} (wasm backend)",
+                                if has_payload {
+                                    "takes a payload, got no arguments"
+                                } else {
+                                    "is not callable"
+                                }
+                            ));
+                        }
+                        self.var_box(fx, &name, args)
                     } else {
                         Err(format!("unknown function `{name}` (wasm backend)"))
                     }
@@ -2219,11 +2306,12 @@ impl<'a> Emitter<'a> {
     /// current scope. Nested patterns keep `fail` because no blocks are opened.
     fn pattern(&mut self, fx: &mut FnCtx, pat: NodeId, v: u32, fail: u32) -> Result<(), String> {
         match self.arena.node(pat).clone() {
-            // `none` (the only builtin payload-less variant in v0) matches by
-            // equality; every other bare name binds. Mirrors the interpreter,
-            // which keys this off names bound to a payload-less variant.
-            Node::Sym(name) if name == "none" => {
-                let naddr = self.intern_str("none");
+            // `none` and the nullary cases of local `DefType` variants/enums
+            // match by equality; every other bare name binds. Mirrors the
+            // interpreter, which keys this off names bound to a payload-less
+            // variant (`none` builtin, DefType case bindings — 4.1).
+            Node::Sym(name) if name == "none" || self.local_cases.get(&name) == Some(&false) => {
+                let naddr = self.intern_str(&name);
                 fx.op(I::LocalGet(v));
                 fx.op(I::I32Load(ma(0, 2)));
                 fx.op(I::I32Const(TAG_VAR));
@@ -2234,7 +2322,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::BrIf(fail));
                 fx.op(I::LocalGet(v));
                 fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::I32Const(naddr as i32));
+                fx.op(I::I32Const(naddr as i32)); // case name must equal
                 fx.op(I::Call(self.h.eq_raw));
                 fx.op(I::I32Eqz);
                 fx.op(I::BrIf(fail));
@@ -2420,6 +2508,20 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// The [`Dep`] an import alias resolves to, if it names one in the build set.
+    fn dep_for_alias(&self, alias: &str) -> Result<&Dep, String> {
+        let imp = self
+            .info
+            .imports
+            .iter()
+            .find(|i| i.alias == alias)
+            .ok_or(format!("unknown import alias `{alias}`"))?;
+        self.deps.get(&imp.package).ok_or(format!(
+            "dependency `{}` is not in the build set",
+            imp.package
+        ))
+    }
+
     fn dep_call(
         &mut self,
         fx: &mut FnCtx,
@@ -2516,8 +2618,28 @@ impl<'a> Emitter<'a> {
         let iface = import_iface(&imp.path);
         // Resolve freestanding names directly, and resource operations
         // (`[method]`/`[static]`/`[constructor]`/`[resource-drop]`) by their
-        // bare op name.
-        let sig = resolve_dep_func(dep, &iface, fname)?.clone();
+        // bare op name. A name that is no function but IS a case of one of the
+        // dep's variant/enum types is a case constructor call (4.1).
+        let sig = match resolve_dep_func(dep, &iface, fname) {
+            Ok(sig) => sig.clone(),
+            Err(e) => {
+                return match dep_case(dep, fname) {
+                    Some(true) if !args.is_empty() => self.var_box(fx, fname, args),
+                    Some(true) => Err(format!(
+                        "variant case `{alias}/{fname}` takes a payload, got no arguments"
+                    )),
+                    Some(false) if args.is_empty() => {
+                        let addr = self.none_like_box(fname);
+                        fx.op(I::I32Const(addr as i32));
+                        Ok(())
+                    }
+                    Some(false) => Err(format!(
+                        "variant case `{alias}/{fname}` is not callable (use the bare name)"
+                    )),
+                    None => Err(e),
+                };
+            }
+        };
         let module = versioned_iface(&dep.package, &iface);
         // The host import is keyed by the *mangled* WIT name (`sig.name`), which
         // is what the import-signature loop declares and what `wit-component`
@@ -2954,6 +3076,20 @@ impl<'a> Emitter<'a> {
                 let v = fx.local(ValType::I32);
                 fx.op(I::LocalSet(v));
                 self.lift_flags(fx, v, names);
+            }
+            // A variant whose every case is payload-less (e.g. a bare
+            // `result`, 4.2) flattens to its lone i32 discriminant — exactly
+            // an enum's shape, so lift it the same way.
+            WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) if flat_len(ty) == 1 => {
+                let cases: Vec<String> = ty
+                    .variant_cases()
+                    .expect("variant-shaped type has cases")
+                    .iter()
+                    .map(|(n, _)| n.to_string())
+                    .collect();
+                let d = fx.local(ValType::I32);
+                fx.op(I::LocalSet(d));
+                self.lift_enum(fx, d, &cases, 0);
             }
             WitTy::Str
             | WitTy::List(_)
@@ -3838,7 +3974,13 @@ impl<'a> Emitter<'a> {
             }
             "some" | "ok" | "err" => {
                 // the argument(s) bundle into the variant payload, exactly as
-                // the interpreter binds it
+                // the interpreter binds it. `ok()`/`err()` with no arguments
+                // construct the payload-less case (4.2), like the interpreter.
+                if args.is_empty() && name != "some" {
+                    let addr = self.none_like_box(name);
+                    fx.op(I::I32Const(addr as i32));
+                    return Ok(());
+                }
                 return self.var_box(fx, name, args);
             }
             "form-kind" => {
@@ -3964,6 +4106,23 @@ fn emit_core_module(
     // export pass/return those types — matching the interpreter, which already
     // handles every element kind structurally.
     let (local_defs, local_aliases) = local_non_record_types(arena, &info.types);
+    // The file's own variant/enum cases, for bare case construction (4.1).
+    let mut local_cases: HashMap<String, bool> = HashMap::new();
+    for (_name, def) in &local_defs {
+        match def {
+            TypeDef::Enum(cases) => {
+                for c in cases {
+                    local_cases.insert(c.clone(), false);
+                }
+            }
+            TypeDef::Variant(cases) => {
+                for (c, p) in cases {
+                    local_cases.insert(c.clone(), p.is_some());
+                }
+            }
+            _ => {}
+        }
+    }
     for (name, def) in local_defs {
         type_env.defs.insert(name, def);
     }
@@ -3982,6 +4141,12 @@ fn emit_core_module(
                 .defs
                 .entry(name.clone())
                 .or_insert_with(|| def.clone());
+        }
+        for (name, target) in &dep.aliases {
+            type_env
+                .aliases
+                .entry(name.clone())
+                .or_insert_with(|| target.clone());
         }
     }
     // Each functor instantiation exports a `set` resource. Declaring `set` as a
@@ -4015,6 +4180,7 @@ fn emit_core_module(
         info,
         deps,
         type_env,
+        local_cases,
         data: Vec::new(),
         str_cache: HashMap::new(),
         types: Vec::new(),
@@ -4100,7 +4266,17 @@ fn emit_core_module(
         let iface = import_iface(&imp.path);
         // Same op-name resolution as `dep_call`, so a resource operation's
         // core import is declared under its mangled WIT name (`sig.name`).
-        let sig = resolve_dep_func(dep, &iface, fname)?;
+        // A dep *case constructor* call (`t/circle(…)`, 4.1) is not a runtime
+        // import — the variant box is built locally — so it declares nothing.
+        let sig = match resolve_dep_func(dep, &iface, fname) {
+            Ok(sig) => sig,
+            Err(e) => {
+                if dep_case(dep, fname).is_some() {
+                    continue;
+                }
+                return Err(e);
+            }
+        };
         let mut p = Vec::new();
         for (_, t) in &sig.params {
             p.extend_from_slice(&flat_checked(&wit_ty(t, &em.type_env)?)?);
@@ -4943,6 +5119,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         info: &info,
         deps: &deps,
         type_env: TypeEnv::default(),
+        local_cases: HashMap::new(),
         data: Vec::new(),
         str_cache: HashMap::new(),
         types: Vec::new(),
@@ -8232,6 +8409,84 @@ pub fn dep_package_wit(arena: &Arena, info: &FileInfo) -> Result<String, String>
     Ok(out)
 }
 
+/// The `use` clauses a local interface needs for the dep-defined type names
+/// its rendered signatures/type declarations reference (4.3): each entry is a
+/// versioned interface path (`acme:pts/types@0.3.1`) with the names to bring
+/// in. Tokenizes the WIT texts and keeps identifiers that are not primitives,
+/// WIT keywords, or locally-declared types, and that some imported dependency
+/// declares (records, variants/enums/flags, aliases, resources alike).
+fn dep_type_uses(
+    texts: &[String],
+    info: &FileInfo,
+    deps: &HashMap<String, Dep>,
+) -> Vec<(String, Vec<String>)> {
+    /// primitives, type constructors, and declaration keywords that can appear
+    /// in rendered WIT type text — never dep type names.
+    const RESERVED: &[&str] = &[
+        "bool",
+        "u8",
+        "u16",
+        "u32",
+        "u64",
+        "s8",
+        "s16",
+        "s32",
+        "s64",
+        "f32",
+        "f64",
+        "char",
+        "string",
+        "list",
+        "option",
+        "result",
+        "tuple",
+        "own",
+        "borrow",
+        "record",
+        "variant",
+        "enum",
+        "flags",
+        "type",
+        "func",
+        "resource",
+        "static",
+        "constructor",
+        "use",
+    ];
+    let local: std::collections::HashSet<&str> =
+        info.types.iter().map(|(n, _)| n.as_str()).collect();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for text in texts {
+        for tok in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
+            if tok.is_empty()
+                || tok == "_"
+                || RESERVED.contains(&tok)
+                || local.contains(tok)
+                || !seen.insert(tok.to_string())
+            {
+                continue;
+            }
+            // The first imported dependency declaring this name wins.
+            for imp in &info.imports {
+                let Some(dep) = deps.get(&imp.package) else {
+                    continue;
+                };
+                let Some((_, di)) = dep.type_ifaces.iter().find(|(n, _)| n == tok) else {
+                    continue;
+                };
+                let path = versioned_iface(&dep.package, di);
+                match out.iter_mut().find(|(p, _)| p == &path) {
+                    Some((_, names)) => names.push(tok.to_string()),
+                    None => out.push((path, vec![tok.to_string()])),
+                }
+                break;
+            }
+        }
+    }
+    out
+}
+
 fn synthesize_world_wit(
     arena: &Arena,
     info: &FileInfo,
@@ -8240,6 +8495,48 @@ fn synthesize_world_wit(
     let mut out = format!("package {};\n\n", info.package);
 
     let ifaces = crate::wit::iface_order(&info.exports, !info.types.is_empty());
+
+    // Hoisted local types (4.7). An export that returns (or takes) a functor
+    // handle makes its interface `use` the functor interface; when that
+    // functor's element is a local record, the functor interface would `use`
+    // the record back from `api` — a WIT interface cycle, which WIT cannot
+    // express. Break it by hoisting the element record (and any local types
+    // its declaration references, transitively) into a shared `types`
+    // interface that both `api` and the functor interface `use`.
+    let hoisted = crate::wit::hoisted_types(arena, info)?;
+    if !hoisted.is_empty() {
+        out.push_str("interface types {\n");
+        let mut texts: Vec<String> = Vec::new();
+        for name in &hoisted {
+            let (_, ty) = info
+                .types
+                .iter()
+                .find(|(n, _)| n == name)
+                .expect("hoisted names come from info.types");
+            let d = type_decl(arena, name, *ty)?;
+            texts.push(d.clone());
+            out.push_str(&format!("  {d}\n"));
+        }
+        // …their declarations may themselves reference dep types (4.3).
+        // (Re-rendered inside the loop; collect first to emit uses on top.)
+        let uses = dep_type_uses(&texts, info, deps);
+        if !uses.is_empty() {
+            // `use` lines must be re-emitted before the decls: rebuild.
+            let mut body = String::new();
+            for (use_path, names) in &uses {
+                body.push_str(&format!("  use {use_path}.{{{}}};\n", names.join(", ")));
+            }
+            for t in &texts {
+                body.push_str(&format!("  {t}\n"));
+            }
+            let start = out.rfind("interface types {\n").expect("just pushed");
+            out.truncate(start);
+            out.push_str("interface types {\n");
+            out.push_str(&body);
+        }
+        out.push_str("}\n\n");
+    }
+
     // External interfaces (e.g. wasi:http/incoming-handler, wasi:cli/run) are
     // defined by the dependency's WIT; we only export them by name, never
     // re-declare them here.
@@ -8265,48 +8562,6 @@ fn synthesize_world_wit(
             })
             .map(|f| f.iface.as_str())
             .collect();
-        // WIT forbids interface cycles. An export in `api` that *returns* (or
-        // takes) a functor handle makes `api` depend on the functor interface
-        // (`use point-set.{set}`); when that functor's element is a local record,
-        // the functor interface already depends back on `api` (`use api.{point}`).
-        // That `api ↔ point-set` cycle is not expressible in WIT — the encoder
-        // rejects it. This is the `nearest-set: func(..) -> point-set.set` shape
-        // in the docs example. Surface it as an honest, specific error rather than
-        // emitting WIT that fails to parse deep in the encoder. (An export whose
-        // result/params are ordinary types — e.g. `-> u32`/`-> bool` derived from
-        // set ops — has no such cycle and builds + validates fine. Lifting this
-        // limitation is future work, likely by hoisting the element record into a
-        // shared interface; tracked for step 04.)
-        for funct in &used {
-            if let Some(f) = info.functors.iter().find(|f| f.iface == *funct)
-                && info.types.iter().any(|(name, _)| name == &f.elem)
-            {
-                return Err(format!(
-                    "export `{}` in interface `{iface}` references the functor \
-                         handle `{}.set`, whose element type `{}` is a local record. \
-                         That makes `{iface}` and `{}` mutually depend (`{iface}` \
-                         `use`s the handle, `{}` `use`s the record) — a WIT interface \
-                         cycle, which the component model cannot express. An export \
-                         returning a `set` handle over a local record type is not yet \
-                         supported by the wasm backend; an export deriving an ordinary \
-                         result (e.g. `size`/`contains`) from the set works. \
-                         (Resource emission + routing of the handle return is tracked \
-                         for the functor build follow-up.)",
-                    sigs.iter()
-                        .find(|s| {
-                            let d = format!("{funct}.set");
-                            s.result.as_deref() == Some(d.as_str())
-                                || s.params.iter().any(|(_, t)| t == &d)
-                        })
-                        .map(|s| s.name.as_str())
-                        .unwrap_or("?"),
-                    funct,
-                    f.elem,
-                    funct,
-                    funct,
-                ));
-            }
-        }
         out.push_str(&format!("interface {iface} {{\n"));
         // Each functor interface names its resource `set`, so an interface that
         // references *two* functor handles (two instantiations, both returned or
@@ -8319,10 +8574,38 @@ fn synthesize_world_wit(
         for funct in &used {
             out.push_str(&format!("  use {funct}.{{set as {funct}-handle}};\n"));
         }
-        if iface == "api" {
-            for (name, ty) in &info.types {
-                out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
+        // Cross-package type references (4.3): a signature (or a local type
+        // declaration) may name a type a dependency's interface defines. WIT
+        // requires such names be brought into scope with a `use`, so collect
+        // every dep-defined name the interface's text references and emit
+        // `use <pkg>/<iface>@<ver>.{names};` per defining interface.
+        let mut texts: Vec<String> = Vec::new();
+        for sig in &sigs {
+            for (_, t) in &sig.params {
+                texts.push(t.clone());
             }
+            if let Some(r) = &sig.result {
+                texts.push(r.clone());
+            }
+        }
+        let mut api_decls: Vec<String> = Vec::new();
+        if iface == "api" {
+            // Hoisted element types (4.7) are declared in `types` and brought
+            // back into scope here; the rest declare in place as before.
+            if !hoisted.is_empty() {
+                out.push_str(&format!("  use types.{{{}}};\n", hoisted.join(", ")));
+            }
+            for (name, ty) in info.types.iter().filter(|(n, _)| !hoisted.contains(n)) {
+                let d = type_decl(arena, name, *ty)?;
+                texts.push(d.clone());
+                api_decls.push(d);
+            }
+        }
+        for (use_path, names) in dep_type_uses(&texts, info, deps) {
+            out.push_str(&format!("  use {use_path}.{{{}}};\n", names.join(", ")));
+        }
+        for d in &api_decls {
+            out.push_str(&format!("  {d}\n"));
         }
         for sig in &sigs {
             let mut line = sig.to_wit();
@@ -8339,7 +8622,16 @@ fn synthesize_world_wit(
     // (`wit::functor_interface`) so the WIT the encoder validates against and the
     // resource the wasm backend implements cannot drift.
     for f in &info.functors {
-        out.push_str(crate::wit::functor_interface(arena, f, &info.types)?.trim_start());
+        // The element's declaring interface: `types` once hoisted (4.7), `api`
+        // for an un-hoisted local type, none for a primitive element.
+        let elem_iface = if hoisted.contains(&f.elem) {
+            Some("types")
+        } else if info.types.iter().any(|(n, _)| n == &f.elem) {
+            Some("api")
+        } else {
+            None
+        };
+        out.push_str(crate::wit::functor_interface(arena, f, elem_iface)?.trim_start());
         out.push('\n');
     }
 
@@ -8362,6 +8654,11 @@ fn synthesize_world_wit(
             "  import {};\n",
             versioned_iface(&dep.package, &iface)
         ));
+    }
+    // The hoisted `types` interface (4.7) is exported so the interfaces that
+    // `use` it resolve in the encoded component.
+    if !hoisted.is_empty() {
+        out.push_str("  export types;\n");
     }
     for iface in &ifaces {
         if is_external_iface(iface) {
@@ -8511,6 +8808,7 @@ world app {
             info: &info,
             deps: &deps,
             type_env: TypeEnv::default(),
+            local_cases: HashMap::new(),
             data: Vec::new(),
             str_cache: HashMap::new(),
             types: Vec::new(),

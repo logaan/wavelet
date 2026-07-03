@@ -11,11 +11,12 @@ pub struct FileInfo {
     /// world name, e.g. `shout`
     pub world: String,
     pub imports: Vec<ImportInfo>,
-    /// Compile-time functor instantiations: an `Import {pkg: … elem: T as: alias}`
-    /// is not a runtime import but a request to stamp out a monomorphic component
-    /// specialized at element type `T` (Steps 10–11). Recorded here instead of in
-    /// `imports`, so synthesis emits a specialized interface rather than an
-    /// `import` of the (non-existent) functor package.
+    /// Compile-time functor instantiations: an `Instantiate {pkg: … with:
+    /// {elem: T} as: alias}` (4.6.1) is not a runtime import but a request to
+    /// stamp out a monomorphic component specialized at element type `T`
+    /// (Steps 10–11). Recorded here instead of in `imports`, so synthesis
+    /// emits a specialized interface rather than an `import` of the
+    /// (non-existent) functor package.
     pub functors: Vec<FunctorInst>,
     pub exports: Vec<FuncSig>,
     pub types: Vec<(String, NodeId)>,
@@ -74,7 +75,8 @@ pub enum FunctorKind {
     Set,
 }
 
-/// One `Import {pkg: … elem: T as: alias}` functor instantiation (Steps 10–11).
+/// One `Instantiate {pkg: … with: {elem: T} as: alias}` functor instantiation
+/// (Steps 10–11, spelling per 4.6.1).
 pub struct FunctorInst {
     pub kind: FunctorKind,
     /// the `as:` alias used to qualify the functor's ops (`pts/new`, `pts/add`, …)
@@ -181,18 +183,34 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                     package = Some(s.clone());
                 }
             }
+            // `Instantiate {pkg: … with: {elem: t} as: alias}` applies a
+            // compile-time functor (4.6, decision 4.6.1 option 1): stamp out a
+            // monomorphic interface specialized at the `with:` arguments. It is
+            // recorded in `functors` and never reaches the ordinary `imports`
+            // list, so synthesis emits the specialized interface rather than an
+            // `import <functor pkg>;`.
+            "instantiate-MACRO" => {
+                let Some(&p) = items.get(1) else { continue };
+                let Node::Rec(fields) = arena.node(p) else {
+                    return Err("malformed Instantiate (expects a record)".into());
+                };
+                functors.push(parse_instantiate(arena, fields)?);
+            }
             "import-MACRO" => {
                 let Some(&p) = items.get(1) else { continue };
-                // An `Import` carrying `elem:` is a *functor instantiation* (Steps
-                // 10–11), not a runtime import: stamp out a monomorphic component
-                // specialized at that element type. It is recorded in `functors`
-                // and never reaches the ordinary `imports` list, so synthesis emits
-                // a specialized interface rather than `import <functor pkg>;`.
+                // `Import` brings an unparameterized dependency into scope;
+                // functor application moved to its own `Instantiate` form
+                // (4.6.1). Importing a functor package is an actionable error.
                 if let Node::Rec(fields) = arena.node(p)
-                    && let Some(inst) = parse_functor(arena, fields)?
+                    && let Some(pkg) = record_pkg(arena, fields)
+                    && is_functor_pkg(&pkg)
                 {
-                    functors.push(inst);
-                    continue;
+                    return Err(format!(
+                        "`{}` is a functor package: apply it with \
+                         `Instantiate {{pkg: … with: {{elem: t}} as: alias}}`, \
+                         not `Import`",
+                        strip_version(&pkg)
+                    ));
                 }
                 let spec = match arena.node(p) {
                     Node::Str(s) => Some((s.clone(), None, false, None)),
@@ -447,55 +465,67 @@ fn strip_version(s: &str) -> String {
     s.split('@').next().unwrap_or(s).to_string()
 }
 
-/// Parse an `Import` record as a functor instantiation, keyed on the `pkg:`
-/// *package identity* — not on the presence of any particular field. A record
-/// whose `pkg:` is a recognized functor package (currently only
-/// `wavelet:coll/set`) is a functor instantiation; anything else returns
-/// `Ok(None)` so the caller treats it as an ordinary import (whose unknown
-/// fields, such as a generic `elem:`, are simply ignored). Only once the package
-/// is known to be a functor is a missing `elem:` an error, since at that point
-/// the record is a malformed functor instantiation.
-fn parse_functor(
-    arena: &Arena,
-    fields: &[(String, NodeId)],
-) -> Result<Option<FunctorInst>, String> {
-    // Classify on the package, not the fields: read `pkg:` first and bail out as
-    // an ordinary import unless it names a known functor package.
-    let pkg = fields
+/// The `pkg:` field of an `Import`/`Instantiate` record, if present.
+fn record_pkg(arena: &Arena, fields: &[(String, NodeId)]) -> Option<String> {
+    fields
         .iter()
         .find_map(|(k, v)| match (k.as_str(), arena.node(*v)) {
             ("pkg", Node::Str(s)) => Some(s.clone()),
             _ => None,
-        });
-    let Some(pkg) = pkg else { return Ok(None) };
+        })
+}
+
+/// Whether a package id names a compile-time functor the compiler knows
+/// intrinsically (currently only `wavelet:coll/set`).
+fn is_functor_pkg(pkg: &str) -> bool {
+    strip_version(pkg).ends_with("coll/set")
+}
+
+/// Parse an `Instantiate {pkg: … with: {…} as: alias}` record (4.6, decision
+/// 4.6.1): `pkg:` must name a known functor package, and the functor's
+/// parameters are passed *by name* in the `with:` record — for `Set`, the
+/// single parameter `elem:`. The `as:` alias defaults to the trailing path
+/// segment, as for ordinary imports.
+fn parse_instantiate(arena: &Arena, fields: &[(String, NodeId)]) -> Result<FunctorInst, String> {
+    let pkg = record_pkg(arena, fields).ok_or("Instantiate is missing `pkg:`")?;
     let path = strip_version(&pkg);
-    let kind = if path.ends_with("coll/set") {
-        FunctorKind::Set
-    } else {
-        // Not a functor package: an ordinary import that merely shares a field
-        // name (e.g. `elem:`) with the functor form. Leave it for the caller.
-        return Ok(None);
-    };
-    // From here the package *is* a functor, so the instantiation must be
-    // well-formed: an `elem:` is required.
+    if !is_functor_pkg(&pkg) {
+        return Err(format!(
+            "`{path}` is not a functor package (known functors: wavelet:coll/set)"
+        ));
+    }
+    let kind = FunctorKind::Set;
     let mut alias = None;
-    let mut elem = None;
+    let mut with: Vec<(String, NodeId)> = Vec::new();
     for (k, v) in fields {
         match (k.as_str(), arena.node(*v)) {
             ("as", Node::Sym(s)) => alias = Some(s.clone()),
-            ("elem", _) => elem = Some(type_text(arena, *v)?),
+            ("with", Node::Rec(args)) => with = args.clone(),
             _ => {}
         }
     }
-    let elem = elem.ok_or_else(|| format!("functor Import `{path}` is missing `elem:`"))?;
+    // Arguments bind the functor's parameters by name; `Set` takes `elem`.
+    let mut elem = None;
+    for (k, v) in &with {
+        match k.as_str() {
+            "elem" => elem = Some(type_text(arena, *v)?),
+            other => {
+                return Err(format!(
+                    "functor `{path}` has no parameter `{other}` (expected `elem:`)"
+                ));
+            }
+        }
+    }
+    let elem =
+        elem.ok_or_else(|| format!("Instantiate of `{path}` is missing `with: {{elem: …}}`"))?;
     let alias = alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
     let iface = format!("{elem}-set");
-    Ok(Some(FunctorInst {
+    Ok(FunctorInst {
         kind,
         alias,
         elem,
         iface,
-    }))
+    })
 }
 
 /// The result type of one functor op: `Some(t)` is a Known WIT type, `None` is
@@ -963,12 +993,34 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
     out.push_str(&format!("package {};\n", info.package));
 
     let ifaces = iface_order(&info.exports, !info.types.is_empty());
+
+    // Hoisted local types (4.7), mirroring `emit::synthesize_world_wit`: when
+    // an export references a functor handle whose element is a local type, the
+    // element's declaration moves into a shared `types` interface so `api` and
+    // the functor interface need not `use` each other (a WIT cycle).
+    let hoisted = hoisted_types(arena, info)?;
+    if !hoisted.is_empty() {
+        out.push_str("\ninterface types {\n");
+        for name in &hoisted {
+            let (_, ty) = info
+                .types
+                .iter()
+                .find(|(n, _)| n == name)
+                .expect("hoisted names come from info.types");
+            out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
+        }
+        out.push_str("}\n");
+    }
+
     // External interfaces (e.g. wasi:http/incoming-handler) are defined by the
     // host's WIT; we only export them by name, never re-declare them.
     for iface in ifaces.iter().filter(|i| !is_external_iface(i)) {
         out.push_str(&format!("\ninterface {iface} {{\n"));
         if iface == "api" {
-            for (name, ty) in &info.types {
+            if !hoisted.is_empty() {
+                out.push_str(&format!("  use types.{{{}}};\n", hoisted.join(", ")));
+            }
+            for (name, ty) in info.types.iter().filter(|(n, _)| !hoisted.contains(n)) {
                 out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
             }
         }
@@ -979,10 +1031,17 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
     }
 
     // Functor instantiations stamp out a specialized, monomorphic interface each
-    // (Steps 10–11). `Import {pkg: "wavelet:coll/set" elem: T as: …}` produces a
+    // (Steps 10–11). `Instantiate {pkg: "wavelet:coll/set" with: {elem: T} as: …}` produces a
     // `T-set` interface holding the element-specialized `set` resource (fig-wit).
     for f in &info.functors {
-        out.push_str(&functor_interface(arena, f, &info.types)?);
+        let elem_iface = if hoisted.contains(&f.elem) {
+            Some("types")
+        } else if info.types.iter().any(|(name, _)| name == &f.elem) {
+            Some("api")
+        } else {
+            None
+        };
+        out.push_str(&functor_interface(arena, f, elem_iface)?);
     }
 
     out.push_str(&format!("\nworld {} {{\n", info.world));
@@ -1000,6 +1059,9 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
         } else if !host_only {
             out.push_str(&format!("  import {};\n", imp.path));
         }
+    }
+    if !hoisted.is_empty() && !host_only {
+        out.push_str("  export types;\n");
     }
     for iface in &ifaces {
         if is_external_iface(iface) {
@@ -1024,24 +1086,24 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
 /// SAME interface text from the SAME `SET_OPS` source as `wavelet wit` does —
 /// the resource the wasm backend implements and the WIT the encoder validates
 /// against cannot drift.
-/// `local_types` are the file's own `DefType` names (those that land in the
-/// `api` interface). When the element type is one of them, the specialized
-/// functor interface must `use api.{<elem>};` to bring the record into scope —
-/// a primitive element (`s32`, `string`, …) needs no `use`.
+/// `elem_iface` is the interface that *declares* the element type, when the
+/// element is a locally-defined type: the specialized functor interface then
+/// `use`s it (`use api.{point};`, or `use types.{point};` once the element has
+/// been hoisted to break a cycle — 4.7). `None` for a primitive element
+/// (`s32`, `string`, …), which needs no `use`.
 pub(crate) fn functor_interface(
     _arena: &Arena,
     f: &FunctorInst,
-    local_types: &[(String, NodeId)],
+    elem_iface: Option<&str>,
 ) -> Result<String, String> {
     match f.kind {
         FunctorKind::Set => {
             let t = &f.elem;
-            // The element references a locally-defined record (it appears in the
-            // `api` interface): bring it into scope with a `use`.
-            let uses = if local_types.iter().any(|(name, _)| name == t) {
-                format!("  use api.{{{t}}};\n")
-            } else {
-                String::new()
+            // The element references a locally-defined record: bring it into
+            // scope with a `use` from its declaring interface.
+            let uses = match elem_iface {
+                Some(iface) => format!("  use {iface}.{{{t}}};\n"),
+                None => String::new(),
             };
             // Build the resource members from `SET_OPS`, the same descriptor that
             // drives the inference op-table, so the two cannot drift.
@@ -1074,6 +1136,59 @@ pub(crate) fn functor_interface(
     }
 }
 
+/// The local types to hoist into a shared `types` interface (4.7): the element
+/// types of every functor whose handle some export signature references (as
+/// the dotted `<iface>.set` text), plus — transitively — any local types those
+/// declarations reference. Hoisting breaks the `api ↔ <elem>-set` WIT
+/// interface cycle: both sides `use types.{…}` instead of each other. Shared
+/// by [`synthesize_info`] and `emit::synthesize_world_wit` so the two
+/// renderers cannot disagree. Empty when no export returns/takes a handle
+/// over a local element.
+pub(crate) fn hoisted_types(arena: &Arena, info: &FileInfo) -> Result<Vec<String>, String> {
+    let handle_referenced = |f: &FunctorInst| {
+        let dotted = format!("{}.set", f.iface);
+        info.exports.iter().any(|s| {
+            s.result.as_deref() == Some(dotted.as_str())
+                || s.params.iter().any(|(_, t)| t == &dotted)
+        })
+    };
+    let mut hoisted: Vec<String> = Vec::new();
+    for f in info.functors.iter().filter(|f| handle_referenced(f)) {
+        if info.types.iter().any(|(n, _)| n == &f.elem) && !hoisted.contains(&f.elem) {
+            hoisted.push(f.elem.clone());
+        }
+    }
+    // Transitively pull in local types the hoisted declarations reference.
+    let mut i = 0;
+    while i < hoisted.len() {
+        let name = hoisted[i].clone();
+        i += 1;
+        let Some((_, ty)) = info.types.iter().find(|(n, _)| n == &name) else {
+            continue;
+        };
+        let text = type_decl(arena, &name, *ty)?;
+        for (other, _) in &info.types {
+            if !hoisted.contains(other)
+                && text
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+                    .any(|tok| tok == other)
+            {
+                hoisted.push(other.clone());
+            }
+        }
+    }
+    if !hoisted.is_empty()
+        && (info.exports.iter().any(|s| s.iface == "types")
+            || info.functors.iter().any(|f| f.iface == "types"))
+    {
+        return Err(
+            "cannot hoist functor element types: the interface name `types` is already taken"
+                .into(),
+        );
+    }
+    Ok(hoisted)
+}
+
 /// An interface that names an external WIT interface directly — it contains a
 /// `:` (e.g. `wasi:http/incoming-handler`) — rather than a local one like `api`.
 fn is_external_iface(iface: &str) -> bool {
@@ -1096,6 +1211,20 @@ pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String
         }
         Node::Flg(names) => Ok(format!("flags {name} {{ {} }}", names.join(", "))),
         Node::Lst(cases) => {
+            // A list whose cases are all payload-less is a WIT `enum`; any
+            // payloaded case makes it a `variant` (4.1). Same single-i32
+            // discriminant ABI either way, but the synthesized WIT now says
+            // what a WIT author would say.
+            if cases.iter().all(|&c| matches!(arena.node(c), Node::Sym(_))) {
+                let names: Vec<String> = cases
+                    .iter()
+                    .map(|&c| match arena.node(c) {
+                        Node::Sym(s) => s.clone(),
+                        _ => unreachable!("all-Sym checked above"),
+                    })
+                    .collect();
+                return Ok(format!("enum {name} {{ {} }}", names.join(", ")));
+            }
             let mut parts = Vec::new();
             for &c in cases {
                 match arena.node(c) {

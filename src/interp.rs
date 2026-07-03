@@ -154,6 +154,19 @@ impl Interp {
                 Ok(Step::Jump(c.arena.clone(), c.body, env))
             }
             Value::Builtin(name) => Ok(Step::Done(builtins::call(self, name, arg, env)?)),
+            // A `DefType` variant case constructor: wrap the bundled argument
+            // as its case's payload (4.1). Zero-argument application (`arg` is
+            // the empty tuple) is rejected — a payloaded case needs a payload;
+            // the checker enforces the exact arity statically.
+            Value::CaseCtor(case) => match arg {
+                Value::Tup(items) if items.is_empty() => err(format!(
+                    "variant case `{case}` takes a payload, got no arguments"
+                )),
+                payload => Ok(Step::Done(Value::Variant(
+                    case.clone(),
+                    Some(Rc::new(payload)),
+                ))),
+            },
             other => err(format!(
                 "not callable: {}",
                 crate::value::print_value(other)
@@ -288,7 +301,40 @@ impl Interp {
                 let [_ty, expr] = args2(args, "The")?;
                 Step::Jump(arena.clone(), expr, env.clone())
             }
-            "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO" => {
+            // `DefType` declares a nominal type; evaluating it binds the
+            // declaration's *case constructors* (4.1): each nullary case of a
+            // variant/enum becomes a payload-less `Variant` value (like
+            // `none`), each payloaded case a `CaseCtor`. Record/flags/alias
+            // declarations bind nothing. The static side (checking, WIT
+            // synthesis) reads the declaration separately (`crate::check`,
+            // `crate::wit`).
+            "deftype-MACRO" => {
+                let [name_id, decl] = args2(args, "DefType")?;
+                let Node::Sym(_) = arena.node(name_id) else {
+                    return err("DefType expects a name");
+                };
+                if let Node::Lst(cases) = arena.node(decl) {
+                    for &c in cases {
+                        match arena.node(c) {
+                            Node::Sym(case) => {
+                                env.define(case.clone(), Value::Variant(case.clone(), None));
+                            }
+                            Node::Tup(case_items) => {
+                                let Some(&h) = case_items.first() else {
+                                    return err("bad variant case in DefType");
+                                };
+                                let Node::Sym(case) = arena.node(h) else {
+                                    return err("bad variant case in DefType");
+                                };
+                                env.define(case.clone(), Value::CaseCtor(case.clone()));
+                            }
+                            _ => return err("bad variant case in DefType"),
+                        }
+                    }
+                }
+                Step::Done(unit())
+            }
+            "package-MACRO" | "import-MACRO" | "instantiate-MACRO" | "export-MACRO" => {
                 return err(format!(
                     "`{}` is only allowed at the top level of a file",
                     name.trim_end_matches("-MACRO")

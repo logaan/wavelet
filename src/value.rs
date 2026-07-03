@@ -18,6 +18,9 @@ pub enum Value {
     Flg(Vec<String>),
     /// variant case; payload-less cases double as symbols under quote
     Variant(String, Option<Rc<Value>>),
+    /// constructor of a payloaded `DefType` variant case (4.1): applying it
+    /// wraps the bundled argument as `Variant(case, Some(payload))`
+    CaseCtor(String),
     Closure(Rc<Closure>),
     Macro(Rc<Closure>),
     Builtin(&'static str),
@@ -79,6 +82,7 @@ impl PartialEq for Value {
             (Variant(a, p), Variant(b, q)) => a == b && p == q,
             (Closure(a), Closure(b)) | (Macro(a), Macro(b)) => Rc::ptr_eq(a, b),
             (Builtin(a), Builtin(b)) => a == b,
+            (CaseCtor(a), CaseCtor(b)) => a == b,
             (Cell(a), Cell(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
@@ -176,6 +180,10 @@ pub fn value_to_form(value: &Value, arena: &mut Arena) -> Result<NodeId, String>
             Node::Rec(out)
         }
         Value::Flg(names) => Node::Flg(names.clone()),
+        // An unapplied case constructor serializes as its bare case name, so a
+        // macro can emit a constructor reference (it re-reads as the same
+        // constructor when the DefType is in scope).
+        Value::CaseCtor(name) => sym_node(name),
         Value::Closure(_) | Value::Macro(_) | Value::Builtin(_) | Value::Cell(_) => {
             return Err("this value cannot appear in code".into());
         }
@@ -253,6 +261,11 @@ fn write_value(v: &Value, out: &mut String) {
         Value::Macro(_) => out.push_str("<macro>"),
         Value::Builtin(name) => {
             out.push_str("<builtin ");
+            out.push_str(name);
+            out.push('>');
+        }
+        Value::CaseCtor(name) => {
+            out.push_str("<constructor ");
             out.push_str(name);
             out.push('>');
         }

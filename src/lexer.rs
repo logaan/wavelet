@@ -109,6 +109,16 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
                     i = next;
                 }
             }
+            // A standalone `_` is the type placeholder (WIT's absent result
+            // arm: `result(_ e)`). Only the lone underscore lexes; `_` is not
+            // a name character, so `_foo`/`foo_` stay errors.
+            '_' if b
+                .get(i + 1)
+                .is_none_or(|&ch| !is_name_char(ch) && ch != b'_') =>
+            {
+                out.push((Tok::Ident("_".to_string()), span(i, i + 1)));
+                i += 1;
+            }
             '%' | 'a'..='z' | 'A'..='Z' => {
                 let start = i;
                 let (tok, next) = lex_name(src, i)?;

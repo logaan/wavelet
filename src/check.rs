@@ -134,13 +134,16 @@ impl Type {
                 match (ctor.as_str(), args) {
                     ("list", [elem]) => Type::List(Box::new(Type::from_form(arena, *elem))),
                     ("option", [elem]) => Type::Option(Box::new(Type::from_form(arena, *elem))),
-                    ("result", [ok]) => Type::Result(
-                        Box::new(Type::from_form(arena, *ok)),
-                        Box::new(Type::Unknown),
-                    ),
+                    // A result arm can be absent — spelled `_` (4.2): `result(t)`
+                    // has no err payload, `result(_ e)` no ok payload. An absent
+                    // arm is carried as `Type::Unit` (the language has no unit
+                    // value, so Unit-in-a-result-arm is unambiguous: no payload).
+                    ("result", [ok]) => {
+                        Type::Result(Box::new(Self::result_arm(arena, *ok)), Box::new(Type::Unit))
+                    }
                     ("result", [ok, err]) => Type::Result(
-                        Box::new(Type::from_form(arena, *ok)),
-                        Box::new(Type::from_form(arena, *err)),
+                        Box::new(Self::result_arm(arena, *ok)),
+                        Box::new(Self::result_arm(arena, *err)),
                     ),
                     ("tuple", elems) => {
                         Type::Tuple(elems.iter().map(|&e| Type::from_form(arena, e)).collect())
@@ -152,12 +155,23 @@ impl Type {
         }
     }
 
+    /// One arm of a `result(…)` type form: `_` means the arm carries no
+    /// payload (encoded `Type::Unit`); anything else parses normally (4.2).
+    fn result_arm(arena: &Arena, id: NodeId) -> Type {
+        if matches!(arena.node(id), Node::Sym(s) if s == "_") {
+            return Type::Unit;
+        }
+        Type::from_form(arena, id)
+    }
+
     /// Parse a primitive WIT type name. Unknown names (including user `DefType`
     /// names we cannot resolve here) become `Named`/`Unknown` so they stay
     /// gradual.
     fn from_name(s: &str) -> Type {
         match s {
             "bool" => Type::Bool,
+            // A bare `result` type is the double-payload-less result (4.2).
+            "result" => Type::Result(Box::new(Type::Unit), Box::new(Type::Unit)),
             "tree" => Type::Tree,
             "u8" => Type::U8,
             "u16" => Type::U16,
@@ -227,6 +241,14 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
         (FloatLit, t) | (t, FloatLit) if t.is_float() => Some(t.clone()),
         (FloatLit, FloatLit) => Some(FloatLit),
 
+        // A quoted form (`tree`) where a tuple or list is expected: the docs
+        // bless `Quote (1 2)` as the literal-tuple spelling ("a literal tuple
+        // value comes from Quote"), and a quoted tuple/list IS a runtime
+        // tuple/list, so this unifies gradually toward the concrete side
+        // rather than falsely rejecting a boundary call.
+        (Tree, t @ Tuple(_)) | (t @ Tuple(_), Tree) => Some(t.clone()),
+        (Tree, t @ List(_)) | (t @ List(_), Tree) => Some(t.clone()),
+
         // Containers unify element-wise.
         (List(x), List(y)) => Some(List(Box::new(unify(tbl, x, y)?))),
         (Option(x), Option(y)) => Some(Option(Box::new(unify(tbl, x, y)?))),
@@ -264,10 +286,14 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             None => Some(Named(n.clone())),
         },
 
+        // An unresolved nominal name (declared by a dependency, not in this
+        // module's table) stays gradual against ANY type — it may be an alias
+        // of anything (`points = list<point>`, 4.4) — rather than falsely
+        // rejecting. Resolved names keep the strict arms below.
+        (Named(n), _) | (_, Named(n)) if !tbl.contains_key(n) => Some(Named(n.clone())),
+
         // A structural record literal against a nominal record type: resolve
-        // the name and unify field-wise; the nominal name wins. An unresolved
-        // nominal name (e.g. a type declared in another component) stays
-        // gradual rather than falsely rejecting.
+        // the name and unify field-wise; the nominal name wins.
         (Named(n), Record(fs)) | (Record(fs), Named(n)) => match tbl.get(n) {
             Some(TypeDef::Record(dfs)) => {
                 unify_fields(tbl, dfs, fs)?;
@@ -486,13 +512,18 @@ fn type_from_wit_text(text: &str) -> Type {
         .strip_prefix("result<")
         .and_then(|t| t.strip_suffix('>'))
     {
+        // An absent arm (WIT `_`, or a missing err arm) is `Type::Unit` (4.2).
+        let arm = |s: &str| {
+            if s.trim() == "_" {
+                Type::Unit
+            } else {
+                type_from_wit_text(s)
+            }
+        };
         let parts = split_wit_args(inner);
         return match parts.as_slice() {
-            [ok] => Type::Result(Box::new(type_from_wit_text(ok)), Box::new(Type::Unknown)),
-            [ok, err] => Type::Result(
-                Box::new(type_from_wit_text(ok)),
-                Box::new(type_from_wit_text(err)),
-            ),
+            [ok] => Type::Result(Box::new(arm(ok)), Box::new(Type::Unit)),
+            [ok, err] => Type::Result(Box::new(arm(ok)), Box::new(arm(err))),
             _ => Type::Unknown,
         };
     }
@@ -564,7 +595,13 @@ pub(crate) fn type_to_wit(t: &Type) -> Option<String> {
         Type::FloatLit => Some("f64".into()),
         Type::List(e) => Some(format!("list<{}>", type_to_wit(e)?)),
         Type::Option(e) => Some(format!("option<{}>", type_to_wit(e)?)),
-        Type::Result(o, e) => Some(format!("result<{}, {}>", type_to_wit(o)?, type_to_wit(e)?)),
+        // Absent arms (`Type::Unit`) render in WIT's elided forms (4.2).
+        Type::Result(o, e) => Some(match (&**o, &**e) {
+            (Type::Unit, Type::Unit) => "result".to_string(),
+            (Type::Unit, _) => format!("result<_, {}>", type_to_wit(e)?),
+            (_, Type::Unit) => format!("result<{}>", type_to_wit(o)?),
+            _ => format!("result<{}, {}>", type_to_wit(o)?, type_to_wit(e)?),
+        }),
         Type::Tuple(ts) => {
             let parts: Option<Vec<String>> = ts.iter().map(type_to_wit).collect();
             Some(format!("tuple<{}>", parts?.join(", ")))
@@ -978,7 +1015,11 @@ impl<'a> Checker<'a> {
         };
         matches!(
             h.as_str(),
-            "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO"
+            "package-MACRO"
+                | "import-MACRO"
+                | "instantiate-MACRO"
+                | "export-MACRO"
+                | "deftype-MACRO"
         ) || (h.ends_with("-MACRO")
             && !matches!(
                 h.as_str(),
@@ -1071,11 +1112,13 @@ impl<'a> Checker<'a> {
             return Ok(Type::Unknown);
         }
         // A nullary case of a `DefType` variant used as a value: its nominal
-        // variant type (3.3).
-        if let Some((tyname, payload)) = self.variant_cases.get(name)
-            && payload.is_empty()
-        {
-            return Ok(Type::Named(tyname.clone()));
+        // variant type (3.3). A *payloaded* case used as a value is the case's
+        // constructor function — first-class functions are gradual (Phase D).
+        if let Some((tyname, payload)) = self.variant_cases.get(name) {
+            if payload.is_empty() {
+                return Ok(Type::Named(tyname.clone()));
+            }
+            return Ok(Type::Unknown);
         }
         Err(format!("eval error: unbound name `{name}`"))
     }
@@ -1289,9 +1332,8 @@ impl<'a> Checker<'a> {
             // Top-level file forms (`Package`/`Import`/`Export`/`DefType`)
             // carry annotations, not value expressions: opaque to the value
             // checker.
-            "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO" => {
-                Ok(Type::Unknown)
-            }
+            "package-MACRO" | "import-MACRO" | "instantiate-MACRO" | "export-MACRO"
+            | "deftype-MACRO" => Ok(Type::Unknown),
             // Any other `-MACRO` head is a user (or foreign) macro call that
             // `eval_snippet` expands at runtime. We cannot statically see
             // through it, so check nothing and stay gradual. Crucially we do NOT
@@ -1440,6 +1482,14 @@ impl<'a> Checker<'a> {
         args: &[NodeId],
         scope: &mut Scope,
     ) -> Result<Type, String> {
+        // A nullary case is a value, not a function: `north()` is an error the
+        // interpreter also raises ("not callable"); write the bare name.
+        if payload.is_empty() {
+            return Err(format!(
+                "eval error: variant case `{case}` of `{tyname}` takes no payload \
+                 and is not callable; write the bare case name"
+            ));
+        }
         if args.len() != payload.len() {
             return Err(format!(
                 "eval error: variant case `{case}` of `{tyname}` takes {} argument(s), got {}",
@@ -1771,13 +1821,16 @@ impl<'a> Checker<'a> {
             // the other side stays unconstrained until unified against context.
             // Multiple args bundle to a tuple payload (`some(1 2)`).
             "some" => Ok(Type::Option(Box::new(ctor_payload(&arg_tys)))),
+            // `ok()`/`err()` with no argument construct the payload-less case
+            // (4.2): the constructed arm is absent (`Unit`); the other arm is
+            // unconstrained until unified against context.
             "ok" => Ok(Type::Result(
-                Box::new(ctor_payload(&arg_tys)),
+                Box::new(result_ctor_payload(&arg_tys)),
                 Box::new(Type::Unknown),
             )),
             "err" => Ok(Type::Result(
                 Box::new(Type::Unknown),
-                Box::new(ctor_payload(&arg_tys)),
+                Box::new(result_ctor_payload(&arg_tys)),
             )),
             // Sequence ops (3.5/3.8): element types flow through.
             "get" | "head" => Ok(elem_type(arg_tys.first())),
@@ -1863,10 +1916,10 @@ impl<'a> Checker<'a> {
     fn bind_pattern(&self, pat: NodeId, ty: &Type, scope: &mut Scope) {
         match self.arena.node(pat) {
             Node::Sym(name) => {
-                // A bare symbol that names a nullary case of the scrutinee's
-                // type matches by equality and binds nothing; any other symbol
-                // binds the whole scrutinee.
-                if self.case_payload(name, ty).is_some_and(|p| p.is_empty()) {
+                // A bare symbol that names a *bound* nullary case of the
+                // scrutinee's type matches by equality and binds nothing; any
+                // other symbol binds the whole scrutinee.
+                if self.sym_matches_nullary_case(name, ty) {
                     return;
                 }
                 scope.push((name.clone(), ty.clone()));
@@ -1973,13 +2026,18 @@ impl<'a> Checker<'a> {
                 ],
                 pats,
             ),
-            Type::Result(o, e) => self.check_cases_covered(
-                &[
-                    ("ok".to_string(), vec![(**o).clone()]),
-                    ("err".to_string(), vec![(**e).clone()]),
-                ],
-                pats,
-            ),
+            Type::Result(o, e) => {
+                // An absent arm (`Unit`, 4.2) is a nullary case, covered by the
+                // sub-pattern-less call shape `(ok)` / `(err)`.
+                let arm = |t: &Type| match t {
+                    Type::Unit => Vec::new(),
+                    t => vec![t.clone()],
+                };
+                self.check_cases_covered(
+                    &[("ok".to_string(), arm(o)), ("err".to_string(), arm(e))],
+                    pats,
+                )
+            }
             Type::Named(n) => match self.types.get(n) {
                 Some(TypeDef::Variant(cases)) => {
                     let cases = cases.clone();
@@ -2057,6 +2115,14 @@ impl<'a> Checker<'a> {
                     rest.iter()
                         .zip(payload)
                         .all(|(&sub, t)| self.irrefutable(sub, t))
+                } else if rest.is_empty()
+                    && payload.len() == 1
+                    && matches!(payload[0], Type::Unknown)
+                {
+                    // Gradual: a case whose payload type is unknown may be
+                    // payload-less at runtime (`ok()`, 4.2), so the nullary
+                    // call shape `(ok)` counts as covering it.
+                    true
                 } else if rest.len() == 1 && payload.len() > 1 {
                     self.irrefutable(rest[0], &Type::Tuple(payload.to_vec()))
                 } else {
@@ -2075,7 +2141,7 @@ impl<'a> Checker<'a> {
     /// same-length tuple type likewise.
     fn irrefutable(&self, p: NodeId, ty: &Type) -> bool {
         match self.arena.node(p) {
-            Node::Sym(name) => !self.case_payload(name, ty).is_some_and(|pl| pl.is_empty()),
+            Node::Sym(name) => !self.sym_matches_nullary_case(name, ty),
             Node::Rec(fields) => {
                 let ty = self.resolve_alias(ty);
                 let rec_fields: Option<Vec<(String, Type)>> = match &ty {
@@ -2143,11 +2209,38 @@ impl<'a> Checker<'a> {
                 _ => None,
             },
             Type::Result(o, e) => match case {
-                "ok" => Some(vec![(**o).clone()]),
-                "err" => Some(vec![(**e).clone()]),
+                // An absent arm (`Unit`, 4.2) makes the case nullary: it is
+                // matched by `(ok)`/`(err)` with no sub-pattern.
+                "ok" => Some(match &**o {
+                    Type::Unit => Vec::new(),
+                    t => vec![t.clone()],
+                }),
+                "err" => Some(match &**e {
+                    Type::Unit => Vec::new(),
+                    t => vec![t.clone()],
+                }),
                 _ => None,
             },
             _ => None,
+        }
+    }
+
+    /// Whether a *bare symbol* pattern named `name` matches by equality (rather
+    /// than binding) against a scrutinee of type `ty`. The interpreter's rule
+    /// is "the name is bound in scope to a payload-less variant of itself":
+    /// true for `none` and for the nullary cases of a `DefType` variant (which
+    /// 4.1 binds), but NOT for `ok`/`err` — those names are bound to the
+    /// constructor builtins, so a bare `ok` pattern binds like any other name;
+    /// payload-less result cases are matched with the call shape `(ok)`.
+    fn sym_matches_nullary_case(&self, name: &str, ty: &Type) -> bool {
+        match self.resolve_alias(ty) {
+            Type::Option(_) => name == "none",
+            Type::Named(n) => matches!(
+                self.types.get(&n),
+                Some(TypeDef::Variant(cases))
+                    if cases.iter().any(|(c, p)| c == name && p.is_empty())
+            ),
+            _ => false,
         }
     }
 }
@@ -2170,6 +2263,15 @@ fn ctor_payload(arg_tys: &[Type]) -> Type {
         [] => Type::Unknown,
         [one] => one.clone(),
         many => Type::Tuple(many.to_vec()),
+    }
+}
+
+/// [`ctor_payload`] for a *result* arm: `ok()`/`err()` construct the
+/// payload-less case, so no argument means an absent arm (`Type::Unit`, 4.2).
+fn result_ctor_payload(arg_tys: &[Type]) -> Type {
+    match arg_tys {
+        [] => Type::Unit,
+        _ => ctor_payload(arg_tys),
     }
 }
 

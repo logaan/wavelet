@@ -57,7 +57,9 @@ const SKIP: &[(&str, &str)] = &[
     ("gs-hello", TOSTR_STRING),
     ("hello-shout", TOSTR_STRING),
     ("macro-expand", EXPAND),
-    ("macro-gensym-three", TOSTR_TRAP), // list of symbols
+    ("macro-gensym-three", TOSTR_TRAP),         // list of symbols
+    ("sf-deftype-cases", TOSTR_TRAP),           // list result
+    ("values-payloadless-results", TOSTR_TRAP), // variant result
     ("macro-swap", TOSTR_TRAP),
     ("macro-trylet", TOSTR_TRAP),
     ("map-square", BUILTIN), // map

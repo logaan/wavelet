@@ -110,11 +110,13 @@ the interpreter playground.
 ## Functors
 
 A **functor** specializes a generic data structure to a concrete element type at
-compile time. You instantiate one with a parameterized `Import`, naming the
-package, the element type, and a local alias:
+compile time. You apply one with the dedicated `Instantiate` form, naming the
+package, passing the functor's parameters *by name* in `with:`, and choosing a
+local alias (`Import` stays what it is — bringing an unparameterized dependency
+into scope):
 
 ```wavelet
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 ```
 
 This synthesizes a **concrete, per-element WIT interface** — instantiating `set`
@@ -169,7 +171,7 @@ Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
 
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 
 Export nearest-set
 Def nearest-set Fn {ps: list(point)}
@@ -184,8 +186,12 @@ type:
 ```wit
 package demo:geo@0.1.0;
 
-interface api {
+interface types {
   record point { x: s32, y: s32 }
+}
+
+interface api {
+  use types.{point};
   eq-point: func(a: point, b: point) -> bool;
   compare-point: func(a: point, b: point) -> s32;
   show-point: func(v: point) -> string;
@@ -194,7 +200,7 @@ interface api {
 
 // the set functor, instantiated at `point`
 interface point-set {
-  use api.{point};
+  use types.{point};
   resource set {
     constructor();
     add: func(value: point);
@@ -204,25 +210,27 @@ interface point-set {
 }
 
 world geo {
+  export types;
   export api;
   export point-set;
 }
 ```
 
-The record, the derived operations, and the export all land in a single `api`
-interface, while each functor instantiation gets its own interface (which `use`s
-the element type from `api`). The overload set `eq` lowers to the distinctly
-named `eq-point`, the derived operations become concrete functions, and the `set`
-functor becomes the concrete `point-set` interface. A generic set would have
-wanted `resource set<t>` with `add: func(value: t)`, which WIT simply cannot
-express — the functor produces a concrete interface instead.
+The derived operations and the export land in the `api` interface, while each
+functor instantiation gets its own interface. The overload set `eq` lowers to
+the distinctly named `eq-point`, the derived operations become concrete
+functions, and the `set` functor becomes the concrete `point-set` interface. A
+generic set would have wanted `resource set<t>` with `add: func(value: t)`,
+which WIT simply cannot express — the functor produces a concrete interface
+instead.
 
-One caveat on this particular example: `nearest-set` *returns* the `set` handle
-over the local record `point`, which is exactly the shape `wavelet build` rejects
-(the `api` and `point-set` interfaces would each `use` the other — a WIT
-interface cycle). `wavelet wit` and `wavelet run` still synthesize and execute it,
-so it illustrates the synthesis above; to *build* a `point` set, derive an
-ordinary result from it (e.g. `-> u32`) rather than returning the handle.
+Note where `point` was declared: because `nearest-set` *returns* the `set`
+handle, `api` needs the handle's type from `point-set` — and `point-set` needs
+the element record. If `api` declared `point` itself, the two interfaces would
+`use` each other, a cycle WIT cannot express. The compiler therefore **hoists**
+the element record into a shared `types` interface that both sides `use`.
+(A program whose exports only derive ordinary results — `-> u32` and friends —
+keeps its record declarations in `api` as usual.)
 
 (`each` here is illustrative iteration over the input list, applying `pts/add`
 for its side effect; it is not yet a builtin. To run a set today, iterate with
@@ -230,11 +238,11 @@ for its side effect; it is not yet a builtin. To run a set today, iterate with
 
 ## A program you can build
 
-The example above *synthesizes* — `wavelet wit` prints it and `wavelet run`
-executes it — but its `nearest-set` returns the `set` handle over a record, the
-one shape `wavelet build` rejects. Here are the two shapes that **do** build,
-each shown with the WIT the backend actually emits (run `wavelet build` then
-`wasm-tools component wit` on the result to reproduce these verbatim).
+Every shape above builds — including `nearest-set`, which returns the `set`
+handle over a record (the hoisted `types` interface is what makes that
+expressible). Here are two more shapes shown with the WIT the backend actually
+emits (run `wavelet build` then `wasm-tools component wit` on the result to
+reproduce these verbatim).
 
 ### Derive an ordinary result
 
@@ -248,7 +256,7 @@ Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
 
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 
 Export count-distinct
 Def count-distinct Fn {}
@@ -293,16 +301,16 @@ Calling `count-distinct` returns `2`: the two `{x: 1 y: 2}` points are
 structurally equal, so the set dedups them — exactly the answer `wavelet run`
 gives, because membership uses the same structural equality on both paths.
 
-### Return the handle (primitive or string element)
+### Return the handle
 
-When the element is a primitive or a string — not a local record — there is no
-interface cycle, so an export *can* hand the `set` itself back as an `own<set>`
-handle for a host to keep and query:
+An export can hand the `set` itself back as an `own<set>` handle for a host to
+keep and query — over any element type (a local-record element just hoists the
+record, as shown above; a primitive element needs no hoisting at all):
 
 ```wavelet
 Package "demo:app@0.1.0"
 
-Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
 
 Export build-ints
 Def build-ints Fn {}

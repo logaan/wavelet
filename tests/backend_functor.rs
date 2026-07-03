@@ -72,7 +72,7 @@ fn routed_record_set_size_matches_interpreter() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
-Import {pkg: "wavelet:coll/set" elem: point as: pts}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export count-distinct
 Def count-distinct Fn {}
   Let {s: pts/new()}
@@ -98,7 +98,7 @@ Def count-distinct Fn {}
 // `add_is_observed_on_the_same_handle_and_dedups`).
 fn returned_handle_methods_match_interpreter() {
     const SRC: &str = r#"Package "demo:app@0.1.0"
-Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
 Export build-ints
 Def build-ints Fn {}
   Let {s: ints/new()}
@@ -148,8 +148,8 @@ Def build-ints Fn {}
 // same component, matching the interpreter.
 fn two_instantiations_in_one_world_match_interpreter() {
     const SRC: &str = r#"Package "demo:multi@0.1.0"
-Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
-Import {pkg: "wavelet:coll/set" elem: string as: words}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: string} as: words}
 Export build-ints
 Def build-ints Fn {}
   Let {s: ints/new()}
@@ -208,7 +208,7 @@ Def build-words Fn {}
 fn compound_list_element_dedups_like_interpreter() {
     const SRC: &str = r#"Package "demo:cmp@0.1.0"
 DefType nums list(s32)
-Import {pkg: "wavelet:coll/set" elem: nums as: groups}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: nums} as: groups}
 Export count-groups
 Def count-groups Fn {}
   Let {s: groups/new()}
@@ -230,7 +230,7 @@ Def count-groups Fn {}
 // `ints/new()` then `ints/size(s)` with no adds, matching the interpreter.
 fn empty_set_size_is_zero() {
     const SRC: &str = r#"Package "demo:empty@0.1.0"
-Import {pkg: "wavelet:coll/set" elem: s32 as: ints}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
 Export count-empty
 Def count-empty Fn {}
   Let {s: ints/new()}
@@ -251,7 +251,7 @@ Def count-empty Fn {}
 // exact. Complements the s32 handle-return test with a non-primitive scalar.
 fn string_element_handle_methods_match_interpreter() {
     const SRC: &str = r#"Package "demo:str@0.1.0"
-Import {pkg: "wavelet:coll/set" elem: string as: words}
+Instantiate {pkg: "wavelet:coll/set" with: {elem: string} as: words}
 Export build-words
 Def build-words Fn {}
   Let {s: words/new()}
@@ -295,6 +295,59 @@ Def build-words Fn {}
     );
 
     // Drop the returned own<set> handle host-side; the no-op dtor runs cleanly.
+    c.drop_resource(handle)
+        .expect("dropping the returned set handle should run the dtor cleanly");
+}
+
+#[test]
+// 4.7 — a set handle RETURNED over a locally-declared record element. This is
+// the shape the emitter used to reject as a WIT interface cycle (`api` uses
+// `point-set.{set}` while `point-set` uses `api.{point}`): the element record
+// is now hoisted into a shared `types` interface both sides `use`, so the
+// component encodes, validates, and behaves like the interpreter (dedup by
+// structural equality on the record).
+fn record_element_handle_return_hoists_the_element() {
+    const SRC: &str = r#"Package "demo:app@0.1.0"
+DefType point {x: s32 y: s32}
+Derive {Eq Ord Show} point
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
+Export build-points
+Def build-points Fn {}
+  Let {s: pts/new()}
+    Do [ pts/add(s {x: 1 y: 2})
+         pts/add(s {x: 1 y: 2})
+         pts/add(s {x: 3 y: 4})
+         s ]"#;
+    const IFACE: &str = "demo:app/point-set@0.1.0";
+    const API: &str = "demo:app/api@0.1.0";
+
+    let mut c = build_component(SRC);
+    let handle = match one(&mut c, API, "build-points", &[]) {
+        v @ Val::Resource(_) => v,
+        other => panic!("`build-points` should return a set resource, got {other:?}"),
+    };
+
+    // size(self): {1,2} added twice dedups — 2 distinct points.
+    let size = c
+        .call_instance(IFACE, "[method]set.size", std::slice::from_ref(&handle))
+        .expect("size call should succeed");
+    assert_eq!(size, vec![Val::U32(2)], "deduped size should be 2");
+
+    // contains(self, value) over the hoisted record type.
+    let point = |x: i32, y: i32| {
+        Val::Record(vec![
+            ("x".to_string(), Val::S32(x)),
+            ("y".to_string(), Val::S32(y)),
+        ])
+    };
+    let has = |c: &mut HostComponent, p: Val| {
+        c.call_instance(IFACE, "[method]set.contains", &[handle.clone(), p])
+            .expect("contains call should succeed")
+    };
+    assert_eq!(has(&mut c, point(1, 2)), vec![Val::Bool(true)]);
+    assert_eq!(has(&mut c, point(3, 4)), vec![Val::Bool(true)]);
+    assert_eq!(has(&mut c, point(9, 9)), vec![Val::Bool(false)]);
+
     c.drop_resource(handle)
         .expect("dropping the returned set handle should run the dtor cleanly");
 }

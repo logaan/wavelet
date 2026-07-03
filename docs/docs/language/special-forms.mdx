@@ -12,6 +12,7 @@ This is the **entire core language**. Everything else is the [standard library](
 |---|---|---|---|
 | [`Package`](#package) | 1 | string | declare this component's package id and version |
 | [`Import`](#import) | 1 | string or record | import an interface |
+| [`Instantiate`](#instantiate) | 1 | record | apply a compile-time functor |
 | [`Export`](#export) | 1 | name or record | export a definition or type |
 | [`DefType`](#deftype) | 2 | name, type form | declare a WIT type for this component |
 | [`Def`](#def) | 2 | name, expression | immutable module-level binding |
@@ -28,7 +29,7 @@ This is the **entire core language**. Everything else is the [standard library](
 | [`The`](#the) | 2 | type form, expression | type ascription |
 
 :::note[Component-level forms run across files]
-`Package`, `Import`, `Export`, and `DefType` describe a *file's* relationship to the component world, and are only valid at the top level of a file. The in-browser playground evaluates a single component's code, so those four are shown as static snippets; the other twelve are live.
+`Package`, `Import`, `Instantiate`, `Export`, and `DefType` describe a *file's* relationship to the component world, and are only valid at the top level of a file. The in-browser playground evaluates a single component's code, so most of these are shown as static snippets — except `DefType`, whose case constructors are ordinary bindings, so its examples run.
 :::
 
 ---
@@ -160,6 +161,21 @@ Import {pkg: "wasi:keyvalue/store@0.2.0" as: kv}  // explicit alias
 Import {pkg: "demo:text/api" open: true}          // splat names in unqualified
 ```
 
+### `Instantiate`
+
+Applies a **compile-time functor** — a generic container specialized to concrete
+type arguments at build time. The functor's parameters are passed *by name* in
+the `with:` record; the alias qualifies the instantiation's operations
+(`pts/new`, `pts/add`, …). See [the type system](./type-system#functors)
+for what this synthesizes.
+
+```wavelet
+Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
+```
+
+(`Import` never applies a functor — it only brings an unparameterized
+dependency into scope.)
+
 ### `Export`
 
 Exports a definition (or a type). A bare name exports that definition into the default interface `api`; a record form gives finer control over the signature and the interface it lands in.
@@ -177,8 +193,19 @@ Export {iface: "wasi:cli/run" name: run result: result}
 
 ### `DefType`
 
-Declares a WIT type for this component's interface.
+Declares a WIT type for this component's interface: a record (field braces), a
+variant or enum (a list of cases), flags, or a transparent alias to a type form.
 
 ```wavelet
-DefType point {x: f64 y: f64}
+DefType point {x: f64 y: f64}          // record
+DefType ttl [days(u32) forever]        // variant (a case carries a payload)
+DefType direction [north east south west]  // enum (all cases payload-less)
+DefType perms {read write exec}        // flags
+DefType points list(point)             // type alias
 ```
+
+A variant or enum declaration also **binds its case constructors** in the value
+namespace: each payload-less case is a value (like `none`), and each payloaded
+case is a constructor function — first-class, like any other.
+
+<Playground id="sf-deftype-cases" />

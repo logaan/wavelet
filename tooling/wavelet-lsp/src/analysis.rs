@@ -24,6 +24,10 @@ use crate::line_index::LineIndex;
 const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("Package", "Package \"ns:name@ver\" — declare the component's package id"),
     ("Import", "Import {pkg: \"…\" as: alias} — import another component's interface"),
+    (
+        "Instantiate",
+        "Instantiate {pkg: \"…\" with: {elem: t} as: alias} — apply a compile-time functor",
+    ),
     ("Export", "Export name — export a function from this component"),
     ("DefType", "DefType Name type — define a named WIT type"),
     ("Def", "Def name value — bind a top-level name"),

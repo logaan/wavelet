@@ -93,6 +93,8 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
     let mut funcs = Vec::new();
     let mut types: Vec<(String, Vec<(String, String)>)> = Vec::new();
     let mut type_defs: Vec<(String, TypeDef)> = Vec::new();
+    let mut aliases: Vec<(String, String)> = Vec::new();
+    let mut type_ifaces: Vec<(String, String)> = Vec::new();
 
     for (iface_name, &iface_id) in &pkg.interfaces {
         let iface = &resolve.interfaces[iface_id];
@@ -102,6 +104,9 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
         // flags in `type_defs` (the generic-bridge kinds).
         for (type_name, &type_id) in &iface.types {
             let tdef = &resolve.types[type_id];
+            // Every named type records its declaring interface, for `use`
+            // synthesis when a local signature references it (4.3).
+            type_ifaces.push((type_name.clone(), iface_name.clone()));
             match &tdef.kind {
                 TypeDefKind::Record(rec) => {
                     let fields = rec
@@ -137,6 +142,20 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
                     let names = fl.flags.iter().map(|f| f.name.clone()).collect();
                     type_defs.push((type_name.clone(), TypeDef::Flags(names)));
                 }
+                // A named alias over a compound or primitive type
+                // (`type points = list<point>`): record its underlying type
+                // text so the emitter's `TypeEnv` expands it before lowering
+                // (4.4). `structural_type_string` covers list/option/result/
+                // tuple/handle and alias-of-named chains.
+                TypeDefKind::List(_)
+                | TypeDefKind::Option(_)
+                | TypeDefKind::Result(_)
+                | TypeDefKind::Tuple(_)
+                | TypeDefKind::Type(_) => {
+                    if let Ok(t) = structural_type_string(&resolve, &tdef.kind) {
+                        aliases.push((type_name.clone(), t));
+                    }
+                }
                 TypeDefKind::Variant(var) => {
                     let cases = var
                         .cases
@@ -168,6 +187,8 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
         package_wit,
         types,
         type_defs,
+        aliases,
+        type_ifaces,
     }))
 }
 

@@ -49,9 +49,13 @@ A list has exactly **one element type** (`list<t>`), checked at compile time. Mi
 
 ## Variants, options, results
 
-Constructors `some`, `ok`, and `err` are ordinary bindings in the standard library; `none` is a bound name. The flat shorthands (`1` for `some(1)`, etc.) engage wherever a WIT `option`/`result` type is expected, exactly as WAVE specifies.
+Constructors `some`, `ok`, and `err` are ordinary bindings in the standard library; `none` is a bound name. The flat shorthands (`1` for `some(1)`, etc.) engage wherever a WIT `option`/`result` type is expected, exactly as WAVE specifies. A [`DefType`](./special-forms#deftype) variant or enum binds its own case constructors the same way.
 
 <Playground id="values-options-results" />
+
+`ok()` and `err()` with no argument construct the **payload-less** result cases — WIT's `result`, `result<t>`, and `result<_, e>` shapes, where `_` spells an absent side in type text. Match them with the sub-pattern-less call shapes `(ok)` / `(err)`:
+
+<Playground id="values-payloadless-results" />
 
 A call form with an unbound head is, as *data*, just a variant case. Under `Quote` you can see this directly:
 
