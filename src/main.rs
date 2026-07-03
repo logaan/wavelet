@@ -1,7 +1,15 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `--strict` (3.9): Type::Unknown is a compile error rather than a gradual
+    // top. Opt-in while the burn-down runs; accepted plan flips it to the
+    // default (and deletes gradual mode) once the example + conformance suites
+    // pass under it.
+    if let Some(i) = args.iter().position(|a| a == "--strict") {
+        args.remove(i);
+        wavelet::check::set_strict(true);
+    }
     match args.as_slice() {
         [cmd] if cmd == "--version" || cmd == "-V" || cmd == "version" => {
             println!("wavelet {}", env!("CARGO_PKG_VERSION"));
@@ -32,6 +40,7 @@ fn main() -> ExitCode {
             eprintln!("       wavelet build <file.wlt>... [-o <dir>]");
             eprintln!("       wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]");
             eprintln!("       wavelet --version");
+            eprintln!("options: --strict   (typecheck with Unknown as an error)");
             ExitCode::from(2)
         }
     }

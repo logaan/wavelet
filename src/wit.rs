@@ -346,7 +346,8 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
             };
 
             for (&(params_id, body), mangled) in members.iter().zip(labels) {
-                let mut sig = infer_sig(arena, &mangled, params_id, body, &defs, &functor_ops)?;
+                let mut sig =
+                    infer_sig(arena, roots, &mangled, params_id, body, &defs, &functor_ops)?;
                 sig.iface = iface.clone();
                 // Record the identity backing this mangled export so the emitter
                 // can register a concrete internal function for it (the `Def` is
@@ -363,7 +364,8 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                 if sig.params.is_empty() && sig.result.is_none() && defs.contains_key(&name) =>
             {
                 let (params_id, body) = defs[&name];
-                let mut inferred = infer_sig(arena, &name, params_id, body, &defs, &functor_ops)?;
+                let mut inferred =
+                    infer_sig(arena, roots, &name, params_id, body, &defs, &functor_ops)?;
                 inferred.iface = sig.iface;
                 inferred
             }
@@ -372,7 +374,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                 let (params_id, body) = defs
                     .get(&name)
                     .ok_or(format!("Export `{name}` has no definition"))?;
-                infer_sig(arena, &name, *params_id, *body, &defs, &functor_ops)?
+                infer_sig(arena, roots, &name, *params_id, *body, &defs, &functor_ops)?
             }
         };
         exports.push(sig);
@@ -652,6 +654,7 @@ fn parse_explicit_sig(arena: &Arena, fields: &[(String, NodeId)]) -> Option<Func
 
 fn infer_sig(
     arena: &Arena,
+    roots: &[NodeId],
     name: &str,
     params_id: NodeId,
     body: NodeId,
@@ -692,11 +695,18 @@ fn infer_sig(
     let result = match infer(arena, body, &param_types, defs, functor_ops, &mut visiting) {
         Inferred::Known(t) => Some(t),
         Inferred::Unit => None,
-        Inferred::Unknown => {
-            return Err(format!(
-                "cannot infer result type of `{name}` (use the Export record form)"
-            ));
-        }
+        // The local best-effort walk could not see the result type: fall back
+        // to the full Phase A/C checker, which models lists, options, results,
+        // tuples, and nominal DefTypes (3.8).
+        Inferred::Unknown => match crate::check::infer_wit_result(arena, roots, &params, body) {
+            crate::check::InferredWit::Known(t) => Some(t),
+            crate::check::InferredWit::Unit => None,
+            crate::check::InferredWit::Unknown => {
+                return Err(format!(
+                    "cannot infer result type of `{name}` (use the Export record form)"
+                ));
+            }
+        },
     };
     Ok(FuncSig {
         name: name.to_string(),
@@ -809,6 +819,91 @@ fn call_param_type(
         return Some(t);
     }
     None
+}
+
+/// The names a file's `Export` declarations export (bare or record form),
+/// without running full collection. Used by the build path to keep exported
+/// overload sets intact through `check::resolve_overloads_excluding` (3.14).
+pub fn export_names(arena: &Arena, roots: &[NodeId]) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for &root in roots {
+        let Node::Tup(items) = arena.node(root) else {
+            continue;
+        };
+        let Some(&head) = items.first() else { continue };
+        if !matches!(arena.node(head), Node::Sym(s) if s == "export-MACRO") {
+            continue;
+        }
+        let Some(&p) = items.get(1) else { continue };
+        match arena.node(p) {
+            Node::Sym(s) => {
+                out.insert(s.clone());
+            }
+            Node::Rec(fields) => {
+                for (k, v) in fields {
+                    if k == "name"
+                        && let Node::Sym(s) = arena.node(*v)
+                    {
+                        out.insert(s.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Build checker import signatures (3.1) for one resolved import: every
+/// function the dependency exports in `iface`, keyed `alias/name`, its WIT
+/// param/result texts parsed into checker types.
+pub fn import_sigs_for(alias: &str, funcs: &[FuncSig], iface: &str) -> crate::check::ImportSigs {
+    let mut out = crate::check::ImportSigs::new();
+    for f in funcs.iter().filter(|f| f.iface == iface) {
+        let params: Vec<(String, crate::check::Type)> = f
+            .params
+            .iter()
+            .map(|(n, t)| (n.clone(), crate::check::type_from_wit(t)))
+            .collect();
+        let result = match &f.result {
+            Some(t) => crate::check::type_from_wit(t),
+            None => crate::check::Type::Unit,
+        };
+        out.insert(format!("{alias}/{}", f.name), (params, result));
+    }
+    out
+}
+
+/// Build checker import signatures (3.1) for each functor instantiation's ops
+/// (`alias/new`, `alias/add`, …), derived from the same `SET_OPS` descriptor
+/// that drives inference and the emitted WIT.
+pub fn functor_import_sigs(functors: &[FunctorInst]) -> crate::check::ImportSigs {
+    use crate::check::Type;
+    let mut out = crate::check::ImportSigs::new();
+    for f in functors {
+        match f.kind {
+            FunctorKind::Set => {
+                let handle = Type::Named(format!("{}.set", f.iface));
+                let elem = crate::check::type_from_wit(&f.elem);
+                for op in SET_OPS {
+                    let mut params: Vec<(String, Type)> = Vec::new();
+                    if !matches!(op.result, SetOpResult::Handle) {
+                        params.push(("self".to_string(), handle.clone()));
+                    }
+                    if op.takes_value {
+                        params.push(("value".to_string(), elem.clone()));
+                    }
+                    let result = match op.result {
+                        SetOpResult::Handle => handle.clone(),
+                        SetOpResult::Ty(t) => crate::check::type_from_wit(t),
+                        SetOpResult::Unit => Type::Unit,
+                    };
+                    out.insert(format!("{}/{}", f.alias, op.name), (params, result));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Synthesize WIT text for a file (§6.1), as shown by `wavelet wit`.

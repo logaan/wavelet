@@ -56,12 +56,32 @@ pub enum Type {
     Char,
     String,
     List(Box<Type>),
+    /// `option<T>`.
+    Option(Box<Type>),
+    /// `result<O, E>`.
+    Result(Box<Type>, Box<Type>),
+    /// `tuple<…>`.
+    Tuple(Vec<Type>),
+    /// A structural (anonymous) record literal's type: its fields and their
+    /// types, in literal order. Unifies with a nominal `Named` record whose
+    /// declared fields match (see [`unify`]).
+    Record(Vec<(String, Type)>),
     /// A `DefType` record/variant, named nominally.
     Named(String),
+    /// A form — the meta layer's WIT interchange type (the `wavelet:meta`
+    /// `tree` record). `Quote`/`Quasi` produce it; macro templates map it to
+    /// itself; the form accessors consume it (3.7).
+    Tree,
+    /// A flags literal `{read write}`: its member names. Unifies with itself
+    /// and with a nominal flags `DefType` declaring the same members.
+    Flags(Vec<String>),
     /// The unit type (`{}`), e.g. the result of a `Def`.
     Unit,
-    /// An unconstrained integer literal: compatible with any int or float type.
-    IntLit,
+    /// An unconstrained integer literal: compatible with any int or float type
+    /// (an int type only when the carried literal value, if known, fits its
+    /// range — 3.4). `None` for int-typed results whose value is not a literal
+    /// (e.g. `len`).
+    IntLit(Option<i64>),
     /// An unconstrained float literal: compatible with `f32`/`f64` only.
     FloatLit,
     /// Gradual top: unifies with anything, never an error. The result of
@@ -95,7 +115,7 @@ impl Type {
     fn numeric(&self) -> bool {
         self.is_int()
             || self.is_float()
-            || matches!(self, Type::IntLit | Type::FloatLit | Type::Unknown)
+            || matches!(self, Type::IntLit(_) | Type::FloatLit | Type::Unknown)
     }
 
     /// Parse a WIT type form (a `Sym` like `u8`/`s32`, or a constructor tuple
@@ -113,8 +133,18 @@ impl Type {
                 };
                 match (ctor.as_str(), args) {
                     ("list", [elem]) => Type::List(Box::new(Type::from_form(arena, *elem))),
-                    // option/result/tuple are not modelled in Phase A; treat as
-                    // gradual so nothing downstream is falsely rejected.
+                    ("option", [elem]) => Type::Option(Box::new(Type::from_form(arena, *elem))),
+                    ("result", [ok]) => Type::Result(
+                        Box::new(Type::from_form(arena, *ok)),
+                        Box::new(Type::Unknown),
+                    ),
+                    ("result", [ok, err]) => Type::Result(
+                        Box::new(Type::from_form(arena, *ok)),
+                        Box::new(Type::from_form(arena, *err)),
+                    ),
+                    ("tuple", elems) => {
+                        Type::Tuple(elems.iter().map(|&e| Type::from_form(arena, e)).collect())
+                    }
                     _ => Type::Unknown,
                 }
             }
@@ -128,6 +158,7 @@ impl Type {
     fn from_name(s: &str) -> Type {
         match s {
             "bool" => Type::Bool,
+            "tree" => Type::Tree,
             "u8" => Type::U8,
             "u16" => Type::U16,
             "u32" => Type::U32,
@@ -147,52 +178,151 @@ impl Type {
     }
 }
 
+/// A module's `DefType` declarations: how a nominal [`Type::Named`] resolves to
+/// structure. Shared by unification (nominal-vs-structural records), variant
+/// constructor typing, and pattern binding.
+#[derive(Debug, Clone)]
+pub enum TypeDef {
+    /// `DefType name {x: t …}` — a nominal record.
+    Record(Vec<(String, Type)>),
+    /// `DefType name [case case(t) …]` — a nominal variant: each case's name
+    /// and payload types (empty = nullary case).
+    Variant(Vec<(String, Vec<Type>)>),
+    /// `DefType name {a b c}` — flags.
+    Flags(Vec<String>),
+    /// `DefType name <type>` — a transparent type alias.
+    Alias(Type),
+}
+
+/// The nominal type table, keyed by `DefType` name.
+type TypeTable = HashMap<String, TypeDef>;
+
 /// Unify two types, gradually. `Unknown` absorbs anything. Numeric literals
 /// unify with compatible concrete numeric types (and default toward the
-/// concrete one). Two known, incompatible concrete types fail.
-fn unify(a: &Type, b: &Type) -> Option<Type> {
+/// concrete one). A structural record unifies with a nominal record whose
+/// declared fields match (resolved through `tbl`). Two known, incompatible
+/// concrete types fail.
+fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
     use Type::*;
     match (a, b) {
         (Unknown, t) | (t, Unknown) => Some(t.clone()),
         (x, y) if x == y => Some(x.clone()),
 
-        // An integer literal unifies with any concrete int or float, resolving
-        // to that concrete type.
-        (IntLit, t) | (t, IntLit) if t.is_int() || t.is_float() => Some(t.clone()),
-        (IntLit, IntLit) => Some(IntLit),
+        // An integer literal unifies with any concrete int type whose range
+        // admits its (known) value, resolving to that concrete type (3.4), and
+        // with any float type.
+        (IntLit(v), t) | (t, IntLit(v)) if t.is_int() => {
+            if v.is_none_or(|n| int_in_range(n, t)) {
+                Some(t.clone())
+            } else {
+                None
+            }
+        }
+        (IntLit(_), t) | (t, IntLit(_)) if t.is_float() => Some(t.clone()),
+        (IntLit(a), IntLit(b)) => Some(IntLit(if a == b { *a } else { None })),
         // An int literal and a float literal together are still a float literal.
-        (IntLit, FloatLit) | (FloatLit, IntLit) => Some(FloatLit),
+        (IntLit(_), FloatLit) | (FloatLit, IntLit(_)) => Some(FloatLit),
 
         // A float literal unifies only with a concrete float type.
         (FloatLit, t) | (t, FloatLit) if t.is_float() => Some(t.clone()),
         (FloatLit, FloatLit) => Some(FloatLit),
 
-        // Lists unify element-wise.
-        (List(x), List(y)) => Some(List(Box::new(unify(x, y)?))),
+        // Containers unify element-wise.
+        (List(x), List(y)) => Some(List(Box::new(unify(tbl, x, y)?))),
+        (Option(x), Option(y)) => Some(Option(Box::new(unify(tbl, x, y)?))),
+        (Result(xo, xe), Result(yo, ye)) => Some(Result(
+            Box::new(unify(tbl, xo, yo)?),
+            Box::new(unify(tbl, xe, ye)?),
+        )),
+        (Tuple(xs), Tuple(ys)) if xs.len() == ys.len() => {
+            let elems: std::option::Option<Vec<Type>> =
+                xs.iter().zip(ys).map(|(x, y)| unify(tbl, x, y)).collect();
+            Some(Tuple(elems?))
+        }
+
+        // A nominal alias is transparent: unify the other side against its
+        // target, keeping the nominal name in the result.
+        (Named(n), t) | (t, Named(n)) if matches!(tbl.get(n), Some(TypeDef::Alias(_))) => {
+            let Some(TypeDef::Alias(target)) = tbl.get(n) else {
+                unreachable!("guard matched an alias")
+            };
+            unify(tbl, target, t)?;
+            Some(Named(n.clone()))
+        }
+
+        // A flags literal against a nominal flags type declaring a superset
+        // of members.
+        (Named(n), Flags(ms)) | (Flags(ms), Named(n)) => match tbl.get(n) {
+            Some(TypeDef::Flags(decl)) => {
+                if ms.iter().all(|m| decl.contains(m)) {
+                    Some(Named(n.clone()))
+                } else {
+                    None
+                }
+            }
+            Some(_) => None,
+            None => Some(Named(n.clone())),
+        },
+
+        // A structural record literal against a nominal record type: resolve
+        // the name and unify field-wise; the nominal name wins. An unresolved
+        // nominal name (e.g. a type declared in another component) stays
+        // gradual rather than falsely rejecting.
+        (Named(n), Record(fs)) | (Record(fs), Named(n)) => match tbl.get(n) {
+            Some(TypeDef::Record(dfs)) => {
+                unify_fields(tbl, dfs, fs)?;
+                Some(Named(n.clone()))
+            }
+            Some(_) => None,
+            None => Some(Named(n.clone())),
+        },
+        // Two structural records unify field-wise over the same field-name set.
+        (Record(xs), Record(ys)) => {
+            let fields = unify_fields(tbl, xs, ys)?;
+            Some(Record(fields))
+        }
 
         _ => None,
     }
 }
 
+/// Unify two field lists by name: the field-name *sets* must be equal, and each
+/// same-named pair must unify. Result fields keep `a`'s order.
+fn unify_fields(
+    tbl: &TypeTable,
+    a: &[(String, Type)],
+    b: &[(String, Type)],
+) -> Option<Vec<(String, Type)>> {
+    if a.len() != b.len() {
+        return None;
+    }
+    let mut out = Vec::with_capacity(a.len());
+    for (name, at) in a {
+        let (_n, bt) = b.iter().find(|(n, _)| n == name)?;
+        out.push((name.clone(), unify(tbl, at, bt)?));
+    }
+    Some(out)
+}
+
 /// Whether a value of type `actual` is acceptable where `expected` is required.
 /// Gradual: `Unknown` on either side always passes; numeric literals are
 /// class-compatible; otherwise it is unifiability.
-fn compatible(expected: &Type, actual: &Type) -> bool {
-    unify(expected, actual).is_some()
+fn compatible(tbl: &TypeTable, expected: &Type, actual: &Type) -> bool {
+    unify(tbl, expected, actual).is_some()
 }
 
 /// Whether an overload candidate with parameters `params` is applicable to a
 /// positional call whose static argument types are `arg_tys`: the arity must
 /// match and each parameter type must be compatible with its argument. (The
 /// single-bundled-payload form `f(x)` to a one-parameter `f` also matches.)
-fn args_match(params: &[(String, Type)], arg_tys: &[Type]) -> bool {
+fn args_match(tbl: &TypeTable, params: &[(String, Type)], arg_tys: &[Type]) -> bool {
     if params.len() != arg_tys.len() {
         return false;
     }
     params
         .iter()
         .zip(arg_tys)
-        .all(|((_n, pt), at)| compatible(pt, at))
+        .all(|((_n, pt), at)| compatible(tbl, pt, at))
 }
 
 /// The static signature of a module-level `Def name Fn {params} body`.
@@ -217,6 +347,21 @@ struct Checker<'a> {
     sigs: HashMap<String, Vec<Sig>>,
     /// Module-level `Def` names (functions and values both bind a name).
     defs: std::collections::HashSet<String>,
+    /// Module-level *value* defs (`Def name expr` where expr is not an Fn):
+    /// name -> expr, for typing references to them.
+    value_defs: HashMap<String, NodeId>,
+    /// Memoised value-def types, with an in-progress guard for recursion.
+    value_def_types: RefCell<HashMap<String, Type>>,
+    value_defs_in_progress: RefCell<std::collections::HashSet<String>>,
+    /// `DefType` declarations: nominal name -> structure (3.3).
+    types: TypeTable,
+    /// Variant-case index: case name -> (owning `DefType` name, payload types).
+    /// Lets a constructor call like `days(30)` (or a bare nullary case) type as
+    /// its nominal variant.
+    variant_cases: HashMap<String, (String, Vec<Type>)>,
+    /// Resolved import signatures, keyed by the qualified spelling
+    /// `alias/name` (3.1). Empty on paths with no import resolution.
+    import_sigs: ImportSigs,
     /// For each *overloaded* call site (keyed by the call `Tup`'s `NodeId`), the
     /// index of the chosen candidate within its overload set. Filled in while
     /// checking; read back by [`resolve_overloads`] to rewrite the program.
@@ -227,7 +372,38 @@ struct Checker<'a> {
     /// its side effects on `resolved` are throwaway, so re-running it for the
     /// same body is pure redundant work during return-type-directed resolution.
     sig_result_cache: RefCell<HashMap<NodeId, Type>>,
+    /// Bodies currently being inferred by [`Self::infer_sig_result`]: the
+    /// recursion guard. A (mutually) recursive def re-entering its own result
+    /// inference gets `Unknown` for the recursive call, exactly like the
+    /// `visiting` guard in [`crate::wit`]'s inference.
+    sig_in_progress: RefCell<std::collections::HashSet<NodeId>>,
 }
+
+/// Strict mode (3.9): when set, `Type::Unknown` is an **error** rather than a
+/// gradual top — every expression must have a concrete static type. Shipped
+/// opt-in (`--strict` on the CLI); the failure list under strict is the
+/// burn-down backlog toward flipping the default, after which the gradual
+/// mode is deleted (accepted option-1 gate: flip when the documented example
+/// suite and the conformance suite pass under strict).
+static STRICT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Turn strict mode on or off for subsequent checks (process-wide).
+pub fn set_strict(on: bool) {
+    STRICT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether strict mode is on.
+pub fn strict() -> bool {
+    STRICT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The checker-facing signature of one imported function: its parameters
+/// (name, type) and result type (`Type::Unit` for none). Keyed in an import
+/// table by the qualified call spelling `alias/name` (3.1).
+pub type ImportSig = (Vec<(String, Type)>, Type);
+
+/// An import-signature table: `alias/name` -> signature.
+pub type ImportSigs = HashMap<String, ImportSig>;
 
 /// Check a whole program (the top-level roots). Returns `Err(msg)` on the first
 /// type error, where `msg` is already in the `eval error: …` surface form so it
@@ -237,6 +413,168 @@ pub fn check_program(arena: &Arena, roots: &[NodeId]) -> Result<(), String> {
     checker.check_roots(roots)
 }
 
+/// [`check_program`] with the WIT signatures of the file's resolved imports
+/// (3.1): qualified calls (`alias/fn`) are checked against — and typed by —
+/// their declared signatures instead of staying gradual.
+pub fn check_program_with_imports(
+    arena: &Arena,
+    roots: &[NodeId],
+    imports: &ImportSigs,
+) -> Result<(), String> {
+    let mut checker = Checker::collect(arena, roots);
+    checker.import_sigs = imports.clone();
+    checker.check_roots(roots)
+}
+
+/// Parse WIT type text into a checker [`Type`] — the bridge used when feeding
+/// declared import signatures into the checker (3.1).
+pub fn type_from_wit(text: &str) -> Type {
+    type_from_wit_text(text)
+}
+
+/// A WIT-rendered inference outcome, for [`infer_wit_result`]. Mirrors the
+/// shape `wit::infer` reports: a concrete WIT type text, unit, or unknown.
+pub enum InferredWit {
+    Known(String),
+    Unit,
+    Unknown,
+}
+
+/// Phase B bridge (3.8): infer a def's *result* WIT type using the full Phase
+/// A/C checker (which models lists, options, results, tuples, records, and
+/// nominal `DefType`s), rendering the inferred [`Type`] as WIT text.
+/// `params` are the def's parameters as `(name, wit-type-text)` pairs.
+pub fn infer_wit_result(
+    arena: &Arena,
+    roots: &[NodeId],
+    params: &[(String, String)],
+    body: NodeId,
+) -> InferredWit {
+    let checker = Checker::collect(arena, roots);
+    let mut scope: Scope = params
+        .iter()
+        .map(|(n, t)| (n.clone(), type_from_wit_text(t)))
+        .collect();
+    let Ok(ty) = checker.infer(body, None, &mut scope) else {
+        return InferredWit::Unknown;
+    };
+    match ty {
+        Type::Unit => InferredWit::Unit,
+        other => match type_to_wit(&other) {
+            Some(text) => InferredWit::Known(text),
+            None => InferredWit::Unknown,
+        },
+    }
+}
+
+/// Parse WIT type *text* (`list<s32>`, `option<string>`, `result<a, b>`,
+/// `tuple<a, b>`, or a bare name) into a checker [`Type`]. Anything
+/// unrecognized is gradual `Unknown`-free `Named`, exactly like
+/// [`Type::from_name`].
+fn type_from_wit_text(text: &str) -> Type {
+    let text = text.trim();
+    if let Some(inner) = text.strip_prefix("list<").and_then(|t| t.strip_suffix('>')) {
+        return Type::List(Box::new(type_from_wit_text(inner)));
+    }
+    if let Some(inner) = text
+        .strip_prefix("option<")
+        .and_then(|t| t.strip_suffix('>'))
+    {
+        return Type::Option(Box::new(type_from_wit_text(inner)));
+    }
+    if let Some(inner) = text
+        .strip_prefix("result<")
+        .and_then(|t| t.strip_suffix('>'))
+    {
+        let parts = split_wit_args(inner);
+        return match parts.as_slice() {
+            [ok] => Type::Result(Box::new(type_from_wit_text(ok)), Box::new(Type::Unknown)),
+            [ok, err] => Type::Result(
+                Box::new(type_from_wit_text(ok)),
+                Box::new(type_from_wit_text(err)),
+            ),
+            _ => Type::Unknown,
+        };
+    }
+    if let Some(inner) = text
+        .strip_prefix("tuple<")
+        .and_then(|t| t.strip_suffix('>'))
+    {
+        return Type::Tuple(
+            split_wit_args(inner)
+                .iter()
+                .map(|t| type_from_wit_text(t))
+                .collect(),
+        );
+    }
+    if text.contains('<') || text.contains('>') {
+        return Type::Unknown;
+    }
+    Type::from_name(text)
+}
+
+/// Split `a, b, c` at top-level commas (respecting `<…>` nesting).
+fn split_wit_args(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut cur = String::new();
+    for ch in s.chars() {
+        match ch {
+            '<' => {
+                depth += 1;
+                cur.push(ch);
+            }
+            '>' => {
+                depth = depth.saturating_sub(1);
+                cur.push(ch);
+            }
+            ',' if depth == 0 => {
+                out.push(cur.trim().to_string());
+                cur = String::new();
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_string());
+    }
+    out
+}
+
+/// Render a checker [`Type`] as WIT type text, if it names a concrete WIT
+/// type. Numeric literals default to their WIT widths (`s64`/`f64` — the
+/// defaulting rule). `None` for anything without a boundary spelling
+/// (gradual `Unknown`, structural records, half-known results).
+pub(crate) fn type_to_wit(t: &Type) -> Option<String> {
+    match t {
+        Type::Bool => Some("bool".into()),
+        Type::U8 => Some("u8".into()),
+        Type::U16 => Some("u16".into()),
+        Type::U32 => Some("u32".into()),
+        Type::U64 => Some("u64".into()),
+        Type::S8 => Some("s8".into()),
+        Type::S16 => Some("s16".into()),
+        Type::S32 => Some("s32".into()),
+        Type::S64 => Some("s64".into()),
+        Type::F32 => Some("f32".into()),
+        Type::F64 => Some("f64".into()),
+        Type::Char => Some("char".into()),
+        Type::String => Some("string".into()),
+        Type::IntLit(_) => Some("s64".into()),
+        Type::FloatLit => Some("f64".into()),
+        Type::List(e) => Some(format!("list<{}>", type_to_wit(e)?)),
+        Type::Option(e) => Some(format!("option<{}>", type_to_wit(e)?)),
+        Type::Result(o, e) => Some(format!("result<{}, {}>", type_to_wit(o)?, type_to_wit(e)?)),
+        Type::Tuple(ts) => {
+            let parts: Option<Vec<String>> = ts.iter().map(type_to_wit).collect();
+            Some(format!("tuple<{}>", parts?.join(", ")))
+        }
+        Type::Named(n) => Some(n.clone()),
+        Type::Tree => None,
+        Type::Flags(_) | Type::Record(_) | Type::Unit | Type::Unknown => None,
+    }
+}
+
 impl<'a> Checker<'a> {
     /// First pass: collect every module-level Def name and Fn signature so
     /// forward and mutual references resolve. Same-named Fn defs accumulate into
@@ -244,6 +582,9 @@ impl<'a> Checker<'a> {
     fn collect(arena: &'a Arena, roots: &[NodeId]) -> Self {
         let mut sigs: HashMap<String, Vec<Sig>> = HashMap::new();
         let mut defs = std::collections::HashSet::new();
+        let mut types: TypeTable = HashMap::new();
+        let mut variant_cases: HashMap<String, (String, Vec<Type>)> = HashMap::new();
+        let mut value_defs: HashMap<String, NodeId> = HashMap::new();
         for &root in roots {
             if let Some((name, expr)) = as_def(arena, root) {
                 defs.insert(name.to_string());
@@ -252,15 +593,32 @@ impl<'a> Checker<'a> {
                     sigs.entry(name.to_string())
                         .or_default()
                         .push(Sig { params, body });
+                } else {
+                    value_defs.insert(name.to_string(), expr);
                 }
+            }
+            if let Some((name, def)) = as_deftype(arena, root) {
+                if let TypeDef::Variant(cases) = &def {
+                    for (case, payload) in cases {
+                        variant_cases.insert(case.clone(), (name.to_string(), payload.clone()));
+                    }
+                }
+                types.insert(name.to_string(), def);
             }
         }
         Checker {
             arena,
             sigs,
             defs,
+            types,
+            variant_cases,
+            value_defs,
+            value_def_types: RefCell::new(HashMap::new()),
+            value_defs_in_progress: RefCell::new(std::collections::HashSet::new()),
+            import_sigs: HashMap::new(),
             resolved: RefCell::new(HashMap::new()),
             sig_result_cache: RefCell::new(HashMap::new()),
+            sig_in_progress: RefCell::new(std::collections::HashSet::new()),
         }
     }
 
@@ -324,10 +682,26 @@ impl<'a> Checker<'a> {
 /// this; Phase D should revisit it if derived/functor ops are ever passed by
 /// value.
 pub fn resolve_overloads(arena: Arena, roots: &[NodeId]) -> Result<(Arena, Vec<NodeId>), String> {
+    resolve_overloads_excluding(arena, roots, &std::collections::HashSet::new())
+}
+
+/// [`resolve_overloads`] for the **build** path (3.14): overload sets whose
+/// name is in `keep` (the file's exported names) are left intact — their
+/// members are emitted per-member through `wit::collect`'s boundary mangling
+/// (`info.overload_bodies`), which keys on the un-rewritten sets. Every
+/// *other* (non-exported) overload set is resolved and rewritten exactly as on
+/// the run path, so internal calls dispatch to the member the checker chose
+/// rather than to the last definition.
+pub fn resolve_overloads_excluding(
+    arena: Arena,
+    roots: &[NodeId],
+    keep: &std::collections::HashSet<String>,
+) -> Result<(Arena, Vec<NodeId>), String> {
     let checker = Checker::collect(&arena, roots);
     checker.check_roots(roots)?;
 
-    let overloads = checker.overload_names();
+    let mut overloads = checker.overload_names();
+    overloads.retain(|n| !keep.contains(n));
     if overloads.is_empty() {
         // Identity: nothing to rewrite, hand the program back as-is.
         return Ok((arena, roots.to_vec()));
@@ -398,6 +772,7 @@ impl<'a> Rewriter<'a> {
                 if let Some(&chosen) = self.resolved.get(&id)
                     && let Some(&head) = items.first()
                     && let Node::Sym(name) = self.arena.node(head)
+                    && self.overloads.contains(name)
                 {
                     let unique = mangled_def_name(name, chosen);
                     let new_head = self.out.add(Node::Sym(unique), self.arena.span(head));
@@ -445,6 +820,57 @@ fn as_def(arena: &Arena, id: NodeId) -> Option<(&str, NodeId)> {
         return None;
     };
     Some((name, *expr))
+}
+
+/// If `id` is `DefType name decl`, parse the declaration into a [`TypeDef`].
+fn as_deftype(arena: &Arena, id: NodeId) -> Option<(&str, TypeDef)> {
+    let Node::Tup(items) = arena.node(id) else {
+        return None;
+    };
+    let [head, name_id, decl] = items.as_slice() else {
+        return None;
+    };
+    let Node::Sym(h) = arena.node(*head) else {
+        return None;
+    };
+    if h != "deftype-MACRO" {
+        return None;
+    }
+    let Node::Sym(name) = arena.node(*name_id) else {
+        return None;
+    };
+    let def = match arena.node(*decl) {
+        Node::Rec(fields) => TypeDef::Record(
+            fields
+                .iter()
+                .map(|(k, v)| (k.clone(), Type::from_form(arena, *v)))
+                .collect(),
+        ),
+        Node::Lst(cases) => {
+            let mut out = Vec::with_capacity(cases.len());
+            for &c in cases {
+                match arena.node(c) {
+                    Node::Sym(case) => out.push((case.clone(), Vec::new())),
+                    Node::Tup(case_items) => {
+                        let (&h, payload) = case_items.split_first()?;
+                        let Node::Sym(case) = arena.node(h) else {
+                            return None;
+                        };
+                        let tys = payload.iter().map(|&t| Type::from_form(arena, t)).collect();
+                        out.push((case.clone(), tys));
+                    }
+                    _ => return None,
+                }
+            }
+            TypeDef::Variant(out)
+        }
+        Node::Flg(names) => TypeDef::Flags(names.clone()),
+        // `DefType name <type-form>` — a transparent alias (`DefType nums
+        // list(s32)`). `from_form` yields Unknown for anything unmodelled, so
+        // this stays gradual for exotic targets.
+        _ => TypeDef::Alias(Type::from_form(arena, *decl)),
+    };
+    Some((name, def))
 }
 
 /// If `id` is `Fn {params} body`, return the parsed parameter list.
@@ -499,11 +925,74 @@ impl<'a> Checker<'a> {
     ) -> Result<Type, String> {
         let ty = self.infer(id, expected, scope)?;
         if let Some(exp) = expected
-            && !compatible(exp, &ty)
+            && !compatible(&self.types, exp, &ty)
         {
             return Err(self.type_error(id, exp, &ty));
         }
+        // Strict mode (3.9): an expression the checker cannot give a concrete
+        // type is an error. Top-level declaration forms and unexpanded macro
+        // calls are exempt — declarations carry no value, and macro output is
+        // checked post-expansion.
+        if matches!(ty, Type::Unknown) && strict() && !self.strict_exempt(id) {
+            return Err(
+                "eval error: cannot infer a static type for this expression (strict mode)"
+                    .to_string(),
+            );
+        }
         Ok(ty)
+    }
+
+    /// The inferred type of a module-level value def, memoised. Recursive
+    /// references contribute `Unknown`.
+    fn value_def_type(&self, name: &str, expr: NodeId) -> Type {
+        if let Some(t) = self.value_def_types.borrow().get(name) {
+            return t.clone();
+        }
+        if !self
+            .value_defs_in_progress
+            .borrow_mut()
+            .insert(name.to_string())
+        {
+            return Type::Unknown;
+        }
+        let mut scope: Scope = Vec::new();
+        let t = self.infer(expr, None, &mut scope).unwrap_or(Type::Unknown);
+        self.value_defs_in_progress.borrow_mut().remove(name);
+        self.value_def_types
+            .borrow_mut()
+            .insert(name.to_string(), t.clone());
+        t
+    }
+
+    /// Forms strict mode does not require a concrete type for: top-level
+    /// declaration heads and (not-yet-expanded) macro calls.
+    fn strict_exempt(&self, id: NodeId) -> bool {
+        let Node::Tup(items) = self.arena.node(id) else {
+            return false;
+        };
+        let Some(&head) = items.first() else {
+            return false;
+        };
+        let Node::Sym(h) = self.arena.node(head) else {
+            return false;
+        };
+        matches!(
+            h.as_str(),
+            "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO"
+        ) || (h.ends_with("-MACRO")
+            && !matches!(
+                h.as_str(),
+                "fn-MACRO"
+                    | "if-MACRO"
+                    | "let-MACRO"
+                    | "do-MACRO"
+                    | "match-MACRO"
+                    | "the-MACRO"
+                    | "quote-MACRO"
+                    | "quasi-MACRO"
+                    | "def-MACRO"
+                    | "defmacro-MACRO"
+            ))
     }
 
     fn type_error(&self, _id: NodeId, expected: &Type, actual: &Type) -> String {
@@ -518,24 +1007,40 @@ impl<'a> Checker<'a> {
     ) -> Result<Type, String> {
         match self.arena.node(id) {
             Node::Bool(_) => Ok(Type::Bool),
-            Node::Int(_) => Ok(Type::IntLit),
+            Node::Int(n) => Ok(Type::IntLit(Some(*n))),
             Node::Dec(_) => Ok(Type::FloatLit),
             Node::Char(_) => Ok(Type::Char),
             Node::Str(_) => Ok(Type::String),
             Node::Sym(name) => self.infer_name(name, scope),
-            // A qualified name (`alias/fn`) reaches into an imported component we
-            // do not model here.
+            // A qualified name (`alias/fn`) used as a *value* is the imported
+            // function itself, which we do not model (function types are Phase
+            // D); calls through it are typed in `infer_tup`.
             Node::Qsym(..) => Ok(Type::Unknown),
             Node::Lst(items) => self.infer_list(items, expected, scope),
-            // A record literal in value position: we don't model record types
-            // structurally in Phase A. Check its fields, yield Unknown.
+            // A record literal in value position types structurally (3.3): its
+            // fields' types, checked against the expected record's declared
+            // field types when the context supplies one (a nominal `Named`
+            // record resolves through the `DefType` table).
             Node::Rec(fields) => {
-                for (_k, v) in fields {
-                    self.check(*v, None, scope)?;
+                let exp_fields: Option<Vec<(String, Type)>> = match expected {
+                    Some(Type::Record(fs)) => Some(fs.clone()),
+                    Some(Type::Named(n)) => match self.types.get(n) {
+                        Some(TypeDef::Record(fs)) => Some(fs.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let mut out = Vec::with_capacity(fields.len());
+                for (k, v) in fields {
+                    let exp = exp_fields
+                        .as_ref()
+                        .and_then(|fs| fs.iter().find(|(n, _)| n == k).map(|(_, t)| t.clone()));
+                    let t = self.check(*v, exp.as_ref(), scope)?;
+                    out.push((k.clone(), t));
                 }
-                Ok(Type::Unknown)
+                Ok(Type::Record(out))
             }
-            Node::Flg(_) => Ok(Type::Unknown),
+            Node::Flg(names) => Ok(Type::Flags(names.clone())),
             Node::Tup(items) => self.infer_tup(id, items, expected, scope),
         }
     }
@@ -548,12 +1053,29 @@ impl<'a> Checker<'a> {
             return Ok(t.clone());
         }
         if self.defs.contains(name) {
-            // A reference to a module-level def. As a value its type is the
-            // function/value itself, which we don't model — gradual.
+            // A module-level *value* def types as its expression's inferred
+            // type (memoised, recursion-guarded). A function def used as a
+            // value stays gradual — function types are future work.
+            if let Some(&expr) = self.value_defs.get(name) {
+                return Ok(self.value_def_type(name, expr));
+            }
             return Ok(Type::Unknown);
+        }
+        if name == "none" {
+            return Ok(Type::Option(Box::new(Type::Unknown)));
+        }
+        if name == "pi" {
+            return Ok(Type::F64);
         }
         if is_builtin(name) {
             return Ok(Type::Unknown);
+        }
+        // A nullary case of a `DefType` variant used as a value: its nominal
+        // variant type (3.3).
+        if let Some((tyname, payload)) = self.variant_cases.get(name)
+            && payload.is_empty()
+        {
+            return Ok(Type::Named(tyname.clone()));
         }
         Err(format!("eval error: unbound name `{name}`"))
     }
@@ -575,13 +1097,17 @@ impl<'a> Checker<'a> {
             if !seeded {
                 elem = t;
                 seeded = true;
-            } else if let Some(u) = unify(&elem, &t) {
+            } else if let Some(u) = unify(&self.types, &elem, &t) {
                 elem = u;
             } else {
-                // Heterogeneous list elements: not modelled as an error in
-                // Phase A (lists of mixed shape appear in quoted data); stay
-                // gradual.
-                elem = Type::Unknown;
+                // A list has exactly one element type (2.2 drop: no
+                // heterogeneous lists — mixed shapes want a variant, and
+                // code-like data is a quoted tree, which is never checked
+                // here).
+                return Err(format!(
+                    "eval error: heterogeneous list: elements must share one \
+                     type, got {elem:?} and {t:?}"
+                ));
             }
         }
         Ok(Type::List(Box::new(elem)))
@@ -606,8 +1132,17 @@ impl<'a> Checker<'a> {
             // A call to a known builtin or module-level def.
             return self.infer_call(id, h, args, expected, scope);
         }
-        // Head is not a plain symbol (e.g. a Qsym, or a computed head): check
-        // the arguments and yield Unknown.
+        // A qualified call `alias/fn(args…)`: when the import's WIT signature
+        // is resolved (3.1), check the call against it and type the result;
+        // otherwise stay gradual.
+        if let Node::Qsym(alias, fname) = self.arena.node(head) {
+            let qname = format!("{alias}/{fname}");
+            if let Some((params, result)) = self.import_sigs.get(&qname).cloned() {
+                return self.check_call_shape(&qname, &params, result, args, scope);
+            }
+        }
+        // Head is not a plain symbol (e.g. a computed head): check the
+        // arguments and yield Unknown.
         for &a in args {
             self.check(a, None, scope)?;
         }
@@ -638,12 +1173,15 @@ impl<'a> Checker<'a> {
             }
             "if-MACRO" => {
                 let [c, t, e] = expect3(args)?;
-                // Do NOT statically check the condition's bool-ness (a runtime
-                // example relies on a non-bool condition failing at runtime).
-                self.check(c, None, scope)?;
+                // The condition must be a bool, statically (2.2 drop: no
+                // truthiness, no runtime bool check).
+                let ct = self.check(c, None, scope)?;
+                if !matches!(ct, Type::Bool | Type::Unknown) {
+                    return Err("eval error: If condition must be a bool".to_string());
+                }
                 let tt = self.check(t, expected, scope)?;
                 let et = self.check(e, expected, scope)?;
-                match unify(&tt, &et) {
+                match unify(&self.types, &tt, &et) {
                     Some(u) => Ok(u),
                     None => Err("eval error: If branches have incompatible types".to_string()),
                 }
@@ -677,7 +1215,7 @@ impl<'a> Checker<'a> {
             }
             "match-MACRO" => {
                 let [scrut, clauses] = expect2(args)?;
-                self.check(scrut, None, scope)?;
+                let scrut_ty = self.check(scrut, None, scope)?;
                 let Node::Lst(items) = self.arena.node(clauses) else {
                     return Ok(Type::Unknown);
                 };
@@ -689,19 +1227,32 @@ impl<'a> Checker<'a> {
                     if pair.len() != 2 {
                         continue;
                     }
-                    // Bind every variable mentioned in the pattern as Unknown so
-                    // the clause body doesn't see false "unbound" errors.
+                    // Bind the pattern's variables at the types the scrutinee
+                    // implies (3.3): a variant-case pattern binds its payload at
+                    // the declared payload types, a record pattern binds fields
+                    // at their field types, and so on. Anything the scrutinee
+                    // type doesn't determine binds as Unknown.
                     let mark = scope.len();
-                    self.bind_pattern(pair[0], scope);
+                    self.bind_pattern(pair[0], &scrut_ty, scope);
                     let rt = self.check(pair[1], expected, scope)?;
                     scope.truncate(mark);
                     result = Some(match result {
                         None => rt,
-                        Some(prev) => unify(&prev, &rt).ok_or_else(|| {
+                        Some(prev) => unify(&self.types, &prev, &rt).ok_or_else(|| {
                             "eval error: Match clauses have incompatible result types".to_string()
                         })?,
                     });
                 }
+                // Exhaustiveness (3.12): wherever the scrutinee's type is
+                // known, the clauses must cover every possible value.
+                let pats: Vec<NodeId> = items
+                    .iter()
+                    .filter_map(|&clause| match self.arena.node(clause) {
+                        Node::Tup(pair) if pair.len() == 2 => Some(pair[0]),
+                        _ => None,
+                    })
+                    .collect();
+                self.check_exhaustive(&scrut_ty, &pats)?;
                 Ok(result.unwrap_or(Type::Unknown))
             }
             "the-MACRO" => {
@@ -709,14 +1260,38 @@ impl<'a> Checker<'a> {
                 let ty = Type::from_form(self.arena, ty_form);
                 self.check_the(ty_form, &ty, expr, scope)
             }
-            // Quote/Quasi produce data (the `tree` arena type); their contents
-            // are not value-checked. A `DefMacro` defines a compile-time macro
-            // whose body is a template (data), not a value expression, so we do
-            // not check it. Top-level file forms (`Package`/`Import`/`Export`/
-            // `DefType`) carry annotations, not value expressions. All of these
-            // are opaque to the value checker.
-            "quote-MACRO" | "quasi-MACRO" | "defmacro-MACRO" | "package-MACRO" | "import-MACRO"
-            | "export-MACRO" | "deftype-MACRO" => Ok(Type::Unknown),
+            // `Quote` produces a form: the `tree` interchange type (3.7). Its
+            // contents are data, never value-checked.
+            "quote-MACRO" => Ok(Type::Tree),
+            // `Quasi` also produces a `tree`, but its `Unquote`/`Splice` holes
+            // contain ordinary expressions — check them (3.7).
+            "quasi-MACRO" => {
+                if let [form] = args {
+                    self.check_quasi(*form, scope, 1)?;
+                }
+                Ok(Type::Tree)
+            }
+            // A `DefMacro` template is tree -> tree (3.7): its parameters are
+            // bound forms, and its body is ordinary code evaluated at expansion
+            // time — check it with the parameters in scope at `tree`.
+            "defmacro-MACRO" => {
+                if let [_name_id, params_id, body] = args {
+                    let params = parse_params(self.arena, *params_id);
+                    let mark = scope.len();
+                    for (n, _t) in &params {
+                        scope.push((n.clone(), Type::Tree));
+                    }
+                    self.check(*body, None, scope)?;
+                    scope.truncate(mark);
+                }
+                Ok(Type::Unit)
+            }
+            // Top-level file forms (`Package`/`Import`/`Export`/`DefType`)
+            // carry annotations, not value expressions: opaque to the value
+            // checker.
+            "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO" => {
+                Ok(Type::Unknown)
+            }
             // Any other `-MACRO` head is a user (or foreign) macro call that
             // `eval_snippet` expands at runtime. We cannot statically see
             // through it, so check nothing and stay gradual. Crucially we do NOT
@@ -726,6 +1301,64 @@ impl<'a> Checker<'a> {
                 let _ = args;
                 Ok(Type::Unknown)
             }
+        }
+    }
+
+    /// Walk a `Quasi` template's form. Everything is data except the
+    /// `Unquote`/`Splice` holes at depth 1, whose contents are ordinary
+    /// expressions checked in the enclosing scope; nesting mirrors the
+    /// interpreter's depth rules (`interp::quasi`).
+    fn check_quasi(&self, id: NodeId, scope: &mut Scope, depth: u32) -> Result<(), String> {
+        match self.arena.node(id) {
+            Node::Tup(items) => {
+                if items.len() == 2
+                    && let Node::Sym(name) = self.arena.node(items[0])
+                {
+                    let arg = items[1];
+                    match name.as_str() {
+                        "unquote-MACRO" if depth == 1 => {
+                            self.check(arg, None, scope)?;
+                            return Ok(());
+                        }
+                        "splice-MACRO" if depth == 1 => {
+                            // A splice's expression must be a list (the
+                            // interpreter enforces this at runtime); a `tree`
+                            // can itself be a list form.
+                            let t = self.check(arg, None, scope)?;
+                            if !matches!(t, Type::List(_) | Type::Tree | Type::Unknown) {
+                                return Err(format!(
+                                    "eval error: Splice expects a list, got {t:?}"
+                                ));
+                            }
+                            return Ok(());
+                        }
+                        "unquote-MACRO" | "splice-MACRO" if depth > 1 => {
+                            return self.check_quasi(arg, scope, depth - 1);
+                        }
+                        "quasi-MACRO" => {
+                            return self.check_quasi(arg, scope, depth + 1);
+                        }
+                        _ => {}
+                    }
+                }
+                for &it in items {
+                    self.check_quasi(it, scope, depth)?;
+                }
+                Ok(())
+            }
+            Node::Lst(items) => {
+                for &it in items {
+                    self.check_quasi(it, scope, depth)?;
+                }
+                Ok(())
+            }
+            Node::Rec(fields) => {
+                for (_k, v) in fields {
+                    self.check_quasi(*v, scope, depth)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -759,15 +1392,11 @@ impl<'a> Checker<'a> {
                 Ok(ty.clone())
             }
             _ => {
-                // The interpreter only conformance-checks a *bare `Sym`*
-                // annotation against the runtime value (interp `the-MACRO`); a
-                // constructor annotation like `list(s32)` is not checked at all.
-                // Mirror that: propagate the expected type (so return-type-
-                // directed overload resolution still fires) only for a `Sym`
-                // annotation, so we never reject a program the interpreter runs,
-                // e.g. `The list(s32) ["a"]`.
-                let prop = matches!(self.arena.node(ty_form), Node::Sym(_)).then_some(ty);
-                self.check(expr, prop, scope)?;
+                // `The` is a pure static ascription (2.2 drop: no runtime
+                // check survives): the annotated type is the expected type of
+                // the expression, whatever the annotation's shape — a bare
+                // name or a constructor like `list(s32)`.
+                self.check(expr, Some(ty), scope)?;
                 Ok(ty.clone())
             }
         }
@@ -792,8 +1421,36 @@ impl<'a> Checker<'a> {
             // argument types against the parameters (Phase A behaviour).
             return self.check_def_call(name, &sigs[0], args, scope);
         }
+        // A constructor call of a `DefType` variant case: `days(30)` types as
+        // its nominal variant (3.3).
+        if let Some((tyname, payload)) = self.variant_cases.get(name).cloned() {
+            return self.check_variant_ctor(name, &tyname, &payload, args, scope);
+        }
         // A builtin we model, or one we don't (Unknown).
         self.check_builtin_call(name, args, scope)
+    }
+
+    /// Check a variant-case constructor call `case(args…)` against the case's
+    /// declared payload types; the call's type is the owning nominal variant.
+    fn check_variant_ctor(
+        &self,
+        case: &str,
+        tyname: &str,
+        payload: &[Type],
+        args: &[NodeId],
+        scope: &mut Scope,
+    ) -> Result<Type, String> {
+        if args.len() != payload.len() {
+            return Err(format!(
+                "eval error: variant case `{case}` of `{tyname}` takes {} argument(s), got {}",
+                payload.len(),
+                args.len()
+            ));
+        }
+        for (&a, pt) in args.iter().zip(payload) {
+            self.check(a, Some(pt), scope)?;
+        }
+        Ok(Type::Named(tyname.to_string()))
     }
 
     /// Resolve an overloaded call `name(args…)` to exactly one member of its
@@ -821,7 +1478,7 @@ impl<'a> Checker<'a> {
 
         // Step 1 — argument-directed filtering.
         let mut candidates: Vec<usize> = (0..sigs.len())
-            .filter(|&i| args_match(&sigs[i].params, &arg_tys))
+            .filter(|&i| args_match(&self.types, &sigs[i].params, &arg_tys))
             .collect();
 
         // Step 2 — return-type-directed filtering, only when arguments leave
@@ -836,7 +1493,7 @@ impl<'a> Checker<'a> {
             let by_result: Vec<usize> = candidates
                 .iter()
                 .copied()
-                .filter(|&i| compatible(exp, &self.infer_sig_result(&sigs[i])))
+                .filter(|&i| compatible(&self.types, exp, &self.infer_sig_result(&sigs[i])))
                 .collect();
             if !by_result.is_empty() {
                 candidates = by_result;
@@ -870,11 +1527,19 @@ impl<'a> Checker<'a> {
         if let Some(cached) = self.sig_result_cache.borrow().get(&body) {
             return cached.clone();
         }
+        // Recursion guard: a recursive (or mutually recursive) def re-enters
+        // its own result inference through the call in its body. The recursive
+        // occurrence contributes no constraint (`Unknown`); the non-recursive
+        // branches still determine the result.
+        if !self.sig_in_progress.borrow_mut().insert(body) {
+            return Type::Unknown;
+        }
         let mut scope: Scope = sig.params.clone();
         // Inference errors inside a candidate body don't disqualify it here (the
         // body is checked properly when its own Def is checked); treat them as
         // an unconstrained result so resolution stays gradual.
         let result = self.infer(body, None, &mut scope).unwrap_or(Type::Unknown);
+        self.sig_in_progress.borrow_mut().remove(&body);
         self.sig_result_cache
             .borrow_mut()
             .insert(body, result.clone());
@@ -888,28 +1553,72 @@ impl<'a> Checker<'a> {
         args: &[NodeId],
         scope: &mut Scope,
     ) -> Result<Type, String> {
+        // The call's result type: inferred from the def's body exactly as
+        // return-type-directed overload resolution does (3.2 — calling a def no
+        // longer erases type information).
+        let result = self.infer_sig_result(sig);
+        self.check_call_shape(name, &sig.params, result, args, scope)
+    }
+
+    /// Check a call against a known signature, in every §4.2 call shape:
+    /// by-name record payload, single bundled payload, and positional.
+    /// Shared by local def calls and resolved qualified imports (3.1).
+    fn check_call_shape(
+        &self,
+        name: &str,
+        sig_params: &[(String, Type)],
+        result: Type,
+        args: &[NodeId],
+        scope: &mut Scope,
+    ) -> Result<Type, String> {
         // First, infer the argument types (also checks their subexpressions).
         let arg_tys: Vec<Type> = args
             .iter()
             .map(|&a| self.check(a, None, scope))
             .collect::<Result<_, _>>()?;
 
-        let nparams = sig.params.len();
+        let nparams = sig_params.len();
 
         // The single-record-arg-by-name form: `f({a: … b: …})` binds by field
-        // name. We do not check those field types in Phase A — accept.
+        // name when the field names are exactly the parameter names — check
+        // each field's type against its parameter (3.3). A record whose fields
+        // do NOT match the parameter names is an ordinary single value.
         if args.len() == 1 {
-            if let Node::Rec(_) = self.arena.node(args[0]) {
-                return Ok(Type::Unknown);
+            if let Type::Record(fs) = &arg_tys[0] {
+                let mut fnames: Vec<&str> = fs.iter().map(|(n, _)| n.as_str()).collect();
+                let mut pnames: Vec<&str> = sig_params.iter().map(|(n, _)| n.as_str()).collect();
+                fnames.sort_unstable();
+                pnames.sort_unstable();
+                if fnames == pnames {
+                    for (fname, ft) in fs {
+                        let (_pn, pt) = sig_params
+                            .iter()
+                            .find(|(pn, _)| pn == fname)
+                            .expect("field names equal param names");
+                        if !self.param_compatible(pt, ft) {
+                            return Err(self.param_type_error(fname, pt, ft, name));
+                        }
+                    }
+                    return Ok(result);
+                }
+                if nparams != 1 {
+                    // Field names don't bind the parameters and the record is
+                    // not a single-parameter payload: the interpreter rejects
+                    // this bind at runtime; stay gradual here.
+                    return Ok(result);
+                }
             }
             // A single argument to a single parameter taking the whole payload.
             if nparams == 1 {
-                if !compatible(&sig.params[0].1, &arg_tys[0]) {
-                    return Err(format!(
-                        "eval error: argument to `{name}` has the wrong type"
+                if !self.param_compatible(&sig_params[0].1, &arg_tys[0]) {
+                    return Err(self.param_type_error(
+                        &sig_params[0].0,
+                        &sig_params[0].1,
+                        &arg_tys[0],
+                        name,
                     ));
                 }
-                return Ok(Type::Unknown);
+                return Ok(result);
             }
         }
 
@@ -920,18 +1629,47 @@ impl<'a> Checker<'a> {
                 args.len()
             ));
         }
-        for ((_pn, pt), at) in sig.params.iter().zip(&arg_tys) {
-            if !compatible(pt, at) {
-                return Err(format!(
-                    "eval error: argument to `{name}` has the wrong type"
-                ));
+        for ((pn, pt), at) in sig_params.iter().zip(&arg_tys) {
+            if !self.param_compatible(pt, at) {
+                return Err(self.param_type_error(pn, pt, at, name));
             }
         }
-        Ok(Type::Unknown)
+        Ok(result)
     }
 
-    /// Check a builtin call, modelling only the operand/result behaviour needed
-    /// to pass the tests and to type the example set without false positives.
+    /// Parameter compatibility for a call shape: ordinary gradual
+    /// compatibility, plus the boundary widening the generic bridge performs —
+    /// a Wavelet `string` lowers as `list<u8>` (see tests/generic_bridge.rs),
+    /// so a `list<u8>` parameter accepts a string.
+    fn param_compatible(&self, pt: &Type, at: &Type) -> bool {
+        if compatible(&self.types, pt, at) {
+            return true;
+        }
+        matches!(
+            (pt, at),
+            (Type::List(e), Type::String) if **e == Type::U8
+        )
+    }
+
+    /// The error for an argument that does not fit its parameter. An integer
+    /// literal that misses a concrete int parameter's range produces the SAME
+    /// message the interpreter's runtime bind check produces (`bind_one`), so
+    /// moving the check to compile time does not change the reported error.
+    fn param_type_error(&self, pname: &str, pt: &Type, at: &Type, fname: &str) -> String {
+        if let Type::IntLit(Some(n)) = at
+            && pt.is_int()
+        {
+            return format!(
+                "eval error: parameter `{pname}`: {n} does not conform to type `{}`",
+                wit_name(pt)
+            );
+        }
+        format!("eval error: argument `{pname}` to `{fname}` has the wrong type")
+    }
+
+    /// Check a builtin call. Every builtin has a typed signature here (3.5):
+    /// its result type is modelled, and operands are constrained wherever the
+    /// runtime is strict about them. Argument subexpressions are always checked.
     fn check_builtin_call(
         &self,
         name: &str,
@@ -960,7 +1698,7 @@ impl<'a> Checker<'a> {
                     if !seeded {
                         result = t.clone();
                         seeded = true;
-                    } else if let Some(u) = unify(&result, t) {
+                    } else if let Some(u) = unify(&self.types, &result, t) {
                         result = u;
                     } else {
                         result = Type::Unknown;
@@ -974,13 +1712,15 @@ impl<'a> Checker<'a> {
             }
             // `min`/`max` return one of their operands and — via the
             // interpreter's `compare` — are defined over numbers, strings, and
-            // chars, so they do NOT constrain operands to numeric (that would
-            // falsely reject `min("a" "b")`, which the interpreter runs). The
-            // result is the unified operand type, gradual when they disagree.
+            // chars. The result is the unified operand type, gradual when they
+            // disagree.
             "min" | "max" => {
                 let mut result = Type::Unknown;
                 for t in &arg_tys {
-                    result = unify(&result, t).unwrap_or(Type::Unknown);
+                    if !comparable(t) {
+                        return Err(format!("eval error: `{name}` requires comparable operands"));
+                    }
+                    result = unify(&self.types, &result, t).unwrap_or(Type::Unknown);
                 }
                 Ok(result)
             }
@@ -1001,47 +1741,468 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Type::String)
             }
-            // Comparisons and `not`: do NOT constrain operands; result bool.
-            "eq" | "lt" | "le" | "gt" | "ge" | "not" => Ok(Type::Bool),
+            // `eq` is total structural equality over every type; result bool.
+            "eq" => Ok(Type::Bool),
+            // Ordering comparisons are defined over numbers, strings, and chars.
+            "lt" | "le" | "gt" | "ge" => {
+                for t in &arg_tys {
+                    if !comparable(t) {
+                        return Err(format!("eval error: `{name}` requires comparable operands"));
+                    }
+                }
+                Ok(Type::Bool)
+            }
+            "not" => {
+                for t in &arg_tys {
+                    if !matches!(t, Type::Bool | Type::Unknown) {
+                        return Err("eval error: `not` requires a bool operand".to_string());
+                    }
+                }
+                Ok(Type::Bool)
+            }
+            // `empty`/`contains` report a property; result bool.
+            "empty" | "contains" => Ok(Type::Bool),
             // `len` returns a plain Int that range-checks against any int type
             // at runtime (and promotes to float), so model it as an
             // unconstrained int literal — not concrete `s64`, which would
             // falsely reject e.g. `The u8 len(xs)` that the interpreter accepts.
-            "len" => Ok(Type::IntLit),
-            // Everything else: result Unknown, args unconstrained (already
-            // checked their subexpressions above). Later phases extend this.
+            "len" => Ok(Type::IntLit(None)),
+            // Option/result constructors (3.3/3.8): the payload's type flows in;
+            // the other side stays unconstrained until unified against context.
+            // Multiple args bundle to a tuple payload (`some(1 2)`).
+            "some" => Ok(Type::Option(Box::new(ctor_payload(&arg_tys)))),
+            "ok" => Ok(Type::Result(
+                Box::new(ctor_payload(&arg_tys)),
+                Box::new(Type::Unknown),
+            )),
+            "err" => Ok(Type::Result(
+                Box::new(Type::Unknown),
+                Box::new(ctor_payload(&arg_tys)),
+            )),
+            // Sequence ops (3.5/3.8): element types flow through.
+            "get" | "head" => Ok(elem_type(arg_tys.first())),
+            "tail" | "reverse" => Ok(arg_tys.first().cloned().unwrap_or(Type::Unknown)),
+            "put" if arg_tys.len() == 3 => {
+                let elem = unify(&self.types, &elem_type(arg_tys.first()), &arg_tys[2])
+                    .unwrap_or(Type::Unknown);
+                Ok(Type::List(Box::new(elem)))
+            }
+            "push" if arg_tys.len() == 2 => {
+                let elem = unify(&self.types, &elem_type(arg_tys.first()), &arg_tys[1])
+                    .unwrap_or(Type::Unknown);
+                Ok(Type::List(Box::new(elem)))
+            }
+            "concat" if arg_tys.len() == 2 => Ok(unify(&self.types, &arg_tys[0], &arg_tys[1])
+                .unwrap_or(Type::List(Box::new(Type::Unknown)))),
+            "range" => Ok(Type::List(Box::new(Type::S64))),
+            "zip" if arg_tys.len() == 2 => Ok(Type::List(Box::new(Type::Tuple(vec![
+                elem_type(arg_tys.first()),
+                elem_type(arg_tys.get(1)),
+            ])))),
+            // The mapper's result type is not modelled (closures are untyped in
+            // Phase A), so `map` yields list<unknown>; `filter` preserves its
+            // sequence's type; `fold`'s accumulator is unconstrained.
+            "map" => Ok(Type::List(Box::new(Type::Unknown))),
+            "filter" => Ok(arg_tys.get(1).cloned().unwrap_or(Type::Unknown)),
+            "fold" => Ok(Type::Unknown),
+            "split" => Ok(Type::List(Box::new(Type::String))),
+            "join" => Ok(Type::String),
+            "to-string" | "form-kind" => Ok(Type::String),
+            // `read` produces a form or an error string (3.7).
+            "read" => Ok(Type::Result(Box::new(Type::Tree), Box::new(Type::String))),
+            // Meta-layer builtins are ordinary typed functions over `tree`
+            // (3.7): `gensym` mints a fresh symbol form, `expand` maps a form
+            // to a form, `rec-key` projects a record form's first key as a
+            // symbol form. (`rec-val` yields the field's *value*, which on a
+            // runtime record can be anything — it stays gradual.)
+            "gensym" | "expand" | "rec-key" => Ok(Type::Tree),
+            // `rec-val` projects a record's *first field's value*: typed when
+            // the record's static type knows that field.
+            "rec-val" => match arg_tys.first() {
+                Some(Type::Record(fs)) if !fs.is_empty() => Ok(fs[0].1.clone()),
+                _ => Ok(Type::Unknown),
+            },
+            // Numeric conversions: the result is the named concrete type. A
+            // literal argument is range-checked at compile time with the SAME
+            // message the runtime conversion produces (3.4).
+            "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32" | "to-s64" => {
+                let ty = Type::from_name(&name[3..]);
+                if let [arg] = args
+                    && let Node::Int(n) = self.arena.node(*arg)
+                    && !int_in_range(*n, &ty)
+                {
+                    return Err(format!("eval error: `{name}`: {n} out of range"));
+                }
+                Ok(ty)
+            }
+            "to-f32" => Ok(Type::F32),
+            "to-f64" => Ok(Type::F64),
+            "to-char" => {
+                if let [arg] = args
+                    && let Node::Int(n) = self.arena.node(*arg)
+                    && u32::try_from(*n).ok().and_then(char::from_u32).is_none()
+                {
+                    return Err(format!(
+                        "eval error: `to-char`: {n} is not a Unicode scalar value"
+                    ));
+                }
+                Ok(Type::Char)
+            }
+            // Unit-returning effects.
+            "cell-set" | "drop" => Ok(Type::Unit),
+            // Everything else (apply/gensym/expand/rec-key/rec-val/cell-new/
+            // cell-get, form accessors): result Unknown, args unconstrained
+            // (already checked above). 3.7 types the form accessors as tree.
             _ => Ok(Type::Unknown),
         }
     }
 
-    /// Bind every variable name appearing in a Match pattern as `Unknown`.
-    fn bind_pattern(&self, pat: NodeId, scope: &mut Scope) {
+    /// Bind every variable name appearing in a Match pattern, at the type the
+    /// scrutinee's type `ty` implies for its position (3.3); `Unknown` wherever
+    /// the scrutinee type does not determine it.
+    fn bind_pattern(&self, pat: NodeId, ty: &Type, scope: &mut Scope) {
         match self.arena.node(pat) {
             Node::Sym(name) => {
-                // A bare symbol pattern binds the name (it may also be a nullary
-                // variant case, but binding it as Unknown is harmless).
-                scope.push((name.clone(), Type::Unknown));
+                // A bare symbol that names a nullary case of the scrutinee's
+                // type matches by equality and binds nothing; any other symbol
+                // binds the whole scrutinee.
+                if self.case_payload(name, ty).is_some_and(|p| p.is_empty()) {
+                    return;
+                }
+                scope.push((name.clone(), ty.clone()));
             }
             Node::Tup(items) => {
-                // `(case rest…)` or element-wise tuple: skip the head if it
-                // looks like a constructor symbol, bind the rest.
+                // A variant-case pattern `(case p…)` against a scrutinee whose
+                // type declares that case: bind the sub-patterns at the payload
+                // types.
+                if let Some((&h, rest)) = items.split_first()
+                    && let Node::Sym(case) = self.arena.node(h)
+                    && let Some(payload) = self.case_payload(case, ty)
+                {
+                    if rest.len() == payload.len() {
+                        for (&p, t) in rest.iter().zip(&payload) {
+                            self.bind_pattern(p, t, scope);
+                        }
+                    } else if rest.len() == 1 && payload.len() > 1 {
+                        // One pattern against a bundled tuple payload.
+                        self.bind_pattern(rest[0], &Type::Tuple(payload), scope);
+                    } else {
+                        for &p in rest {
+                            self.bind_pattern(p, &Type::Unknown, scope);
+                        }
+                    }
+                    return;
+                }
+                // An element-wise tuple pattern against a tuple type.
+                if let Type::Tuple(ts) = ty
+                    && ts.len() == items.len()
+                {
+                    for (&p, t) in items.iter().zip(ts) {
+                        self.bind_pattern(p, t, scope);
+                    }
+                    return;
+                }
                 for &it in items {
-                    self.bind_pattern(it, scope);
+                    self.bind_pattern(it, &Type::Unknown, scope);
                 }
             }
             Node::Lst(items) => {
+                let elem = match ty {
+                    Type::List(e) => (**e).clone(),
+                    _ => Type::Unknown,
+                };
                 for &it in items {
-                    self.bind_pattern(it, scope);
+                    self.bind_pattern(it, &elem, scope);
                 }
             }
             Node::Rec(fields) => {
-                for (_k, v) in fields {
-                    self.bind_pattern(*v, scope);
+                let rec_fields: Option<Vec<(String, Type)>> = match ty {
+                    Type::Record(fs) => Some(fs.clone()),
+                    Type::Named(n) => match self.types.get(n) {
+                        Some(TypeDef::Record(fs)) => Some(fs.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                for (k, v) in fields {
+                    let ft = rec_fields
+                        .as_ref()
+                        .and_then(|fs| fs.iter().find(|(n, _)| n == k).map(|(_, t)| t.clone()))
+                        .unwrap_or(Type::Unknown);
+                    self.bind_pattern(*v, &ft, scope);
                 }
             }
             // Literals in patterns bind nothing.
             _ => {}
         }
+    }
+
+    /// Enforce Match exhaustiveness (3.12) for a scrutinee of type `ty` against
+    /// clause patterns `pats`. Where the type cannot be enumerated (numbers,
+    /// strings, chars, lists, trees), an irrefutable catch-all clause is
+    /// required; bools and variant-shaped types (`option`, `result`, nominal
+    /// `DefType` variants) must cover every case. Gradual `Unknown` scrutinees
+    /// are not enforced.
+    fn check_exhaustive(&self, ty: &Type, pats: &[NodeId]) -> Result<(), String> {
+        // An irrefutable clause anywhere makes the Match total.
+        if pats.iter().any(|&p| self.irrefutable(p, ty)) {
+            return Ok(());
+        }
+        let ty = self.resolve_alias(ty);
+        match &ty {
+            Type::Bool => {
+                let mut have = [false, false];
+                for &p in pats {
+                    if let Node::Bool(b) = self.arena.node(p) {
+                        have[*b as usize] = true;
+                    }
+                }
+                if have[0] && have[1] {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "eval error: non-exhaustive Match: missing case `{}`",
+                        if have[1] { "false" } else { "true" }
+                    ))
+                }
+            }
+            Type::Option(t) => self.check_cases_covered(
+                &[
+                    ("some".to_string(), vec![(**t).clone()]),
+                    ("none".to_string(), vec![]),
+                ],
+                pats,
+            ),
+            Type::Result(o, e) => self.check_cases_covered(
+                &[
+                    ("ok".to_string(), vec![(**o).clone()]),
+                    ("err".to_string(), vec![(**e).clone()]),
+                ],
+                pats,
+            ),
+            Type::Named(n) => match self.types.get(n) {
+                Some(TypeDef::Variant(cases)) => {
+                    let cases = cases.clone();
+                    self.check_cases_covered(&cases, pats)
+                }
+                // A nominal record: an irrefutable record pattern would have
+                // returned above; anything else does not cover every value.
+                Some(TypeDef::Record(_)) => Err(non_exhaustive_catch_all()),
+                // Unresolved nominal (imported type) or flags: stay gradual.
+                _ => Ok(()),
+            },
+            // Enumerable by literals never, so a catch-all is required.
+            Type::U8
+            | Type::U16
+            | Type::U32
+            | Type::U64
+            | Type::S8
+            | Type::S16
+            | Type::S32
+            | Type::S64
+            | Type::F32
+            | Type::F64
+            | Type::IntLit(_)
+            | Type::FloatLit
+            | Type::Char
+            | Type::String
+            | Type::List(_)
+            | Type::Tuple(_)
+            | Type::Record(_)
+            | Type::Flags(_)
+            | Type::Tree => Err(non_exhaustive_catch_all()),
+            // Gradual or unenforceable.
+            Type::Unit | Type::Unknown => Ok(()),
+        }
+    }
+
+    /// Check that every declared case is covered by some clause pattern.
+    fn check_cases_covered(
+        &self,
+        cases: &[(String, Vec<Type>)],
+        pats: &[NodeId],
+    ) -> Result<(), String> {
+        let mut missing = Vec::new();
+        for (case, payload) in cases {
+            let covered = pats.iter().any(|&p| self.covers_case(p, case, payload));
+            if !covered {
+                missing.push(format!("`{case}`"));
+            }
+        }
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "eval error: non-exhaustive Match: missing case{} {}",
+                if missing.len() == 1 { "" } else { "s" },
+                missing.join(", ")
+            ))
+        }
+    }
+
+    /// Whether pattern `p` covers *all* values of variant case `case` with
+    /// payload types `payload`.
+    fn covers_case(&self, p: NodeId, case: &str, payload: &[Type]) -> bool {
+        match self.arena.node(p) {
+            // A bare symbol naming the (nullary) case.
+            Node::Sym(s) => s == case && payload.is_empty(),
+            Node::Tup(items) => {
+                let Some((&h, rest)) = items.split_first() else {
+                    return false;
+                };
+                if !matches!(self.arena.node(h), Node::Sym(s) if s == case) {
+                    return false;
+                }
+                if rest.len() == payload.len() {
+                    rest.iter()
+                        .zip(payload)
+                        .all(|(&sub, t)| self.irrefutable(sub, t))
+                } else if rest.len() == 1 && payload.len() > 1 {
+                    self.irrefutable(rest[0], &Type::Tuple(payload.to_vec()))
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether pattern `p` matches every value of type `ty` (a catch-all for
+    /// that type). A bare symbol binds anything — unless it names a nullary
+    /// case of the scrutinee's variant-shaped type, where it matches by
+    /// equality instead. A record pattern over a known record type is
+    /// irrefutable when its field sub-patterns are; a tuple pattern over a
+    /// same-length tuple type likewise.
+    fn irrefutable(&self, p: NodeId, ty: &Type) -> bool {
+        match self.arena.node(p) {
+            Node::Sym(name) => !self.case_payload(name, ty).is_some_and(|pl| pl.is_empty()),
+            Node::Rec(fields) => {
+                let ty = self.resolve_alias(ty);
+                let rec_fields: Option<Vec<(String, Type)>> = match &ty {
+                    Type::Record(fs) => Some(fs.clone()),
+                    Type::Named(n) => match self.types.get(n) {
+                        Some(TypeDef::Record(fs)) => Some(fs.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(rec_fields) = rec_fields else {
+                    return false;
+                };
+                fields.iter().all(|(k, v)| {
+                    rec_fields
+                        .iter()
+                        .find(|(n, _)| n == k)
+                        .is_some_and(|(_, t)| self.irrefutable(*v, t))
+                })
+            }
+            Node::Tup(items) => {
+                let ty = self.resolve_alias(ty);
+                match &ty {
+                    Type::Tuple(ts) if ts.len() == items.len() => items
+                        .iter()
+                        .zip(ts)
+                        .all(|(&sub, t)| self.irrefutable(sub, t)),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Resolve a nominal alias to its target type (transparently, one level at
+    /// a time up to a small depth bound to tolerate alias cycles).
+    fn resolve_alias(&self, ty: &Type) -> Type {
+        let mut ty = ty.clone();
+        for _ in 0..8 {
+            let Type::Named(n) = &ty else { break };
+            let Some(TypeDef::Alias(target)) = self.types.get(n) else {
+                break;
+            };
+            ty = target.clone();
+        }
+        ty
+    }
+
+    /// The payload types of variant case `case` under scrutinee type `ty`:
+    /// `Some(payloads)` when `ty` declares that case (a `DefType` variant, an
+    /// `option`, or a `result`), `None` otherwise. A nullary case yields an
+    /// empty payload list.
+    fn case_payload(&self, case: &str, ty: &Type) -> Option<Vec<Type>> {
+        match ty {
+            Type::Named(n) => match self.types.get(n)? {
+                TypeDef::Variant(cases) => cases
+                    .iter()
+                    .find(|(c, _)| c == case)
+                    .map(|(_, p)| p.clone()),
+                _ => None,
+            },
+            Type::Option(t) => match case {
+                "some" => Some(vec![(**t).clone()]),
+                "none" => Some(Vec::new()),
+                _ => None,
+            },
+            Type::Result(o, e) => match case {
+                "ok" => Some(vec![(**o).clone()]),
+                "err" => Some(vec![(**e).clone()]),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+/// The element type of a sequence operand: `list<t>` yields `t`; anything else
+/// (including a tuple, whose per-index type a dynamic `get` cannot pin) is
+/// gradual `Unknown`.
+fn elem_type(t: Option<&Type>) -> Type {
+    match t {
+        Some(Type::List(e)) => (**e).clone(),
+        _ => Type::Unknown,
+    }
+}
+
+/// The payload type of an option/result constructor call from its bundled
+/// argument types: no argument is unit-ish `Unknown`, one argument is that
+/// value, several bundle into a tuple.
+fn ctor_payload(arg_tys: &[Type]) -> Type {
+    match arg_tys {
+        [] => Type::Unknown,
+        [one] => one.clone(),
+        many => Type::Tuple(many.to_vec()),
+    }
+}
+
+/// The catch-all flavour of the non-exhaustive Match error.
+fn non_exhaustive_catch_all() -> String {
+    "eval error: non-exhaustive Match: no clause matches every possible value \
+     (add a catch-all clause)"
+        .to_string()
+}
+
+/// Whether a type is admissible to the ordering builtins (`lt`/`min`/…):
+/// numbers, strings, and chars, plus gradual `Unknown`.
+fn comparable(t: &Type) -> bool {
+    t.numeric() || matches!(t, Type::String | Type::Char)
+}
+
+/// The WIT name of a concrete primitive type, for error messages.
+fn wit_name(t: &Type) -> &'static str {
+    match t {
+        Type::Bool => "bool",
+        Type::U8 => "u8",
+        Type::U16 => "u16",
+        Type::U32 => "u32",
+        Type::U64 => "u64",
+        Type::S8 => "s8",
+        Type::S16 => "s16",
+        Type::S32 => "s32",
+        Type::S64 => "s64",
+        Type::F32 => "f32",
+        Type::F64 => "f64",
+        Type::Char => "char",
+        Type::String => "string",
+        _ => "?",
     }
 }
 

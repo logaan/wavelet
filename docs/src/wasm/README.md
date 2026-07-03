@@ -19,7 +19,7 @@ brew install logaan/tap/wavelet
 
 ## Example
 
-`shout.wvl` — compiles to `demo:shout.wasm`
+`shout.wlt` — compiles to `demo:shout.wasm`
 
 ``` rust
 Package "demo:shout@0.1.0"
@@ -29,7 +29,7 @@ Def shout Fn {phrase: string}
   str-cat[upper(phrase) "!"]
 ```
 
-`main.wvl` compiles to `demo:main.wasm`
+`main.wlt` compiles to `demo:main.wasm`
 
 ``` rust
 Package "demo:main@0.1.0"
@@ -46,7 +46,7 @@ Def greet Fn {phrase: string}
 The repl (Read Eval Print Loop) lets us run code interactively.
 
 ``` bash
-$ wavelet repl examples/main.wvl
+$ wavelet repl examples/main.wlt
 $ demo:main/greet("world")
 -> "Hello, WORLD!"
 ```
@@ -144,12 +144,12 @@ And what you can use instead.
 
 ``` text
 wavelet new <name> [--type=cli|http]                 # scaffold a new project (cli is the default)
-wavelet read [file.wvl]                              # parse and print the canonical WAVE form tree (reads stdin if no file)
-wavelet expand <file.wvl>                            # run macros to fixpoint and print the result
-wavelet wit <file.wvl>                               # show the synthesized WIT world
+wavelet read [file.wlt]                              # parse and print the canonical WAVE form tree (reads stdin if no file)
+wavelet expand <file.wlt>                            # run macros to fixpoint and print the result
+wavelet wit <file.wlt>                               # show the synthesized WIT world
 wavelet repl                                         # interactive read-eval-print loop
-wavelet run <file.wvl>... [-- <args>...]             # interpret directly (no codegen)
-wavelet build <file.wvl>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
+wavelet run <file.wlt>... [-- <args>...]             # interpret directly (no codegen)
+wavelet build <file.wlt>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
 wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
 wavelet --version                                    # print the wavelet version
 ```
@@ -159,7 +159,7 @@ honoring `Export`/`as:`/`open:`, and calling the exported `run`. It is the
 fastest way to try a program:
 
 ``` bash
-$ wavelet run examples/main.wvl examples/shout.wvl -- wasm
+$ wavelet run examples/main.wlt examples/shout.wlt -- wasm
 WASM!
 ```
 
@@ -168,7 +168,7 @@ canonical-ABI lift/lower and componentized via `wasm-tools`); `compose` links
 them with `wac`-style auto-plugging.
 
 `new` scaffolds a fresh project into a directory of the given name — a
-`.gitignore`, a `src/` with two `.wvl` files (an entry point and the domain
+`.gitignore`, a `src/` with two `.wlt` files (an entry point and the domain
 model it imports across the component boundary), build/run scripts, and a short
 README. `--type` picks the template; `cli` is the default:
 
@@ -197,7 +197,7 @@ Running at http://localhost:8080
 
 ## Editor support
 
-`.wvl` files get syntax highlighting plus a language server, `wavelet-lsp`,
+`.wlt` files get syntax highlighting plus a language server, `wavelet-lsp`,
 adding diagnostics, completion, hover, and document symbols. The highlighting
 grammars are derived from the lexer, so they match the compiler. `wavelet-lsp`
 ships as a standalone binary per platform on the [releases page] and is used
@@ -215,13 +215,13 @@ return {
     "logaan/wavelet.nvim",
     ft = "wavelet",
     init = function()
-      vim.filetype.add({ extension = { wvl = "wavelet" } })
+      vim.filetype.add({ extension = { wlt = "wavelet" } })
     end,
   },
 }
 ```
 
-Open any `.wvl` file and it is highlighted. For language features, put the
+Open any `.wlt` file and it is highlighted. For language features, put the
 `wavelet-lsp` server on your `PATH` — the plugin starts it automatically:
 
 ``` bash

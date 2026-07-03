@@ -618,13 +618,12 @@ fn min_max_on_strings_is_not_rejected() {
 }
 
 #[test]
-// The interpreter only conformance-checks a bare `Sym` `The` annotation; a
-// constructor annotation like `list(s32)` is never checked, so the checker must
-// stay gradual there rather than element-checking the list.
-fn the_with_a_constructor_annotation_is_not_element_checked() {
+// `The` is a pure static ascription (2.2 drop): a constructor annotation like
+// `list(s32)` element-checks the expression, so a string element is rejected
+// at compile time.
+fn the_with_a_constructor_annotation_is_element_checked() {
     let r = run(r#"The list(s32) ["a"]"#);
-    assert!(r.ok, "The list(s32) [\"a\"] should run, got: {}", r.error);
-    assert_eq!(r.value, r#"["a"]"#);
+    assert!(!r.ok, "The list(s32) [\"a\"] must be a compile error");
 }
 
 #[test]
@@ -635,4 +634,297 @@ fn the_narrow_int_of_a_len_result_is_not_rejected() {
     let r = run(r#"The u8 len([1 2 3])"#);
     assert!(r.ok, "The u8 len(...) should run, got: {}", r.error);
     assert_eq!(r.value, "3");
+}
+
+// ===========================================================================
+// Goal 3 — closing the gradual holes
+// ===========================================================================
+
+/// Pure-checker path: read → expand → `check_program`, as `wavelet build`/`wit`
+/// do. Returns the first compile error, if any.
+fn check_src(src: &str) -> Result<(), String> {
+    let (arena, roots) = read_file(src).map_err(|e| e.to_string())?;
+    let (arena, roots) = expand::expand_file(arena, &roots, None)?;
+    wavelet::check::check_program(&arena, &roots)
+}
+
+// --- 3.2: non-overloaded def calls carry their inferred result type ---------
+
+#[test]
+fn def_call_result_type_flows_into_the_caller() {
+    // g() is inferred string; using it as an arithmetic operand must fail.
+    let r = run(r#"Def g Fn {} "s"
+Def f Fn {} add(g() 1)"#);
+    assert!(
+        !r.ok,
+        "string-returning def used as a number must be rejected"
+    );
+}
+
+#[test]
+fn recursive_def_call_still_checks() {
+    let r = run("Def count-down Fn {n} If eq(n 0) \"liftoff\" count-down(sub(n 1))\ncount-down(3)");
+    assert!(r.ok, "recursive def failed: {}", r.error);
+}
+
+// --- 3.3: record and variant types are modelled ------------------------------
+
+#[test]
+fn record_literal_field_type_mismatch_against_nominal_param_is_rejected() {
+    let r = check_src(
+        r#"Package "demo:rec@0.1.0"
+DefType point {x: s32 y: s32}
+Def f Fn {p: point} 1
+Def g Fn {} f({x: "a" y: 2})"#,
+    );
+    assert!(
+        r.is_err(),
+        "string field for s32-typed record field must be rejected"
+    );
+}
+
+#[test]
+fn record_literal_matching_nominal_param_is_accepted() {
+    let r = check_src(
+        r#"Package "demo:rec@0.1.0"
+DefType point {x: s32 y: s32}
+Def f Fn {p: point} 1
+Def g Fn {} f({x: 1 y: 2})"#,
+    );
+    assert!(r.is_ok(), "well-typed record literal rejected: {r:?}");
+}
+
+#[test]
+fn variant_ctor_payload_type_is_checked() {
+    let r = check_src(
+        r#"Package "demo:var@0.1.0"
+DefType ttl [days(u32) forever]
+Def f Fn {} days("x")"#,
+    );
+    assert!(r.is_err(), "string payload for days(u32) must be rejected");
+}
+
+#[test]
+fn variant_ctor_and_nullary_case_type_as_the_nominal_variant() {
+    let r = check_src(
+        r#"Package "demo:var@0.1.0"
+DefType ttl [days(u32) forever]
+Def pick Fn {b: bool} If b days(30) forever"#,
+    );
+    assert!(r.is_ok(), "both If branches are `ttl`: {r:?}");
+}
+
+#[test]
+fn match_binds_variant_payload_at_declared_type() {
+    // `d` is bound at u32 by the `days(d)` pattern; using it as a string operand
+    // must be rejected.
+    let r = check_src(
+        r#"Package "demo:var@0.1.0"
+DefType ttl [days(u32) forever]
+Def f Fn {t: ttl}
+  Match t [
+    (days(d) upper(d))
+    (forever "f")]"#,
+    );
+    assert!(r.is_err(), "u32 payload used as a string must be rejected");
+}
+
+#[test]
+fn match_binds_record_fields_at_declared_types() {
+    let r = check_src(
+        r#"Package "demo:rec@0.1.0"
+DefType point {x: s32 y: s32}
+Def f Fn {p: point}
+  Match p [
+    ({x: a y: b} upper(a))
+    (other "no")]"#,
+    );
+    assert!(r.is_err(), "s32 field used as a string must be rejected");
+}
+
+// --- 3.7: the meta layer is typed tree -> tree --------------------------------
+
+#[test]
+fn quote_types_as_tree_and_rejects_arithmetic() {
+    let r = run("add(Quote foo 1)");
+    assert!(!r.ok, "a tree is not a number; add must be rejected");
+}
+
+#[test]
+fn quasi_unquote_holes_are_checked() {
+    // The unquote hole references an unbound name: a compile error even though
+    // the template is data.
+    let r = run("Quasi add(Unquote(nope) 1)");
+    assert!(!r.ok, "unbound name inside an Unquote hole must be caught");
+}
+
+#[test]
+fn quasi_data_heads_are_not_value_checked() {
+    // `greeting` is data (a form head), not a value use — no unbound error.
+    let r = run("Let {name: Quote(ada)} Quasi greeting(Unquote(name))");
+    assert!(r.ok, "quasi data head wrongly value-checked: {}", r.error);
+}
+
+#[test]
+fn defmacro_template_body_is_checked() {
+    // The macro body itself contains an unbound name outside any Quasi: caught
+    // at compile time even though the macro is never used.
+    let r = run("DefMacro bad {x} add(nope 1)");
+    assert!(!r.ok, "unbound name in a DefMacro body must be caught");
+}
+
+#[test]
+fn defmacro_params_are_trees_in_the_body() {
+    // Using a macro parameter as a number is a compile error: parameters are
+    // forms (tree), not numbers.
+    let r = run("DefMacro bad {x} add(x 1)");
+    assert!(
+        !r.ok,
+        "tree-typed macro parameter used as a number must be rejected"
+    );
+}
+
+// --- 3.8: richer inference for lists, options, and results --------------------
+
+#[test]
+fn synthesis_infers_option_result_type() {
+    let wit = synth(
+        r#"Package "demo:opt@0.1.0"
+Export lookup
+Def lookup Fn {k: s64} If gt(k 0) some(mul(k 10)) none"#,
+    )
+    .expect("option result should now be inferable");
+    assert!(
+        wit.contains("-> option<s64>"),
+        "option result not inferred:\n{wit}"
+    );
+}
+
+#[test]
+fn synthesis_infers_result_type_from_both_arms() {
+    let wit = synth(
+        r#"Package "demo:res@0.1.0"
+Export checked
+Def checked Fn {k: s64} If gt(k 0) ok(k) err("nonpositive")"#,
+    )
+    .expect("result<s64, string> should now be inferable");
+    assert!(
+        wit.contains("-> result<s64, string>"),
+        "result type not inferred:\n{wit}"
+    );
+}
+
+#[test]
+fn synthesis_infers_list_literal_result() {
+    let wit = synth(
+        r#"Package "demo:lst@0.1.0"
+Export pair
+Def pair Fn {n: s64} [n mul(n 2)]"#,
+    )
+    .expect("list<s64> literal result should be inferable");
+    assert!(
+        wit.contains("-> list<s64>"),
+        "list literal result not inferred:\n{wit}"
+    );
+}
+
+#[test]
+fn synthesis_infers_nominal_variant_result() {
+    let wit = synth(
+        r#"Package "demo:var@0.1.0"
+DefType ttl [days(u32) forever]
+Export pick
+Def pick Fn {b: bool} If b days(30) forever"#,
+    )
+    .expect("nominal variant result should be inferable");
+    assert!(
+        wit.contains("-> ttl"),
+        "variant result not inferred:\n{wit}"
+    );
+}
+
+// --- 3.6: macro-expanded code is checked, not just source forms ---------------
+
+#[test]
+fn macro_generated_type_error_is_a_compile_error() {
+    // The macro's expansion (`add("a" "b")`) is ill-typed even though the
+    // source form is an opaque macro call; the post-expansion check catches it
+    // before evaluation would.
+    let r = run("DefMacro bad-add {} Quasi add(\"a\" \"b\")\nDef f Fn {} Bad-add()");
+    assert!(!r.ok, "macro-generated ill-typed code must be rejected");
+}
+
+#[test]
+fn macro_generated_well_typed_code_still_runs() {
+    let r = run("DefMacro twice {x} Quasi mul(2 Unquote(x))\nTwice(21)");
+    assert!(r.ok, "well-typed macro expansion failed: {}", r.error);
+    assert_eq!(r.value, "42");
+}
+
+// --- 3.12: pattern exhaustiveness is enforced ----------------------------------
+
+#[test]
+fn match_on_bool_must_cover_both_literals() {
+    let r = run(r#"Def f Fn {b: bool} Match b [(true 1)]"#);
+    assert!(!r.ok, "bool Match missing `false` must be rejected");
+    assert!(r.error.contains("missing case `false`"), "{}", r.error);
+}
+
+#[test]
+fn match_on_bool_with_both_literals_is_total() {
+    let r = run(r#"Def f Fn {b: bool} Match b [(true 1) (false 2)]
+f(true)"#);
+    assert!(
+        r.ok,
+        "two-clause bool-literal Match should be total: {}",
+        r.error
+    );
+    assert_eq!(r.value, "1");
+}
+
+#[test]
+fn match_on_option_must_cover_none() {
+    let r = run(r#"Def f Fn {} Match some(1) [(some(x) x)]"#);
+    assert!(!r.ok, "option Match missing `none` must be rejected");
+    assert!(r.error.contains("missing case `none`"), "{}", r.error);
+}
+
+#[test]
+fn match_on_int_requires_catch_all() {
+    let r = run(r#"Def f Fn {} Match 5 [(1 "one")]"#);
+    assert!(!r.ok, "int Match without catch-all must be rejected");
+    assert!(r.error.contains("catch-all"), "{}", r.error);
+}
+
+#[test]
+fn match_with_catch_all_is_total() {
+    let r = run(r#"Match 5 [(1 "one") (n "many")]"#);
+    assert!(r.ok, "catch-all Match rejected: {}", r.error);
+}
+
+#[test]
+fn match_on_deftype_variant_must_cover_every_case() {
+    let r = check_src(
+        r#"Package "demo:var@0.1.0"
+DefType ttl [days(u32) forever]
+Def f Fn {t: ttl} Match t [(days(d) d)]"#,
+    );
+    assert!(
+        r.is_err(),
+        "variant Match missing `forever` must be rejected"
+    );
+    assert!(
+        r.as_ref().unwrap_err().contains("missing case `forever`"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn refutable_subpatterns_do_not_count_as_coverage() {
+    // `ok([])`/`ok([a])` are refutable list patterns: `ok` is not covered.
+    let r = run(r#"Def f Fn {} Match ok([1 2]) [(ok([]) 0) (err(e) 1)]"#);
+    assert!(
+        !r.ok,
+        "refutable ok-subpattern must not count as covering `ok`"
+    );
 }

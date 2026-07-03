@@ -122,7 +122,7 @@ DefMacro element {tag body}
   Quasi html-node Unquote(tag) Unquote(body)
 
 DefMacro unless {cond body}
-  Quasi If Unquote(cond) {} Unquote(body)
+  Quasi If Unquote(cond) "" Unquote(body)
 ```
 
 ```console

@@ -131,7 +131,18 @@ pub fn eval_snippet(src: &str) -> EvalOutcome {
     // when the bad code is never reached at runtime. `resolve_overloads` checks
     // the program, then rewrites overload sets to uniquely-named defs so the
     // interpreter sees no overloading. With no overload set it is an identity.
-    let (arena, roots) = match check::resolve_overloads(arena, &roots) {
+    // Under strict mode the *source* pass stays gradual: unexpanded macro
+    // calls make pre-expansion strictness meaningless, and the post-expansion
+    // check below re-checks the fully expanded program strictly.
+    let was_strict = check::strict();
+    if was_strict {
+        check::set_strict(false);
+    }
+    let resolved = check::resolve_overloads(arena, &roots);
+    if was_strict {
+        check::set_strict(true);
+    }
+    let (arena, roots) = match resolved {
         Ok(pair) => pair,
         Err(msg) => {
             return EvalOutcome {
@@ -142,6 +153,28 @@ pub fn eval_snippet(src: &str) -> EvalOutcome {
             };
         }
     };
+    // 3.6: check what macros *generate*, not just the source forms. Macro
+    // expansion runs to fixpoint on a copy and the checker runs again over the
+    // result, so code a macro produces is typed like code the user wrote.
+    // Evaluation still uses the original tree — the interpreter's lazy runtime
+    // expansion is the semantics oracle. An expansion *failure* is left for
+    // the runtime path so its error message is unchanged.
+    {
+        let copy = Arena {
+            nodes: arena.nodes.clone(),
+            spans: arena.spans.clone(),
+        };
+        if let Ok((xarena, xroots)) = expand::expand_file(copy, &roots, None)
+            && let Err(msg) = check::check_program(&xarena, &xroots)
+        {
+            return EvalOutcome {
+                ok: false,
+                value: String::new(),
+                output: String::new(),
+                error: msg,
+            };
+        }
+    }
     let arena = Rc::new(arena);
 
     let interp = interp::Interp::new();
@@ -393,19 +426,10 @@ mod tests {
             eval_str("Def s Fn {phrase: string} upper(phrase) s(\"hi\")"),
             "\"HI\""
         );
-        let (arena, roots) = read_file("Def s Fn {phrase: string} phrase s(42)").unwrap();
-        let arena = std::rc::Rc::new(arena);
-        let env = value::Env::root();
-        builtins::install(&env);
-        let interp = interp::Interp::new();
-        let mut result = Ok(value::unit());
-        for root in roots {
-            result = interp.eval(&arena, root, &env);
-            if result.is_err() {
-                break;
-            }
-        }
-        assert!(result.is_err(), "type check should reject 42 for string");
+        // Parameter conformance is a *static* check now (3.11): the checker
+        // rejects the call; the interpreter itself binds unconditionally.
+        let out = eval_snippet("Def s Fn {phrase: string} phrase s(42)");
+        assert!(!out.ok, "type check should reject 42 for string");
     }
 
     #[test]

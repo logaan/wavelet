@@ -47,19 +47,6 @@ const PI: &str = "stdlib constant `pi` is not bound in the wasm backend (5.7)";
 const FLAGS: &str = "flag literals rejected on this emit path (5.4)";
 /// On the build path `expand` is confined to macro libraries (6.1.8).
 const EXPAND: &str = "`expand` is only available inside a macro library when building (6.1.8)";
-/// Found by this harness: `build_files` runs the pure checker but never
-/// `resolve_overloads`, so a *non-exported* overload set collapses to
-/// `FileInfo::defs`'s last-wins entry and every call dispatches there,
-/// whatever the argument (or `The`-expected) type says. Tracked as 3.14.
-const OVERLOAD: &str = "non-exported overload sets dispatch last-wins in the backend (no \
-     resolve_overloads on the build path; 3.14)";
-/// The interpreter checks `If` conditions are bools at runtime; compiled code
-/// applies bare truthiness. Closed when the checker rejects it statically
-/// (goal 3).
-const IF_BOOL: &str = "compiled If skips the interpreter's runtime bool-condition check (goal 3)";
-/// The interpreter checks typed-parameter conformance (e.g. u8 range) at the
-/// call boundary; compiled code does not. Tracked under 2.2.4 / goal 3.
-const U8_CHECK: &str = "runtime parameter-conformance checks are not emitted (2.2.4 / goal 3)";
 
 /// Examples the compiled artifact is known to disagree on, with the current
 /// reason. Removing a fixed entry is part of fixing the backend gap.
@@ -83,7 +70,6 @@ const SKIP: &[(&str, &str)] = &[
     ("sf-defmacro", FLAGS), // `{}` in the expansion
     ("sf-fn-shout", TOSTR_STRING),
     ("sf-if", TOSTR_STRING),
-    ("sf-if-nonbool", IF_BOOL),
     ("sf-let", PI),
     ("sf-match", TOSTR_STRING),
     ("sf-quasi", TOSTR_TRAP),         // form result
@@ -117,12 +103,9 @@ const SKIP: &[(&str, &str)] = &[
     ("syntax-if-arity", TOSTR_STRING),
     ("syntax-quote-call", TOSTR_TRAP), // form result
     ("tail-count-down", TOSTR_STRING),
-    ("ty-overload-int", OVERLOAD),
-    ("ty-overload-str", OVERLOAD),
-    ("ty-the-return", OVERLOAD),
-    ("typed-byte-add-bad", U8_CHECK),
+    ("ty-overload-int", TOSTR_STRING),
+    ("ty-overload-str", TOSTR_STRING),
     ("values-atoms", FLAGS),
-    ("values-heterogeneous", TOSTR_TRAP),
     ("values-options-results", TOSTR_TRAP),
     ("values-quote-days", TOSTR_TRAP), // form result
     ("values-record", TOSTR_TRAP),     // record result

@@ -13,7 +13,78 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- **`--strict` mode (opt-in).** `wavelet run|build|wit --strict` makes
+  `Type::Unknown` a compile error: every expression must have a concrete
+  static type. Strict ships opt-in while the remaining gradual holes
+  (chiefly untyped function values and higher-order builtins) are burned
+  down; the plan flips it to the default — and deletes gradual mode — once
+  the documented example suite and the conformance suite pass under it.
+
+- **Pattern exhaustiveness checking.** Every `Match` whose scrutinee's type is
+  known must now be total, at compile time: `bool`, `option`, `result`, and
+  `DefType` variant scrutinees must cover every case, and types that cannot
+  be enumerated (numbers, strings, chars, lists, trees) require a catch-all
+  clause. What used to be the runtime "no Match clause for …" error is now a
+  compile-time "non-exhaustive Match" diagnostic.
+
+- **Cross-component calls are type-checked.** On the build path, qualified
+  calls (`alias/fn`) are checked against — and typed by — the imported
+  function's declared WIT signature (sibling components, `wit/deps` packages,
+  and functor instantiations), so a mistyped argument to an import is a
+  compile error instead of an emit failure or a runtime trap.
+
+- **The meta layer is typed.** `Quote`/`Quasi` have the static type `tree`
+  (the `wavelet:meta` interchange record); `DefMacro` templates check as
+  `tree -> tree` (template bodies are checked, with parameters typed as
+  forms); `Quasi`'s `Unquote`/`Splice` holes are checked as ordinary
+  expressions; `gensym`/`expand`/`rec-key` return `tree` and `read` returns
+  `result<tree, string>`. Macro-*generated* code is also now type-checked
+  after expansion on every path, including the playground.
+
+- **Richer static types everywhere.** The checker now models records
+  (structural and `DefType`-nominal), variants and their constructors,
+  options, results, tuples, and type aliases; every builtin has a typed
+  signature; non-overloaded def calls carry their inferred result type; and
+  `Match` patterns bind variables at the types the scrutinee implies. WIT
+  synthesis falls back to the full checker, so exports returning options,
+  results, list literals, or `DefType` values synthesize without an explicit
+  `Export` record form.
+
+- **`wavelet-lsp` surfaces the total checker's diagnostics.** After a
+  successful parse, the file is macro-expanded and run through the type
+  checker on every edit, so type errors — ill-typed calls, non-exhaustive
+  `Match`es, heterogeneous lists — appear in the editor with the compiler's
+  exact message.
+
 ### Changed
+
+- **Lists are `list<t>`.** A list literal's elements must share one type;
+  mixing shapes is a compile error. Reach for a record, a `DefType` variant,
+  or quoted data (a `tree`) instead.
+
+- **A non-bool `If` condition is a compile error** (there is no truthiness,
+  and the check no longer waits for runtime).
+
+- **`The` is a pure static ascription.** The annotated type is checked
+  against the expression at compile time for every annotation shape
+  (constructor annotations like `list(s32)` included). The runtime `The`
+  conformance check and the runtime typed-parameter conformance check are
+  **deleted** — the total checker runs ahead of the interpreter, and the
+  wasm backend never emitted them, so removing them also removes an
+  interpreter/backend divergence. (`The` is now also tail-transparent at
+  runtime.)
+
+- **Out-of-range integer literals are compile errors.** A literal that meets
+  a concrete integer context (a typed parameter, a `to-*` conversion, an
+  overload filter) is resolved and range-checked statically, with the same
+  message the runtime check used to produce.
+
+- **Non-exported overload sets now dispatch correctly in compiled
+  components.** The build path resolves and rewrites internal overloaded
+  calls exactly as the interpreter does (previously every internal call
+  dispatched to the last definition).
 
 - **The official file extension is now `.wlt`** (was `.wvl`). The CLI usage
   text, `wavelet new` scaffolding, the macro-library build pipeline, the

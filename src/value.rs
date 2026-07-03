@@ -33,7 +33,6 @@ pub struct Closure {
 
 pub struct Param {
     pub name: String,
-    pub ty: Option<String>,
 }
 
 pub fn unit() -> Value {
@@ -42,10 +41,9 @@ pub fn unit() -> Value {
 
 /// Whether the integer `n` fits within the WIT integer type named `type_name`.
 ///
-/// This is the single source of truth for the per-width integer bounds: both
-/// the runtime `The` check ([`crate::interp`]'s `check_type`) and the
-/// compile-time one ([`crate::check`]'s `int_in_range`) delegate here so the two
-/// can never silently diverge.
+/// This is the single source of truth for the per-width integer bounds: the
+/// compile-time checks ([`crate::check`]'s `int_in_range` and the `to-*`
+/// builtin signatures) delegate here.
 ///
 /// Returns `None` when `type_name` is not one of the eight integer types, and
 /// `Some(in_range)` otherwise. Note `u64` is the only unsigned type without an

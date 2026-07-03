@@ -38,11 +38,11 @@ Wavelet has **no value types beyond WIT's.** Its booleans, strings, lists, recor
 
 <Playground id="noffi-shout" />
 
-## Dynamically typed in the core, statically typed at the edges
+## One type system, from the core to the edges
 
-Inside a component, values carry their shape at runtime: lists may be heterogeneous, records are structural, and there is no type to declare. At every component boundary, though, there is a WIT signature. The compiler checks what it can statically and inserts checked coercions for the rest.
+Every expression has a WIT type, inferred where it can be and declared where it must be. The same types that describe a component's boundary describe its insides: lists are `list<t>`, records and variants are the `DefType` shapes, and quoted code is a `tree`. What the checker cannot prove, it rejects — errors surface at compile time, not as runtime surprises.
 
-Annotations claw back compile-time checking where it matters: typed `Fn` parameters and the [`The`](./language/special-forms#the) ascription form push checking earlier.
+Annotations narrow types where inference alone would not: typed `Fn` parameters and the [`The`](./language/special-forms#the) ascription form.
 
 <Playground id="typed-byte-add-ok" />
 

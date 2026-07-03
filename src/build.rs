@@ -50,12 +50,15 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
         .map_err(|e| format!("{path}: {e}"))?;
         // Type-check the expanded program before emit, so an ill-typed build is
         // rejected with the same error the playground/`run` report — the static
-        // guarantee now holds on the build path, not just in the playground. We
-        // run the *pure* checker (`check_program`), NOT the overload-rewrite:
-        // exported overload sets are emitted by keying on the intact overload
-        // sets (`info.fn_defs`/`info.overload_bodies`), so the forms must stay
-        // un-rewritten for `wit::collect`/`emit`.
-        crate::check::check_program(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
+        // guarantee holds on the build path, not just in the playground. This
+        // also resolves and rewrites every *non-exported* overload set (3.14),
+        // so internal calls dispatch to the member the checker chose rather
+        // than last-wins. *Exported* sets are kept intact: they are emitted
+        // per-member through `wit::collect`'s boundary mangling, which keys on
+        // the un-rewritten sets (`info.fn_defs`/`info.overload_bodies`).
+        let exported = wit::export_names(&arena, &roots);
+        let (arena, roots) = crate::check::resolve_overloads_excluding(arena, &roots, &exported)
+            .map_err(|e| format!("{path}: {e}"))?;
         let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
         units.push(Unit {
             path: path.clone(),
@@ -140,6 +143,24 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                 deps.insert(pkg.to_string(), dep);
             }
         }
+        // Re-check with the resolved imports' WIT signatures (3.1): qualified
+        // calls are typed against their declared signatures, so a cross-
+        // component type error is rejected here rather than surfacing as an
+        // emit failure or a runtime trap. (The pure local check already ran
+        // right after expansion.)
+        let mut import_sigs = crate::check::ImportSigs::new();
+        for imp in &u.info.imports {
+            if wit::is_macro_only(imp) {
+                continue;
+            }
+            if let Some(dep) = deps.get(&imp.package) {
+                let iface = imp.path.split_once('/').map(|(_, i)| i).unwrap_or("api");
+                import_sigs.extend(wit::import_sigs_for(&imp.alias, &dep.funcs, iface));
+            }
+        }
+        import_sigs.extend(wit::functor_import_sigs(&u.info.functors));
+        crate::check::check_program_with_imports(&u.arena, &u.roots, &import_sigs)
+            .map_err(|e| format!("{}: {e}", u.path))?;
         let bytes = emit::emit_component(&u.arena, &u.roots, &u.info, &deps)
             .map_err(|e| format!("{}: {e}", u.path))?;
         let out = format!("{out_dir}/{}.wasm", u.info.package_path.replace(':', "-"));
