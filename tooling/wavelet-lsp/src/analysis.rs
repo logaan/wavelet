@@ -2,9 +2,12 @@
 //!
 //! Every feature here funnels through `wavelet::read_file`, so the server and
 //! the compiler can never disagree about what parses: the reader is the single
-//! source of syntax truth (CLAUDE.md, "the interpreter is the semantics
-//! oracle"). We deliberately stop at *read* — no expansion, evaluation, or
-//! codegen — to keep responses fast and side-effect free.
+//! source of syntax truth. Diagnostics go further (3.13): after a successful
+//! read, the file is macro-expanded (best-effort, local macros only) and run
+//! through the total type checker (`wavelet::check`), so type errors —
+//! non-exhaustive `Match`es, ill-typed calls, heterogeneous lists — surface at
+//! the keystroke with the exact message the compiler reports. Evaluation and
+//! codegen still never run here.
 
 use std::path::{Path, PathBuf};
 
@@ -75,10 +78,12 @@ fn builtin_doc(name: &str) -> &'static str {
     }
 }
 
-/// Syntax diagnostics: a single error from the reader, if reading fails.
+/// Diagnostics: a reader error if the file does not parse; otherwise the
+/// first error from the total type checker over the (best-effort) expanded
+/// program.
 pub fn diagnostics(text: &str, index: &LineIndex) -> Vec<Diagnostic> {
     match wavelet::read_file(text) {
-        Ok(_) => Vec::new(),
+        Ok((arena, roots)) => check_diagnostics(text, index, arena, roots),
         Err(e) => {
             let at = (e.at as usize).min(text.len());
             let start = index.position(text, at);
@@ -94,6 +99,37 @@ pub fn diagnostics(text: &str, index: &LineIndex) -> Vec<Diagnostic> {
                 start
             };
             vec![diag(Range::new(start, end), e.msg)]
+        }
+    }
+}
+
+/// Run the total checker the way the compile paths do: expand macros to
+/// fixpoint (local macros only — foreign macro components are not
+/// instantiated on the keystroke path; if expansion fails, check the source
+/// tree instead so diagnostics stay best-effort), then `check_program`. The
+/// checker's errors carry no spans yet, so the diagnostic highlights the
+/// first line; the message is the compiler's, verbatim minus its
+/// `eval error: ` surface prefix.
+fn check_diagnostics(
+    text: &str,
+    index: &LineIndex,
+    arena: Arena,
+    roots: Vec<NodeId>,
+) -> Vec<Diagnostic> {
+    let (arena, roots) = match wavelet::expand::expand_file(arena, &roots, None) {
+        Ok(pair) => pair,
+        Err(_) => match wavelet::read_file(text) {
+            Ok(pair) => pair,
+            Err(_) => return Vec::new(),
+        },
+    };
+    match wavelet::check::check_program(&arena, &roots) {
+        Ok(()) => Vec::new(),
+        Err(msg) => {
+            let message = msg.strip_prefix("eval error: ").unwrap_or(&msg).to_string();
+            let start = index.position(text, 0);
+            let end = index.position(text, next_char_boundary(text, 0));
+            vec![diag(Range::new(start, end), message)]
         }
     }
 }
@@ -405,6 +441,40 @@ mod tests {
         // Sanity: a surviving special form and builtin are still offered.
         assert!(got.iter().any(|l| l == "Import"));
         assert!(got.iter().any(|l| l == "map"));
+    }
+
+    /// 3.13 — the total checker's diagnostics surface in the editor: an
+    /// ill-typed body (never called) is a diagnostic, with the compiler's
+    /// message; a well-typed file has none.
+    #[test]
+    fn type_errors_surface_as_diagnostics() {
+        let index = LineIndex::new("");
+        let bad = "Def f Fn {} add(\"a\" \"b\")\n";
+        let got = diagnostics(bad, &LineIndex::new(bad));
+        assert_eq!(got.len(), 1, "expected one checker diagnostic: {got:?}");
+        assert!(
+            got[0].message.contains("numeric"),
+            "message should be the compiler's: {}",
+            got[0].message
+        );
+
+        let _ = index;
+        let ok = "Def f Fn {n: s64} add(n 1)\n";
+        let got = diagnostics(ok, &LineIndex::new(ok));
+        assert!(got.is_empty(), "well-typed file should be clean: {got:?}");
+    }
+
+    /// Non-exhaustive Match diagnostics reach the editor too (3.12 + 3.13).
+    #[test]
+    fn non_exhaustive_match_is_a_diagnostic() {
+        let src = "Def f Fn {b: bool} Match b [(true 1)]\n";
+        let got = diagnostics(src, &LineIndex::new(src));
+        assert_eq!(got.len(), 1);
+        assert!(
+            got[0].message.contains("missing case `false`"),
+            "got: {}",
+            got[0].message
+        );
     }
 
     /// An `Import` of a package vendored under the project's `wit/deps` offers

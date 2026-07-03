@@ -52,6 +52,12 @@ you work, and rename it to the new version when you cut a release.
   results, list literals, or `DefType` values synthesize without an explicit
   `Export` record form.
 
+- **`wavelet-lsp` surfaces the total checker's diagnostics.** After a
+  successful parse, the file is macro-expanded and run through the type
+  checker on every edit, so type errors — ill-typed calls, non-exhaustive
+  `Match`es, heterogeneous lists — appear in the editor with the compiler's
+  exact message.
+
 ### Changed
 
 - **Lists are `list<t>`.** A list literal's elements must share one type;
