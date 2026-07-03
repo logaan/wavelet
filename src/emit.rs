@@ -722,6 +722,7 @@ impl FnCtx {
 
 // ------------------------------------------------------------- helper ids
 
+#[derive(Default)]
 struct Helpers {
     alloc: u32,
     realloc: u32,
@@ -745,6 +746,14 @@ struct Helpers {
     arith_raw: u32,
     cmp_raw: u32,
     neg_raw: u32,
+    /// `arith_int(a: i64, b: i64, op: i32) -> i64` — the checked integer
+    /// arithmetic core (op: 0=add 1=sub 2=mul 3=div 4=rem), shared by the
+    /// boxed `arith_raw` and the goal-5 typed scalar path so their semantics
+    /// cannot drift.
+    arith_int: u32,
+    /// `cmp_f64(x: f64, y: f64) -> i32` in {-1,0,1}; traps on NaN. The
+    /// numeric tail of `cmp_raw`, shared with the typed scalar path.
+    cmp_f64: u32,
 }
 
 // ---------------------------------------------------------------- emitter
@@ -1232,6 +1241,37 @@ fn dep_case(dep: &Dep, name: &str) -> Option<bool> {
             .map(|(_, p)| p.is_some()),
         _ => None,
     })
+}
+
+/// The unboxed representation of a *scalar-kinded* value on the wasm stack
+/// (goal 5, 5.2/5.6.1). The kind mirrors the interpreter's value variants —
+/// NOT the WIT width — so typed code computes exactly what the oracle
+/// computes: every integer type (and an unresolved int literal) is the
+/// interpreter's `Value::Int` domain, i.e. one i64; every float type is
+/// `Value::Dec` (f64; f32 is a boundary-only representation); `Value::Bool`
+/// is an i32 0/1; `Value::Char` is its Unicode scalar as an i64.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Scalar {
+    Int,
+    Float,
+    Bool,
+    Char,
+}
+
+impl Scalar {
+    /// The static-scalar kind of a checker type, if it has one.
+    fn of(ty: &crate::check::Type) -> Option<Scalar> {
+        use crate::check::Type as T;
+        Some(match ty {
+            T::Bool => Scalar::Bool,
+            T::U8 | T::U16 | T::U32 | T::U64 | T::S8 | T::S16 | T::S32 | T::S64 | T::IntLit(_) => {
+                Scalar::Int
+            }
+            T::F32 | T::F64 | T::FloatLit => Scalar::Float,
+            T::Char => Scalar::Char,
+            _ => return None,
+        })
+    }
 }
 
 struct Emitter<'a> {
@@ -2225,8 +2265,14 @@ impl<'a> Emitter<'a> {
         let [c, t, e] = *args else {
             return Err("malformed If".into());
         };
-        self.expr(fx, c, false)?;
-        fx.op(I::Call(self.h.truthy));
+        // Goal 5: a statically-bool condition evaluates unboxed — a typed
+        // comparison as an If condition allocates nothing at all.
+        if self.node_scalar(c) == Some(Scalar::Bool) {
+            self.expr_scalar(fx, c, Scalar::Bool)?;
+        } else {
+            self.expr(fx, c, false)?;
+            fx.op(I::Call(self.h.truthy));
+        }
         fx.op(I::If(BlockType::Result(ValType::I32)));
         self.expr(fx, t, tail)?;
         fx.op(I::Else);
@@ -3833,7 +3879,252 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// The scalar kind of `id`'s checker-inferred static type, if any
+    /// (goal 5). Absent/unknown/compound types return `None` — the boxed
+    /// fallback.
+    fn node_scalar(&self, id: NodeId) -> Option<Scalar> {
+        Scalar::of(self.node_types.get(&id)?)
+    }
+
+    /// Box an unboxed scalar on the stack (the typed→boxed seam).
+    fn box_scalar(&mut self, fx: &mut FnCtx, kind: Scalar) {
+        match kind {
+            Scalar::Int => fx.op(I::Call(self.h.box_int)),
+            Scalar::Float => fx.op(I::Call(self.h.box_dec)),
+            Scalar::Bool => fx.op(I::Call(self.h.box_bool)),
+            Scalar::Char => self.box_char(fx),
+        }
+    }
+
+    /// Emit expression `id` UNBOXED as scalar kind `want` (goal 5, 5.2).
+    ///
+    /// The caller must have established that `id`'s static value kind is
+    /// `want` — or is `Int` while `want` is `Float`, which widens like the
+    /// interpreter's `want_num` in mixed arithmetic. Literals and nested
+    /// scalar operations compile natively with no intermediate boxes;
+    /// anything else falls back to the boxed emitter plus one unbox. The
+    /// unbox helpers trap on a tag the static type ruled out, exactly where
+    /// the boxed path traps inside the polymorphic runtime helper, so the
+    /// two representations fail on the same programs.
+    fn expr_scalar(&mut self, fx: &mut FnCtx, id: NodeId, want: Scalar) -> Result<(), String> {
+        match self.arena.node(id).clone() {
+            Node::Int(n) => {
+                if want == Scalar::Float {
+                    // an int literal in float context: the interpreter widens
+                    fx.op(I::F64Const((n as f64).into()));
+                } else {
+                    fx.op(I::I64Const(n));
+                }
+                return Ok(());
+            }
+            Node::Dec(d) => {
+                fx.op(I::F64Const(d.into()));
+                return Ok(());
+            }
+            Node::Bool(b) => {
+                fx.op(I::I32Const(b as i32));
+                return Ok(());
+            }
+            Node::Char(c) => {
+                fx.op(I::I64Const(c as u32 as i64));
+                return Ok(());
+            }
+            Node::Tup(items) if !items.is_empty() => {
+                if let Node::Sym(name) = self.arena.node(items[0]).clone()
+                    && fx.lookup(&name).is_none()
+                    && let Some(kind) = self.scalar_op(fx, &name, &items[1..])?
+                {
+                    if kind == Scalar::Int && want == Scalar::Float {
+                        fx.op(I::F64ConvertI64S);
+                    }
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+        // Boxed fallback + one unbox at the seam.
+        self.expr(fx, id, false)?;
+        match (self.node_scalar(id), want) {
+            (Some(Scalar::Int), Scalar::Float) => {
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::F64ConvertI64S);
+            }
+            (_, Scalar::Int) => fx.op(I::Call(self.h.unbox_int)),
+            (_, Scalar::Float) => fx.op(I::Call(self.h.as_f64)),
+            (_, Scalar::Bool) => fx.op(I::Call(self.h.truthy)),
+            (_, Scalar::Char) => fx.op(I::Call(self.h.unbox_char)),
+        }
+        Ok(())
+    }
+
+    /// If `name(args)` is a scalar builtin whose operand kinds are statically
+    /// known, emit it UNBOXED and return the result kind; `Ok(None)` (with
+    /// nothing emitted) means "not eligible — use the boxed path". This is
+    /// the goal-5 static resolution of the polymorphic builtins (5.6.1):
+    /// arithmetic picks the int/float path at compile time, comparisons pick
+    /// codepoint/numeric at compile time, and eq compiles to one machine
+    /// comparison. Semantics are shared with the boxed path via the
+    /// arith_int/cmp_f64 helper cores.
+    fn scalar_op(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        args: &[NodeId],
+    ) -> Result<Option<Scalar>, String> {
+        use Scalar::*;
+        match name {
+            "add" | "sub" | "mul" | "div" | "rem" if args.len() == 2 => {
+                let (Some(ka), Some(kb)) = (self.node_scalar(args[0]), self.node_scalar(args[1]))
+                else {
+                    return Ok(None);
+                };
+                if !matches!(ka, Int | Float) || !matches!(kb, Int | Float) {
+                    return Ok(None);
+                }
+                if ka == Float || kb == Float {
+                    // float path: both widened to f64, like the interpreter
+                    self.expr_scalar(fx, args[0], Float)?;
+                    self.expr_scalar(fx, args[1], Float)?;
+                    match name {
+                        "add" => fx.op(I::F64Add),
+                        "sub" => fx.op(I::F64Sub),
+                        "mul" => fx.op(I::F64Mul),
+                        "div" => fx.op(I::F64Div),
+                        _ => {
+                            // rem: x - trunc(x/y)*y (Rust f64 `%`, like arith_raw)
+                            let y = fx.local(ValType::F64);
+                            let x = fx.local(ValType::F64);
+                            fx.op(I::LocalSet(y));
+                            fx.op(I::LocalSet(x));
+                            fx.op(I::LocalGet(x));
+                            fx.op(I::LocalGet(x));
+                            fx.op(I::LocalGet(y));
+                            fx.op(I::F64Div);
+                            fx.op(I::F64Trunc);
+                            fx.op(I::LocalGet(y));
+                            fx.op(I::F64Mul);
+                            fx.op(I::F64Sub);
+                        }
+                    }
+                    Ok(Some(Float))
+                } else {
+                    // int path: the shared checked-arithmetic core
+                    self.expr_scalar(fx, args[0], Int)?;
+                    self.expr_scalar(fx, args[1], Int)?;
+                    fx.op(I::I32Const(match name {
+                        "add" => 0,
+                        "sub" => 1,
+                        "mul" => 2,
+                        "div" => 3,
+                        _ => 4,
+                    }));
+                    fx.op(I::Call(self.h.arith_int));
+                    Ok(Some(Int))
+                }
+            }
+            "neg" if args.len() == 1 => match self.node_scalar(args[0]) {
+                Some(Int) => {
+                    // wrapping 0 - x, exactly neg_raw's int arm
+                    fx.op(I::I64Const(0));
+                    self.expr_scalar(fx, args[0], Int)?;
+                    fx.op(I::I64Sub);
+                    Ok(Some(Int))
+                }
+                Some(Float) => {
+                    self.expr_scalar(fx, args[0], Float)?;
+                    fx.op(I::F64Neg);
+                    Ok(Some(Float))
+                }
+                _ => Ok(None),
+            },
+            "lt" | "le" | "gt" | "ge" if args.len() == 2 => {
+                let (Some(ka), Some(kb)) = (self.node_scalar(args[0]), self.node_scalar(args[1]))
+                else {
+                    return Ok(None);
+                };
+                match (ka, kb) {
+                    (Char, Char) => {
+                        // by codepoint, like cmp_raw's char arm
+                        self.expr_scalar(fx, args[0], Char)?;
+                        self.expr_scalar(fx, args[1], Char)?;
+                    }
+                    (Int | Float, Int | Float) => {
+                        // widened to f64 (cmp_f64 core), like the
+                        // interpreter's `compare` — ints included
+                        self.expr_scalar(fx, args[0], Float)?;
+                        self.expr_scalar(fx, args[1], Float)?;
+                        fx.op(I::Call(self.h.cmp_f64));
+                        fx.op(I::I64ExtendI32S);
+                        fx.op(I::I64Const(0));
+                    }
+                    // strings keep the boxed cmp_raw; mixed char/number is a
+                    // runtime error either way (boxed path traps in as_f64)
+                    _ => return Ok(None),
+                }
+                fx.op(match name {
+                    "lt" => I::I64LtS,
+                    "le" => I::I64LeS,
+                    "gt" => I::I64GtS,
+                    _ => I::I64GeS,
+                });
+                Ok(Some(Bool))
+            }
+            "eq" if args.len() == 2 => {
+                let (Some(ka), Some(kb)) = (self.node_scalar(args[0]), self.node_scalar(args[1]))
+                else {
+                    return Ok(None);
+                };
+                if ka != kb {
+                    // Int-vs-Float etc. is `false` at the value level, but the
+                    // boxed eq_raw already answers that: keep one source of
+                    // truth for cross-kind eq.
+                    return Ok(None);
+                }
+                self.expr_scalar(fx, args[0], ka)?;
+                self.expr_scalar(fx, args[1], ka)?;
+                fx.op(match ka {
+                    Int | Char => I::I64Eq,
+                    Float => I::F64Eq,
+                    Bool => I::I32Eq,
+                });
+                Ok(Some(Bool))
+            }
+            "not" if args.len() == 1 => {
+                if self.node_scalar(args[0]) != Some(Bool) {
+                    return Ok(None);
+                }
+                self.expr_scalar(fx, args[0], Bool)?;
+                fx.op(I::I32Eqz);
+                Ok(Some(Bool))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn builtin(&mut self, fx: &mut FnCtx, name: &str, args: &[NodeId]) -> Result<(), String> {
+        // Goal 5 (5.2/5.6.1): when the operand types are statically known
+        // scalars, compile the polymorphic builtin as unboxed per-type code
+        // and box once at the seam. Ineligible calls (unknown/compound
+        // operand types, strings, arity errors) fall through to the boxed
+        // arms below unchanged.
+        if matches!(
+            name,
+            "eq" | "not"
+                | "lt"
+                | "le"
+                | "gt"
+                | "ge"
+                | "add"
+                | "sub"
+                | "mul"
+                | "div"
+                | "rem"
+                | "neg"
+        ) && let Some(kind) = self.scalar_op(fx, name, args)?
+        {
+            self.box_scalar(fx, kind);
+            return Ok(());
+        }
         let items = args;
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
@@ -4212,30 +4503,7 @@ fn emit_core_module(
         types: Vec::new(),
         imports: Vec::new(),
         import_fn: HashMap::new(),
-        h: Helpers {
-            alloc: 0,
-            realloc: 0,
-            box_int: 0,
-            box_bool: 0,
-            box_dec: 0,
-            box_str: 0,
-            truthy: 0,
-            unbox_int: 0,
-            unbox_char: 0,
-            unbox_dec: 0,
-            eq_raw: 0,
-            len_raw: 0,
-            head_h: 0,
-            tail_h: 0,
-            strcat2: 0,
-            case_h: 0,
-            to_str: 0,
-            rec_get: 0,
-            as_f64: 0,
-            arith_raw: 0,
-            cmp_raw: 0,
-            neg_raw: 0,
-        },
+        h: Helpers::default(),
         funcs: HashMap::new(),
         value_globals: HashMap::new(),
         compiling_values: Vec::new(),
@@ -4377,6 +4645,8 @@ fn emit_core_module(
     em.h.arith_raw = take();
     em.h.cmp_raw = take();
     em.h.neg_raw = take();
+    em.h.arith_int = take();
+    em.h.cmp_f64 = take();
 
     // ---- reserve the functor `set` resource core-func indices (step 04)
     //
@@ -5207,30 +5477,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         types: Vec::new(),
         imports: Vec::new(),
         import_fn: HashMap::new(),
-        h: Helpers {
-            alloc: 0,
-            realloc: 0,
-            box_int: 0,
-            box_bool: 0,
-            box_dec: 0,
-            box_str: 0,
-            truthy: 0,
-            unbox_int: 0,
-            unbox_char: 0,
-            unbox_dec: 0,
-            eq_raw: 0,
-            len_raw: 0,
-            head_h: 0,
-            tail_h: 0,
-            strcat2: 0,
-            case_h: 0,
-            to_str: 0,
-            rec_get: 0,
-            as_f64: 0,
-            arith_raw: 0,
-            cmp_raw: 0,
-            neg_raw: 0,
-        },
+        h: Helpers::default(),
         funcs: HashMap::new(),
         value_globals: HashMap::new(),
         compiling_values: Vec::new(),
@@ -5283,6 +5530,8 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     em.h.arith_raw = take();
     em.h.cmp_raw = take();
     em.h.neg_raw = take();
+    em.h.arith_int = take();
+    em.h.cmp_f64 = take();
     emit_helpers(&mut em)?;
 
     // macro body functions (each compiles like a Fn over its param forms)
@@ -8054,12 +8303,9 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
     // arith_raw(a, b, op) -> box   op: 0=add 1=sub 2=mul 3=div 4=rem.
     // Matches the interpreter `arith`: both ints → checked i64 (trap on
     // overflow / div-0 / INT_MIN÷-1); otherwise both widened to f64.
-    // [locals: ia=3, ib=4, r=5 (i64); xf=6, yf=7 (f64)]
+    // [locals: xf=3, yf=4 (f64)]
     {
         let mut fx = FnCtx::new(3);
-        let ia = fx.local(I64);
-        let ib = fx.local(I64);
-        let r = fx.local(I64);
         let xf = fx.local(F64);
         let yf = fx.local(F64);
         // both int?
@@ -8073,12 +8319,259 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Eq);
         fx.op(I::I32And);
         fx.op(I::If(BlockType::Result(I32)));
-        // ---- int path
+        // ---- int path: the shared checked-arithmetic core (arith_int), so
+        // the boxed and typed (goal 5) paths cannot drift apart
         fx.op(I::LocalGet(0));
         fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::LocalSet(ia));
         fx.op(I::LocalGet(1));
         fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(2));
+        fx.op(I::Call(em.h.arith_int));
+        fx.op(I::Call(em.h.box_int));
+        fx.op(I::Else);
+        // ---- float path
+        fx.op(I::LocalGet(0));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::LocalSet(xf));
+        fx.op(I::LocalGet(1));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::LocalSet(yf));
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(0));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Add);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Sub);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Mul);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(3));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Div);
+        fx.op(I::Else);
+        // rem: xf - trunc(xf/yf)*yf  (matches Rust f64 `%`)
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Div);
+        fx.op(I::F64Trunc);
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Mul);
+        fx.op(I::F64Sub);
+        fx.op(I::End); // op == 3
+        fx.op(I::End); // op == 2
+        fx.op(I::End); // op == 1
+        fx.op(I::End); // op == 0
+        fx.op(I::Call(em.h.box_dec));
+        fx.op(I::End); // int vs float
+        let t = em.ty_idx(vec![I32, I32, I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // cmp_raw(a, b) -> i32 in {-1, 0, 1}   total order over strings (byte
+    // lexicographic), chars (by codepoint) and numbers (widened to f64); traps
+    // on NaN/non-comparable, matching the interpreter's `compare`.
+    // [locals: la=2, lb=3, n=4, i=5, ca=6, cb=7 (i32)]
+    {
+        let mut fx = FnCtx::new(2);
+        let la = fx.local(I32);
+        let lb = fx.local(I32);
+        let n = fx.local(I32);
+        let i = fx.local(I32);
+        let ca = fx.local(I32);
+        let cb = fx.local(I32);
+        // both char? order by codepoint (interpreter: `Char(x).cmp(Char(y))`)
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Eq);
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Eq);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64LtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(-1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64GtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // both str?
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_STR));
+        fx.op(I::I32Eq);
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_STR));
+        fx.op(I::I32Eq);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Result(I32)));
+        // ---- string lexicographic compare
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(la));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(lb));
+        // n = min(la, lb)
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(lb));
+        fx.op(I::I32LtU);
+        fx.op(I::If(BlockType::Result(I32)));
+        fx.op(I::LocalGet(la));
+        fx.op(I::Else);
+        fx.op(I::LocalGet(lb));
+        fx.op(I::End);
+        fx.op(I::LocalSet(n));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(n));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(8, 0)));
+        fx.op(I::LocalSet(ca));
+        fx.op(I::LocalGet(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(8, 0)));
+        fx.op(I::LocalSet(cb));
+        fx.op(I::LocalGet(ca));
+        fx.op(I::LocalGet(cb));
+        fx.op(I::I32LtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(-1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(ca));
+        fx.op(I::LocalGet(cb));
+        fx.op(I::I32GtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End); // loop
+        fx.op(I::End); // block
+        // equal prefix: shorter string is less
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(lb));
+        fx.op(I::I32LtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(-1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(lb));
+        fx.op(I::I32GtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        fx.op(I::Else);
+        // ---- numeric compare: the shared cmp_f64 core (widened to f64;
+        // traps on NaN), so the boxed and typed (goal 5) paths cannot drift
+        fx.op(I::LocalGet(0));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::LocalGet(1));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::Call(em.h.cmp_f64));
+        fx.op(I::End); // str vs numeric
+        let t = em.ty_idx(vec![I32, I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // neg_raw(box) -> box   negates an int (wrapping, as the interpreter's `-n`)
+    // or a dec; traps on anything else.
+    {
+        let mut fx = FnCtx::new(1);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_INT));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(I32)));
+        fx.op(I::I64Const(0));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64Sub);
+        fx.op(I::Call(em.h.box_int));
+        fx.op(I::Else);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_DEC));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::F64Load(ma(8, 3)));
+        fx.op(I::F64Neg);
+        fx.op(I::Call(em.h.box_dec));
+        fx.op(I::End);
+        let t = em.ty_idx(vec![I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // arith_int(a: i64, b: i64, op: i32) -> i64 — the checked integer
+    // arithmetic core (op: 0=add 1=sub 2=mul 3=div 4=rem): trap on overflow /
+    // div-0 / INT_MIN÷-1, exactly the interpreter's checked_* semantics. The
+    // boxed arith_raw and the goal-5 typed scalar path both call this, so the
+    // two representations share one copy of the semantics.
+    // [locals: ia=3, ib=4, r=5 (i64)]
+    {
+        let mut fx = FnCtx::new(3);
+        let ia = fx.local(I64);
+        let ib = fx.local(I64);
+        let r = fx.local(I64);
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalSet(ia));
+        fx.op(I::LocalGet(1));
         fx.op(I::LocalSet(ib));
         // op == 0 : add
         fx.op(I::LocalGet(2));
@@ -8212,217 +8705,29 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::End); // op == 2
         fx.op(I::End); // op == 1
         fx.op(I::End); // op == 0
-        fx.op(I::Call(em.h.box_int));
-        fx.op(I::Else);
-        // ---- float path
-        fx.op(I::LocalGet(0));
-        fx.op(I::Call(em.h.as_f64));
-        fx.op(I::LocalSet(xf));
-        fx.op(I::LocalGet(1));
-        fx.op(I::Call(em.h.as_f64));
-        fx.op(I::LocalSet(yf));
-        fx.op(I::LocalGet(2));
-        fx.op(I::I32Const(0));
-        fx.op(I::I32Eq);
-        fx.op(I::If(BlockType::Result(F64)));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Add);
-        fx.op(I::Else);
-        fx.op(I::LocalGet(2));
-        fx.op(I::I32Const(1));
-        fx.op(I::I32Eq);
-        fx.op(I::If(BlockType::Result(F64)));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Sub);
-        fx.op(I::Else);
-        fx.op(I::LocalGet(2));
-        fx.op(I::I32Const(2));
-        fx.op(I::I32Eq);
-        fx.op(I::If(BlockType::Result(F64)));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Mul);
-        fx.op(I::Else);
-        fx.op(I::LocalGet(2));
-        fx.op(I::I32Const(3));
-        fx.op(I::I32Eq);
-        fx.op(I::If(BlockType::Result(F64)));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Div);
-        fx.op(I::Else);
-        // rem: xf - trunc(xf/yf)*yf  (matches Rust f64 `%`)
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Div);
-        fx.op(I::F64Trunc);
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Mul);
-        fx.op(I::F64Sub);
-        fx.op(I::End); // op == 3
-        fx.op(I::End); // op == 2
-        fx.op(I::End); // op == 1
-        fx.op(I::End); // op == 0
-        fx.op(I::Call(em.h.box_dec));
-        fx.op(I::End); // int vs float
-        let t = em.ty_idx(vec![I32, I32, I32], vec![I32]);
+        let t = em.ty_idx(vec![I64, I64, I32], vec![I64]);
         em.bodies.push((t, fx.finish()));
     }
 
-    // cmp_raw(a, b) -> i32 in {-1, 0, 1}   total order over strings (byte
-    // lexicographic), chars (by codepoint) and numbers (widened to f64); traps
-    // on NaN/non-comparable, matching the interpreter's `compare`.
-    // [locals: xf=2, yf=3 (f64); la=4, lb=5, n=6, i=7, ca=8, cb=9 (i32)]
+    // cmp_f64(x: f64, y: f64) -> i32 in {-1, 0, 1}; traps on NaN (the
+    // interpreter's "values are not comparable"). The numeric tail of
+    // cmp_raw, shared with the goal-5 typed scalar path.
     {
         let mut fx = FnCtx::new(2);
-        let xf = fx.local(F64);
-        let yf = fx.local(F64);
-        let la = fx.local(I32);
-        let lb = fx.local(I32);
-        let n = fx.local(I32);
-        let i = fx.local(I32);
-        let ca = fx.local(I32);
-        let cb = fx.local(I32);
-        // both char? order by codepoint (interpreter: `Char(x).cmp(Char(y))`)
         fx.op(I::LocalGet(0));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_CHAR));
-        fx.op(I::I32Eq);
         fx.op(I::LocalGet(1));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_CHAR));
-        fx.op(I::I32Eq);
-        fx.op(I::I32And);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::LocalGet(0));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::LocalGet(1));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::I64LtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(-1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::LocalGet(0));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::LocalGet(1));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::I64GtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::I32Const(0));
-        fx.op(I::Return);
-        fx.op(I::End);
-        // both str?
-        fx.op(I::LocalGet(0));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_STR));
-        fx.op(I::I32Eq);
-        fx.op(I::LocalGet(1));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_STR));
-        fx.op(I::I32Eq);
-        fx.op(I::I32And);
-        fx.op(I::If(BlockType::Result(I32)));
-        // ---- string lexicographic compare
-        fx.op(I::LocalGet(0));
-        fx.op(I::I32Load(ma(4, 2)));
-        fx.op(I::LocalSet(la));
-        fx.op(I::LocalGet(1));
-        fx.op(I::I32Load(ma(4, 2)));
-        fx.op(I::LocalSet(lb));
-        // n = min(la, lb)
-        fx.op(I::LocalGet(la));
-        fx.op(I::LocalGet(lb));
-        fx.op(I::I32LtU);
-        fx.op(I::If(BlockType::Result(I32)));
-        fx.op(I::LocalGet(la));
-        fx.op(I::Else);
-        fx.op(I::LocalGet(lb));
-        fx.op(I::End);
-        fx.op(I::LocalSet(n));
-        fx.op(I::I32Const(0));
-        fx.op(I::LocalSet(i));
-        fx.op(I::Block(BlockType::Empty));
-        fx.op(I::Loop(BlockType::Empty));
-        fx.op(I::LocalGet(i));
-        fx.op(I::LocalGet(n));
-        fx.op(I::I32GeU);
-        fx.op(I::BrIf(1));
-        fx.op(I::LocalGet(0));
-        fx.op(I::LocalGet(i));
-        fx.op(I::I32Add);
-        fx.op(I::I32Load8U(ma(8, 0)));
-        fx.op(I::LocalSet(ca));
-        fx.op(I::LocalGet(1));
-        fx.op(I::LocalGet(i));
-        fx.op(I::I32Add);
-        fx.op(I::I32Load8U(ma(8, 0)));
-        fx.op(I::LocalSet(cb));
-        fx.op(I::LocalGet(ca));
-        fx.op(I::LocalGet(cb));
-        fx.op(I::I32LtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(-1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::LocalGet(ca));
-        fx.op(I::LocalGet(cb));
-        fx.op(I::I32GtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::LocalGet(i));
-        fx.op(I::I32Const(1));
-        fx.op(I::I32Add);
-        fx.op(I::LocalSet(i));
-        fx.op(I::Br(0));
-        fx.op(I::End); // loop
-        fx.op(I::End); // block
-        // equal prefix: shorter string is less
-        fx.op(I::LocalGet(la));
-        fx.op(I::LocalGet(lb));
-        fx.op(I::I32LtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(-1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::LocalGet(la));
-        fx.op(I::LocalGet(lb));
-        fx.op(I::I32GtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::I32Const(0));
-        fx.op(I::Else);
-        // ---- numeric compare (widened to f64)
-        fx.op(I::LocalGet(0));
-        fx.op(I::Call(em.h.as_f64));
-        fx.op(I::LocalSet(xf));
-        fx.op(I::LocalGet(1));
-        fx.op(I::Call(em.h.as_f64));
-        fx.op(I::LocalSet(yf));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
         fx.op(I::F64Lt);
         fx.op(I::If(BlockType::Result(I32)));
         fx.op(I::I32Const(-1));
         fx.op(I::Else);
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(1));
         fx.op(I::F64Gt);
         fx.op(I::If(BlockType::Result(I32)));
         fx.op(I::I32Const(1));
         fx.op(I::Else);
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(1));
         fx.op(I::F64Eq);
         fx.op(I::If(BlockType::Result(I32)));
         fx.op(I::I32Const(0));
@@ -8432,39 +8737,7 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::End);
         fx.op(I::End);
         fx.op(I::End);
-        fx.op(I::End); // str vs numeric
-        let t = em.ty_idx(vec![I32, I32], vec![I32]);
-        em.bodies.push((t, fx.finish()));
-    }
-
-    // neg_raw(box) -> box   negates an int (wrapping, as the interpreter's `-n`)
-    // or a dec; traps on anything else.
-    {
-        let mut fx = FnCtx::new(1);
-        fx.op(I::LocalGet(0));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_INT));
-        fx.op(I::I32Eq);
-        fx.op(I::If(BlockType::Result(I32)));
-        fx.op(I::I64Const(0));
-        fx.op(I::LocalGet(0));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::I64Sub);
-        fx.op(I::Call(em.h.box_int));
-        fx.op(I::Else);
-        fx.op(I::LocalGet(0));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_DEC));
-        fx.op(I::I32Ne);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::Unreachable);
-        fx.op(I::End);
-        fx.op(I::LocalGet(0));
-        fx.op(I::F64Load(ma(8, 3)));
-        fx.op(I::F64Neg);
-        fx.op(I::Call(em.h.box_dec));
-        fx.op(I::End);
-        let t = em.ty_idx(vec![I32], vec![I32]);
+        let t = em.ty_idx(vec![F64, F64], vec![I32]);
         em.bodies.push((t, fx.finish()));
     }
 
@@ -8897,30 +9170,7 @@ world app {
             types: Vec::new(),
             imports: Vec::new(),
             import_fn: HashMap::new(),
-            h: Helpers {
-                alloc: 0,
-                realloc: 0,
-                box_int: 0,
-                box_bool: 0,
-                box_dec: 0,
-                box_str: 0,
-                truthy: 0,
-                unbox_int: 0,
-                unbox_char: 0,
-                unbox_dec: 0,
-                eq_raw: 0,
-                len_raw: 0,
-                head_h: 0,
-                tail_h: 0,
-                strcat2: 0,
-                case_h: 0,
-                to_str: 0,
-                rec_get: 0,
-                as_f64: 0,
-                arith_raw: 0,
-                cmp_raw: 0,
-                neg_raw: 0,
-            },
+            h: Helpers::default(),
             funcs: HashMap::new(),
             value_globals: HashMap::new(),
             compiling_values: Vec::new(),
@@ -8991,6 +9241,8 @@ world app {
         em.h.arith_raw = take();
         em.h.cmp_raw = take();
         em.h.neg_raw = take();
+        em.h.arith_int = take();
+        em.h.cmp_f64 = take();
 
         // helper bodies (must precede our set bodies, matching index order).
         emit_helpers(&mut em)?;

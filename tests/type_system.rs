@@ -972,8 +972,8 @@ fn node_type_table_types_param_refs_and_literals() {
     use wavelet::check::{self, Type};
     let (arena, roots) = read_file("Def double Fn {x: u32} add(x x)").expect("reads");
     let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expands");
-    let table = check::node_types_with_imports(&arena, &roots, &check::ImportSigs::new())
-        .expect("checks");
+    let table =
+        check::node_types_with_imports(&arena, &roots, &check::ImportSigs::new()).expect("checks");
     assert!(
         table.values().any(|t| *t == Type::U32),
         "the `x` param references should be typed u32: {table:?}"
