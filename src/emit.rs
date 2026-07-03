@@ -7190,6 +7190,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         fn_defs: HashMap::new(),
         value_defs: Vec::new(),
         overload_bodies: HashMap::new(),
+        resources: Vec::new(),
     };
     let deps: HashMap<String, Dep> = HashMap::new();
 
@@ -10887,6 +10888,7 @@ world app {
             fn_defs: HashMap::new(),
             value_defs: Vec::new(),
             overload_bodies: HashMap::new(),
+            resources: Vec::new(),
         };
         let deps: HashMap<String, Dep> = HashMap::new();
 

@@ -4,7 +4,10 @@ use std::rc::Rc;
 
 use crate::builtins;
 use crate::form::{Arena, Node, NodeId};
-use crate::value::{Closure, Env, Param, Value, form_to_value, unit, value_to_form};
+use crate::value::{
+    Closure, Env, Param, ResourceCtor, ResourceInstance, ResourceMethod, Value, form_to_value,
+    unit, value_to_form,
+};
 
 #[derive(Debug)]
 pub struct EvalError {
@@ -167,6 +170,25 @@ impl Interp {
                     Some(Rc::new(payload)),
                 ))),
             },
+            // A user-declared resource constructor (4.5): run `New` on the
+            // argument, then wrap the resulting rep in a fresh handle stamped
+            // with the resource's nominal type name.
+            Value::ResourceCtor(rc) => {
+                let rep = self.apply(&Value::Closure(rc.ctor.clone()), arg)?;
+                Ok(Step::Done(Value::Resource(std::rc::Rc::new(ResourceInstance {
+                    name: rc.name.clone(),
+                    rep,
+                    consumed: std::cell::Cell::new(false),
+                }))))
+            }
+            // A user-declared resource method (4.5): the receiver is the first
+            // (or sole) argument; unwrap its handle to the rep so the method's
+            // `self` parameter is bound to the rep (decision 2b), then run the
+            // body.
+            Value::ResourceMethod(rm) => {
+                let arg = unwrap_receiver(&rm.name, arg)?;
+                self.apply_step(&Value::Closure(rm.method.clone()), arg, env)
+            }
             other => err(format!(
                 "not callable: {}",
                 crate::value::print_value(other)
@@ -334,6 +356,76 @@ impl Interp {
                 }
                 Step::Done(unit())
             }
+            // `DefResource <name> { … }` declares a resource type (4.5).
+            // Evaluating it binds the resource's use-site names into the module
+            // env: the bare type name to the constructor (`counter(5)`), and
+            // each method/static under its qualified key (`counter/next`,
+            // `counter/sum`). The destructor `Drop` is recorded by the checker
+            // and run by the backend at handle-drop; it is not user-callable, so
+            // the interpreter binds nothing for it. The static/WIT side reads the
+            // declaration separately (`crate::check`, `crate::wit`).
+            "defresource-MACRO" => {
+                let [name_id, members_id] = args2(args, "DefResource")?;
+                let Node::Sym(rname) = arena.node(name_id) else {
+                    return err("DefResource expects a name");
+                };
+                let Node::Rec(members) = arena.node(members_id) else {
+                    return err("DefResource expects member braces `{ … }`");
+                };
+                let rname = rname.clone();
+                for (key, val) in members {
+                    match key.as_str() {
+                        "New" => {
+                            let Value::Closure(c) = self.eval(arena, *val, env)? else {
+                                return err("DefResource `New` must be an `Fn`");
+                            };
+                            env.define(
+                                rname.clone(),
+                                Value::ResourceCtor(std::rc::Rc::new(ResourceCtor {
+                                    name: rname.clone(),
+                                    ctor: c,
+                                })),
+                            );
+                        }
+                        // The destructor is not user-callable; running its body
+                        // at handle-drop is a backend concern (staged, 4c).
+                        "Drop" => {}
+                        other => {
+                            // A `Static Fn {…}` member reads as
+                            // `Tup[static-MACRO, <fn-form>]`; strip the marker and
+                            // bind the closure directly (statics take no `self`).
+                            // Any other member is an instance method.
+                            let (is_static, fn_id) = match arena.node(*val) {
+                                Node::Tup(items)
+                                    if items.len() == 2
+                                        && matches!(
+                                            arena.node(items[0]),
+                                            Node::Sym(s) if s == "static-MACRO"
+                                        ) =>
+                                {
+                                    (true, items[1])
+                                }
+                                _ => (false, *val),
+                            };
+                            let Value::Closure(c) = self.eval(arena, fn_id, env)? else {
+                                return err(format!(
+                                    "resource member `{other}` must be an `Fn`"
+                                ));
+                            };
+                            let value = if is_static {
+                                Value::Closure(c)
+                            } else {
+                                Value::ResourceMethod(std::rc::Rc::new(ResourceMethod {
+                                    name: rname.clone(),
+                                    method: c,
+                                }))
+                            };
+                            env.define(format!("{rname}/{other}"), value);
+                        }
+                    }
+                }
+                Step::Done(unit())
+            }
             "package-MACRO" | "import-MACRO" | "instantiate-MACRO" | "export-MACRO" => {
                 return err(format!(
                     "`{}` is only allowed at the top level of a file",
@@ -463,6 +555,38 @@ impl Interp {
             out.push(self.quasi(arena, item, env, depth)?);
         }
         Ok(out)
+    }
+}
+
+/// Unwrap a resource method's receiver so `self` binds to the rep, not the
+/// handle (decision 2b, 4.5). The receiver is the first element of a multi-arg
+/// payload, or the sole argument for a one-parameter method. A live handle of
+/// the method's own type is unwrapped to its rep; a consumed handle traps; a
+/// value that is already a rep (e.g. a sibling call passing `self` straight
+/// through) is left untouched.
+fn unwrap_receiver(res_name: &str, arg: Value) -> R<Value> {
+    fn unwrap_one(res_name: &str, v: Value) -> R<Value> {
+        match v {
+            Value::Resource(inst) if inst.name == res_name => {
+                if inst.consumed.get() {
+                    return err(format!(
+                        "use of a consumed `{res_name}` handle (its ownership was transferred)"
+                    ));
+                }
+                Ok(inst.rep.clone())
+            }
+            // Already a rep (sibling call) or a foreign value: pass through; the
+            // checker guarantees well-typed receivers.
+            other => Ok(other),
+        }
+    }
+    match arg {
+        Value::Tup(mut items) if !items.is_empty() => {
+            let first = std::mem::replace(&mut items[0], Value::Tup(vec![]));
+            items[0] = unwrap_one(res_name, first)?;
+            Ok(Value::Tup(items))
+        }
+        single => unwrap_one(res_name, single),
     }
 }
 

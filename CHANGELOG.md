@@ -13,6 +13,27 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- **User-declared resource types (`DefResource`).** A dedicated
+  `DefResource <name> { … }` form declares a resource type that maps 1:1 onto a
+  WIT `resource` block. Members are identified by role: `New:` is the
+  constructor (returns the rep; called at the use site as `counter(5)` — the
+  type name applied), `Drop:` is the optional destructor (`Fn {self: <name>}` →
+  unit, not user-callable), a `Static Fn {…}` member is a static (an alternative
+  constructor may return the resource), and any other member is an instance
+  method whose first parameter is `self: <name>` (bound to the rep in the body).
+  Methods and statics are called qualified: `counter/next(c)`, `counter/sum(vs)`.
+  In type position a bare resource name means `own` (ownership transfers),
+  `own(<name>)` is the explicit synonym, and `borrow(<name>)` is a
+  parameter-only borrow (illegal in result or stored position). Resource
+  handles have identity equality and print opaquely as `<name>`; they are not
+  form-serializable and cannot be `Derive`d (`Eq`/`Ord`/`Hash`/`Show` over a
+  resource is a compile error). Exporting a resource (`Export <name>`) exports
+  the whole block; an unexported one is a legal internal resource. (The
+  interpreter semantics, checker discipline, and WIT synthesis are in place; the
+  wasm backend for exported resources is in progress.)
+
 ### Changed
 
 - **A list argument no longer spreads across parameters.** A single list value

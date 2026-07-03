@@ -82,6 +82,9 @@ pub fn expand_file(
     crate::builtins::install(&env);
 
     let arena = Rc::new(arena);
+    // A resource type is not derivable (4.5): `Derive` over one is rejected in
+    // `derive_roots`, so gather the file's resource names up front.
+    let resources = resource_names(&arena, roots);
     let mut out = Arena::new();
     let mut new_roots = Vec::new();
     for &root in roots {
@@ -93,7 +96,7 @@ pub fn expand_file(
         // it splices a concrete monomorphic definition *and* its export into the
         // output roots (one `Derive` root becomes several roots). It is handled
         // here, before ordinary expansion, because it must produce multiple roots.
-        if let Some(derived) = derive_roots(&arena, root, &mut out)? {
+        if let Some(derived) = derive_roots(&arena, root, &mut out, &resources)? {
             new_roots.extend(derived);
             continue;
         }
@@ -107,6 +110,22 @@ pub fn expand_file(
         )?);
     }
     Ok((out, new_roots))
+}
+
+/// The set of `DefResource` type names declared among `roots` (4.5).
+fn resource_names(arena: &Arena, roots: &[NodeId]) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for &root in roots {
+        if let Node::Tup(items) = arena.node(root)
+            && let Some(&head) = items.first()
+            && matches!(arena.node(head), Node::Sym(s) if s == "defresource-MACRO")
+            && let Some(&name_id) = items.get(1)
+            && let Node::Sym(name) = arena.node(name_id)
+        {
+            out.insert(name.clone());
+        }
+    }
+    out
 }
 
 fn is_def_macro(arena: &Arena, id: NodeId) -> bool {
@@ -133,6 +152,7 @@ fn derive_roots(
     arena: &Arena,
     root: NodeId,
     out: &mut Arena,
+    resources: &std::collections::HashSet<String>,
 ) -> Result<Option<Vec<NodeId>>, String> {
     let Node::Tup(items) = arena.node(root) else {
         return Ok(None);
@@ -153,6 +173,13 @@ fn derive_roots(
     let Node::Sym(tname) = arena.node(type_id) else {
         return Err("malformed Derive: the type must be a bare type name".into());
     };
+    // Equality, ordering, hashing, and printing are all identity/opaque for a
+    // resource (4.5, decision 6): none is derivable. Reject `Derive` over one.
+    if resources.contains(tname) {
+        return Err(format!(
+            "`Derive` cannot be used on the resource type `{tname}`: resources have              identity equality and are opaque (not `Eq`/`Ord`/`Hash`/`Show`)"
+        ));
+    }
 
     let span = arena.span(root);
     let mut roots = Vec::new();
