@@ -41,6 +41,106 @@ pub struct FileInfo {
     /// path), which is exactly where this is consumed — it is *not* preserved
     /// across cross-package `Dep` clones.
     pub overload_bodies: HashMap<String, (NodeId, NodeId)>,
+    /// User-declared resource types (4.5), in file order. Each carries the
+    /// synthesized WIT signatures of its constructor/methods/statics and the
+    /// interface it is exported into (`None` = internal, not exported).
+    pub resources: Vec<ResourceDecl>,
+}
+
+/// A synthesized `DefResource` (4.5): the WIT `resource { … }` block plus where
+/// it is exported. Methods carry their signature with the implicit `self`
+/// parameter already dropped (WIT methods take `self` implicitly).
+#[derive(Clone)]
+pub struct ResourceDecl {
+    pub name: String,
+    /// The interface this resource is exported into, or `None` if internal.
+    pub iface: Option<String>,
+    /// The constructor's parameters (`New`), or `None` if the resource declares
+    /// no `New` member. WIT constructors are anonymous and have no result.
+    pub constructor: Option<Vec<(String, String)>>,
+    /// Instance methods, `self` already removed from each signature.
+    pub methods: Vec<FuncSig>,
+    /// Static members (`Static Fn`), including any that return the resource.
+    pub statics: Vec<FuncSig>,
+    /// Whether the resource declares a `Drop` destructor (rendered implicitly by
+    /// WIT as `[dtor]` at the boundary; no source line in the resource block).
+    pub has_drop: bool,
+}
+
+impl ResourceDecl {
+    /// Render the WIT `resource <name> { … }` block (4.5). The constructor is
+    /// anonymous; methods take `self` implicitly; statics use `static func`.
+    pub fn to_wit(&self) -> String {
+        let mut out = format!("  resource {} {{
+", self.name);
+        if let Some(params) = &self.constructor {
+            let ps: Vec<String> = params.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+            out.push_str(&format!("    constructor({});
+", ps.join(", ")));
+        }
+        for m in &self.methods {
+            let ps: Vec<String> = m.params.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+            match &m.result {
+                Some(r) => out.push_str(&format!("    {}: func({}) -> {r};
+", m.name, ps.join(", "))),
+                None => out.push_str(&format!("    {}: func({});
+", m.name, ps.join(", "))),
+            }
+        }
+        for st in &self.statics {
+            let ps: Vec<String> = st.params.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+            match &st.result {
+                Some(r) => {
+                    out.push_str(&format!("    {}: static func({}) -> {r};
+", st.name, ps.join(", ")))
+                }
+                None => out.push_str(&format!("    {}: static func({});
+", st.name, ps.join(", "))),
+            }
+        }
+        out.push_str("  }
+");
+        out
+    }
+}
+
+/// Peel a `Static` marker off a resource member value in the WIT collector:
+/// `Tup[static-MACRO, <fn>]` → `(true, <fn>)`; anything else → `(false, value)`.
+fn strip_static_member(arena: &Arena, val: NodeId) -> (bool, NodeId) {
+    if let Node::Tup(items) = arena.node(val)
+        && items.len() == 2
+        && matches!(arena.node(items[0]), Node::Sym(s) if s == "static-MACRO")
+    {
+        return (true, items[1]);
+    }
+    (false, val)
+}
+
+/// If `id` is `Fn {params} body`, return `(params_form, body_form)`.
+fn as_fn_form(arena: &Arena, id: NodeId) -> Option<(NodeId, NodeId)> {
+    let Node::Tup(items) = arena.node(id) else {
+        return None;
+    };
+    if items.len() != 3 {
+        return None;
+    }
+    if !matches!(arena.node(items[0]), Node::Sym(s) if s == "fn-MACRO") {
+        return None;
+    }
+    Some((items[1], items[2]))
+}
+
+/// Parse an annotated parameter record into `(name, wit-type-text)` pairs (used
+/// for a constructor's parameters, whose result WIT never needs inferring).
+fn annotated_params(arena: &Arena, params_id: NodeId) -> Result<Vec<(String, String)>, String> {
+    match arena.node(params_id) {
+        Node::Flg(names) if names.is_empty() => Ok(Vec::new()),
+        Node::Rec(fields) => fields
+            .iter()
+            .map(|(k, v)| Ok((k.clone(), type_text(arena, *v)?)))
+            .collect(),
+        _ => Err("a resource constructor's parameters must be annotated `{name: type …}`".into()),
+    }
 }
 
 pub struct ImportInfo {
@@ -164,6 +264,9 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     let mut fn_defs: HashMap<String, Vec<(NodeId, NodeId)>> = HashMap::new();
     let mut value_defs = Vec::new();
     let mut overload_bodies: HashMap<String, (NodeId, NodeId)> = HashMap::new();
+    // Raw DefResource members, gathered in the root loop and turned into
+    // `ResourceDecl`s once `defs`/`functor_ops` exist for member inference (4.5).
+    let mut resource_forms: Vec<(String, Vec<(String, NodeId)>)> = Vec::new();
 
     for &root in roots {
         // Top-level forms are tuples `Tup[head, …args]`. The arity-1 special
@@ -263,6 +366,14 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                     types.push((name.clone(), items[2]));
                 }
             }
+            "defresource-MACRO" => {
+                if items.len() >= 3
+                    && let Node::Sym(name) = arena.node(items[1])
+                    && let Node::Rec(members) = arena.node(items[2])
+                {
+                    resource_forms.push((name.clone(), members.clone()));
+                }
+            }
             "def-MACRO" => {
                 if items.len() >= 3
                     && let Node::Sym(name) = arena.node(items[1])
@@ -303,6 +414,52 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     // 10–11). `Some(t)` is a Known WIT type; `None` is unit (`alias/add`).
     let functor_ops = functor_op_table(&functors);
 
+    // Turn each DefResource into a `ResourceDecl` with WIT signatures (4.5).
+    // The constructor contributes its (annotated) parameters only — its body
+    // returns the rep, which is anonymous in WIT. Methods and statics infer
+    // their result like any export; a method's implicit `self` is dropped.
+    let resource_names: std::collections::HashSet<String> =
+        resource_forms.iter().map(|(n, _)| n.clone()).collect();
+    let mut resources: Vec<ResourceDecl> = Vec::new();
+    for (rname, members) in &resource_forms {
+        let mut constructor = None;
+        let mut methods = Vec::new();
+        let mut statics = Vec::new();
+        let mut has_drop = false;
+        for (key, val) in members {
+            let (is_static, fn_id) = strip_static_member(arena, *val);
+            let (params_id, body) = as_fn_form(arena, fn_id).ok_or(format!(
+                "DefResource `{rname}`: member `{key}` must be an `Fn`"
+            ))?;
+            match key.as_str() {
+                "New" => constructor = Some(annotated_params(arena, params_id)?),
+                "Drop" => has_drop = true,
+                other => {
+                    let mut sig =
+                        infer_sig(arena, roots, other, params_id, body, &defs, &functor_ops)?;
+                    sig.iface = String::new();
+                    if is_static {
+                        statics.push(sig);
+                    } else {
+                        // WIT methods take `self` implicitly: drop the first param.
+                        if !sig.params.is_empty() {
+                            sig.params.remove(0);
+                        }
+                        methods.push(sig);
+                    }
+                }
+            }
+        }
+        resources.push(ResourceDecl {
+            name: rname.clone(),
+            iface: None,
+            constructor,
+            methods,
+            statics,
+            has_drop,
+        });
+    }
+
     // De-duplicate identical export declarations before lowering (§6 review
     // fix). `Derive` auto-emits a bare `Export {op}-{tname}` for each derived op
     // (`expand.rs`), so an author who also writes that same bare `Export eq-point`
@@ -315,6 +472,18 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
 
     let mut exports = Vec::new();
     for (name, explicit) in export_decls {
+        // Exporting a resource exports the whole `resource { … }` block, not a
+        // function (4.5). Record its placement interface and skip the
+        // function-export machinery below.
+        if resource_names.contains(&name) {
+            let iface = explicit
+                .map(|s| s.iface)
+                .unwrap_or_else(|| "api".to_string());
+            if let Some(r) = resources.iter_mut().find(|r| r.name == name) {
+                r.iface = Some(iface);
+            }
+            continue;
+        }
         // An exported *overload set* (≥2 same-named Fn defs, or a name that
         // collides with a builtin operation) has no single WIT signature: WIT
         // does not overload. Lower each member to its own concrete, mangled
@@ -410,6 +579,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
         fn_defs,
         value_defs,
         overload_bodies,
+        resources,
     })
 }
 
@@ -992,7 +1162,16 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
     let mut out = String::new();
     out.push_str(&format!("package {};\n", info.package));
 
-    let ifaces = iface_order(&info.exports, !info.types.is_empty());
+    let mut ifaces = iface_order(&info.exports, !info.types.is_empty());
+    // A resource-only export still needs its interface present (4.5): fold each
+    // exported resource's placement interface into the interface order.
+    for r in &info.resources {
+        if let Some(iface) = &r.iface
+            && !ifaces.contains(iface)
+        {
+            ifaces.push(iface.clone());
+        }
+    }
 
     // Hoisted local types (4.7), mirroring `emit::synthesize_world_wit`: when
     // an export references a functor handle whose element is a local type, the
@@ -1023,6 +1202,14 @@ fn synthesize_info(arena: &Arena, info: &FileInfo, host_only: bool) -> Result<St
             for (name, ty) in info.types.iter().filter(|(n, _)| !hoisted.contains(n)) {
                 out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
             }
+        }
+        // Exported resource blocks land in their placement interface (4.5).
+        for r in info
+            .resources
+            .iter()
+            .filter(|r| r.iface.as_deref() == Some(iface.as_str()))
+        {
+            out.push_str(&r.to_wit());
         }
         for sig in info.exports.iter().filter(|s| &s.iface == iface) {
             out.push_str(&format!("  {}\n", sig.to_wit()));
@@ -1265,6 +1452,15 @@ pub fn type_text(arena: &Arena, id: NodeId) -> Result<String, String> {
             let Node::Sym(ctor) = arena.node(head) else {
                 return Err("bad type form".into());
             };
+            // `own(<resource>)` is the explicit synonym for a bare owned handle
+            // (4.5); WIT spells an owned handle with the bare resource name, so
+            // strip the `own` wrapper. `borrow(<resource>)` keeps its WIT keyword
+            // form (`borrow<counter>`) through the generic rendering below.
+            if ctor == "own"
+                && let [inner] = args
+            {
+                return type_text(arena, *inner);
+            }
             let args: Vec<String> = args
                 .iter()
                 .map(|&i| type_text(arena, i))
@@ -1429,6 +1625,28 @@ mod tests {
     fn collect_src(src: &str) -> FileInfo {
         let (arena, roots) = read_file(src).expect("read");
         collect(&arena, &roots).expect("collect")
+    }
+
+    #[test]
+    fn synthesize_defresource_counter_block() {
+        // The 4.5 conformance counter: an exported resource plus the own/borrow
+        // free functions. The synthesized WIT must match the suite interface.
+        let src = "Package \"roundtrip:suite@0.1.0\"\n            DefResource counter {\n              New: Fn {start: u32} cell-new(start)\n              next: Fn {self: counter} The u32 cell-get(self)\n              value: Fn {self: counter} The u32 cell-get(self)\n              sum: Static Fn {values: list(u32)} The counter counter(fold(add 0 values))\n            }\n            Export counter\n            Def make-counter Fn {start: u32} The counter counter(start)\n            Export make-counter\n            Def bump-counter Fn {c: borrow(counter)} The u32 counter/next(c)\n            Export bump-counter\n            Def take-counter Fn {c: counter} The u32 counter/value(c)\n            Export take-counter\n            Def counter-round-trip Fn {c: counter} The counter counter(0)\n            Export counter-round-trip";
+        let (arena, roots) = read_file(src).expect("read");
+        let got = synthesize(&arena, &roots).expect("synthesize");
+        for needle in [
+            "resource counter {",
+            "constructor(start: u32);",
+            "next: func() -> u32;",
+            "value: func() -> u32;",
+            "sum: static func(values: list<u32>) -> counter;",
+            "make-counter: func(start: u32) -> counter;",
+            "bump-counter: func(c: borrow<counter>) -> u32;",
+            "take-counter: func(c: counter) -> u32;",
+            "counter-round-trip: func(c: counter) -> counter;",
+        ] {
+            assert!(got.contains(needle), "missing `{needle}` in:\n{got}");
+        }
     }
 
     fn import_named<'a>(info: &'a FileInfo, alias: &str) -> &'a ImportInfo {
