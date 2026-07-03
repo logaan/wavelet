@@ -57,9 +57,6 @@ const OVERLOAD: &str = "non-exported overload sets dispatch last-wins in the bac
 /// applies bare truthiness. Closed when the checker rejects it statically
 /// (goal 3).
 const IF_BOOL: &str = "compiled If skips the interpreter's runtime bool-condition check (goal 3)";
-/// The interpreter checks typed-parameter conformance (e.g. u8 range) at the
-/// call boundary; compiled code does not. Tracked under 2.2.4 / goal 3.
-const U8_CHECK: &str = "runtime parameter-conformance checks are not emitted (2.2.4 / goal 3)";
 
 /// Examples the compiled artifact is known to disagree on, with the current
 /// reason. Removing a fixed entry is part of fixing the backend gap.
@@ -120,7 +117,6 @@ const SKIP: &[(&str, &str)] = &[
     ("ty-overload-int", OVERLOAD),
     ("ty-overload-str", OVERLOAD),
     ("ty-the-return", OVERLOAD),
-    ("typed-byte-add-bad", U8_CHECK),
     ("values-atoms", FLAGS),
     ("values-heterogeneous", TOSTR_TRAP),
     ("values-options-results", TOSTR_TRAP),

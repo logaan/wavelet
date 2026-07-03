@@ -70,8 +70,11 @@ pub enum Type {
     Named(String),
     /// The unit type (`{}`), e.g. the result of a `Def`.
     Unit,
-    /// An unconstrained integer literal: compatible with any int or float type.
-    IntLit,
+    /// An unconstrained integer literal: compatible with any int or float type
+    /// (an int type only when the carried literal value, if known, fits its
+    /// range — 3.4). `None` for int-typed results whose value is not a literal
+    /// (e.g. `len`).
+    IntLit(Option<i64>),
     /// An unconstrained float literal: compatible with `f32`/`f64` only.
     FloatLit,
     /// Gradual top: unifies with anything, never an error. The result of
@@ -105,7 +108,7 @@ impl Type {
     fn numeric(&self) -> bool {
         self.is_int()
             || self.is_float()
-            || matches!(self, Type::IntLit | Type::FloatLit | Type::Unknown)
+            || matches!(self, Type::IntLit(_) | Type::FloatLit | Type::Unknown)
     }
 
     /// Parse a WIT type form (a `Sym` like `u8`/`s32`, or a constructor tuple
@@ -195,12 +198,20 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
         (Unknown, t) | (t, Unknown) => Some(t.clone()),
         (x, y) if x == y => Some(x.clone()),
 
-        // An integer literal unifies with any concrete int or float, resolving
-        // to that concrete type.
-        (IntLit, t) | (t, IntLit) if t.is_int() || t.is_float() => Some(t.clone()),
-        (IntLit, IntLit) => Some(IntLit),
+        // An integer literal unifies with any concrete int type whose range
+        // admits its (known) value, resolving to that concrete type (3.4), and
+        // with any float type.
+        (IntLit(v), t) | (t, IntLit(v)) if t.is_int() => {
+            if v.is_none_or(|n| int_in_range(n, t)) {
+                Some(t.clone())
+            } else {
+                None
+            }
+        }
+        (IntLit(_), t) | (t, IntLit(_)) if t.is_float() => Some(t.clone()),
+        (IntLit(a), IntLit(b)) => Some(IntLit(if a == b { *a } else { None })),
         // An int literal and a float literal together are still a float literal.
-        (IntLit, FloatLit) | (FloatLit, IntLit) => Some(FloatLit),
+        (IntLit(_), FloatLit) | (FloatLit, IntLit(_)) => Some(FloatLit),
 
         // A float literal unifies only with a concrete float type.
         (FloatLit, t) | (t, FloatLit) if t.is_float() => Some(t.clone()),
@@ -682,7 +693,7 @@ impl<'a> Checker<'a> {
     ) -> Result<Type, String> {
         match self.arena.node(id) {
             Node::Bool(_) => Ok(Type::Bool),
-            Node::Int(_) => Ok(Type::IntLit),
+            Node::Int(n) => Ok(Type::IntLit(Some(*n))),
             Node::Dec(_) => Ok(Type::FloatLit),
             Node::Char(_) => Ok(Type::Char),
             Node::Str(_) => Ok(Type::String),
@@ -733,6 +744,9 @@ impl<'a> Checker<'a> {
         }
         if name == "none" {
             return Ok(Type::Option(Box::new(Type::Unknown)));
+        }
+        if name == "pi" {
+            return Ok(Type::F64);
         }
         if is_builtin(name) {
             return Ok(Type::Unknown);
@@ -1147,9 +1161,7 @@ impl<'a> Checker<'a> {
                             .find(|(pn, _)| pn == fname)
                             .expect("field names equal param names");
                         if !compatible(&self.types, pt, ft) {
-                            return Err(format!(
-                                "eval error: argument `{fname}` to `{name}` has the wrong type"
-                            ));
+                            return Err(self.param_type_error(fname, pt, ft, name));
                         }
                     }
                     return Ok(result);
@@ -1164,8 +1176,11 @@ impl<'a> Checker<'a> {
             // A single argument to a single parameter taking the whole payload.
             if nparams == 1 {
                 if !compatible(&self.types, &sig.params[0].1, &arg_tys[0]) {
-                    return Err(format!(
-                        "eval error: argument to `{name}` has the wrong type"
+                    return Err(self.param_type_error(
+                        &sig.params[0].0,
+                        &sig.params[0].1,
+                        &arg_tys[0],
+                        name,
                     ));
                 }
                 return Ok(result);
@@ -1179,18 +1194,33 @@ impl<'a> Checker<'a> {
                 args.len()
             ));
         }
-        for ((_pn, pt), at) in sig.params.iter().zip(&arg_tys) {
+        for ((pn, pt), at) in sig.params.iter().zip(&arg_tys) {
             if !compatible(&self.types, pt, at) {
-                return Err(format!(
-                    "eval error: argument to `{name}` has the wrong type"
-                ));
+                return Err(self.param_type_error(pn, pt, at, name));
             }
         }
         Ok(result)
     }
 
-    /// Check a builtin call, modelling only the operand/result behaviour needed
-    /// to pass the tests and to type the example set without false positives.
+    /// The error for an argument that does not fit its parameter. An integer
+    /// literal that misses a concrete int parameter's range produces the SAME
+    /// message the interpreter's runtime bind check produces (`bind_one`), so
+    /// moving the check to compile time does not change the reported error.
+    fn param_type_error(&self, pname: &str, pt: &Type, at: &Type, fname: &str) -> String {
+        if let Type::IntLit(Some(n)) = at
+            && pt.is_int()
+        {
+            return format!(
+                "eval error: parameter `{pname}`: {n} does not conform to type `{}`",
+                wit_name(pt)
+            );
+        }
+        format!("eval error: argument `{pname}` to `{fname}` has the wrong type")
+    }
+
+    /// Check a builtin call. Every builtin has a typed signature here (3.5):
+    /// its result type is modelled, and operands are constrained wherever the
+    /// runtime is strict about them. Argument subexpressions are always checked.
     fn check_builtin_call(
         &self,
         name: &str,
@@ -1233,12 +1263,14 @@ impl<'a> Checker<'a> {
             }
             // `min`/`max` return one of their operands and — via the
             // interpreter's `compare` — are defined over numbers, strings, and
-            // chars, so they do NOT constrain operands to numeric (that would
-            // falsely reject `min("a" "b")`, which the interpreter runs). The
-            // result is the unified operand type, gradual when they disagree.
+            // chars. The result is the unified operand type, gradual when they
+            // disagree.
             "min" | "max" => {
                 let mut result = Type::Unknown;
                 for t in &arg_tys {
+                    if !comparable(t) {
+                        return Err(format!("eval error: `{name}` requires comparable operands"));
+                    }
                     result = unify(&self.types, &result, t).unwrap_or(Type::Unknown);
                 }
                 Ok(result)
@@ -1260,13 +1292,32 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Type::String)
             }
-            // Comparisons and `not`: do NOT constrain operands; result bool.
-            "eq" | "lt" | "le" | "gt" | "ge" | "not" => Ok(Type::Bool),
+            // `eq` is total structural equality over every type; result bool.
+            "eq" => Ok(Type::Bool),
+            // Ordering comparisons are defined over numbers, strings, and chars.
+            "lt" | "le" | "gt" | "ge" => {
+                for t in &arg_tys {
+                    if !comparable(t) {
+                        return Err(format!("eval error: `{name}` requires comparable operands"));
+                    }
+                }
+                Ok(Type::Bool)
+            }
+            "not" => {
+                for t in &arg_tys {
+                    if !matches!(t, Type::Bool | Type::Unknown) {
+                        return Err("eval error: `not` requires a bool operand".to_string());
+                    }
+                }
+                Ok(Type::Bool)
+            }
+            // `empty`/`contains` report a property; result bool.
+            "empty" | "contains" => Ok(Type::Bool),
             // `len` returns a plain Int that range-checks against any int type
             // at runtime (and promotes to float), so model it as an
             // unconstrained int literal — not concrete `s64`, which would
             // falsely reject e.g. `The u8 len(xs)` that the interpreter accepts.
-            "len" => Ok(Type::IntLit),
+            "len" => Ok(Type::IntLit(None)),
             // Option/result constructors (3.3/3.8): the payload's type flows in;
             // the other side stays unconstrained until unified against context.
             // Multiple args bundle to a tuple payload (`some(1 2)`).
@@ -1279,8 +1330,75 @@ impl<'a> Checker<'a> {
                 Box::new(Type::Unknown),
                 Box::new(ctor_payload(&arg_tys)),
             )),
-            // Everything else: result Unknown, args unconstrained (already
-            // checked their subexpressions above). Later phases extend this.
+            // Sequence ops (3.5/3.8): element types flow through.
+            "get" | "head" => Ok(elem_type(arg_tys.first())),
+            "tail" | "reverse" => Ok(arg_tys.first().cloned().unwrap_or(Type::Unknown)),
+            "put" if arg_tys.len() == 3 => {
+                let elem = unify(&self.types, &elem_type(arg_tys.first()), &arg_tys[2])
+                    .unwrap_or(Type::Unknown);
+                Ok(Type::List(Box::new(elem)))
+            }
+            "push" if arg_tys.len() == 2 => {
+                let elem = unify(&self.types, &elem_type(arg_tys.first()), &arg_tys[1])
+                    .unwrap_or(Type::Unknown);
+                Ok(Type::List(Box::new(elem)))
+            }
+            "concat" if arg_tys.len() == 2 => {
+                Ok(unify(&self.types, &arg_tys[0], &arg_tys[1])
+                    .unwrap_or(Type::List(Box::new(Type::Unknown))))
+            }
+            "range" => Ok(Type::List(Box::new(Type::S64))),
+            "zip" if arg_tys.len() == 2 => Ok(Type::List(Box::new(Type::Tuple(vec![
+                elem_type(arg_tys.first()),
+                elem_type(arg_tys.get(1)),
+            ])))),
+            // The mapper's result type is not modelled (closures are untyped in
+            // Phase A), so `map` yields list<unknown>; `filter` preserves its
+            // sequence's type; `fold`'s accumulator is unconstrained.
+            "map" => Ok(Type::List(Box::new(Type::Unknown))),
+            "filter" => Ok(arg_tys.get(1).cloned().unwrap_or(Type::Unknown)),
+            "fold" => Ok(Type::Unknown),
+            "split" => Ok(Type::List(Box::new(Type::String))),
+            "join" => Ok(Type::String),
+            "to-string" | "form-kind" => Ok(Type::String),
+            // `read` produces a form (typed as tree once 3.7 lands) or an error
+            // string.
+            "read" => Ok(Type::Result(
+                Box::new(Type::Unknown),
+                Box::new(Type::String),
+            )),
+            // Numeric conversions: the result is the named concrete type. A
+            // literal argument is range-checked at compile time with the SAME
+            // message the runtime conversion produces (3.4).
+            "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32"
+            | "to-s64" => {
+                let ty = Type::from_name(&name[3..]);
+                if let [arg] = args
+                    && let Node::Int(n) = self.arena.node(*arg)
+                    && !int_in_range(*n, &ty)
+                {
+                    return Err(format!("eval error: `{name}`: {n} out of range"));
+                }
+                Ok(ty)
+            }
+            "to-f32" => Ok(Type::F32),
+            "to-f64" => Ok(Type::F64),
+            "to-char" => {
+                if let [arg] = args
+                    && let Node::Int(n) = self.arena.node(*arg)
+                    && u32::try_from(*n).ok().and_then(char::from_u32).is_none()
+                {
+                    return Err(format!(
+                        "eval error: `to-char`: {n} is not a Unicode scalar value"
+                    ));
+                }
+                Ok(Type::Char)
+            }
+            // Unit-returning effects.
+            "cell-set" | "drop" => Ok(Type::Unit),
+            // Everything else (apply/gensym/expand/rec-key/rec-val/cell-new/
+            // cell-get, form accessors): result Unknown, args unconstrained
+            // (already checked above). 3.7 types the form accessors as tree.
             _ => Ok(Type::Unknown),
         }
     }
@@ -1393,6 +1511,16 @@ impl<'a> Checker<'a> {
     }
 }
 
+/// The element type of a sequence operand: `list<t>` yields `t`; anything else
+/// (including a tuple, whose per-index type a dynamic `get` cannot pin) is
+/// gradual `Unknown`.
+fn elem_type(t: Option<&Type>) -> Type {
+    match t {
+        Some(Type::List(e)) => (**e).clone(),
+        _ => Type::Unknown,
+    }
+}
+
 /// The payload type of an option/result constructor call from its bundled
 /// argument types: no argument is unit-ish `Unknown`, one argument is that
 /// value, several bundle into a tuple.
@@ -1401,6 +1529,32 @@ fn ctor_payload(arg_tys: &[Type]) -> Type {
         [] => Type::Unknown,
         [one] => one.clone(),
         many => Type::Tuple(many.to_vec()),
+    }
+}
+
+/// Whether a type is admissible to the ordering builtins (`lt`/`min`/…):
+/// numbers, strings, and chars, plus gradual `Unknown`.
+fn comparable(t: &Type) -> bool {
+    t.numeric() || matches!(t, Type::String | Type::Char)
+}
+
+/// The WIT name of a concrete primitive type, for error messages.
+fn wit_name(t: &Type) -> &'static str {
+    match t {
+        Type::Bool => "bool",
+        Type::U8 => "u8",
+        Type::U16 => "u16",
+        Type::U32 => "u32",
+        Type::U64 => "u64",
+        Type::S8 => "s8",
+        Type::S16 => "s16",
+        Type::S32 => "s32",
+        Type::S64 => "s64",
+        Type::F32 => "f32",
+        Type::F64 => "f64",
+        Type::Char => "char",
+        Type::String => "string",
+        _ => "?",
     }
 }
 
