@@ -28,6 +28,7 @@ fn dep_from_wavelet(src: &str) -> Dep {
         types: emit::dep_record_types(&arena, &info),
         type_defs: Vec::new(),
             aliases: Vec::new(),
+            type_ifaces: Vec::new(),
     }
 }
 

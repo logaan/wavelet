@@ -94,6 +94,7 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
     let mut types: Vec<(String, Vec<(String, String)>)> = Vec::new();
     let mut type_defs: Vec<(String, TypeDef)> = Vec::new();
     let mut aliases: Vec<(String, String)> = Vec::new();
+    let mut type_ifaces: Vec<(String, String)> = Vec::new();
 
     for (iface_name, &iface_id) in &pkg.interfaces {
         let iface = &resolve.interfaces[iface_id];
@@ -103,6 +104,9 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
         // flags in `type_defs` (the generic-bridge kinds).
         for (type_name, &type_id) in &iface.types {
             let tdef = &resolve.types[type_id];
+            // Every named type records its declaring interface, for `use`
+            // synthesis when a local signature references it (4.3).
+            type_ifaces.push((type_name.clone(), iface_name.clone()));
             match &tdef.kind {
                 TypeDefKind::Record(rec) => {
                     let fields = rec
@@ -184,6 +188,7 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
         types,
         type_defs,
         aliases,
+        type_ifaces,
     }))
 }
 

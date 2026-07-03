@@ -43,6 +43,10 @@ pub struct Dep {
     /// name → underlying WIT type text, expanded by `wit_ty` before lowering
     /// exactly like local `DefType` aliases (4.4).
     pub aliases: Vec<(String, String)>,
+    /// which interface each named type is declared in: type name → interface
+    /// name. Drives `use <pkg>/<iface>.{type};` synthesis when a local export
+    /// signature references a dep-defined type (4.3).
+    pub type_ifaces: Vec<(String, String)>,
 }
 
 const SCRATCH: i32 = 0; // 0..16 reserved as canonical-ABI return area
@@ -8404,6 +8408,58 @@ pub fn dep_package_wit(arena: &Arena, info: &FileInfo) -> Result<String, String>
     Ok(out)
 }
 
+/// The `use` clauses a local interface needs for the dep-defined type names
+/// its rendered signatures/type declarations reference (4.3): each entry is a
+/// versioned interface path (`acme:pts/types@0.3.1`) with the names to bring
+/// in. Tokenizes the WIT texts and keeps identifiers that are not primitives,
+/// WIT keywords, or locally-declared types, and that some imported dependency
+/// declares (records, variants/enums/flags, aliases, resources alike).
+fn dep_type_uses(
+    texts: &[String],
+    info: &FileInfo,
+    deps: &HashMap<String, Dep>,
+) -> Vec<(String, Vec<String>)> {
+    /// primitives, type constructors, and declaration keywords that can appear
+    /// in rendered WIT type text — never dep type names.
+    const RESERVED: &[&str] = &[
+        "bool", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "f32", "f64", "char",
+        "string", "list", "option", "result", "tuple", "own", "borrow", "record", "variant",
+        "enum", "flags", "type", "func", "resource", "static", "constructor", "use",
+    ];
+    let local: std::collections::HashSet<&str> =
+        info.types.iter().map(|(n, _)| n.as_str()).collect();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut out: Vec<(String, Vec<String>)> = Vec::new();
+    for text in texts {
+        for tok in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
+            if tok.is_empty()
+                || tok == "_"
+                || RESERVED.contains(&tok)
+                || local.contains(tok)
+                || !seen.insert(tok.to_string())
+            {
+                continue;
+            }
+            // The first imported dependency declaring this name wins.
+            for imp in &info.imports {
+                let Some(dep) = deps.get(&imp.package) else {
+                    continue;
+                };
+                let Some((_, di)) = dep.type_ifaces.iter().find(|(n, _)| n == tok) else {
+                    continue;
+                };
+                let path = versioned_iface(&dep.package, di);
+                match out.iter_mut().find(|(p, _)| p == &path) {
+                    Some((_, names)) => names.push(tok.to_string()),
+                    None => out.push((path, vec![tok.to_string()])),
+                }
+                break;
+            }
+        }
+    }
+    out
+}
+
 fn synthesize_world_wit(
     arena: &Arena,
     info: &FileInfo,
@@ -8491,10 +8547,33 @@ fn synthesize_world_wit(
         for funct in &used {
             out.push_str(&format!("  use {funct}.{{set as {funct}-handle}};\n"));
         }
+        // Cross-package type references (4.3): a signature (or a local type
+        // declaration) may name a type a dependency's interface defines. WIT
+        // requires such names be brought into scope with a `use`, so collect
+        // every dep-defined name the interface's text references and emit
+        // `use <pkg>/<iface>@<ver>.{names};` per defining interface.
+        let mut texts: Vec<String> = Vec::new();
+        for sig in &sigs {
+            for (_, t) in &sig.params {
+                texts.push(t.clone());
+            }
+            if let Some(r) = &sig.result {
+                texts.push(r.clone());
+            }
+        }
+        let mut api_decls: Vec<String> = Vec::new();
         if iface == "api" {
             for (name, ty) in &info.types {
-                out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
+                let d = type_decl(arena, name, *ty)?;
+                texts.push(d.clone());
+                api_decls.push(d);
             }
+        }
+        for (use_path, names) in dep_type_uses(&texts, info, deps) {
+            out.push_str(&format!("  use {use_path}.{{{}}};\n", names.join(", ")));
+        }
+        for d in &api_decls {
+            out.push_str(&format!("  {d}\n"));
         }
         for sig in &sigs {
             let mut line = sig.to_wit();
