@@ -2650,6 +2650,13 @@ impl<'a> Emitter<'a> {
             Node::Lst(pats) if matches!(ty, WitTy::List(_)) => {
                 self.pattern_mem_lst(fx, &pats, &ty, v, 0, 0)
             }
+            Node::Tup(pats)
+                if !pats.is_empty()
+                    && ty.variant_cases().is_some()
+                    && matches!(self.arena.node(pats[0]), Node::Sym(_)) =>
+            {
+                self.pattern_mem_var(fx, &pats, &ty, v, 0, 0)
+            }
             Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
                 let l = fx.local(ValType::I32);
@@ -2752,6 +2759,56 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// A variant-case pattern `(case p…)` over a canonical variant layout
+    /// (5.4): the case name resolves to its numeric discriminant at COMPILE
+    /// time, so the match is one integer comparison — no runtime case-name
+    /// strings — and the payload destructures at the canonical payload
+    /// offset. A case the static type lacks, or an arity the case's payload
+    /// cannot satisfy, can never match: the clause branches out.
+    fn pattern_mem_var(
+        &mut self,
+        fx: &mut FnCtx,
+        pats: &[NodeId],
+        ty: &WitTy,
+        v: u32,
+        off: u64,
+        fail: u32,
+    ) -> Result<(), String> {
+        let cases = ty
+            .variant_cases()
+            .ok_or("internal: case pattern over a non-variant layout")?;
+        let Node::Sym(head) = self.arena.node(pats[0]).clone() else {
+            return Err("internal: pattern_mem_var expects a Sym-headed pattern".into());
+        };
+        let Some(i) = cases.iter().position(|(n, _)| *n == head) else {
+            fx.op(I::Br(fail));
+            return Ok(());
+        };
+        let payload = cases[i].1.cloned();
+        fx.op(I::LocalGet(v));
+        fx.op(I::I32Load8U(ma(off, 0)));
+        fx.op(I::I32Const(i as i32));
+        fx.op(I::I32Ne);
+        fx.op(I::BrIf(fail));
+        let poff = variant_payload_offset(ty);
+        let rest = &pats[1..];
+        match (rest.len(), payload) {
+            (0, None) => Ok(()),
+            (1, Some(pt)) => self.pattern_mem_field(fx, rest[0], &pt, v, off + poff, fail),
+            // several sub-patterns destructure a tuple payload element-wise,
+            // exactly like the interpreter's `(case p q …)` rule
+            (n, Some(WitTy::Tuple(es))) if n > 1 && es.len() == n => {
+                let t = WitTy::Tuple(es);
+                self.pattern_mem_tup(fx, rest, &t, v, off + poff, fail)
+            }
+            // payload/arity mismatch can never match
+            _ => {
+                fx.op(I::Br(fail));
+                Ok(())
+            }
+        }
+    }
+
     /// One canonical field against a sub-pattern: a bare binder binds the
     /// field at its natural representation (typed scalar / interior record
     /// pointer / rebuilt box), a nested record pattern recurses in place,
@@ -2780,6 +2837,13 @@ impl<'a> Emitter<'a> {
             }
             Node::Lst(pats) if matches!(tf, WitTy::List(_)) => {
                 self.pattern_mem_lst(fx, &pats, tf, v, off, fail)
+            }
+            Node::Tup(pats)
+                if !pats.is_empty()
+                    && tf.variant_cases().is_some()
+                    && matches!(self.arena.node(pats[0]), Node::Sym(_)) =>
+            {
+                self.pattern_mem_var(fx, &pats, tf, v, off, fail)
             }
             Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
@@ -4616,6 +4680,10 @@ impl<'a> Emitter<'a> {
             T::String => WitTy::Str,
             T::List(e) => WitTy::List(Box::new(self.wit_of_check_type(e)?)),
             T::Option(e) => WitTy::Option(Box::new(self.wit_of_check_type(e)?)),
+            T::Result(o, e) => WitTy::Result(
+                Box::new(self.wit_of_check_type(o)?),
+                Box::new(self.wit_of_check_type(e)?),
+            ),
             T::Tuple(es) => WitTy::Tuple(
                 es.iter()
                     .map(|e| self.wit_of_check_type(e))
@@ -4657,7 +4725,13 @@ impl<'a> Emitter<'a> {
             // exactly the order the interpreter's boundary lift produces.
             (
                 Node::Tup(items),
-                WitTy::Record(_) | WitTy::Tuple(_) | WitTy::Str | WitTy::List(_),
+                WitTy::Record(_)
+                | WitTy::Tuple(_)
+                | WitTy::Str
+                | WitTy::List(_)
+                | WitTy::Option(_)
+                | WitTy::Result(..)
+                | WitTy::Variant(_),
             ) if !items.is_empty() => {
                 match self.arena.node(items[0]) {
                     Node::Qsym(alias, fname) => self
@@ -4671,10 +4745,11 @@ impl<'a> Emitter<'a> {
     }
 
     /// The canonical layout a dep call's result area carries, when it is a
-    /// retptr-lowered non-empty record or tuple, or a string or list (whose
-    /// canonical form is the (ptr, len) pair the area carries — 5.5).
-    /// `None` for functor ops (they are not imports), scalar/One-flat
-    /// results, and anything unresolvable.
+    /// retptr-lowered non-empty record or tuple, a string or list (whose
+    /// canonical form is the (ptr, len) pair the area carries — 5.5), or an
+    /// option/result/variant (numeric discriminant + payload at the
+    /// canonical offset — 5.4). `None` for functor ops (they are not
+    /// imports), scalar/One-flat results, and anything unresolvable.
     fn dep_result_mem_ty(&self, alias: &str, fname: &str) -> Option<WitTy> {
         let imp = self.info.imports.iter().find(|i| i.alias == alias)?;
         let dep = self.deps.get(&imp.package)?;
@@ -4686,7 +4761,10 @@ impl<'a> Emitter<'a> {
         let rty = wit_ty(sig.result.as_deref()?, &self.type_env).ok()?;
         (matches!(&rty, WitTy::Record(fs) if !fs.is_empty())
             || matches!(&rty, WitTy::Tuple(es) if !es.is_empty())
-            || matches!(&rty, WitTy::Str | WitTy::List(_)))
+            || matches!(
+                &rty,
+                WitTy::Str | WitTy::List(_) | WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_)
+            ))
         .then_some(rty)
     }
 
@@ -4744,7 +4822,10 @@ impl<'a> Emitter<'a> {
         let ty = self.wit_of_check_type(&t)?;
         if !(matches!(&ty, WitTy::Record(fs) if !fs.is_empty())
             || matches!(&ty, WitTy::Tuple(es) if !es.is_empty())
-            || matches!(&ty, WitTy::Str | WitTy::List(_)))
+            || matches!(
+                &ty,
+                WitTy::Str | WitTy::List(_) | WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_)
+            ))
         {
             return None;
         }
