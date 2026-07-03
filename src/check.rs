@@ -972,8 +972,9 @@ fn as_fn(arena: &Arena, id: NodeId) -> Option<(NodeId, NodeId)> {
 }
 
 /// Parse a `Fn` parameter form (`{a: t b …}` record, or `{}` flags). Untyped
-/// parameters get `Unknown`.
-fn parse_params(arena: &Arena, id: NodeId) -> Vec<(String, Type)> {
+/// parameters get `Unknown`. `pub(crate)`: the wasm backend reads declared
+/// param types to give internal functions typed (unboxed) signatures (5.2).
+pub(crate) fn parse_params(arena: &Arena, id: NodeId) -> Vec<(String, Type)> {
     match arena.node(id) {
         Node::Rec(fields) => fields
             .iter()

@@ -1254,6 +1254,69 @@ fn dep_case(dep: &Dep, name: &str) -> Option<bool> {
     })
 }
 
+/// An internal function's representation signature (goal 5, 5.2): for each
+/// parameter — and the result — either `Some(kind)` (an UNBOXED scalar slot:
+/// i64 for ints/chars, f64 for floats, i32 for bools) or `None` (an i32 box
+/// pointer, the pre-goal-5 uniform convention). Computed from the def's
+/// declared parameter types and the checker's inferred body type, so a
+/// gradual def keeps the all-boxed signature unchanged.
+#[derive(Clone, Debug)]
+struct FnSig {
+    params: Vec<Option<Scalar>>,
+    result: Option<Scalar>,
+}
+
+/// The core valtype of a representation slot.
+fn repr_vt(repr: Option<Scalar>) -> ValType {
+    match repr {
+        Some(Scalar::Int) | Some(Scalar::Char) => ValType::I64,
+        Some(Scalar::Float) => ValType::F64,
+        Some(Scalar::Bool) | None => ValType::I32,
+    }
+}
+
+impl FnSig {
+    /// The all-boxed signature (every slot an i32 box pointer).
+    fn boxed(n: usize) -> FnSig {
+        FnSig {
+            params: vec![None; n],
+            result: None,
+        }
+    }
+
+    fn param_vts(&self) -> Vec<ValType> {
+        self.params.iter().map(|&p| repr_vt(p)).collect()
+    }
+}
+
+/// Compute a def's representation signature from its declared parameter
+/// types and the checker's recorded type for its body (5.2). Anything the
+/// checker left gradual stays a boxed slot.
+fn def_sig(
+    arena: &Arena,
+    node_types: &crate::check::NodeTypes,
+    params_id: NodeId,
+    body: NodeId,
+) -> FnSig {
+    let ptys = crate::check::parse_params(arena, params_id);
+    FnSig {
+        params: ptys.iter().map(|(_, t)| Scalar::of(t)).collect(),
+        result: node_types.get(&body).and_then(Scalar::of),
+    }
+}
+
+/// The scalar kind a WIT boundary type carries at the value level, if any.
+/// (`Handle` is deliberately `None`: handles ride in int boxes, opaque.)
+fn wit_scalar(ty: &WitTy) -> Option<Scalar> {
+    match ty {
+        WitTy::Bool => Some(Scalar::Bool),
+        WitTy::IntS(_) | WitTy::IntU(_) | WitTy::S64 => Some(Scalar::Int),
+        WitTy::F32 | WitTy::F64 => Some(Scalar::Float),
+        WitTy::Char => Some(Scalar::Char),
+        _ => None,
+    }
+}
+
 /// One name in a function's lexical scope: which wasm local holds it and,
 /// under goal 5, whether that local is an UNBOXED scalar (`Some(kind)`) or a
 /// box pointer (`None`).
@@ -1318,10 +1381,10 @@ struct Emitter<'a> {
     imports: Vec<(String, String, u32)>, // module, field, type idx
     import_fn: HashMap<(String, String), u32>,
     h: Helpers,
-    funcs: HashMap<String, (u32, Vec<String>)>, // internal defs
-    value_globals: HashMap<String, u32>,        // module-level value defs → global idx
-    compiling_values: Vec<String>,              // cycle guard for value-def inits
-    bodies: Vec<(u32, Function)>,               // (type idx, body) for defined funcs
+    funcs: HashMap<String, (u32, Vec<String>, FnSig)>, // internal defs: (idx, param names, repr sig)
+    value_globals: HashMap<String, u32>,               // module-level value defs → global idx
+    compiling_values: Vec<String>,                     // cycle guard for value-def inits
+    bodies: Vec<(u32, Function)>,                      // (type idx, body) for defined funcs
     /// uniform `(env, payload) -> box` functions reachable through the
     /// funcref table; slot k = function index `imports + bodies + k`
     closure_bodies: Vec<(u32, Function)>,
@@ -2055,11 +2118,17 @@ impl<'a> Emitter<'a> {
         if let Some(&s) = self.fn_wrappers.get(name) {
             return Ok(s);
         }
-        let (fidx, params) = self.funcs[name].clone();
+        let (fidx, params, sig) = self.funcs[name].clone();
         let mut fx = FnCtx::new(2);
         match params.len() {
             0 => {}
-            1 => fx.op(I::LocalGet(1)),
+            1 => {
+                fx.op(I::LocalGet(1));
+                // a typed sole param unboxes at the wrapper seam
+                if let Some(k) = sig.params[0] {
+                    self.unbox_scalar(&mut fx, k);
+                }
+            }
             n => {
                 // payload must be a list box of exactly n elements, same guard
                 // `fn_form` emits, so a malformed indirect call traps rather
@@ -2081,10 +2150,19 @@ impl<'a> Emitter<'a> {
                 for i in 0..n {
                     fx.op(I::LocalGet(1));
                     fx.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
+                    if let Some(k) = sig.params[i] {
+                        self.unbox_scalar(&mut fx, k);
+                    }
                 }
             }
         }
-        fx.op(I::ReturnCall(fidx));
+        // the uniform wrapper returns a box: a typed result boxes at the seam
+        if let Some(k) = sig.result {
+            fx.op(I::Call(fidx));
+            self.box_scalar(&mut fx, k);
+        } else {
+            fx.op(I::ReturnCall(fidx));
+        }
         let t = self.ty_idx(vec![ValType::I32; 2], vec![ValType::I32]);
         self.closure_bodies.push((t, fx.finish()));
         let slot = (self.closure_bodies.len() - 1) as u32;
@@ -2245,9 +2323,9 @@ impl<'a> Emitter<'a> {
                 self.dep_call(fx, &alias, &fname, args)
             }
             Node::Sym(name) => match name.as_str() {
-                "if-MACRO" => self.if_form(fx, args, tail),
-                "do-MACRO" => self.do_form(fx, args, tail),
-                "let-MACRO" => self.let_form(fx, args, tail),
+                "if-MACRO" => self.if_form(fx, args, None, tail),
+                "do-MACRO" => self.do_form(fx, args, None, tail),
+                "let-MACRO" => self.let_form(fx, args, None, tail),
                 "the-MACRO" => {
                     // args = [ty, expr]
                     let [_ty, expr] = *args else {
@@ -2255,7 +2333,7 @@ impl<'a> Emitter<'a> {
                     };
                     self.expr(fx, expr, tail)
                 }
-                "match-MACRO" => self.match_form(fx, args, tail),
+                "match-MACRO" => self.match_form(fx, args, None, tail),
                 "fn-MACRO" => self.fn_form(fx, args),
                 "quote-MACRO" => {
                     let [form] = args else {
@@ -2276,7 +2354,7 @@ impl<'a> Emitter<'a> {
                 _ if BUILTINS.contains(&name.as_str()) => self.builtin(fx, &name, args),
                 _ => {
                     if self.funcs.contains_key(&name) {
-                        self.internal_call(fx, &name, args, tail)
+                        self.internal_call(fx, &name, args, None, tail)
                     } else if self.value_globals.contains_key(&name) {
                         self.closure_call(fx, head, args, tail)
                     } else if let Some(&has_payload) = self.local_cases.get(name.as_str()) {
@@ -2304,7 +2382,13 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    fn if_form(&mut self, fx: &mut FnCtx, args: &[NodeId], tail: bool) -> Result<(), String> {
+    fn if_form(
+        &mut self,
+        fx: &mut FnCtx,
+        args: &[NodeId],
+        want: Option<Scalar>,
+        tail: bool,
+    ) -> Result<(), String> {
         let [c, t, e] = *args else {
             return Err("malformed If".into());
         };
@@ -2316,15 +2400,21 @@ impl<'a> Emitter<'a> {
             self.expr(fx, c, false)?;
             fx.op(I::Call(self.h.truthy));
         }
-        fx.op(I::If(BlockType::Result(ValType::I32)));
-        self.expr(fx, t, tail)?;
+        fx.op(I::If(BlockType::Result(repr_vt(want))));
+        self.expr_repr(fx, t, want, tail)?;
         fx.op(I::Else);
-        self.expr(fx, e, tail)?;
+        self.expr_repr(fx, e, want, tail)?;
         fx.op(I::End);
         Ok(())
     }
 
-    fn do_form(&mut self, fx: &mut FnCtx, args: &[NodeId], tail: bool) -> Result<(), String> {
+    fn do_form(
+        &mut self,
+        fx: &mut FnCtx,
+        args: &[NodeId],
+        want: Option<Scalar>,
+        tail: bool,
+    ) -> Result<(), String> {
         let [list] = *args else {
             return Err("malformed Do".into());
         };
@@ -2332,17 +2422,28 @@ impl<'a> Emitter<'a> {
             return Err("Do expects a list of expressions".into());
         };
         if items.is_empty() {
+            // the unit value; a scalar `want` unboxes it and traps, exactly
+            // like the interpreter erroring on a unit in a numeric context
             fx.op(I::I32Const(self.unit_addr() as i32));
+            if let Some(k) = want {
+                self.unbox_scalar(fx, k);
+            }
             return Ok(());
         }
         for &x in &items[..items.len() - 1] {
             self.expr(fx, x, false)?;
             fx.op(I::Drop);
         }
-        self.expr(fx, items[items.len() - 1], tail)
+        self.expr_repr(fx, items[items.len() - 1], want, tail)
     }
 
-    fn let_form(&mut self, fx: &mut FnCtx, args: &[NodeId], tail: bool) -> Result<(), String> {
+    fn let_form(
+        &mut self,
+        fx: &mut FnCtx,
+        args: &[NodeId],
+        want: Option<Scalar>,
+        tail: bool,
+    ) -> Result<(), String> {
         let [bindings, body] = *args else {
             return Err("malformed Let".into());
         };
@@ -2372,7 +2473,7 @@ impl<'a> Emitter<'a> {
             fx.op(I::LocalSet(binding.local));
             fx.scopes.last_mut().unwrap().insert(k.clone(), binding);
         }
-        let r = self.expr(fx, body, tail);
+        let r = self.expr_repr(fx, body, want, tail);
         fx.scopes.pop();
         r
     }
@@ -2380,17 +2481,27 @@ impl<'a> Emitter<'a> {
     /// Each clause is a block: a failed test branches past the clause; a
     /// matched clause leaves its result and branches to the end. No clause
     /// matching traps (the interpreter raises "no Match clause" instead).
-    fn match_form(&mut self, fx: &mut FnCtx, args: &[NodeId], tail: bool) -> Result<(), String> {
+    fn match_form(
+        &mut self,
+        fx: &mut FnCtx,
+        args: &[NodeId],
+        want: Option<Scalar>,
+        tail: bool,
+    ) -> Result<(), String> {
         let [scrut_form, clauses_form] = *args else {
             return Err("malformed Match".into());
         };
         let Node::Lst(clauses) = self.arena.node(clauses_form).clone() else {
             return Err("Match expects a list of (pattern result) clauses".into());
         };
+        // The scrutinee stays boxed (patterns walk boxes), but its scalar
+        // kind — when known — lets a bare-name clause bind a TYPED local
+        // (5.2 Match-binding typed locals).
+        let scrut_kind = self.node_scalar(scrut_form);
         self.expr(fx, scrut_form, false)?;
         let scrut = fx.local(ValType::I32);
         fx.op(I::LocalSet(scrut));
-        fx.op(I::Block(BlockType::Result(ValType::I32)));
+        fx.op(I::Block(BlockType::Result(repr_vt(want))));
         for &clause in &clauses {
             let pair = match self.arena.node(clause).clone() {
                 Node::Tup(pair) if pair.len() == 2 => pair,
@@ -2399,8 +2510,8 @@ impl<'a> Emitter<'a> {
             fx.op(I::Block(BlockType::Empty));
             fx.scopes.push(HashMap::new());
             let r = self
-                .pattern(fx, pair[0], scrut, 0)
-                .and_then(|()| self.expr(fx, pair[1], tail));
+                .pattern_top(fx, pair[0], scrut, scrut_kind)
+                .and_then(|()| self.expr_repr(fx, pair[1], want, tail));
             fx.scopes.pop();
             r?;
             fx.op(I::Br(1));
@@ -2409,6 +2520,37 @@ impl<'a> Emitter<'a> {
         fx.op(I::Unreachable);
         fx.op(I::End);
         Ok(())
+    }
+
+    /// A clause's top-level pattern: like [`Self::pattern`], except a bare
+    /// binder over a scrutinee with a known scalar kind binds a TYPED local
+    /// (unboxed once, at bind time) instead of a box pointer.
+    fn pattern_top(
+        &mut self,
+        fx: &mut FnCtx,
+        pat: NodeId,
+        v: u32,
+        scrut_kind: Option<Scalar>,
+    ) -> Result<(), String> {
+        if let Node::Sym(name) = self.arena.node(pat).clone()
+            && name != "none"
+            && self.local_cases.get(&name) != Some(&false)
+            && let Some(kind) = scrut_kind
+        {
+            let l = fx.local(repr_vt(Some(kind)));
+            fx.op(I::LocalGet(v));
+            self.unbox_scalar(fx, kind);
+            fx.op(I::LocalSet(l));
+            fx.scopes.last_mut().unwrap().insert(
+                name,
+                Binding {
+                    local: l,
+                    scalar: Some(kind),
+                },
+            );
+            return Ok(());
+        }
+        self.pattern(fx, pat, v, 0)
     }
 
     /// Compile a pattern test against the box in local `v`; on mismatch branch
@@ -2597,27 +2739,54 @@ impl<'a> Emitter<'a> {
         ))
     }
 
+    /// Call an internal def, producing the result in representation `want`
+    /// (`None` = boxed). Arguments are emitted per the callee's repr
+    /// signature — typed slots receive unboxed scalars directly. A tail call
+    /// stays a `return_call` when caller and callee agree on the result
+    /// representation; a representation seam (box/unbox/convert after the
+    /// call) forces a plain call.
     fn internal_call(
         &mut self,
         fx: &mut FnCtx,
         name: &str,
         args: &[NodeId],
+        want: Option<Scalar>,
         tail: bool,
     ) -> Result<(), String> {
-        let (idx, params) = self.funcs[name].clone();
+        let (idx, params, sig) = self.funcs[name].clone();
         match self.bind_args(args, &params)? {
             BoundArgs::PerParam(nodes) => {
-                for a in nodes {
-                    self.expr(fx, a, false)?;
+                for (a, slot) in nodes.into_iter().zip(sig.params.iter()) {
+                    self.expr_repr(fx, a, *slot, false)?;
                 }
             }
-            BoundArgs::Bundle => self.seq_box(fx, args, TAG_TUP)?,
+            BoundArgs::Bundle => {
+                self.seq_box(fx, args, TAG_TUP)?;
+                // sole parameter; a typed slot unboxes the bundle — trapping,
+                // as the interpreter's use of a mis-bound bundle would error
+                if let [Some(k)] = sig.params[..] {
+                    self.unbox_scalar(fx, k);
+                }
+            }
         }
-        fx.op(if tail {
-            I::ReturnCall(idx)
-        } else {
-            I::Call(idx)
-        });
+        if tail && want == sig.result {
+            fx.op(I::ReturnCall(idx));
+            return Ok(());
+        }
+        fx.op(I::Call(idx));
+        // representation seam on the result
+        match (sig.result, want) {
+            (a, b) if a == b => {}
+            (None, None) => {}
+            (Some(Scalar::Int), Some(Scalar::Float)) => fx.op(I::F64ConvertI64S),
+            (Some(k), None) => self.box_scalar(fx, k),
+            (None, Some(k)) => self.unbox_scalar(fx, k),
+            (Some(a), Some(b)) => {
+                return Err(format!(
+                    "internal: `{name}` returns {a:?} where {b:?} is expected"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -3989,6 +4158,18 @@ impl<'a> Emitter<'a> {
         Scalar::of(self.node_types.get(&id)?)
     }
 
+    /// Unbox a box pointer on the stack into an unboxed scalar (the
+    /// boxed→typed seam). Traps on a tag the static type ruled out — exactly
+    /// where the boxed path traps inside its polymorphic runtime helper.
+    fn unbox_scalar(&mut self, fx: &mut FnCtx, kind: Scalar) {
+        match kind {
+            Scalar::Int => fx.op(I::Call(self.h.unbox_int)),
+            Scalar::Float => fx.op(I::Call(self.h.as_f64)),
+            Scalar::Bool => fx.op(I::Call(self.h.truthy)),
+            Scalar::Char => fx.op(I::Call(self.h.unbox_char)),
+        }
+    }
+
     /// Box an unboxed scalar on the stack (the typed→boxed seam).
     fn box_scalar(&mut self, fx: &mut FnCtx, kind: Scalar) {
         match kind {
@@ -4010,6 +4191,37 @@ impl<'a> Emitter<'a> {
     /// the boxed path traps inside the polymorphic runtime helper, so the
     /// two representations fail on the same programs.
     fn expr_scalar(&mut self, fx: &mut FnCtx, id: NodeId, want: Scalar) -> Result<(), String> {
+        self.expr_scalar_t(fx, id, want, false)
+    }
+
+    /// Emit `id` in representation `want` — `None` = boxed (an i32 box
+    /// pointer), `Some(kind)` = unboxed scalar. The single entry point that
+    /// lets control forms and internal calls carry a typed result through
+    /// tail position (5.2).
+    fn expr_repr(
+        &mut self,
+        fx: &mut FnCtx,
+        id: NodeId,
+        want: Option<Scalar>,
+        tail: bool,
+    ) -> Result<(), String> {
+        match want {
+            None => self.expr(fx, id, tail),
+            Some(k) => self.expr_scalar_t(fx, id, k, tail),
+        }
+    }
+
+    /// [`Self::expr_scalar`] with tail-position awareness: control forms
+    /// thread `tail` into their result branches, and a tail call to an
+    /// internal function with the same result representation compiles to
+    /// `return_call` (preserving the tail recursion the boxed path has).
+    fn expr_scalar_t(
+        &mut self,
+        fx: &mut FnCtx,
+        id: NodeId,
+        want: Scalar,
+        tail: bool,
+    ) -> Result<(), String> {
         match self.arena.node(id).clone() {
             Node::Int(n) => {
                 if want == Scalar::Float {
@@ -4045,29 +4257,47 @@ impl<'a> Emitter<'a> {
                 }
             }
             Node::Tup(items) if !items.is_empty() => {
-                if let Node::Sym(name) = self.arena.node(items[0]).clone()
-                    && fx.lookup(&name).is_none()
-                    && let Some(kind) = self.scalar_op(fx, &name, &items[1..])?
-                {
-                    if kind == Scalar::Int && want == Scalar::Float {
-                        fx.op(I::F64ConvertI64S);
+                if let Node::Sym(name) = self.arena.node(items[0]).clone() {
+                    let args = &items[1..];
+                    // Control forms carry the typed result straight through
+                    // (including tail position). Dispatch order mirrors
+                    // `call`: special forms, then locals, then builtins,
+                    // then internal defs.
+                    match name.as_str() {
+                        "if-MACRO" => return self.if_form(fx, args, Some(want), tail),
+                        "do-MACRO" => return self.do_form(fx, args, Some(want), tail),
+                        "let-MACRO" => return self.let_form(fx, args, Some(want), tail),
+                        "match-MACRO" => return self.match_form(fx, args, Some(want), tail),
+                        "the-MACRO" => {
+                            if let [_ty, expr] = *args {
+                                return self.expr_scalar_t(fx, expr, want, tail);
+                            }
+                        }
+                        _ => {}
                     }
-                    return Ok(());
+                    if fx.lookup(&name).is_none() {
+                        if BUILTINS.contains(&name.as_str()) {
+                            if let Some(kind) = self.scalar_op(fx, &name, args)? {
+                                if kind == Scalar::Int && want == Scalar::Float {
+                                    fx.op(I::F64ConvertI64S);
+                                }
+                                return Ok(());
+                            }
+                        } else if self.funcs.contains_key(name.as_str()) {
+                            return self.internal_call(fx, &name, args, Some(want), tail);
+                        }
+                    }
                 }
             }
             _ => {}
         }
         // Boxed fallback + one unbox at the seam.
         self.expr(fx, id, false)?;
-        match (self.node_scalar(id), want) {
-            (Some(Scalar::Int), Scalar::Float) => {
-                fx.op(I::Call(self.h.unbox_int));
-                fx.op(I::F64ConvertI64S);
-            }
-            (_, Scalar::Int) => fx.op(I::Call(self.h.unbox_int)),
-            (_, Scalar::Float) => fx.op(I::Call(self.h.as_f64)),
-            (_, Scalar::Bool) => fx.op(I::Call(self.h.truthy)),
-            (_, Scalar::Char) => fx.op(I::Call(self.h.unbox_char)),
+        if self.node_scalar(id) == Some(Scalar::Int) && want == Scalar::Float {
+            fx.op(I::Call(self.h.unbox_int));
+            fx.op(I::F64ConvertI64S);
+        } else {
+            self.unbox_scalar(fx, want);
         }
         Ok(())
     }
@@ -4953,15 +5183,17 @@ fn emit_core_module(
         em.value_globals.insert(name.clone(), 1 + i as u32); // global 0 = heap ptr
     }
     for name in &internal_order {
-        let (params_id, _) = info.defs[name];
+        let (params_id, body) = info.defs[name];
         let params = param_names(arena, params_id)?;
-        em.funcs.insert(name.clone(), (take(), params));
+        let sig = def_sig(arena, &em.node_types, params_id, body);
+        em.funcs.insert(name.clone(), (take(), params, sig));
     }
     // Mangled overload members get their own internal-function indices.
     for mangled in &overload_order {
-        let (params_id, _) = info.overload_bodies[mangled];
+        let (params_id, body) = info.overload_bodies[mangled];
         let params = param_names(arena, params_id)?;
-        em.funcs.insert(mangled.clone(), (take(), params));
+        let sig = def_sig(arena, &em.node_types, params_id, body);
+        em.funcs.insert(mangled.clone(), (take(), params, sig));
     }
 
     // ---- helper bodies (order must match index assignment above)
@@ -4991,36 +5223,48 @@ fn emit_core_module(
         );
     }
 
-    // ---- internal function bodies
+    // ---- internal function bodies (typed per their repr signature — 5.2)
     for name in &internal_order {
         let (_, body) = info.defs[name];
-        let params = em.funcs[name].1.clone();
+        let (_, params, sig) = em.funcs[name].clone();
         let n = params.len();
         let mut fx = FnCtx::new(n as u32);
         let mut scope = HashMap::new();
         for (i, p) in params.iter().enumerate() {
-            scope.insert(p.clone(), Binding::boxed(i as u32));
+            scope.insert(
+                p.clone(),
+                Binding {
+                    local: i as u32,
+                    scalar: sig.params[i],
+                },
+            );
         }
         fx.scopes.push(scope);
-        em.expr(&mut fx, body, true)
+        em.expr_repr(&mut fx, body, sig.result, true)
             .map_err(|e| format!("in `{name}`: {e}"))?;
-        let t = em.ty_idx(vec![I32; n], vec![I32]);
+        let t = em.ty_idx(sig.param_vts(), vec![repr_vt(sig.result)]);
         em.bodies.push((t, fx.finish()));
     }
     // ---- mangled overload member bodies (same paired order as their indices)
     for mangled in &overload_order {
         let (_, body) = info.overload_bodies[mangled];
-        let params = em.funcs[mangled].1.clone();
+        let (_, params, sig) = em.funcs[mangled].clone();
         let n = params.len();
         let mut fx = FnCtx::new(n as u32);
         let mut scope = HashMap::new();
         for (i, p) in params.iter().enumerate() {
-            scope.insert(p.clone(), Binding::boxed(i as u32));
+            scope.insert(
+                p.clone(),
+                Binding {
+                    local: i as u32,
+                    scalar: sig.params[i],
+                },
+            );
         }
         fx.scopes.push(scope);
-        em.expr(&mut fx, body, true)
+        em.expr_repr(&mut fx, body, sig.result, true)
             .map_err(|e| format!("in `{mangled}`: {e}"))?;
-        let t = em.ty_idx(vec![I32; n], vec![I32]);
+        let t = em.ty_idx(sig.param_vts(), vec![repr_vt(sig.result)]);
         em.bodies.push((t, fx.finish()));
     }
 
@@ -5030,9 +5274,10 @@ fn emit_core_module(
     // companion is emitted per entry after this loop (5.1 arena-per-call).
     let mut post_returns: Vec<(String, Vec<ValType>)> = Vec::new();
     for sig in &info.exports {
-        let (fidx, _) = *em
+        let (fidx, _, fsig) = em
             .funcs
             .get(&sig.name)
+            .cloned()
             .ok_or(format!("export `{}` has no Def Fn", sig.name))?;
         let mut fparams = Vec::new();
         let mut lifted: Vec<(WitTy, u32)> = Vec::new(); // (ty, first flat local)
@@ -5050,20 +5295,71 @@ fn emit_core_module(
             ));
         }
         let mut fx = FnCtx::new(fparams.len() as u32);
-        for (ty, base) in &lifted {
-            em.lift_flat(&mut fx, ty, *base)?;
+        // 5.2 export fast path: a typed def param whose WIT type is the same
+        // scalar kind receives the flat ABI value DIRECTLY (extend/promote),
+        // skipping the box entirely; everything else lifts to a box as
+        // before (plus one unbox if the def param is typed anyway).
+        let typed_ok = fsig.params.len() == lifted.len();
+        for (i, (ty, base)) in lifted.iter().enumerate() {
+            let slot = if typed_ok { fsig.params[i] } else { None };
+            match (slot, wit_scalar(ty)) {
+                (Some(k), Some(wk)) if k == wk => {
+                    fx.op(I::LocalGet(*base));
+                    match ty {
+                        WitTy::Bool => {
+                            // normalize to 0/1, like the interpreter's Bool
+                            fx.op(I::I32Const(0));
+                            fx.op(I::I32Ne);
+                        }
+                        WitTy::IntS(_) => fx.op(I::I64ExtendI32S),
+                        WitTy::IntU(_) | WitTy::Char => fx.op(I::I64ExtendI32U),
+                        WitTy::S64 | WitTy::F64 => {}
+                        WitTy::F32 => fx.op(I::F64PromoteF32),
+                        _ => unreachable!("wit_scalar admitted a non-scalar"),
+                    }
+                }
+                (Some(k), _) => {
+                    em.lift_flat(&mut fx, ty, *base)?;
+                    em.unbox_scalar(&mut fx, k);
+                }
+                (None, _) => em.lift_flat(&mut fx, ty, *base)?,
+            }
         }
         fx.op(I::Call(fidx));
+        // the call produced the def's result repr; the paths below expect
+        // the value they were written for (flat scalar or box)
+        let res_kind = if typed_ok { fsig.result } else { None };
         let fresults = match flat_result(sig, &em.type_env)? {
             FlatRes::None => {
                 fx.op(I::Drop);
                 vec![]
             }
             FlatRes::One(t) => {
-                em.lower(&mut fx, &t)?;
+                match res_kind {
+                    // typed result, same scalar kind as the WIT type: convert
+                    // directly to the flat form — no box was ever built
+                    Some(k) if wit_scalar(&t) == Some(k) => match t {
+                        WitTy::Bool | WitTy::S64 | WitTy::F64 => {}
+                        WitTy::IntS(_) | WitTy::IntU(_) | WitTy::Char => fx.op(I::I32WrapI64),
+                        WitTy::F32 => fx.op(I::F32DemoteF64),
+                        _ => unreachable!("wit_scalar admitted a non-scalar"),
+                    },
+                    // typed result but a non-scalar/mismatched WIT type:
+                    // box at the seam and lower as before
+                    Some(k) => {
+                        em.box_scalar(&mut fx, k);
+                        em.lower(&mut fx, &t)?;
+                    }
+                    None => em.lower(&mut fx, &t)?,
+                }
                 flat(&t)
             }
             FlatRes::Retptr => {
+                // compound results are boxed; a (mismatched) typed scalar
+                // result boxes at the seam first
+                if let Some(k) = res_kind {
+                    em.box_scalar(&mut fx, k);
+                }
                 let ty = wit_ty(sig.result.as_deref().unwrap(), &em.type_env)?;
                 let area = fx.local(I32);
                 if matches!(
@@ -5767,7 +6063,10 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     // macro body functions (each compiles like a Fn over its param forms)
     for m in &macros {
         let idx = take();
-        em.funcs.insert(m.name.clone(), (idx, m.params.clone()));
+        em.funcs.insert(
+            m.name.clone(),
+            (idx, m.params.clone(), FnSig::boxed(m.params.len())),
+        );
     }
     let tree_to_form_idx = take();
     let count_idx = take();
