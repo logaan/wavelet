@@ -2620,9 +2620,10 @@ impl<'a> Emitter<'a> {
 
     /// A clause's top-level pattern over a canonical-layout scrutinee (5.3):
     /// a bare binder aliases the pointer (a `Repr::Mem` binding), a record
-    /// pattern destructures at despec offsets, and any other pattern
-    /// rebuilds the box once and delegates to the uniform matcher (where a
-    /// non-record pattern against a record value fails, like the oracle).
+    /// pattern destructures a record layout at despec offsets, a tuple
+    /// pattern destructures a tuple layout element-wise, and any other
+    /// pattern rebuilds the box once and delegates to the uniform matcher
+    /// (where a mismatched pattern fails, like the oracle).
     fn pattern_top_mem(
         &mut self,
         fx: &mut FnCtx,
@@ -2643,6 +2644,9 @@ impl<'a> Emitter<'a> {
                 Ok(())
             }
             Node::Rec(fields) => self.pattern_mem_rec(fx, &fields, &ty, v, 0, 0),
+            Node::Tup(pats) if matches!(ty, WitTy::Tuple(_)) => {
+                self.pattern_mem_tup(fx, &pats, &ty, v, 0, 0)
+            }
             Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
                 let l = fx.local(ValType::I32);
@@ -2682,6 +2686,36 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// A tuple pattern over canonical layout: element sub-patterns
+    /// destructure positionally at their despec offsets. The scrutinee is
+    /// statically a tuple, so EVERY tuple pattern destructures element-wise
+    /// — the oracle disambiguates tuple-vs-variant patterns by the VALUE,
+    /// and a tuple value never matches a variant case — which is why a
+    /// Sym-headed pattern binds its first element here instead of reading
+    /// as a variant case (the boxed matcher's recorded 5.9 limitation). A
+    /// length mismatch can never match: the clause branches out.
+    fn pattern_mem_tup(
+        &mut self,
+        fx: &mut FnCtx,
+        pats: &[NodeId],
+        ty: &WitTy,
+        v: u32,
+        off: u64,
+        fail: u32,
+    ) -> Result<(), String> {
+        let WitTy::Tuple(elems) = ty else {
+            return Err("internal: tuple pattern over a non-tuple layout".into());
+        };
+        if pats.len() != elems.len() {
+            fx.op(I::Br(fail));
+            return Ok(());
+        }
+        for (&p, (o, tf)) in pats.iter().zip(record_field_offsets(ty)) {
+            self.pattern_mem_field(fx, p, &tf, v, off + o, fail)?;
+        }
+        Ok(())
+    }
+
     /// One canonical field against a sub-pattern: a bare binder binds the
     /// field at its natural representation (typed scalar / interior record
     /// pointer / rebuilt box), a nested record pattern recurses in place,
@@ -2705,6 +2739,9 @@ impl<'a> Emitter<'a> {
             Node::Rec(fields) if matches!(tf, WitTy::Record(_)) => {
                 self.pattern_mem_rec(fx, &fields, tf, v, off, fail)
             }
+            Node::Tup(pats) if matches!(tf, WitTy::Tuple(_)) => {
+                self.pattern_mem_tup(fx, &pats, tf, v, off, fail)
+            }
             Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
                 let l = fx.local(ValType::I32);
@@ -2717,8 +2754,8 @@ impl<'a> Emitter<'a> {
 
     /// Bind one canonical field at its natural representation: scalar fields
     /// load unboxed into typed locals (widening to the interpreter's value
-    /// domains), a nested record binds an interior pointer (headerless
-    /// layout — 5.1), everything else rebuilds its box.
+    /// domains), a nested record or tuple binds an interior pointer
+    /// (headerless layout — 5.1), everything else rebuilds its box.
     fn mem_field_binding(
         &mut self,
         fx: &mut FnCtx,
@@ -2776,7 +2813,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::F64Load(ma(off, 3)));
                 scalar(fx, ValType::F64, Scalar::Float)
             }
-            WitTy::Record(_) => {
+            WitTy::Record(_) | WitTy::Tuple(_) => {
                 fx.op(I::LocalGet(v));
                 if off > 0 {
                     fx.op(I::I32Const(off as i32));
@@ -4579,7 +4616,7 @@ impl<'a> Emitter<'a> {
             // A dep call whose declared result IS this layout: the retptr
             // area arrives in canonical form, in declared field order —
             // exactly the order the interpreter's boundary lift produces.
-            (Node::Tup(items), WitTy::Record(_)) if !items.is_empty() => {
+            (Node::Tup(items), WitTy::Record(_) | WitTy::Tuple(_)) if !items.is_empty() => {
                 match self.arena.node(items[0]) {
                     Node::Qsym(alias, fname) => self
                         .dep_result_mem_ty(alias, fname)
@@ -4592,8 +4629,9 @@ impl<'a> Emitter<'a> {
     }
 
     /// The canonical layout a dep call's result area carries, when it is a
-    /// retptr-lowered non-empty record. `None` for functor ops (they are not
-    /// imports), scalar/One-flat results, and anything unresolvable.
+    /// retptr-lowered non-empty record or tuple. `None` for functor ops
+    /// (they are not imports), scalar/One-flat results, and anything
+    /// unresolvable.
     fn dep_result_mem_ty(&self, alias: &str, fname: &str) -> Option<WitTy> {
         let imp = self.info.imports.iter().find(|i| i.alias == alias)?;
         let dep = self.deps.get(&imp.package)?;
@@ -4603,7 +4641,9 @@ impl<'a> Emitter<'a> {
             return None;
         }
         let rty = wit_ty(sig.result.as_deref()?, &self.type_env).ok()?;
-        matches!(&rty, WitTy::Record(fs) if !fs.is_empty()).then_some(rty)
+        (matches!(&rty, WitTy::Record(fs) if !fs.is_empty())
+            || matches!(&rty, WitTy::Tuple(es) if !es.is_empty()))
+        .then_some(rty)
     }
 
     /// The canonical-layout type a name is bound at, if any — through the
@@ -4650,11 +4690,13 @@ impl<'a> Emitter<'a> {
     }
 
     /// The canonical layout for `id` when 5.3 admits one: a known non-empty
-    /// record type whose construction here is provably faithful.
+    /// record or tuple type whose construction here is provably faithful.
     fn node_mem_ty(&self, look: &MemLookup, id: NodeId) -> Option<WitTy> {
         let t = self.node_types.get(&id)?.clone();
         let ty = self.wit_of_check_type(&t)?;
-        if !matches!(&ty, WitTy::Record(fs) if !fs.is_empty()) {
+        if !(matches!(&ty, WitTy::Record(fs) if !fs.is_empty())
+            || matches!(&ty, WitTy::Tuple(es) if !es.is_empty()))
+        {
             return None;
         }
         if !self.can_mem_as(look, id, &ty) {
