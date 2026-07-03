@@ -7,7 +7,6 @@ Package "conformance:wavelet@0.1.0"
 // Checks that wavelet cannot express today are ABSENT and recorded as
 // shortcomings on the LoT task instead:
 //   - permissions-rt: flag literals are not supported by the wasm backend.
-//   - option-u8-rt none side: none() missing from the wasm backend.
 //
 // All present checks pass against a correct callee. (list-u8-rt, option-u8-rt
 // some, and result-tuple-direction-rt ok used to fail to a backend bug —
@@ -52,6 +51,7 @@ Def values-fails Fn {}
              check("list-string-rt" eq(iv/list-string-rt(["a" ""]) ["a!" "!"]))
              check("list-list-u8-rt" eq(iv/list-list-u8-rt([[1] []]) [[2] []]))
              check("option-u8-rt some" eq(iv/option-u8-rt(some(7)) some(8)))
+             check("option-u8-rt none" eq(iv/option-u8-rt(none) none))
              check("option-shape-rt some"
                    eq(iv/option-shape-rt(some(t/dot)) some(t/circle(1.0))))
              check("shape-rt circle"
