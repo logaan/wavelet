@@ -62,6 +62,7 @@ const TAG_VAR: i32 = 7; // case-name str box @4, payload box (0 if none) @8
 const TAG_TUP: i32 = 8; // n i32 @4, then element boxes @8+4i (list layout, distinct tag)
 const TAG_FLG: i32 = 9; // a flags *form* (Node::Flg): n i32 @4, name str boxes @8+4i
 const TAG_CHAR: i32 = 10; // a char value/form: i64 Unicode scalar @8 (TAG_INT layout)
+const TAG_CELL: i32 = 11; // a mutable cell: current value box @4 (identity = ptr)
 
 fn ma(offset: u64, align: u32) -> MemArg {
     MemArg {
@@ -1476,6 +1477,12 @@ struct Emitter<'a> {
     /// an `alias/op` call (`pts/new`, `pts/add`, …) to the matching resource fn
     /// while those bodies are still being lowered (step 04 routing).
     functor_fns: HashMap<String, ResourceFns>,
+    /// User-declared resource types (4.5) exported by this component, keyed by
+    /// the resource name (`counter`). Populated up front so `dep_call` can route
+    /// a `counter/next` method / `counter/sum` static call while bodies are still
+    /// being lowered. The constructor is an ordinary internal fn registered in
+    /// `funcs` under the bare resource name; methods/statics under `name/op`.
+    user_res: HashMap<String, UserRes>,
     /// Per-node static types from the checker (goal 5): the emitter consults
     /// this to choose type-directed (unboxed/ABI-native) representations.
     /// Empty when checking failed or was skipped — every node then keeps the
@@ -3360,6 +3367,18 @@ impl<'a> Emitter<'a> {
                 }
             }
             return Ok(());
+        }
+        // A user-declared resource (4.5): `counter/next(c)` (method) or
+        // `counter/sum(vs)` (static). A resource value is carried guest-internally
+        // as its rep (the `New` cell), so `self` is simply the first argument — a
+        // method or static is therefore an ordinary internal call. The own/borrow
+        // handle conversions happen only at the component boundary.
+        if let Some(ur) = self.user_res.get(alias).cloned() {
+            let mname = format!("{alias}/{fname}");
+            if ur.methods.contains(fname) || ur.statics.contains(fname) {
+                return self.internal_call(fx, &mname, args, Repr::Boxed, false);
+            }
+            return Err(format!("resource `{alias}` has no member `{fname}`"));
         }
         let imp = self
             .info
@@ -5930,6 +5949,42 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(rp));
                 fx.op(I::I32Load(ma(12, 2)));
             }
+            "cell-new" => {
+                // A mutable cell holding one boxed value; its heap pointer is
+                // its identity (interp: `Value::Cell(Rc<RefCell<Value>>)`).
+                nargs(1)?;
+                let v = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(v));
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_CELL));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(p));
+            }
+            "cell-get" => {
+                // Current value box, at cell offset 4.
+                nargs(1)?;
+                self.expr(fx, items[0], false)?;
+                fx.op(I::I32Load(ma(4, 2)));
+            }
+            "cell-set" => {
+                // Overwrite the cell's value box; return unit (interp parity).
+                nargs(2)?;
+                let c = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(c));
+                fx.op(I::LocalGet(c));
+                self.expr(fx, items[1], false)?;
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::I32Const(self.unit_addr() as i32));
+            }
             "gensym" => {
                 nargs(0)?;
                 return self.gensym(fx);
@@ -5994,6 +6049,9 @@ const BUILTINS: &[&str] = &[
     "some",
     "ok",
     "err",
+    "cell-new",
+    "cell-get",
+    "cell-set",
     // compile-time form machinery (macro bodies)
     "form-kind",
     "rec-key",
@@ -6115,6 +6173,18 @@ fn emit_core_module(
             .or_insert(TypeDef::Resource);
     }
 
+    // User-declared resources (4.5): register each resource NAME as a boundary
+    // resource type so `wit_ty` maps `counter` / `own(counter)` / `borrow(counter)`
+    // to a handle, exactly as for the functor `set`. The classified member forms
+    // drive index reservation, body emission, call routing, and boundary exports.
+    let user_res_forms = user_resource_forms(arena, roots)?;
+    for rf in &user_res_forms {
+        type_env
+            .defs
+            .entry(rf.name.clone())
+            .or_insert(TypeDef::Resource);
+    }
+
     let mut em = Emitter {
         arena,
         info,
@@ -6139,6 +6209,7 @@ fn emit_core_module(
         true_addr: 0,
         macro_expand_idx: None,
         functor_fns: HashMap::new(),
+        user_res: HashMap::new(),
         node_types: node_types_tbl,
         mem_tys: Vec::new(),
     };
@@ -6171,6 +6242,12 @@ fn emit_core_module(
         // for now. Skip it so the import-declaration loop does not reject it as an
         // unknown import alias.
         if info.functors.iter().any(|f| &f.alias == alias) {
+            continue;
+        }
+        // A user-resource method/static (`counter/next`, `counter/sum`) is an
+        // exported resource member, not a runtime import; `dep_call` routes it to
+        // the emitted member fn. Skip it here for the same reason as a functor.
+        if user_res_forms.iter().any(|rf| &rf.name == alias) {
             continue;
         }
         let imp = info
@@ -6240,6 +6317,42 @@ fn emit_core_module(
         functor_intrinsics.push((new_i, rep_i, drop_i));
     }
 
+    // ---- user-resource resource-intrinsic imports (one triple per resource)
+    //
+    // `[resource-new/rep/drop]<name>` under `[export]<versioned export iface>`,
+    // exactly as for the functor `set`. Only exported resources are supported by
+    // the backend; an unexported `DefResource` has no boundary interface to hang
+    // the intrinsics on.
+    let mut user_res_intrinsics: HashMap<String, (u32, u32, u32)> = HashMap::new();
+    for rf in &user_res_forms {
+        let Some(decl) = info.resources.iter().find(|r| r.name == rf.name) else {
+            continue;
+        };
+        let Some(iface_path) = &decl.iface else {
+            return Err(format!(
+                "resource `{}` is declared but not exported; the wasm backend only \
+                 supports exported resources yet",
+                rf.name
+            ));
+        };
+        let iface = if is_external_iface(iface_path) {
+            external_versioned_in(iface_path, deps)
+        } else {
+            versioned_iface(&info.package, iface_path)
+        };
+        let module = format!("[export]{iface}");
+        let nnew = format!("[resource-new]{}", rf.name);
+        let nrep = format!("[resource-rep]{}", rf.name);
+        let ndrop = format!("[resource-drop]{}", rf.name);
+        add_import(&mut em, &module, &nnew, vec![I32], vec![I32]);
+        add_import(&mut em, &module, &nrep, vec![I32], vec![I32]);
+        add_import(&mut em, &module, &ndrop, vec![I32], vec![]);
+        let ni = em.import_idx(&module, &nnew);
+        let ri = em.import_idx(&module, &nrep);
+        let di = em.import_idx(&module, &ndrop);
+        user_res_intrinsics.insert(rf.name.clone(), (ni, ri, di));
+    }
+
     // ---- assign helper indices
     let mut next = n_imports;
     let mut take = || {
@@ -6302,6 +6415,50 @@ fn emit_core_module(
                 drop_import: drop_i,
             },
         );
+    }
+
+    // ---- reserve user-resource member fn indices (4.5)
+    //
+    // Reserve indices for each resource's constructor, methods, statics, and dtor
+    // in the same take() position their bodies are emitted (right after the functor
+    // `set` bodies), so indices line up. The constructor is registered under the
+    // bare resource name and each method/static under `name/op`, so ordinary call
+    // resolution (the `Sym`/`Qsym` arms) finds them; routing data goes in `user_res`.
+    for rf in &user_res_forms {
+        let (_ni, _ri, _di) = user_res_intrinsics[&rf.name];
+        if let Some((pid, _)) = rf.ctor {
+            let names = param_names(arena, pid)?;
+            let n = names.len();
+            let idx = take();
+            em.funcs.insert(
+                rf.name.clone(),
+                (idx, names, FnSig { params: vec![Repr::Boxed; n], result: Repr::Boxed }),
+            );
+        }
+        let mut methods = std::collections::HashSet::new();
+        for (key, pid, _) in &rf.methods {
+            let names = param_names(arena, *pid)?;
+            let n = names.len();
+            let idx = take();
+            em.funcs.insert(
+                format!("{}/{}", rf.name, key),
+                (idx, names, FnSig { params: vec![Repr::Boxed; n], result: Repr::Boxed }),
+            );
+            methods.insert(key.clone());
+        }
+        let mut statics = std::collections::HashSet::new();
+        for (key, pid, _) in &rf.statics {
+            let names = param_names(arena, *pid)?;
+            let n = names.len();
+            let idx = take();
+            em.funcs.insert(
+                format!("{}/{}", rf.name, key),
+                (idx, names, FnSig { params: vec![Repr::Boxed; n], result: Repr::Boxed }),
+            );
+            statics.insert(key.clone());
+        }
+        let dtor = take();
+        em.user_res.insert(rf.name.clone(), UserRes { methods, statics, dtor });
     }
 
     // An *exported overload set* (≥2 same-named `Def Fn`s, or a curated-op name)
@@ -6387,6 +6544,54 @@ fn emit_core_module(
         );
     }
 
+    // ---- user-resource member bodies (4.5)
+    //
+    // Emitted right after the functor `set` bodies so positions match the indices
+    // reserved above (constructor, methods, statics, dtor per resource, in that
+    // order). A resource *value* is carried guest-internally as its REP (the cell
+    // box the `New` body returns) — the same thing the interpreter binds `self`
+    // to and that `cell-get`/`cell-set` operate on. So the constructor, methods,
+    // and statics are ORDINARY internal bodies over reps; the own/borrow handle
+    // conversions (`resource.new`/`resource.rep`) happen only at the boundary.
+    // The dtor runs `Drop` (rep = param 0) or no-ops.
+    for rf in &user_res_forms {
+        let mut member_bodies: Vec<(String, NodeId)> = Vec::new();
+        if let Some((_pid, body)) = rf.ctor {
+            member_bodies.push((rf.name.clone(), body));
+        }
+        for (key, _pid, body) in rf.methods.iter().chain(rf.statics.iter()) {
+            member_bodies.push((format!("{}/{}", rf.name, key), *body));
+        }
+        for (fname, body) in member_bodies {
+            let (_, params, sig) = em.funcs[&fname].clone();
+            let mut fx = FnCtx::new(params.len() as u32);
+            let mut scope = HashMap::new();
+            for (i, pn) in params.iter().enumerate() {
+                scope.insert(pn.clone(), Binding { local: i as u32, repr: sig.params[i] });
+            }
+            fx.scopes.push(scope);
+            em.expr_repr(&mut fx, body, sig.result, true)
+                .map_err(|e| format!("in resource member `{fname}`: {e}"))?;
+            let t = em.ty_idx(sig.param_vts(), vec![repr_vt(sig.result)]);
+            em.bodies.push((t, fx.finish()));
+        }
+        {
+            let mut fx = FnCtx::new(1);
+            if let Some((pid, body)) = rf.drop_member {
+                let mut scope = HashMap::new();
+                if let Some(pn) = param_names(arena, pid)?.first() {
+                    scope.insert(pn.clone(), Binding { local: 0, repr: Repr::Boxed });
+                }
+                fx.scopes.push(scope);
+                em.expr_repr(&mut fx, body, Repr::Boxed, false)
+                    .map_err(|e| format!("in resource `{}` Drop: {e}", rf.name))?;
+                fx.op(I::Drop); // discard the unit result
+            }
+            let t = em.ty_idx(vec![ValType::I32], vec![]);
+            em.bodies.push((t, fx.finish()));
+        }
+    }
+
     // ---- internal function bodies (typed per their repr signature — 5.2)
     for name in &internal_order {
         let (_, body) = info.defs[name];
@@ -6437,6 +6642,28 @@ fn emit_core_module(
     // Each export's (full export name, flat results) — a canonical post-return
     // companion is emitted per entry after this loop (5.1 arena-per-call).
     let mut post_returns: Vec<(String, Vec<ValType>)> = Vec::new();
+    // Classify a boundary type text as a user-resource handle (4.5): a resource
+    // value crosses the boundary as an own handle (`counter`) or a borrow
+    // (`borrow<counter>`), but is carried guest-internally as its rep. `own`
+    // params/results convert with `resource.rep`/`resource.new`; a `borrow` param
+    // already arrives AS the rep (the canonical ABI hands a borrow of a
+    // self-owned resource the rep directly). The functor `set` (handle carriage)
+    // is deliberately excluded — it is not in `user_res_intrinsics`.
+    let classify_res = |t: &str| -> Option<(String, bool)> {
+        if let Some(inner) = t.strip_prefix("borrow<").and_then(|x| x.strip_suffix('>'))
+            && user_res_intrinsics.contains_key(inner)
+        {
+            return Some((inner.to_string(), true));
+        }
+        let bare = t
+            .strip_prefix("own<")
+            .and_then(|x| x.strip_suffix('>'))
+            .unwrap_or(t);
+        if user_res_intrinsics.contains_key(bare) {
+            return Some((bare.to_string(), false));
+        }
+        None
+    };
     for sig in &info.exports {
         let (fidx, _, fsig) = em
             .funcs
@@ -6444,10 +6671,11 @@ fn emit_core_module(
             .cloned()
             .ok_or(format!("export `{}` has no Def Fn", sig.name))?;
         let mut fparams = Vec::new();
-        let mut lifted: Vec<(WitTy, u32)> = Vec::new(); // (ty, first flat local)
+        let mut lifted: Vec<(WitTy, u32, Option<(String, bool)>)> = Vec::new();
         for (_, t) in &sig.params {
             let ty = wit_ty(t, &em.type_env)?;
-            lifted.push((ty.clone(), fparams.len() as u32));
+            let res = classify_res(t);
+            lifted.push((ty.clone(), fparams.len() as u32, res));
             fparams.extend_from_slice(&flat_checked(&ty)?);
         }
         if fparams.len() > 16 {
@@ -6464,7 +6692,17 @@ fn emit_core_module(
         // skipping the box entirely; everything else lifts to a box as
         // before (plus one unbox if the def param is typed anyway).
         let typed_ok = fsig.params.len() == lifted.len();
-        for (i, (ty, base)) in lifted.iter().enumerate() {
+        for (i, (ty, base, res)) in lifted.iter().enumerate() {
+            if let Some((rname, is_borrow)) = res {
+                // own: `resource.rep(handle) -> rep`; borrow: the flat i32 already
+                // IS the rep box pointer.
+                fx.op(I::LocalGet(*base));
+                if !is_borrow {
+                    let (_n, rep_i, _d) = user_res_intrinsics[rname];
+                    fx.op(I::Call(rep_i));
+                }
+                continue;
+            }
             let slot = if typed_ok {
                 fsig.params[i]
             } else {
@@ -6504,6 +6742,17 @@ fn emit_core_module(
             FlatRes::None => {
                 fx.op(I::Drop);
                 vec![]
+            }
+            FlatRes::One(t) if classify_res(sig.result.as_deref().unwrap_or("")).is_some() => {
+                // A user-resource own result: the def returned the rep; mint the
+                // own handle to hand out across the boundary.
+                let (rname, _) = classify_res(sig.result.as_deref().unwrap()).unwrap();
+                let (new_i, _r, _d) = user_res_intrinsics[&rname];
+                if let Repr::Scalar(k) = res_kind {
+                    em.box_scalar(&mut fx, k);
+                }
+                fx.op(I::Call(new_i));
+                flat(&t)
             }
             FlatRes::One(t) => {
                 match res_kind {
@@ -6629,17 +6878,20 @@ fn emit_core_module(
     // recomputation is semantics-neutral). Interned statics live below the
     // heap base and are untouched.
     //
-    // Components with functor instantiations OPT OUT for now and keep the
-    // never-free behaviour: a `set` resource's cell and stored list live on
-    // this same heap and must survive across calls. They move to an explicit
-    // persistent region when the ABI-native layout work rebuilds value
-    // construction (see the 5.1 decision record).
+    // Components with functor instantiations OR user-declared resources (4.5)
+    // OPT OUT for now and keep the never-free behaviour: a resource's rep — the
+    // `set` cell and its stored list, or a user `counter`'s `New` cell — lives on
+    // this same heap and MUST survive across export calls (a later `next`/`value`
+    // dereferences the rep the constructor allocated). Resetting the arena in the
+    // post-return would free it, so a resource-bearing component keeps its arena.
+    // They move to an explicit persistent region when the ABI-native layout work
+    // rebuilds value construction (see the 5.1 decision record).
     //
     // Global indices: 0 = heap ptr, 1..=n value defs, 1+n gensym counter,
     // 2+n = the immutable arena floor (initialized to the heap base in the
     // globals section below).
     let arena_floor_g = 2 + info.value_defs.len() as u32;
-    if info.functors.is_empty() {
+    if info.functors.is_empty() && info.resources.is_empty() {
         for (name, fresults) in post_returns {
             let mut fx = FnCtx::new(fresults.len() as u32);
             fx.op(I::GlobalGet(arena_floor_g));
@@ -6652,6 +6904,131 @@ fn emit_core_module(
             em.bodies.push((t, fx.finish()));
             exports.push((format!("cabi_post_{name}"), take()));
         }
+    }
+
+    // ---- user-resource boundary exports (4.5)
+    //
+    // Emit the canonical resource-ABI boundary functions per exported resource:
+    // `[constructor]`/`[method]`/`[static]` wrappers that lift the flat params to
+    // boxes, call the internal member fn, and lower the boxed result back to the
+    // flat ABI; the `[dtor]` body was emitted above and is exported directly. A
+    // constructor returns the own handle (unbox the internal fn's boxed handle
+    // value); a method receives the rep as core param 0 (already a box pointer).
+    for rf in &user_res_forms {
+        let Some(decl) = info.resources.iter().find(|r| r.name == rf.name) else {
+            continue;
+        };
+        let Some(iface_path) = &decl.iface else {
+            continue;
+        };
+        let iface = if is_external_iface(iface_path) {
+            external_versioned_in(iface_path, deps)
+        } else {
+            versioned_iface(&info.package, iface_path)
+        };
+        let (new_i, _rep_i, _drop_i) = user_res_intrinsics[&rf.name];
+        if let Some(ctor_params) = &decl.constructor {
+            let ctor_idx = em.funcs[&rf.name].0;
+            let mut fparams = Vec::new();
+            let mut lifted: Vec<(WitTy, u32)> = Vec::new();
+            for (_, t) in ctor_params {
+                let ty = wit_ty(t, &em.type_env)?;
+                lifted.push((ty.clone(), fparams.len() as u32));
+                fparams.extend_from_slice(&flat_checked(&ty)?);
+            }
+            let mut fx = FnCtx::new(fparams.len() as u32);
+            for (ty, base) in &lifted {
+                em.lift_flat(&mut fx, ty, *base)?;
+            }
+            fx.op(I::Call(ctor_idx)); // -> rep pointer (the New cell)
+            fx.op(I::Call(new_i)); // mint an own handle from the rep
+            let t = em.ty_idx(fparams, vec![I32]);
+            em.bodies.push((t, fx.finish()));
+            exports.push((format!("{iface}#[constructor]{}", rf.name), take()));
+        }
+        for m in &decl.methods {
+            let midx = em.funcs[&format!("{}/{}", rf.name, m.name)].0;
+            let mut fparams = vec![I32]; // rep (self)
+            let mut lifted: Vec<(WitTy, u32)> = Vec::new();
+            for (_, t) in &m.params {
+                let ty = wit_ty(t, &em.type_env)?;
+                lifted.push((ty.clone(), fparams.len() as u32));
+                fparams.extend_from_slice(&flat_checked(&ty)?);
+            }
+            let mut fx = FnCtx::new(fparams.len() as u32);
+            fx.op(I::LocalGet(0)); // rep as the boxed `self` argument
+            for (ty, base) in &lifted {
+                em.lift_flat(&mut fx, ty, *base)?;
+            }
+            fx.op(I::Call(midx));
+            let fresults = match flat_result(m, &em.type_env)? {
+                FlatRes::None => {
+                    fx.op(I::Drop);
+                    vec![]
+                }
+                FlatRes::One(WitTy::Handle) => {
+                    fx.op(I::Call(new_i)); // rep -> own handle
+                    vec![I32]
+                }
+                FlatRes::One(t) => {
+                    em.lower(&mut fx, &t)?;
+                    flat(&t)
+                }
+                FlatRes::Retptr => {
+                    return Err(format!(
+                        "resource `{}` method `{}` returns a memory-spilled type; \
+                         not supported by the wasm backend yet",
+                        rf.name, m.name
+                    ));
+                }
+            };
+            let t = em.ty_idx(fparams, fresults);
+            em.bodies.push((t, fx.finish()));
+            exports.push((format!("{iface}#[method]{}.{}", rf.name, m.name), take()));
+        }
+        for st in &decl.statics {
+            let sidx = em.funcs[&format!("{}/{}", rf.name, st.name)].0;
+            let mut fparams = Vec::new();
+            let mut lifted: Vec<(WitTy, u32)> = Vec::new();
+            for (_, t) in &st.params {
+                let ty = wit_ty(t, &em.type_env)?;
+                lifted.push((ty.clone(), fparams.len() as u32));
+                fparams.extend_from_slice(&flat_checked(&ty)?);
+            }
+            let mut fx = FnCtx::new(fparams.len() as u32);
+            for (ty, base) in &lifted {
+                em.lift_flat(&mut fx, ty, *base)?;
+            }
+            fx.op(I::Call(sidx));
+            let fresults = match flat_result(st, &em.type_env)? {
+                FlatRes::None => {
+                    fx.op(I::Drop);
+                    vec![]
+                }
+                FlatRes::One(WitTy::Handle) => {
+                    fx.op(I::Call(new_i)); // rep -> own handle
+                    vec![I32]
+                }
+                FlatRes::One(t) => {
+                    em.lower(&mut fx, &t)?;
+                    flat(&t)
+                }
+                FlatRes::Retptr => {
+                    return Err(format!(
+                        "resource `{}` static `{}` returns a memory-spilled type; \
+                         not supported by the wasm backend yet",
+                        rf.name, st.name
+                    ));
+                }
+            };
+            let t = em.ty_idx(fparams, fresults);
+            em.bodies.push((t, fx.finish()));
+            exports.push((format!("{iface}#[static]{}.{}", rf.name, st.name), take()));
+        }
+        exports.push((
+            format!("{iface}#[dtor]{}", rf.name),
+            em.user_res[&rf.name].dtor,
+        ));
     }
 
     let _ = take; // `next`/`take` are done; the resource bodies were emitted above.
@@ -6841,6 +7218,86 @@ fn emit_core_module(
 //   * dtor `(i32 rep) -> ()`: safe no-op (bump allocator never frees).
 //   * `contains`/`size` return a bare core i32 (the encoder's `canon lift` does
 //     i32→bool / i32→u32), so no value-`lower` is needed on the result.
+
+/// Routing data for one user-declared resource (4.5). `methods`/`statics` are
+/// the member op-names; a method call converts the receiver handle to its rep
+/// with `rep_import` before dispatch, a static call is a plain internal call.
+#[derive(Clone)]
+struct UserRes {
+    methods: std::collections::HashSet<String>,
+    statics: std::collections::HashSet<String>,
+    /// core fn idx of the `[dtor]<name>` body (runs `Drop` or no-op).
+    dtor: u32,
+}
+
+/// One `DefResource` form, classified for the backend: the constructor (`New`),
+/// instance methods, statics, and destructor (`Drop`), each as `(params, body)`
+/// arena node ids. Mirrors the interpreter's `defresource-MACRO` handling.
+struct ResForm {
+    name: String,
+    ctor: Option<(NodeId, NodeId)>,
+    methods: Vec<(String, NodeId, NodeId)>,
+    statics: Vec<(String, NodeId, NodeId)>,
+    drop_member: Option<(NodeId, NodeId)>,
+}
+
+/// Walk the file roots for `DefResource` forms, classifying each member the same
+/// way the interpreter and WIT collector do (`New`/`Drop` keys, `Static Fn`
+/// marker, otherwise an instance method).
+fn user_resource_forms(arena: &Arena, roots: &[NodeId]) -> Result<Vec<ResForm>, String> {
+    let mut out = Vec::new();
+    for &root in roots {
+        let Node::Tup(items) = arena.node(root) else {
+            continue;
+        };
+        if items.len() < 3
+            || !matches!(arena.node(items[0]), Node::Sym(s) if s == "defresource-MACRO")
+        {
+            continue;
+        }
+        let Node::Sym(name) = arena.node(items[1]) else {
+            continue;
+        };
+        let Node::Rec(members) = arena.node(items[2]) else {
+            continue;
+        };
+        let mut rf = ResForm {
+            name: name.clone(),
+            ctor: None,
+            methods: Vec::new(),
+            statics: Vec::new(),
+            drop_member: None,
+        };
+        for (key, val) in members {
+            let (is_static, fn_id) = match arena.node(*val) {
+                Node::Tup(t)
+                    if t.len() == 2
+                        && matches!(arena.node(t[0]), Node::Sym(s) if s == "static-MACRO") =>
+                {
+                    (true, t[1])
+                }
+                _ => (false, *val),
+            };
+            let Node::Tup(fnitems) = arena.node(fn_id) else {
+                return Err(format!("resource `{name}` member `{key}` must be an `Fn`"));
+            };
+            if fnitems.len() != 3
+                || !matches!(arena.node(fnitems[0]), Node::Sym(s) if s == "fn-MACRO")
+            {
+                return Err(format!("resource `{name}` member `{key}` must be an `Fn`"));
+            }
+            let (params_id, body) = (fnitems[1], fnitems[2]);
+            match key.as_str() {
+                "New" => rf.ctor = Some((params_id, body)),
+                "Drop" => rf.drop_member = Some((params_id, body)),
+                other if is_static => rf.statics.push((other.to_string(), params_id, body)),
+                other => rf.methods.push((other.to_string(), params_id, body)),
+            }
+        }
+        out.push(rf);
+    }
+    Ok(out)
+}
 
 /// The five core functions implementing one `set` instantiation, by core
 /// function index, plus the resource-intrinsic import indices their bodies
@@ -7218,6 +7675,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         true_addr: 0,
         macro_expand_idx: None,
         functor_fns: HashMap::new(),
+        user_res: HashMap::new(),
         node_types: Default::default(),
         mem_tys: Vec::new(),
     };
@@ -10582,7 +11040,18 @@ fn synthesize_world_wit(
 ) -> Result<String, String> {
     let mut out = format!("package {};\n\n", info.package);
 
-    let ifaces = crate::wit::iface_order(&info.exports, !info.types.is_empty());
+    let mut ifaces = crate::wit::iface_order(&info.exports, !info.types.is_empty());
+    // A resource-only export (4.5) still needs its placement interface present.
+    // External-interface resource exports are defined by the dependency's WIT and
+    // never re-declared here, so only fold in *internal* placement interfaces.
+    for r in &info.resources {
+        if let Some(iface) = &r.iface
+            && !is_external_iface(iface)
+            && !ifaces.contains(iface)
+        {
+            ifaces.push(iface.clone());
+        }
+    }
 
     // Hoisted local types (4.7). An export that returns (or takes) a functor
     // handle makes its interface `use` the functor interface; when that
@@ -10694,6 +11163,16 @@ fn synthesize_world_wit(
         }
         for d in &api_decls {
             out.push_str(&format!("  {d}\n"));
+        }
+        // Exported user-declared resource blocks (4.5) land in their placement
+        // interface. External-iface resources are defined by the dependency WIT
+        // (filtered out above), so only internal placements reach here.
+        for r in info
+            .resources
+            .iter()
+            .filter(|r| r.iface.as_deref() == Some(iface.as_str()))
+        {
+            out.push_str(&r.to_wit());
         }
         for sig in &sigs {
             let mut line = sig.to_wit();
@@ -10916,6 +11395,7 @@ world app {
             true_addr: 0,
             macro_expand_idx: None,
             functor_fns: HashMap::new(),
+        user_res: HashMap::new(),
             node_types: Default::default(),
             mem_tys: Vec::new(),
         };

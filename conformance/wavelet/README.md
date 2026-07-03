@@ -32,10 +32,27 @@ transforms, and harness). The suite's WIT is vendored under
   of `runner.wlt` (f32, flags literals, the `none` side, char arithmetic —
   goal-5 representation gaps).
 
-- **`src/roundtrip.wlt` — the callee role. Does not build; kept as the
-  target.** Exporting into a foreign interface is all-or-nothing, and a few
-  of the world's types/functions are still not expressible in Wavelet source
-  (f32, flags literals, char arithmetic, resources). Goal 4 closed the rest
-  (variant/enum case construction, payload-less results, dep type aliases,
-  cross-package type references in signatures); the goal-5 tasks in the LoT
-  vault track the remainder; as they land, this file is the acceptance test.
+- **`src/roundtrip-resources.wlt` — the callee role for `resources`. Builds
+  and passes.** Exports the whole `counter` resource (4.5, `DefResource`) plus
+  the own/borrow free functions into `roundtrip:suite/resources`. Because
+  exporting the *full* `roundtrip` world is all-or-nothing and `values` still
+  has goal-5 gaps (f32, flags literals, char arithmetic), this file exports the
+  `resources` slice only; the harness composes a rust caller with it and
+  terminates the caller's `values` import with the exports-only stub:
+
+  ```console
+  ./test-resources-callee.sh          # rust-a and rust-b callers, both PASS
+  ```
+
+  The composition is `caller ∘ resources(wavelet) ∘ values(stub)`, driven by
+  `run-resources()`. Both rust-a and rust-b callers pass, so the counter is
+  decomposed and rebuilt correctly (not hard-coded).
+
+- **`src/roundtrip.wlt` — the full symmetric callee role. Does not build; kept
+  as the target.** Exporting the whole world at once is all-or-nothing, and a
+  few of `values`'s types are still not expressible in Wavelet source (f32,
+  flags literals, char arithmetic). Goal 4 closed the rest (variant/enum case
+  construction, payload-less results, dep type aliases, cross-package type
+  references in signatures) and 4.5 closed resources (now exercised by
+  `roundtrip-resources.wlt` above); the goal-5 tasks in the LoT vault track the
+  remainder; as they land, this file is the acceptance test.
