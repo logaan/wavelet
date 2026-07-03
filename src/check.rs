@@ -148,6 +148,14 @@ impl Type {
                     ("tuple", elems) => {
                         Type::Tuple(elems.iter().map(|&e| Type::from_form(arena, e)).collect())
                     }
+                    // `own(<resource>)` / `borrow(<resource>)` are the boundary
+                    // ownership spellings for a user-declared resource (4.5).
+                    // For inference both reduce to the underlying type — bare
+                    // `<resource>` already means `own` — so the checker sees the
+                    // resource type either way. The `borrow`-position restriction
+                    // and member discipline are enforced structurally by
+                    // `validate_defresources`, not here.
+                    ("own", [inner]) | ("borrow", [inner]) => Type::from_form(arena, *inner),
                     _ => Type::Unknown,
                 }
             }
@@ -695,6 +703,10 @@ impl<'a> Checker<'a> {
     /// Second pass: check every top-level form's body.
     fn check_roots(&self, roots: &[NodeId]) -> Result<(), String> {
         let arena = self.arena;
+        // DefResource member discipline and the borrow-position restriction are
+        // structural checks over the declarations, independent of expression
+        // typing (4.5).
+        validate_defresources(arena, roots)?;
         for &root in roots {
             if let Some((_name, expr)) = as_def(arena, root) {
                 // Check the bound expression. For an `Fn`, check its body with
@@ -941,6 +953,208 @@ fn as_deftype(arena: &Arena, id: NodeId) -> Option<(&str, TypeDef)> {
         _ => TypeDef::Alias(Type::from_form(arena, *decl)),
     };
     Some((name, def))
+}
+
+/// If `id` is `DefResource name { members }`, return the name and the member
+/// `(key, value)` pairs (4.5). The value of a `Static` member still carries its
+/// `Tup[static-MACRO, <fn>]` wrapper; use [`strip_static`] to peel it.
+fn as_defresource(arena: &Arena, id: NodeId) -> Option<(&str, &[(String, NodeId)])> {
+    let Node::Tup(items) = arena.node(id) else {
+        return None;
+    };
+    let [head, name_id, members] = items.as_slice() else {
+        return None;
+    };
+    let Node::Sym(h) = arena.node(*head) else {
+        return None;
+    };
+    if h != "defresource-MACRO" {
+        return None;
+    }
+    let Node::Sym(name) = arena.node(*name_id) else {
+        return None;
+    };
+    let Node::Rec(fields) = arena.node(*members) else {
+        return None;
+    };
+    Some((name, fields.as_slice()))
+}
+
+/// Peel a `Static` marker off a resource member value: `Tup[static-MACRO, <fn>]`
+/// becomes `(true, <fn>)`; anything else is `(false, value)` (4.5).
+fn strip_static(arena: &Arena, val: NodeId) -> (bool, NodeId) {
+    if let Node::Tup(items) = arena.node(val)
+        && items.len() == 2
+        && matches!(arena.node(items[0]), Node::Sym(s) if s == "static-MACRO")
+    {
+        return (true, items[1]);
+    }
+    (false, val)
+}
+
+/// The set of resource type names declared in a module (4.5).
+fn resource_names(arena: &Arena, roots: &[NodeId]) -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for &root in roots {
+        if let Some((name, _)) = as_defresource(arena, root) {
+            out.insert(name.to_string());
+        }
+    }
+    out
+}
+
+/// Whether a member's first parameter is `self: <rname>` (4.5, decision 2b): the
+/// field name must be `self` and its annotation must name the enclosing resource.
+fn first_param_is_self(params: &[(String, Type)], rname: &str) -> bool {
+    matches!(params.first(), Some((n, t)) if n == "self" && *t == Type::Named(rname.to_string()))
+}
+
+/// Whether a member declares a `self` first parameter at all (any annotation) —
+/// used to reject `self` on a `Static` member (4.5).
+fn declares_self(params: &[(String, Type)]) -> bool {
+    matches!(params.first(), Some((n, _)) if n == "self")
+}
+
+/// Validate every `DefResource` in the module (4.5): the `New`/`Drop`/`Static`
+/// marker discipline, the `self: <resource>` requirement on methods, and the
+/// `borrow`-position restriction on the file's exports and stored types.
+fn validate_defresources(arena: &Arena, roots: &[NodeId]) -> Result<(), String> {
+    let resources = resource_names(arena, roots);
+    for &root in roots {
+        if let Some((rname, members)) = as_defresource(arena, root) {
+            for (key, val) in members {
+                let (is_static, fn_id) = strip_static(arena, *val);
+                match key.as_str() {
+                    "New" => {
+                        if is_static {
+                            return Err(format!(
+                                "DefResource `{rname}`: the constructor `New` cannot be `Static`"
+                            ));
+                        }
+                        if fn_params(arena, fn_id).is_none() {
+                            return Err(format!(
+                                "DefResource `{rname}`: `New` must be an `Fn`"
+                            ));
+                        }
+                    }
+                    "Drop" => {
+                        if is_static {
+                            return Err(format!(
+                                "DefResource `{rname}`: the destructor `Drop` cannot be `Static`"
+                            ));
+                        }
+                        let params = fn_params(arena, fn_id).ok_or(format!(
+                            "DefResource `{rname}`: `Drop` must be an `Fn {{self: {rname}}}`"
+                        ))?;
+                        if !first_param_is_self(&params, rname) {
+                            return Err(format!(
+                                "DefResource `{rname}`: `Drop` must take `self: {rname}`                                  as its only parameter"
+                            ));
+                        }
+                    }
+                    other => {
+                        let params = fn_params(arena, fn_id).ok_or(format!(
+                            "DefResource `{rname}`: member `{other}` must be an `Fn`"
+                        ))?;
+                        if is_static {
+                            if declares_self(&params) {
+                                return Err(format!(
+                                    "DefResource `{rname}`: static member `{other}`                                      must not take `self`"
+                                ));
+                            }
+                        } else if !first_param_is_self(&params, rname) {
+                            return Err(format!(
+                                "DefResource `{rname}`: member `{other}` must take                                  `self: {rname}` as its first parameter or be marked `Static`"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        // A `borrow(<resource>)` is legal only in parameter position; it must not
+        // appear in a result or stored (DefType / value-def) type (4.5, WIT).
+        check_no_borrow_in_stored(arena, root, &resources)?;
+    }
+    Ok(())
+}
+
+/// Reject `borrow(<resource>)` in a result or stored type position (4.5): the
+/// result annotation of an `Export`, and the payload/field/alias types of a
+/// `DefType`. Parameter positions (`Fn`/`Export params:`) are left alone — that
+/// is where `borrow` is allowed.
+fn check_no_borrow_in_stored(
+    arena: &Arena,
+    root: NodeId,
+    resources: &std::collections::HashSet<String>,
+) -> Result<(), String> {
+    let Node::Tup(items) = arena.node(root) else {
+        return Ok(());
+    };
+    let Some(&head) = items.first() else {
+        return Ok(());
+    };
+    let Node::Sym(h) = arena.node(head) else {
+        return Ok(());
+    };
+    match h.as_str() {
+        "export-MACRO" => {
+            if let Some(&p) = items.get(1)
+                && let Node::Rec(fields) = arena.node(p)
+            {
+                for (k, v) in fields {
+                    if k == "result" && form_borrows_resource(arena, *v, resources) {
+                        return Err(
+                            "a `borrow(<resource>)` type cannot appear in result position                              (return `own` — the bare resource name — instead)"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
+        "deftype-MACRO" => {
+            if let Some(&decl) = items.get(2)
+                && form_borrows_resource(arena, decl, resources)
+            {
+                return Err(
+                    "a `borrow(<resource>)` type cannot be stored in a `DefType`                      (borrow is a parameter-only, boundary-only type)"
+                        .to_string(),
+                );
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Whether a type form contains a `borrow(<resource>)` application anywhere
+/// (4.5). Only a `borrow` whose argument names a known resource counts, so an
+/// unrelated user function literally named `borrow` in a value position is not
+/// mistaken for the type spelling.
+fn form_borrows_resource(
+    arena: &Arena,
+    id: NodeId,
+    resources: &std::collections::HashSet<String>,
+) -> bool {
+    match arena.node(id) {
+        Node::Tup(items) => {
+            if let [head, arg] = items.as_slice()
+                && matches!(arena.node(*head), Node::Sym(s) if s == "borrow")
+                && matches!(arena.node(*arg), Node::Sym(a) if resources.contains(a))
+            {
+                return true;
+            }
+            items
+                .iter()
+                .any(|&c| form_borrows_resource(arena, c, resources))
+        }
+        Node::Lst(items) => items
+            .iter()
+            .any(|&c| form_borrows_resource(arena, c, resources)),
+        Node::Rec(fields) => fields
+            .iter()
+            .any(|(_, v)| form_borrows_resource(arena, *v, resources)),
+        _ => false,
+    }
 }
 
 /// If `id` is `Fn {params} body`, return the parsed parameter list.
