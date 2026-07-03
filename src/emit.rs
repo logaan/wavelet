@@ -62,6 +62,7 @@ const TAG_VAR: i32 = 7; // case-name str box @4, payload box (0 if none) @8
 const TAG_TUP: i32 = 8; // n i32 @4, then element boxes @8+4i (list layout, distinct tag)
 const TAG_FLG: i32 = 9; // a flags *form* (Node::Flg): n i32 @4, name str boxes @8+4i
 const TAG_CHAR: i32 = 10; // a char value/form: i64 Unicode scalar @8 (TAG_INT layout)
+const TAG_CELL: i32 = 11; // a mutable cell: current value box @4 (identity = ptr)
 
 fn ma(offset: u64, align: u32) -> MemArg {
     MemArg {
@@ -5930,6 +5931,42 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(rp));
                 fx.op(I::I32Load(ma(12, 2)));
             }
+            "cell-new" => {
+                // A mutable cell holding one boxed value; its heap pointer is
+                // its identity (interp: `Value::Cell(Rc<RefCell<Value>>)`).
+                nargs(1)?;
+                let v = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(v));
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_CELL));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(p));
+            }
+            "cell-get" => {
+                // Current value box, at cell offset 4.
+                nargs(1)?;
+                self.expr(fx, items[0], false)?;
+                fx.op(I::I32Load(ma(4, 2)));
+            }
+            "cell-set" => {
+                // Overwrite the cell's value box; return unit (interp parity).
+                nargs(2)?;
+                let c = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(c));
+                fx.op(I::LocalGet(c));
+                self.expr(fx, items[1], false)?;
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::I32Const(self.unit_addr() as i32));
+            }
             "gensym" => {
                 nargs(0)?;
                 return self.gensym(fx);
@@ -5994,6 +6031,9 @@ const BUILTINS: &[&str] = &[
     "some",
     "ok",
     "err",
+    "cell-new",
+    "cell-get",
+    "cell-set",
     // compile-time form machinery (macro bodies)
     "form-kind",
     "rec-key",

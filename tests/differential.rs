@@ -80,7 +80,6 @@ const SKIP: &[(&str, &str)] = &[
     ("sf-unquote", TOSTR_TRAP),       // form result
     ("std-apply", BUILTIN),           // apply
     ("std-arith", BUILTIN),           // abs
-    ("std-cells", BUILTIN),           // cell-new
     ("std-char-conv", BUILTIN),       // to-u32
     ("std-constructors", TOSTR_TRAP), // list of variants
     ("std-conv", BUILTIN),            // to-u8
