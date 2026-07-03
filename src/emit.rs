@@ -1262,16 +1262,37 @@ fn dep_case(dep: &Dep, name: &str) -> Option<bool> {
 /// gradual def keeps the all-boxed signature unchanged.
 #[derive(Clone, Debug)]
 struct FnSig {
-    params: Vec<Option<Scalar>>,
-    result: Option<Scalar>,
+    params: Vec<Repr>,
+    result: Repr,
+}
+
+/// The representation of one value slot (a local, parameter, or result) in
+/// goal-5 typed code: a box pointer (the uniform fallback) or an unboxed
+/// scalar on the wasm stack (5.2). `Copy` on purpose — reprs are threaded
+/// through every expression context.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Repr {
+    Boxed,
+    Scalar(Scalar),
+}
+
+impl Repr {
+    /// Lift a checker-derived scalar kind (`None` = not a static scalar)
+    /// into a representation slot.
+    fn of_scalar(k: Option<Scalar>) -> Repr {
+        match k {
+            Some(k) => Repr::Scalar(k),
+            None => Repr::Boxed,
+        }
+    }
 }
 
 /// The core valtype of a representation slot.
-fn repr_vt(repr: Option<Scalar>) -> ValType {
+fn repr_vt(repr: Repr) -> ValType {
     match repr {
-        Some(Scalar::Int) | Some(Scalar::Char) => ValType::I64,
-        Some(Scalar::Float) => ValType::F64,
-        Some(Scalar::Bool) | None => ValType::I32,
+        Repr::Scalar(Scalar::Int) | Repr::Scalar(Scalar::Char) => ValType::I64,
+        Repr::Scalar(Scalar::Float) => ValType::F64,
+        Repr::Scalar(Scalar::Bool) | Repr::Boxed => ValType::I32,
     }
 }
 
@@ -1279,8 +1300,8 @@ impl FnSig {
     /// The all-boxed signature (every slot an i32 box pointer).
     fn boxed(n: usize) -> FnSig {
         FnSig {
-            params: vec![None; n],
-            result: None,
+            params: vec![Repr::Boxed; n],
+            result: Repr::Boxed,
         }
     }
 
@@ -1300,8 +1321,11 @@ fn def_sig(
 ) -> FnSig {
     let ptys = crate::check::parse_params(arena, params_id);
     FnSig {
-        params: ptys.iter().map(|(_, t)| Scalar::of(t)).collect(),
-        result: node_types.get(&body).and_then(Scalar::of),
+        params: ptys
+            .iter()
+            .map(|(_, t)| Repr::of_scalar(Scalar::of(t)))
+            .collect(),
+        result: Repr::of_scalar(node_types.get(&body).and_then(Scalar::of)),
     }
 }
 
@@ -1318,12 +1342,11 @@ fn wit_scalar(ty: &WitTy) -> Option<Scalar> {
 }
 
 /// One name in a function's lexical scope: which wasm local holds it and,
-/// under goal 5, whether that local is an UNBOXED scalar (`Some(kind)`) or a
-/// box pointer (`None`).
+/// under goal 5, which representation that local carries ([`Repr`]).
 #[derive(Clone, Copy)]
 struct Binding {
     local: u32,
-    scalar: Option<Scalar>,
+    repr: Repr,
 }
 
 impl Binding {
@@ -1331,7 +1354,7 @@ impl Binding {
     fn boxed(local: u32) -> Binding {
         Binding {
             local,
-            scalar: None,
+            repr: Repr::Boxed,
         }
     }
 }
@@ -1484,7 +1507,7 @@ impl<'a> Emitter<'a> {
                 Some(b) => {
                     fx.op(I::LocalGet(b.local));
                     // a goal-5 typed local boxes at the seam to boxed code
-                    if let Some(kind) = b.scalar {
+                    if let Repr::Scalar(kind) = b.repr {
                         self.box_scalar(fx, kind);
                     }
                 }
@@ -2125,7 +2148,7 @@ impl<'a> Emitter<'a> {
             1 => {
                 fx.op(I::LocalGet(1));
                 // a typed sole param unboxes at the wrapper seam
-                if let Some(k) = sig.params[0] {
+                if let Repr::Scalar(k) = sig.params[0] {
                     self.unbox_scalar(&mut fx, k);
                 }
             }
@@ -2150,14 +2173,14 @@ impl<'a> Emitter<'a> {
                 for i in 0..n {
                     fx.op(I::LocalGet(1));
                     fx.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
-                    if let Some(k) = sig.params[i] {
+                    if let Repr::Scalar(k) = sig.params[i] {
                         self.unbox_scalar(&mut fx, k);
                     }
                 }
             }
         }
         // the uniform wrapper returns a box: a typed result boxes at the seam
-        if let Some(k) = sig.result {
+        if let Repr::Scalar(k) = sig.result {
             fx.op(I::Call(fidx));
             self.box_scalar(&mut fx, k);
         } else {
@@ -2254,7 +2277,7 @@ impl<'a> Emitter<'a> {
             fx.op(I::LocalGet(cap.local));
             // a goal-5 typed local boxes at the capture seam (closure
             // capture slots hold box pointers)
-            if let Some(kind) = cap.scalar {
+            if let Repr::Scalar(kind) = cap.repr {
                 self.box_scalar(fx, kind);
             }
             fx.op(I::I32Store(ma(12 + 4 * j as u64, 2)));
@@ -2323,9 +2346,9 @@ impl<'a> Emitter<'a> {
                 self.dep_call(fx, &alias, &fname, args)
             }
             Node::Sym(name) => match name.as_str() {
-                "if-MACRO" => self.if_form(fx, args, None, tail),
-                "do-MACRO" => self.do_form(fx, args, None, tail),
-                "let-MACRO" => self.let_form(fx, args, None, tail),
+                "if-MACRO" => self.if_form(fx, args, Repr::Boxed, tail),
+                "do-MACRO" => self.do_form(fx, args, Repr::Boxed, tail),
+                "let-MACRO" => self.let_form(fx, args, Repr::Boxed, tail),
                 "the-MACRO" => {
                     // args = [ty, expr]
                     let [_ty, expr] = *args else {
@@ -2333,7 +2356,7 @@ impl<'a> Emitter<'a> {
                     };
                     self.expr(fx, expr, tail)
                 }
-                "match-MACRO" => self.match_form(fx, args, None, tail),
+                "match-MACRO" => self.match_form(fx, args, Repr::Boxed, tail),
                 "fn-MACRO" => self.fn_form(fx, args),
                 "quote-MACRO" => {
                     let [form] = args else {
@@ -2354,7 +2377,7 @@ impl<'a> Emitter<'a> {
                 _ if BUILTINS.contains(&name.as_str()) => self.builtin(fx, &name, args),
                 _ => {
                     if self.funcs.contains_key(&name) {
-                        self.internal_call(fx, &name, args, None, tail)
+                        self.internal_call(fx, &name, args, Repr::Boxed, tail)
                     } else if self.value_globals.contains_key(&name) {
                         self.closure_call(fx, head, args, tail)
                     } else if let Some(&has_payload) = self.local_cases.get(name.as_str()) {
@@ -2386,7 +2409,7 @@ impl<'a> Emitter<'a> {
         &mut self,
         fx: &mut FnCtx,
         args: &[NodeId],
-        want: Option<Scalar>,
+        want: Repr,
         tail: bool,
     ) -> Result<(), String> {
         let [c, t, e] = *args else {
@@ -2412,7 +2435,7 @@ impl<'a> Emitter<'a> {
         &mut self,
         fx: &mut FnCtx,
         args: &[NodeId],
-        want: Option<Scalar>,
+        want: Repr,
         tail: bool,
     ) -> Result<(), String> {
         let [list] = *args else {
@@ -2425,7 +2448,7 @@ impl<'a> Emitter<'a> {
             // the unit value; a scalar `want` unboxes it and traps, exactly
             // like the interpreter erroring on a unit in a numeric context
             fx.op(I::I32Const(self.unit_addr() as i32));
-            if let Some(k) = want {
+            if let Repr::Scalar(k) = want {
                 self.unbox_scalar(fx, k);
             }
             return Ok(());
@@ -2441,7 +2464,7 @@ impl<'a> Emitter<'a> {
         &mut self,
         fx: &mut FnCtx,
         args: &[NodeId],
-        want: Option<Scalar>,
+        want: Repr,
         tail: bool,
     ) -> Result<(), String> {
         let [bindings, body] = *args else {
@@ -2464,7 +2487,7 @@ impl<'a> Emitter<'a> {
                 });
                 Binding {
                     local: l,
-                    scalar: Some(kind),
+                    repr: Repr::Scalar(kind),
                 }
             } else {
                 self.expr(fx, *v, false)?;
@@ -2485,7 +2508,7 @@ impl<'a> Emitter<'a> {
         &mut self,
         fx: &mut FnCtx,
         args: &[NodeId],
-        want: Option<Scalar>,
+        want: Repr,
         tail: bool,
     ) -> Result<(), String> {
         let [scrut_form, clauses_form] = *args else {
@@ -2537,7 +2560,7 @@ impl<'a> Emitter<'a> {
             && self.local_cases.get(&name) != Some(&false)
             && let Some(kind) = scrut_kind
         {
-            let l = fx.local(repr_vt(Some(kind)));
+            let l = fx.local(repr_vt(Repr::Scalar(kind)));
             fx.op(I::LocalGet(v));
             self.unbox_scalar(fx, kind);
             fx.op(I::LocalSet(l));
@@ -2545,7 +2568,7 @@ impl<'a> Emitter<'a> {
                 name,
                 Binding {
                     local: l,
-                    scalar: Some(kind),
+                    repr: Repr::Scalar(kind),
                 },
             );
             return Ok(());
@@ -2758,7 +2781,7 @@ impl<'a> Emitter<'a> {
         fx: &mut FnCtx,
         name: &str,
         args: &[NodeId],
-        want: Option<Scalar>,
+        want: Repr,
         tail: bool,
     ) -> Result<(), String> {
         let (idx, params, sig) = self.funcs[name].clone();
@@ -2772,7 +2795,7 @@ impl<'a> Emitter<'a> {
                 self.seq_box(fx, args, TAG_TUP)?;
                 // sole parameter; a typed slot unboxes the bundle — trapping,
                 // as the interpreter's use of a mis-bound bundle would error
-                if let [Some(k)] = sig.params[..] {
+                if let [Repr::Scalar(k)] = sig.params[..] {
                     self.unbox_scalar(fx, k);
                 }
             }
@@ -2785,11 +2808,12 @@ impl<'a> Emitter<'a> {
         // representation seam on the result
         match (sig.result, want) {
             (a, b) if a == b => {}
-            (None, None) => {}
-            (Some(Scalar::Int), Some(Scalar::Float)) => fx.op(I::F64ConvertI64S),
-            (Some(k), None) => self.box_scalar(fx, k),
-            (None, Some(k)) => self.unbox_scalar(fx, k),
-            (Some(a), Some(b)) => {
+            (Repr::Scalar(Scalar::Int), Repr::Scalar(Scalar::Float)) => {
+                fx.op(I::F64ConvertI64S);
+            }
+            (Repr::Scalar(k), Repr::Boxed) => self.box_scalar(fx, k),
+            (Repr::Boxed, Repr::Scalar(k)) => self.unbox_scalar(fx, k),
+            (a, b) => {
                 return Err(format!(
                     "internal: `{name}` returns {a:?} where {b:?} is expected"
                 ));
@@ -4216,12 +4240,12 @@ impl<'a> Emitter<'a> {
         &mut self,
         fx: &mut FnCtx,
         id: NodeId,
-        want: Option<Scalar>,
+        want: Repr,
         tail: bool,
     ) -> Result<(), String> {
         match want {
-            None => self.expr(fx, id, tail),
-            Some(k) => self.expr_scalar_t(fx, id, k, tail),
+            Repr::Boxed => self.expr(fx, id, tail),
+            Repr::Scalar(k) => self.expr_scalar_t(fx, id, k, tail),
         }
     }
 
@@ -4261,7 +4285,7 @@ impl<'a> Emitter<'a> {
             Node::Sym(name) => {
                 // a goal-5 typed local reads directly — no box round-trip
                 if let Some(b) = fx.lookup(&name)
-                    && let Some(kind) = b.scalar
+                    && let Repr::Scalar(kind) = b.repr
                 {
                     fx.op(I::LocalGet(b.local));
                     if kind == Scalar::Int && want == Scalar::Float {
@@ -4278,10 +4302,12 @@ impl<'a> Emitter<'a> {
                     // `call`: special forms, then locals, then builtins,
                     // then internal defs.
                     match name.as_str() {
-                        "if-MACRO" => return self.if_form(fx, args, Some(want), tail),
-                        "do-MACRO" => return self.do_form(fx, args, Some(want), tail),
-                        "let-MACRO" => return self.let_form(fx, args, Some(want), tail),
-                        "match-MACRO" => return self.match_form(fx, args, Some(want), tail),
+                        "if-MACRO" => return self.if_form(fx, args, Repr::Scalar(want), tail),
+                        "do-MACRO" => return self.do_form(fx, args, Repr::Scalar(want), tail),
+                        "let-MACRO" => return self.let_form(fx, args, Repr::Scalar(want), tail),
+                        "match-MACRO" => {
+                            return self.match_form(fx, args, Repr::Scalar(want), tail);
+                        }
                         "the-MACRO" => {
                             if let [_ty, expr] = *args {
                                 return self.expr_scalar_t(fx, expr, want, tail);
@@ -4298,7 +4324,7 @@ impl<'a> Emitter<'a> {
                                 return Ok(());
                             }
                         } else if self.funcs.contains_key(name.as_str()) {
-                            return self.internal_call(fx, &name, args, Some(want), tail);
+                            return self.internal_call(fx, &name, args, Repr::Scalar(want), tail);
                         }
                     }
                 }
@@ -5249,7 +5275,7 @@ fn emit_core_module(
                 p.clone(),
                 Binding {
                     local: i as u32,
-                    scalar: sig.params[i],
+                    repr: sig.params[i],
                 },
             );
         }
@@ -5271,7 +5297,7 @@ fn emit_core_module(
                 p.clone(),
                 Binding {
                     local: i as u32,
-                    scalar: sig.params[i],
+                    repr: sig.params[i],
                 },
             );
         }
@@ -5315,9 +5341,13 @@ fn emit_core_module(
         // before (plus one unbox if the def param is typed anyway).
         let typed_ok = fsig.params.len() == lifted.len();
         for (i, (ty, base)) in lifted.iter().enumerate() {
-            let slot = if typed_ok { fsig.params[i] } else { None };
+            let slot = if typed_ok {
+                fsig.params[i]
+            } else {
+                Repr::Boxed
+            };
             match (slot, wit_scalar(ty)) {
-                (Some(k), Some(wk)) if k == wk => {
+                (Repr::Scalar(k), Some(wk)) if k == wk => {
                     fx.op(I::LocalGet(*base));
                     match ty {
                         WitTy::Bool => {
@@ -5332,17 +5362,17 @@ fn emit_core_module(
                         _ => unreachable!("wit_scalar admitted a non-scalar"),
                     }
                 }
-                (Some(k), _) => {
+                (Repr::Scalar(k), _) => {
                     em.lift_flat(&mut fx, ty, *base)?;
                     em.unbox_scalar(&mut fx, k);
                 }
-                (None, _) => em.lift_flat(&mut fx, ty, *base)?,
+                (Repr::Boxed, _) => em.lift_flat(&mut fx, ty, *base)?,
             }
         }
         fx.op(I::Call(fidx));
         // the call produced the def's result repr; the paths below expect
         // the value they were written for (flat scalar or box)
-        let res_kind = if typed_ok { fsig.result } else { None };
+        let res_kind = if typed_ok { fsig.result } else { Repr::Boxed };
         let fresults = match flat_result(sig, &em.type_env)? {
             FlatRes::None => {
                 fx.op(I::Drop);
@@ -5352,7 +5382,7 @@ fn emit_core_module(
                 match res_kind {
                     // typed result, same scalar kind as the WIT type: convert
                     // directly to the flat form — no box was ever built
-                    Some(k) if wit_scalar(&t) == Some(k) => match t {
+                    Repr::Scalar(k) if wit_scalar(&t) == Some(k) => match t {
                         WitTy::Bool | WitTy::S64 | WitTy::F64 => {}
                         WitTy::IntS(_) | WitTy::IntU(_) | WitTy::Char => fx.op(I::I32WrapI64),
                         WitTy::F32 => fx.op(I::F32DemoteF64),
@@ -5360,18 +5390,18 @@ fn emit_core_module(
                     },
                     // typed result but a non-scalar/mismatched WIT type:
                     // box at the seam and lower as before
-                    Some(k) => {
+                    Repr::Scalar(k) => {
                         em.box_scalar(&mut fx, k);
                         em.lower(&mut fx, &t)?;
                     }
-                    None => em.lower(&mut fx, &t)?,
+                    Repr::Boxed => em.lower(&mut fx, &t)?,
                 }
                 flat(&t)
             }
             FlatRes::Retptr => {
                 // compound results are boxed; a (mismatched) typed scalar
                 // result boxes at the seam first
-                if let Some(k) = res_kind {
+                if let Repr::Scalar(k) = res_kind {
                     em.box_scalar(&mut fx, k);
                 }
                 let ty = wit_ty(sig.result.as_deref().unwrap(), &em.type_env)?;
