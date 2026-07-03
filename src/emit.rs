@@ -4701,6 +4701,85 @@ impl<'a> Emitter<'a> {
         })
     }
 
+    /// When `id` is a variant-case constructor call/reference for the
+    /// variant-shaped layout `ty` — one the current name resolution actually
+    /// routes to a constructor — its case index, payload type, and argument
+    /// forms. Mirrors `expr`'s routing exactly: a local binding shadows
+    /// everything; `some`/`ok`/`err` are builtins (which outrank defs);
+    /// any other head must resolve through `local_cases` (module defs and
+    /// value globals shadow those); a bare Sym is a constructor only for
+    /// `none` and nullary local cases (`value_def_ref`'s rule). `fx` is
+    /// `None` in a prediction walk, where local shadowing is unknowable —
+    /// the emission side falls back to the boxed store when resolution
+    /// turns out different, so an optimistic answer here stays sound.
+    fn ctor_parts(
+        &self,
+        fx: Option<&FnCtx>,
+        id: NodeId,
+        ty: &WitTy,
+    ) -> Option<(usize, Option<WitTy>, Vec<NodeId>)> {
+        let cases = ty.variant_cases()?;
+        let (head, args, bare): (String, Vec<NodeId>, bool) = match self.arena.node(id).clone() {
+            Node::Sym(n) => (n, vec![], true),
+            Node::Tup(items) if !items.is_empty() => match self.arena.node(items[0]).clone() {
+                Node::Sym(n) => (n, items[1..].to_vec(), false),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if let Some(fx) = fx
+            && fx.lookup(&head).is_some()
+        {
+            return None;
+        }
+        if bare {
+            if head != "none" && self.local_cases.get(&head) != Some(&false) {
+                return None;
+            }
+        } else if !matches!(head.as_str(), "some" | "ok" | "err") {
+            if self.funcs.contains_key(&head) || self.value_globals.contains_key(&head) {
+                return None;
+            }
+            // a payload-less local case is not callable (nor is any other name)
+            if self.local_cases.get(&head) != Some(&true) {
+                return None;
+            }
+        }
+        let i = cases.iter().position(|(n, _)| *n == head)?;
+        let payload = cases[i].1.cloned();
+        Some((i, payload, args))
+    }
+
+    /// 5.4 construction gating: is `id` a case-constructor form whose value
+    /// can be BUILT natively in the canonical layout of `ty` — the numeric
+    /// discriminant plus a losslessly-stored payload? A case's value is its
+    /// name plus payload (no field-order hazard), so the gate is just the
+    /// constructor resolution plus per-payload lossless storability, with
+    /// the interpreter's bundling rule: one argument is the payload, two or
+    /// more bundle into a tuple payload.
+    fn ctor_admissible(&self, look: &MemLookup, id: NodeId, ty: &WitTy) -> bool {
+        let fx = match look {
+            MemLookup::Fx(fx) => Some(*fx),
+            MemLookup::Sim(_) => None,
+        };
+        let Some((_, payload, args)) = self.ctor_parts(fx, id, ty) else {
+            return false;
+        };
+        // 1-byte discriminants only (the large-types child rides 5.4)
+        if ty.variant_cases().is_some_and(|c| c.len() > 0x100) {
+            return false;
+        }
+        match (args.len(), payload) {
+            (0, None) => true,
+            (1, Some(pt)) => self.mem_field_ok(look, args[0], &pt),
+            (n, Some(WitTy::Tuple(es))) if n >= 2 && es.len() == n => args
+                .iter()
+                .zip(&es)
+                .all(|(&a, et)| self.mem_field_ok(look, a, et)),
+            _ => false,
+        }
+    }
+
     /// 5.3 gating: may expression `id` be emitted NATIVELY in the canonical
     /// layout of `ty`, yielding exactly the value the interpreter would
     /// build? Field order is observable (`eq`/`to-string` compare records
@@ -4719,7 +4798,12 @@ impl<'a> Emitter<'a> {
             (Node::Lst(items), WitTy::List(elem)) => items
                 .iter()
                 .all(|&v| self.mem_field_ok(look, v, elem)),
-            (Node::Sym(name), _) => self.lookup_mem(look, name).is_some_and(|t| t == *ty),
+            (Node::Sym(name), _) => {
+                self.lookup_mem(look, name).is_some_and(|t| t == *ty)
+                    // `none` / a nullary local case as a value (5.4)
+                    || (self.lookup_mem(look, name).is_none()
+                        && self.ctor_admissible(look, id, ty))
+            }
             // A dep call whose declared result IS this layout: the retptr
             // area arrives in canonical form, in declared field order —
             // exactly the order the interpreter's boundary lift produces.
@@ -4737,6 +4821,8 @@ impl<'a> Emitter<'a> {
                     Node::Qsym(alias, fname) => self
                         .dep_result_mem_ty(alias, fname)
                         .is_some_and(|t| t == *ty),
+                    // a variant-case constructor call builds in place (5.4)
+                    Node::Sym(_) => self.ctor_admissible(look, id, ty),
                     _ => false,
                 }
             }
@@ -4807,9 +4893,11 @@ impl<'a> Emitter<'a> {
             WitTy::List(_) => {
                 matches!(self.arena.node(v), Node::Lst(_)) && self.can_mem_as(look, v, tf)
             }
-            // f32 (demoting would lose the f64 the oracle keeps),
-            // options/results/variants, flags, handles: not yet — those
-            // representations ride 5.4
+            WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
+                self.can_mem_as(look, v, tf)
+            }
+            // f32 (demoting would lose the f64 the oracle keeps), flags
+            // (order-observable Value::Flg), handles: not yet
             _ => false,
         }
     }
@@ -4871,7 +4959,13 @@ impl<'a> Emitter<'a> {
     fn predict_body_mem(&self, id: NodeId, env: &mut Vec<HashMap<String, WitTy>>) -> Option<WitTy> {
         match self.arena.node(id).clone() {
             Node::Rec(_) | Node::Lst(_) => self.node_mem_ty(&MemLookup::Sim(env), id),
-            Node::Sym(name) => env.iter().rev().find_map(|s| s.get(&name)).cloned(),
+            Node::Sym(name) => env
+                .iter()
+                .rev()
+                .find_map(|s| s.get(&name))
+                .cloned()
+                // `none` / a nullary case as the whole body (5.4)
+                .or_else(|| self.node_mem_ty(&MemLookup::Sim(env), id)),
             Node::Tup(items) if !items.is_empty() => {
                 if matches!(self.arena.node(items[0]), Node::Qsym(..)) {
                     return self.node_mem_ty(&MemLookup::Sim(env), id);
@@ -4910,7 +5004,9 @@ impl<'a> Emitter<'a> {
                         r
                     }
                     ("the-MACRO", [_ty, expr]) => self.predict_body_mem(*expr, env),
-                    _ => None,
+                    // a case-constructor call (5.4); non-constructors gate
+                    // to None inside can_mem_as
+                    _ => self.node_mem_ty(&MemLookup::Sim(env), id),
                 }
             }
             _ => None,
@@ -4928,15 +5024,41 @@ impl<'a> Emitter<'a> {
             // a binding already in this layout: alias it (values are
             // immutable, so sharing the memory is unobservable)
             Node::Sym(name) => {
-                let b = fx
-                    .lookup(&name)
-                    .ok_or("internal: Mem repr requested for an unbound name")?;
-                match b.repr {
-                    Repr::Mem(bt) if bt == t => {
-                        fx.op(I::LocalGet(b.local));
+                match fx.lookup(&name) {
+                    Some(b) => match b.repr {
+                        Repr::Mem(bt) if bt == t => {
+                            fx.op(I::LocalGet(b.local));
+                            Ok(())
+                        }
+                        // a boxed binding of a variant-shaped type stores
+                        // canonically (name+payload — no order hazard)
+                        Repr::Boxed if ty.variant_cases().is_some() => {
+                            let l = fx.local(ValType::I32);
+                            fx.op(I::LocalGet(b.local));
+                            fx.op(I::LocalSet(l));
+                            let a = fx.local(ValType::I32);
+                            fx.op(I::I32Const(size_of(&ty) as i32));
+                            fx.op(I::Call(self.h.alloc));
+                            fx.op(I::LocalSet(a));
+                            self.store_to_mem(fx, &ty, l, a, 0)?;
+                            fx.op(I::LocalGet(a));
+                            Ok(())
+                        }
+                        _ => Err("internal: Mem repr requested for a non-Mem binding".into()),
+                    },
+                    // `none` / a nullary local case as a value (5.4), or —
+                    // if resolution differs from the prediction — the boxed
+                    // fallback inside mem_var_into
+                    None if ty.variant_cases().is_some() => {
+                        let a = fx.local(ValType::I32);
+                        fx.op(I::I32Const(size_of(&ty) as i32));
+                        fx.op(I::Call(self.h.alloc));
+                        fx.op(I::LocalSet(a));
+                        self.mem_var_into(fx, id, &ty, a, 0)?;
+                        fx.op(I::LocalGet(a));
                         Ok(())
                     }
-                    _ => Err("internal: Mem repr requested for a non-Mem binding".into()),
+                    None => Err("internal: Mem repr requested for an unbound name".into()),
                 }
             }
             Node::Rec(_) => {
@@ -4976,6 +5098,19 @@ impl<'a> Emitter<'a> {
                                 return self.expr_mem(fx, expr, t, tail);
                             }
                         }
+                        _ if ty.variant_cases().is_some() => {
+                            // a case-constructor call builds disc+payload in
+                            // place (5.4); mem_var_into falls back to the
+                            // boxed store when resolution differs from the
+                            // gate's view
+                            let a = fx.local(ValType::I32);
+                            fx.op(I::I32Const(size_of(&ty) as i32));
+                            fx.op(I::Call(self.h.alloc));
+                            fx.op(I::LocalSet(a));
+                            self.mem_var_into(fx, id, &ty, a, 0)?;
+                            fx.op(I::LocalGet(a));
+                            return Ok(());
+                        }
                         _ => {}
                     }
                 }
@@ -5001,6 +5136,50 @@ impl<'a> Emitter<'a> {
         };
         for ((o, tf), (_, v)) in record_field_offsets(ty).into_iter().zip(&fields) {
             self.mem_field_into(fx, *v, &tf, dst, off + o)?;
+        }
+        Ok(())
+    }
+
+    /// Store a variant-shaped value at `dst + off` (5.4): a case-constructor
+    /// form stores its numeric discriminant and constructs the payload in
+    /// place at the canonical payload offset (bundling several arguments as
+    /// a tuple payload, the interpreter's rule). Anything else — a bound
+    /// name, a call, a resolution the prediction walk could not see —
+    /// evaluates boxed and stores through the canonical seam: a variant's
+    /// value is its case name plus payload, so unlike records there is no
+    /// field-order hazard in the box-to-mem direction.
+    fn mem_var_into(
+        &mut self,
+        fx: &mut FnCtx,
+        id: NodeId,
+        ty: &WitTy,
+        dst: u32,
+        off: u64,
+    ) -> Result<(), String> {
+        let parts = self.ctor_parts(Some(fx), id, ty).filter(|_| {
+            let look = MemLookup::Fx(fx);
+            self.ctor_admissible(&look, id, ty)
+        });
+        let Some((i, payload, args)) = parts else {
+            let l = fx.local(ValType::I32);
+            self.expr(fx, id, false)?;
+            fx.op(I::LocalSet(l));
+            return self.store_to_mem(fx, ty, l, dst, off);
+        };
+        fx.op(I::LocalGet(dst));
+        fx.op(I::I32Const(i as i32));
+        fx.op(I::I32Store8(ma(off, 0)));
+        let poff = variant_payload_offset(ty);
+        match (args.len(), payload) {
+            (0, None) => {}
+            (1, Some(pt)) => self.mem_field_into(fx, args[0], &pt, dst, off + poff)?,
+            (_, Some(WitTy::Tuple(es))) => {
+                let t = WitTy::Tuple(es);
+                for ((o, et), &a) in record_field_offsets(&t).into_iter().zip(&args) {
+                    self.mem_field_into(fx, a, &et, dst, off + poff + o)?;
+                }
+            }
+            _ => return Err("internal: ctor_admissible admitted a payload/arity mismatch".into()),
         }
         Ok(())
     }
@@ -5056,6 +5235,9 @@ impl<'a> Emitter<'a> {
                 self.store_to_mem(fx, tf, l, dst, off)?;
             }
             WitTy::Record(_) => self.expr_mem_into(fx, v, tf, dst, off)?,
+            WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
+                self.mem_var_into(fx, v, tf, dst, off)?;
+            }
             WitTy::List(elem) => {
                 // a list literal packs its elements at their canonical
                 // stride into a fresh buffer; the field itself is the

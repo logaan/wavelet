@@ -182,3 +182,127 @@ fn option_export_takes_the_retptr_fast_path() {
     assert_eq!(ok(&mut c, "fwd", &[Val::Bool(true)]), Val::Option(Some(Box::new(Val::S32(7)))));
     assert_eq!(ok(&mut c, "fwd", &[Val::Bool(false)]), Val::Option(None));
 }
+
+// ---- construction slice: canonical case constructors (5.4, no dep) ----
+
+fn constructed() -> HostComponent {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("wavelet-memvarc-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+
+    let app = r#"Package "demo:app@0.1.0"
+
+DefType shape [circle(f64) square(f64) empty]
+
+Export {name: c-var params: {r: f64} result: f64}
+Def c-var Fn {r: f64}
+  Let {s: circle(r)}
+    Match s [((circle x) x) ((empty) 0.0) (other -1.0)]
+
+Export {name: c-some params: {v: s32} result: option(s32)}
+Def c-some Fn {v: s32} some(v)
+
+Export {name: c-okpair params: {a: s32 b: s32} result: result(tuple(s32 s32) string)}
+Def c-okpair Fn {a: s32 b: s32} ok(a b)
+
+Export {name: c-err params: {m: string} result: result(s32 string)}
+Def c-err Fn {m: string} err(m)
+
+Export {name: c-eq params: {} result: bool}
+Def c-eq Fn {} Let {v: some(7)} eq(v some(7))
+
+Export {name: c-field params: {} result: bool}
+Def c-field Fn {}
+  Let {r: {s: some(3) t: "x"}}
+    eq(r {s: some(3) t: "x"})
+
+Export {name: c-shadow params: {} result: s64}
+Def c-shadow Fn {}
+  Let {ok: Fn {x: s64} some(x)}
+    Match ok(5) [((some x) x) (other -1)]
+"#;
+    let app_path = src.join("app.wlt");
+    std::fs::write(&app_path, app).unwrap();
+    let out = dir.join("out");
+    let outputs = wavelet::build::build_files(
+        &[app_path.to_str().unwrap().to_string()],
+        out.to_str().unwrap(),
+    )
+    .expect("build the canonical-variants app");
+    let bytes = std::fs::read(&outputs[0]).expect("read built component");
+    let _ = std::fs::remove_dir_all(&dir);
+    HostComponent::from_bytes(&bytes).expect("instantiate")
+}
+
+const APP_IFACE: &str = "demo:app/api@0.1.0";
+
+fn okc(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
+    c.call_instance(APP_IFACE, f, args)
+        .unwrap_or_else(|e| panic!("`{f}` should succeed: {e}"))[0]
+        .clone()
+}
+
+#[test]
+// A Let-bound local case-constructor call builds disc+payload in place
+// and Match selects it by discriminant — construction to consumption with
+// no case-name strings and no boxes.
+fn local_case_constructor_builds_canonically() {
+    let mut c = constructed();
+    assert_eq!(okc(&mut c, "c-var", &[Val::Float64(2.5)]), Val::Float64(2.5));
+}
+
+#[test]
+// A def whose body is a some() call carries a Mem result signature and
+// exports through the retptr fast path.
+fn some_constructor_exports_through_the_fast_path() {
+    let mut c = constructed();
+    assert_eq!(
+        okc(&mut c, "c-some", &[Val::S32(3)]),
+        Val::Option(Some(Box::new(Val::S32(3))))
+    );
+}
+
+#[test]
+// ok(a b) bundles two arguments into a tuple payload in place — the
+// interpreter's bundling rule, canonical from birth.
+fn ok_bundles_arguments_into_a_tuple_payload() {
+    let mut c = constructed();
+    let got = okc(&mut c, "c-okpair", &[Val::S32(4), Val::S32(9)]);
+    let Val::Result(Ok(Some(inner))) = got else {
+        panic!("c-okpair should return ok(tuple), got {got:?}");
+    };
+    assert_eq!(*inner, Val::Tuple(vec![Val::S32(4), Val::S32(9)]));
+}
+
+#[test]
+// err(m) stores its string payload through the canonical (ptr, len) seam.
+fn err_string_payload_stores_canonically() {
+    let mut c = constructed();
+    let got = okc(&mut c, "c-err", &[Val::String("bad".into())]);
+    let Val::Result(Err(Some(inner))) = got else {
+        panic!("c-err should return err(string), got {got:?}");
+    };
+    assert_eq!(*inner, Val::String("bad".into()));
+}
+
+#[test]
+// A canonically-built variant reboxes faithfully at the eq seam, both as
+// a Let binding and as a record field.
+fn constructed_variant_rebuild_is_faithful() {
+    let mut c = constructed();
+    assert_eq!(okc(&mut c, "c-eq", &[]), Val::Bool(true));
+    assert_eq!(okc(&mut c, "c-field", &[]), Val::Bool(true));
+}
+
+#[test]
+// A local binding SHADOWS a constructor name (the interpreter's scoping):
+// `ok` bound to a closure routes to the closure call, not the case
+// constructor — the gate refuses and the boxed path answers.
+fn local_binding_shadows_constructor_names() {
+    let mut c = constructed();
+    assert_eq!(okc(&mut c, "c-shadow", &[]), Val::S64(5));
+}
