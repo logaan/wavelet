@@ -778,3 +778,59 @@ fn defmacro_params_are_trees_in_the_body() {
     let r = run("DefMacro bad {x} add(x 1)");
     assert!(!r.ok, "tree-typed macro parameter used as a number must be rejected");
 }
+
+// --- 3.8: richer inference for lists, options, and results --------------------
+
+#[test]
+fn synthesis_infers_option_result_type() {
+    let wit = synth(
+        r#"Package "demo:opt@0.1.0"
+Export lookup
+Def lookup Fn {k: s64} If gt(k 0) some(mul(k 10)) none"#,
+    )
+    .expect("option result should now be inferable");
+    assert!(
+        wit.contains("-> option<s64>"),
+        "option result not inferred:\n{wit}"
+    );
+}
+
+#[test]
+fn synthesis_infers_result_type_from_both_arms() {
+    let wit = synth(
+        r#"Package "demo:res@0.1.0"
+Export checked
+Def checked Fn {k: s64} If gt(k 0) ok(k) err("nonpositive")"#,
+    )
+    .expect("result<s64, string> should now be inferable");
+    assert!(
+        wit.contains("-> result<s64, string>"),
+        "result type not inferred:\n{wit}"
+    );
+}
+
+#[test]
+fn synthesis_infers_list_literal_result() {
+    let wit = synth(
+        r#"Package "demo:lst@0.1.0"
+Export pair
+Def pair Fn {n: s64} [n mul(n 2)]"#,
+    )
+    .expect("list<s64> literal result should be inferable");
+    assert!(
+        wit.contains("-> list<s64>"),
+        "list literal result not inferred:\n{wit}"
+    );
+}
+
+#[test]
+fn synthesis_infers_nominal_variant_result() {
+    let wit = synth(
+        r#"Package "demo:var@0.1.0"
+DefType ttl [days(u32) forever]
+Export pick
+Def pick Fn {b: bool} If b days(30) forever"#,
+    )
+    .expect("nominal variant result should be inferable");
+    assert!(wit.contains("-> ttl"), "variant result not inferred:\n{wit}");
+}

@@ -352,6 +352,135 @@ pub fn check_program(arena: &Arena, roots: &[NodeId]) -> Result<(), String> {
     checker.check_roots(roots)
 }
 
+/// A WIT-rendered inference outcome, for [`infer_wit_result`]. Mirrors the
+/// shape `wit::infer` reports: a concrete WIT type text, unit, or unknown.
+pub enum InferredWit {
+    Known(String),
+    Unit,
+    Unknown,
+}
+
+/// Phase B bridge (3.8): infer a def's *result* WIT type using the full Phase
+/// A/C checker (which models lists, options, results, tuples, records, and
+/// nominal `DefType`s), rendering the inferred [`Type`] as WIT text.
+/// `params` are the def's parameters as `(name, wit-type-text)` pairs.
+pub fn infer_wit_result(
+    arena: &Arena,
+    roots: &[NodeId],
+    params: &[(String, String)],
+    body: NodeId,
+) -> InferredWit {
+    let checker = Checker::collect(arena, roots);
+    let mut scope: Scope = params
+        .iter()
+        .map(|(n, t)| (n.clone(), type_from_wit_text(t)))
+        .collect();
+    let Ok(ty) = checker.infer(body, None, &mut scope) else {
+        return InferredWit::Unknown;
+    };
+    match ty {
+        Type::Unit => InferredWit::Unit,
+        other => match type_to_wit(&other) {
+            Some(text) => InferredWit::Known(text),
+            None => InferredWit::Unknown,
+        },
+    }
+}
+
+/// Parse WIT type *text* (`list<s32>`, `option<string>`, `result<a, b>`,
+/// `tuple<a, b>`, or a bare name) into a checker [`Type`]. Anything
+/// unrecognized is gradual `Unknown`-free `Named`, exactly like
+/// [`Type::from_name`].
+fn type_from_wit_text(text: &str) -> Type {
+    let text = text.trim();
+    if let Some(inner) = text.strip_prefix("list<").and_then(|t| t.strip_suffix('>')) {
+        return Type::List(Box::new(type_from_wit_text(inner)));
+    }
+    if let Some(inner) = text.strip_prefix("option<").and_then(|t| t.strip_suffix('>')) {
+        return Type::Option(Box::new(type_from_wit_text(inner)));
+    }
+    if let Some(inner) = text.strip_prefix("result<").and_then(|t| t.strip_suffix('>')) {
+        let parts = split_wit_args(inner);
+        return match parts.as_slice() {
+            [ok] => Type::Result(Box::new(type_from_wit_text(ok)), Box::new(Type::Unknown)),
+            [ok, err] => Type::Result(
+                Box::new(type_from_wit_text(ok)),
+                Box::new(type_from_wit_text(err)),
+            ),
+            _ => Type::Unknown,
+        };
+    }
+    if let Some(inner) = text.strip_prefix("tuple<").and_then(|t| t.strip_suffix('>')) {
+        return Type::Tuple(split_wit_args(inner).iter().map(|t| type_from_wit_text(t)).collect());
+    }
+    if text.contains('<') || text.contains('>') {
+        return Type::Unknown;
+    }
+    Type::from_name(text)
+}
+
+/// Split `a, b, c` at top-level commas (respecting `<…>` nesting).
+fn split_wit_args(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut cur = String::new();
+    for ch in s.chars() {
+        match ch {
+            '<' => {
+                depth += 1;
+                cur.push(ch);
+            }
+            '>' => {
+                depth = depth.saturating_sub(1);
+                cur.push(ch);
+            }
+            ',' if depth == 0 => {
+                out.push(cur.trim().to_string());
+                cur = String::new();
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_string());
+    }
+    out
+}
+
+/// Render a checker [`Type`] as WIT type text, if it names a concrete WIT
+/// type. Numeric literals default to their WIT widths (`s64`/`f64` — the
+/// defaulting rule). `None` for anything without a boundary spelling
+/// (gradual `Unknown`, structural records, half-known results).
+pub(crate) fn type_to_wit(t: &Type) -> Option<String> {
+    match t {
+        Type::Bool => Some("bool".into()),
+        Type::U8 => Some("u8".into()),
+        Type::U16 => Some("u16".into()),
+        Type::U32 => Some("u32".into()),
+        Type::U64 => Some("u64".into()),
+        Type::S8 => Some("s8".into()),
+        Type::S16 => Some("s16".into()),
+        Type::S32 => Some("s32".into()),
+        Type::S64 => Some("s64".into()),
+        Type::F32 => Some("f32".into()),
+        Type::F64 => Some("f64".into()),
+        Type::Char => Some("char".into()),
+        Type::String => Some("string".into()),
+        Type::IntLit(_) => Some("s64".into()),
+        Type::FloatLit => Some("f64".into()),
+        Type::List(e) => Some(format!("list<{}>", type_to_wit(e)?)),
+        Type::Option(e) => Some(format!("option<{}>", type_to_wit(e)?)),
+        Type::Result(o, e) => Some(format!("result<{}, {}>", type_to_wit(o)?, type_to_wit(e)?)),
+        Type::Tuple(ts) => {
+            let parts: Option<Vec<String>> = ts.iter().map(type_to_wit).collect();
+            Some(format!("tuple<{}>", parts?.join(", ")))
+        }
+        Type::Named(n) => Some(n.clone()),
+        Type::Tree => None,
+        Type::Record(_) | Type::Unit | Type::Unknown => None,
+    }
+}
+
 impl<'a> Checker<'a> {
     /// First pass: collect every module-level Def name and Fn signature so
     /// forward and mutual references resolve. Same-named Fn defs accumulate into

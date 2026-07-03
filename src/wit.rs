@@ -346,7 +346,8 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
             };
 
             for (&(params_id, body), mangled) in members.iter().zip(labels) {
-                let mut sig = infer_sig(arena, &mangled, params_id, body, &defs, &functor_ops)?;
+                let mut sig =
+                    infer_sig(arena, roots, &mangled, params_id, body, &defs, &functor_ops)?;
                 sig.iface = iface.clone();
                 // Record the identity backing this mangled export so the emitter
                 // can register a concrete internal function for it (the `Def` is
@@ -363,7 +364,8 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                 if sig.params.is_empty() && sig.result.is_none() && defs.contains_key(&name) =>
             {
                 let (params_id, body) = defs[&name];
-                let mut inferred = infer_sig(arena, &name, params_id, body, &defs, &functor_ops)?;
+                let mut inferred =
+                    infer_sig(arena, roots, &name, params_id, body, &defs, &functor_ops)?;
                 inferred.iface = sig.iface;
                 inferred
             }
@@ -372,7 +374,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                 let (params_id, body) = defs
                     .get(&name)
                     .ok_or(format!("Export `{name}` has no definition"))?;
-                infer_sig(arena, &name, *params_id, *body, &defs, &functor_ops)?
+                infer_sig(arena, roots, &name, *params_id, *body, &defs, &functor_ops)?
             }
         };
         exports.push(sig);
@@ -652,6 +654,7 @@ fn parse_explicit_sig(arena: &Arena, fields: &[(String, NodeId)]) -> Option<Func
 
 fn infer_sig(
     arena: &Arena,
+    roots: &[NodeId],
     name: &str,
     params_id: NodeId,
     body: NodeId,
@@ -692,11 +695,18 @@ fn infer_sig(
     let result = match infer(arena, body, &param_types, defs, functor_ops, &mut visiting) {
         Inferred::Known(t) => Some(t),
         Inferred::Unit => None,
-        Inferred::Unknown => {
-            return Err(format!(
-                "cannot infer result type of `{name}` (use the Export record form)"
-            ));
-        }
+        // The local best-effort walk could not see the result type: fall back
+        // to the full Phase A/C checker, which models lists, options, results,
+        // tuples, and nominal DefTypes (3.8).
+        Inferred::Unknown => match crate::check::infer_wit_result(arena, roots, &params, body) {
+            crate::check::InferredWit::Known(t) => Some(t),
+            crate::check::InferredWit::Unit => None,
+            crate::check::InferredWit::Unknown => {
+                return Err(format!(
+                    "cannot infer result type of `{name}` (use the Export record form)"
+                ));
+            }
+        },
     };
     Ok(FuncSig {
         name: name.to_string(),
