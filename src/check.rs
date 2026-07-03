@@ -981,10 +981,14 @@ impl<'a> Checker<'a> {
             } else if let Some(u) = unify(&self.types, &elem, &t) {
                 elem = u;
             } else {
-                // Heterogeneous list elements: not modelled as an error in
-                // Phase A (lists of mixed shape appear in quoted data); stay
-                // gradual.
-                elem = Type::Unknown;
+                // A list has exactly one element type (2.2 drop: no
+                // heterogeneous lists — mixed shapes want a variant, and
+                // code-like data is a quoted tree, which is never checked
+                // here).
+                return Err(format!(
+                    "eval error: heterogeneous list: elements must share one \
+                     type, got {elem:?} and {t:?}"
+                ));
             }
         }
         Ok(Type::List(Box::new(elem)))

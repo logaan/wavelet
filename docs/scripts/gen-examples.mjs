@@ -52,12 +52,14 @@ E['syntax-chain'] = `// '.name(...)' makes the receiver the call's first argumen
 // This reads as str-cat(upper("hello") ", world!").
 "hello".upper().str-cat(", world!")`;
 
-E['values-atoms'] = `["a string" 42 -1.5 true 'x' {read write}]`;
+E['values-atoms'] = `{s: "a string" n: 42 d: -1.5 b: true c: 'x' f: {read write}}`;
 E['values-to-u8-ok'] = `to-u8(200)`;
 E['values-to-u8-bad'] = `to-u8(999)`;
 E['values-record'] = `{name: "Ada" born: 1815 fields: ["maths" "computing"]}`;
-E['values-heterogeneous'] = `[1 "two" true 'x']`;
-E['values-options-results'] = `[some(1) none ok("yes") err("nope")]`;
+E['values-heterogeneous'] = `// A list has exactly one element type; mixing shapes is a compile error.
+// Reach for a record, a variant, or quoted data (a tree) instead.
+[1 "two" true 'x']`;
+E['values-options-results'] = `{options: [some(1) none] results: [ok("yes") err("nope")]}`;
 E['values-quote-days'] = `Quote days(30)`;
 E['values-eq'] = `eq({a: 1 b: [2 3]} {a: 1 b: [2 3]})`;
 E['values-unit-def'] = `Def x 10`;
@@ -188,21 +190,21 @@ E['std-predicates'] = `[eq([1 2] [1 2])  lt(2 3)  ge("b" "a")  not(false)]`;
 E['std-arith'] = `[add(2 3)  sub(10 4)  mul(6 7)  div(17 5)  rem(17 5)  neg(8)  abs(-3)  min(4 9)  max(4 9)]`;
 E['std-div-zero'] = `div(1 0)`;
 E['std-div-float'] = `div(7.0 2)`;
-E['std-seq-basics'] = `[len([1 2 3])  head([10 20 30])  tail([10 20 30])  reverse([1 2 3])  range(0 5)]`;
+E['std-seq-basics'] = `{len: len([1 2 3]) head: head([10 20 30]) tail: tail([10 20 30]) reverse: reverse([1 2 3]) range: range(0 5)}`;
 E['std-seq-mutate'] = `Let {xs: [10 20 30]}
-  [get(xs 1)  put(xs 1 99)  push(xs 40)  concat(xs [40 50])]`;
+  {get: get(xs 1) put: put(xs 1 99) push: push(xs 40) concat: concat(xs [40 50])}`;
 E['std-map'] = `map(Fn {x} mul(x x) range(1 6))`;
 E['std-filter'] = `filter(Fn {x} gt(x 2) [1 2 3 4 1])`;
 E['std-fold'] = `fold(Fn {acc x} add(acc x) 0 [1 2 3 4 5])`;
 E['std-zip'] = `zip(["a" "b" "c"] [1 2 3])`;
 E['std-strcat'] = `str-cat(upper("ada") " " "Lovelace")`;
-E['std-strings'] = `[split("a,b,c" ",")  join(["x" "y" "z"] "-")  contains("hello" "ell")]`;
+E['std-strings'] = `{split: split("a,b,c" ",") join: join(["x" "y" "z"] "-") contains: contains("hello" "ell")}`;
 E['std-strcat-tostring'] = `str-cat("count = " to-string(42))`;
-E['std-tostring'] = `to-string([1 some(2) {k: "v"}])`;
+E['std-tostring'] = `to-string({n: 1 opt: some(2) rec: {k: "v"}})`;
 E['std-read'] = `read("add(1 2)")`;
-E['std-conv'] = `[to-u8(255)  to-s8(-128)  to-f64(3)]`;
+E['std-conv'] = `{byte: to-u8(255) signed: to-s8(-128) float: to-f64(3)}`;
 E['std-conv-bad'] = `to-u8(256)`;
-E['std-char-conv'] = `[to-u32('a')  to-char(98)  to-char(add(to-u32('a') 1))]`;
+E['std-char-conv'] = `{code: to-u32('a') char: to-char(98) next: to-char(add(to-u32('a') 1))}`;
 E['std-char-conv-bad'] = `to-char(55296)`;
 E['std-apply'] = `apply(Fn {a b} add(a b) [20 22])`;
 // A quoted call is a tuple now, so 'form-kind(Quote foo(1))' reports "tup"; a
@@ -210,7 +212,7 @@ E['std-apply'] = `apply(Fn {a b} add(a b) [20 22])`;
 E['std-form-kind'] = `[form-kind(42)  form-kind("hi")  form-kind(Quote foo)  form-kind(Quote foo(1))  form-kind(ok(1))  form-kind([1 2])]`;
 E['std-rec-key-val'] = `Let {b: {text: "hello"}}
   [rec-key(b) rec-val(b)]`;
-E['std-constructors'] = `[some(1)  none  ok("yes")  err("nope")]`;
+E['std-constructors'] = `{options: [some(1) none] results: [ok("yes") err("nope")]}`;
 E['std-cells'] = `Let {c: cell-new(0)}
   Do [cell-set(c 41)
       cell-set(c add(cell-get(c) 1))

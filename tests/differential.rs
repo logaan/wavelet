@@ -106,7 +106,6 @@ const SKIP: &[(&str, &str)] = &[
     ("ty-overload-int", TOSTR_STRING),
     ("ty-overload-str", TOSTR_STRING),
     ("values-atoms", FLAGS),
-    ("values-heterogeneous", TOSTR_TRAP),
     ("values-options-results", TOSTR_TRAP),
     ("values-quote-days", TOSTR_TRAP), // form result
     ("values-record", TOSTR_TRAP),     // record result

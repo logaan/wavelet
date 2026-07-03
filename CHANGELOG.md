@@ -47,6 +47,18 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- **Lists are `list<t>`.** A list literal's elements must share one type;
+  mixing shapes is a compile error. Reach for a record, a `DefType` variant,
+  or quoted data (a `tree`) instead.
+
+- **A non-bool `If` condition is a compile error** (there is no truthiness,
+  and the check no longer waits for runtime).
+
+- **`The` is a pure static ascription.** The annotated type is checked
+  against the expression at compile time for every annotation shape
+  (constructor annotations like `list(s32)` included); no runtime check
+  survives on checked paths.
+
 - **Out-of-range integer literals are compile errors.** A literal that meets
   a concrete integer context (a typed parameter, a `to-*` conversion, an
   overload filter) is resolved and range-checked statically, with the same

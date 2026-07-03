@@ -43,7 +43,7 @@ Tuples use parens with two or more elements; lists use brackets; records use bra
 
 <Playground id="values-record" />
 
-Lists may be **heterogeneous** inside a component — the dynamic core does not constrain them. Boundary types are where uniformity is enforced.
+A list has exactly **one element type** (`list<t>`), checked at compile time. Mixed shapes want a record, a `DefType` variant, or quoted data (a tree).
 
 <Playground id="values-heterogeneous" />
 

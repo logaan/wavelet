@@ -54,8 +54,8 @@
     "output": ""
   },
   "values-atoms": {
-    "code": "[\"a string\" 42 -1.5 true 'x' {read write}]",
-    "value": "[\"a string\", 42, -1.5, true, 'x', {read, write}]",
+    "code": "{s: \"a string\" n: 42 d: -1.5 b: true c: 'x' f: {read write}}",
+    "value": "{s: \"a string\", n: 42, d: -1.5, b: true, c: 'x', f: {read, write}}",
     "output": ""
   },
   "values-to-u8-ok": {
@@ -73,13 +73,12 @@
     "output": ""
   },
   "values-heterogeneous": {
-    "code": "[1 \"two\" true 'x']",
-    "value": "[1, \"two\", true, 'x']",
-    "output": ""
+    "code": "// A list has exactly one element type; mixing shapes is a compile error.\n// Reach for a record, a variant, or quoted data (a tree) instead.\n[1 \"two\" true 'x']",
+    "error": "eval error: heterogeneous list: elements must share one type, got IntLit(Some(1)) and String"
   },
   "values-options-results": {
-    "code": "[some(1) none ok(\"yes\") err(\"nope\")]",
-    "value": "[some(1), none, ok(\"yes\"), err(\"nope\")]",
+    "code": "{options: [some(1) none] results: [ok(\"yes\") err(\"nope\")]}",
+    "value": "{options: [some(1), none], results: [ok(\"yes\"), err(\"nope\")]}",
     "output": ""
   },
   "values-quote-days": {
@@ -289,13 +288,13 @@
     "output": ""
   },
   "std-seq-basics": {
-    "code": "[len([1 2 3])  head([10 20 30])  tail([10 20 30])  reverse([1 2 3])  range(0 5)]",
-    "value": "[3, 10, [20, 30], [3, 2, 1], [0, 1, 2, 3, 4]]",
+    "code": "{len: len([1 2 3]) head: head([10 20 30]) tail: tail([10 20 30]) reverse: reverse([1 2 3]) range: range(0 5)}",
+    "value": "{len: 3, head: 10, tail: [20, 30], reverse: [3, 2, 1], range: [0, 1, 2, 3, 4]}",
     "output": ""
   },
   "std-seq-mutate": {
-    "code": "Let {xs: [10 20 30]}\n  [get(xs 1)  put(xs 1 99)  push(xs 40)  concat(xs [40 50])]",
-    "value": "[20, [10, 99, 30], [10, 20, 30, 40], [10, 20, 30, 40, 50]]",
+    "code": "Let {xs: [10 20 30]}\n  {get: get(xs 1) put: put(xs 1 99) push: push(xs 40) concat: concat(xs [40 50])}",
+    "value": "{get: 20, put: [10, 99, 30], push: [10, 20, 30, 40], concat: [10, 20, 30, 40, 50]}",
     "output": ""
   },
   "std-map": {
@@ -324,8 +323,8 @@
     "output": ""
   },
   "std-strings": {
-    "code": "[split(\"a,b,c\" \",\")  join([\"x\" \"y\" \"z\"] \"-\")  contains(\"hello\" \"ell\")]",
-    "value": "[[\"a\", \"b\", \"c\"], \"x-y-z\", true]",
+    "code": "{split: split(\"a,b,c\" \",\") join: join([\"x\" \"y\" \"z\"] \"-\") contains: contains(\"hello\" \"ell\")}",
+    "value": "{split: [\"a\", \"b\", \"c\"], join: \"x-y-z\", contains: true}",
     "output": ""
   },
   "std-strcat-tostring": {
@@ -334,8 +333,8 @@
     "output": ""
   },
   "std-tostring": {
-    "code": "to-string([1 some(2) {k: \"v\"}])",
-    "value": "\"[1, some(2), {k: \\\"v\\\"}]\"",
+    "code": "to-string({n: 1 opt: some(2) rec: {k: \"v\"}})",
+    "value": "\"{n: 1, opt: some(2), rec: {k: \\\"v\\\"}}\"",
     "output": ""
   },
   "std-read": {
@@ -344,8 +343,8 @@
     "output": ""
   },
   "std-conv": {
-    "code": "[to-u8(255)  to-s8(-128)  to-f64(3)]",
-    "value": "[255, -128, 3.0]",
+    "code": "{byte: to-u8(255) signed: to-s8(-128) float: to-f64(3)}",
+    "value": "{byte: 255, signed: -128, float: 3.0}",
     "output": ""
   },
   "std-conv-bad": {
@@ -353,8 +352,8 @@
     "error": "eval error: `to-u8`: 256 out of range"
   },
   "std-char-conv": {
-    "code": "[to-u32('a')  to-char(98)  to-char(add(to-u32('a') 1))]",
-    "value": "[97, 'b', 'b']",
+    "code": "{code: to-u32('a') char: to-char(98) next: to-char(add(to-u32('a') 1))}",
+    "value": "{code: 97, char: 'b', next: 'b'}",
     "output": ""
   },
   "std-char-conv-bad": {
@@ -377,8 +376,8 @@
     "output": ""
   },
   "std-constructors": {
-    "code": "[some(1)  none  ok(\"yes\")  err(\"nope\")]",
-    "value": "[some(1), none, ok(\"yes\"), err(\"nope\")]",
+    "code": "{options: [some(1) none] results: [ok(\"yes\") err(\"nope\")]}",
+    "value": "{options: [some(1), none], results: [ok(\"yes\"), err(\"nope\")]}",
     "output": ""
   },
   "std-cells": {
