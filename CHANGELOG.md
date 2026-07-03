@@ -30,9 +30,21 @@ you work, and rename it to the new version when you cut a release.
   handles have identity equality and print opaquely as `<name>`; they are not
   form-serializable and cannot be `Derive`d (`Eq`/`Ord`/`Hash`/`Show` over a
   resource is a compile error). Exporting a resource (`Export <name>`) exports
-  the whole block; an unexported one is a legal internal resource. (The
-  interpreter semantics, checker discipline, and WIT synthesis are in place; the
-  wasm backend for exported resources is in progress.)
+  the whole block; an unexported one is a legal internal resource. The
+  interpreter (the semantics oracle), checker discipline, WIT synthesis, and the
+  wasm backend all agree: the backend generalizes the functor `set` machinery to
+  emit each resource's constructor/method/static/`Drop` core functions and the
+  canonical `[constructor]`/`[method]`/`[static]`/`[dtor]` boundary exports,
+  carrying a resource value guest-internally as its rep and minting/deref-ing
+  handles only at the component edge (own via `resource.new`/`resource.rep`, a
+  borrow arrives as the rep directly). The 5.12 conformance suite's `counter`
+  callee (`conformance/wavelet/src/roundtrip-resources.wlt`) passes
+  `run-resources()` against both rust seed builds.
+
+- **`cell-new` / `cell-get` / `cell-set` compile.** The mutable-cell builtins
+  (the interpreter's `Value::Cell`) now have a wasm backend (a heap box with
+  pointer identity), so cells — and the resource reps built on them — work in
+  compiled components, not just the interpreter.
 
 ### Changed
 
@@ -56,8 +68,9 @@ you work, and rename it to the new version when you cut a release.
   to the arena floor once the caller has read the results, so a long-lived
   instance no longer grows memory monotonically across calls (arena-per-call;
   module-level value defs recompute per call). Components that instantiate
-  functors (`Set`) keep the previous never-free behaviour for now, since their
-  resource state lives on the same heap.
+  functors (`Set`) OR user-declared resources (`DefResource`) keep the previous
+  never-free behaviour for now, since their resource state (the rep) lives on the
+  same heap and must survive across calls.
 
 ### Added
 
