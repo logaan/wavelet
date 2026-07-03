@@ -58,7 +58,7 @@ fn registry_reachable(dir: &Path, world_export: &str) -> bool {
 fn scaffold_and_build(proj: &Path, kind: ProjectKind, entry: &str) -> PathBuf {
     scaffold::create(proj.to_str().unwrap(), kind).expect("scaffold project");
 
-    let src_paths = vec![proj.join("src/greeting.wvl"), proj.join(entry)];
+    let src_paths = vec![proj.join("src/greeting.wlt"), proj.join(entry)];
     wavelet::build::populate_project_wit(proj, &src_paths).expect("populate wit/deps via wkg");
 
     let out = proj.join("out");
@@ -88,7 +88,7 @@ fn cli_template_builds_and_runs() {
         return;
     }
 
-    let app = scaffold_and_build(&dir.join("greeter"), ProjectKind::Cli, "src/main.wvl");
+    let app = scaffold_and_build(&dir.join("greeter"), ProjectKind::Cli, "src/main.wlt");
 
     let run = |args: &[&str]| -> String {
         let out = Command::new("wasmtime")
@@ -122,7 +122,7 @@ fn http_template_builds_and_serves() {
         return;
     }
 
-    let app = scaffold_and_build(&dir.join("web"), ProjectKind::Http, "src/app.wvl");
+    let app = scaffold_and_build(&dir.join("web"), ProjectKind::Http, "src/app.wlt");
 
     // The composed component is a real wasi:http proxy: it exports the handler
     // and imports wasi:http/types (the greeting dep is composed *in*, so it is no
@@ -173,14 +173,14 @@ fn multi_component_composes_to_one() {
     let src = dir.join("demo/src");
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(
-        src.join("shout.wvl"),
+        src.join("shout.wlt"),
         "Package \"demo:shout@0.1.0\"\n\n\
          Export shout\n\
          Def shout Fn {phrase: string}\n  str-cat(upper(phrase) \"!\")\n",
     )
     .unwrap();
     std::fs::write(
-        src.join("main.wvl"),
+        src.join("main.wlt"),
         "Package \"demo:main@0.1.0\"\n\n\
          Import {pkg: \"demo:shout/api\" as: sh}\n\n\
          Export {name: run params: {} result: string}\n\
@@ -190,8 +190,8 @@ fn multi_component_composes_to_one() {
 
     let out = dir.join("demo/out");
     let sources = vec![
-        src.join("shout.wvl").to_str().unwrap().to_string(),
-        src.join("main.wvl").to_str().unwrap().to_string(),
+        src.join("shout.wlt").to_str().unwrap().to_string(),
+        src.join("main.wlt").to_str().unwrap().to_string(),
     ];
     let outputs =
         wavelet::build::build_files(&sources, out.to_str().unwrap()).expect("build demo components");

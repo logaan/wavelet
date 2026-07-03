@@ -6,14 +6,14 @@ description: Files become components; imports and exports wire them together.
 
 # Components & composition
 
-In Wavelet, **one file is one component**. This page covers how a `.wvl` file declares its place in the component world, and how `build` and `compose` turn files into linked, runnable WebAssembly.
+In Wavelet, **one file is one component**. This page covers how a `.wlt` file declares its place in the component world, and how `build` and `compose` turn files into linked, runnable WebAssembly.
 
 ## Anatomy of a file
 
 A file is a flat sequence of forms: an optional [`Package`](./language/special-forms#package), any number of [`Import`](./language/special-forms#import)s, then [`DefType`](./language/special-forms#deftype)s, [`Def`](./language/special-forms#def)s, and [`Export`](./language/special-forms#export)s in any order.
 
 ```wavelet
-// shout.wvl
+// shout.wlt
 Package "demo:shout@0.1.0"
 
 Export shout
@@ -62,10 +62,10 @@ Imported names are used qualified: `kv/open`, `kv/get`. With `open: true`, the n
 When you run a set of files together with [`wavelet run`](./cli#run), imports are resolved **by package id** against the other files on the command line — an interpreter stand-in for the composer:
 
 ```console
-$ wavelet run main.wvl shout.wvl
+$ wavelet run main.wlt shout.wlt
 ```
 
-`main.wvl` imports `demo:shout/api`; because `shout.wvl` declares `Package "demo:shout@…"`, the runner wires them together and calls `main`'s exported `run`. The interpreter evaluates **pure** logic only — calls into host interfaces (`wasi:*`) run only in a built component on a wasm runtime — so `run` is for exercising your cross-component logic, while output and side effects happen under `wavelet build` + a runtime.
+`main.wlt` imports `demo:shout/api`; because `shout.wlt` declares `Package "demo:shout@…"`, the runner wires them together and calls `main`'s exported `run`. The interpreter evaluates **pure** logic only — calls into host interfaces (`wasi:*`) run only in a built component on a wasm runtime — so `run` is for exercising your cross-component logic, while output and side effects happen under `wavelet build` + a runtime.
 
 ## Exports
 
@@ -102,7 +102,7 @@ A Wavelet project carries a `wit/` tree alongside its `src/`:
 
 ```text
 my-app/
-  src/            # your .wvl components
+  src/            # your .wlt components
   wit/            # synthesized world + fetched dependency WIT
     deps/         # wkg-fetched packages (wasi:cli, wasi:http, …)
   wkg.lock        # pinned dependency versions
@@ -116,7 +116,7 @@ The compiler vendors **no** WASI WIT of its own. Any host interface a component 
 [`wavelet build`](./cli#build) turns each file into a component **and composes them into one artifact**, `out/app.wasm`, wiring every cross-component import to the sibling that exports it via a generated `out/app.wac` run through [**`wac`**](https://github.com/bytecodealliance/wac). Host imports (`wasi:*`) are left unsatisfied for the runtime to provide.
 
 ```console
-$ wavelet build src/*.wvl -o out
+$ wavelet build src/*.wlt -o out
 built out/app.wasm
 $ wasmtime run out/app.wasm wasm
 WASM!
@@ -146,7 +146,7 @@ interface picker { pick: func(seed: u64) -> result<string, string>; }
 ```
 
 ```wavelet
-// main.wvl
+// main.wlt
 Package "demo:main@0.1.0"
 
 Import {pkg: "acme:words/picker@1.0.0" as: words}
@@ -164,6 +164,6 @@ Def pick-word Fn {} -> string
 
 ```console
 $ cargo component build --release          # acme_words.wasm
-$ wavelet build src/*.wvl -o out
+$ wavelet build src/*.wlt -o out
 $ wavelet compose out/app.wasm target/release/acme_words.wasm -o final.wasm
 ```

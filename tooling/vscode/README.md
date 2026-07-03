@@ -1,6 +1,6 @@
 # Wavelet for VS Code
 
-Editor support for [Wavelet](../../README.md) source files (`.wvl`):
+Editor support for [Wavelet](../../README.md) source files (`.wlt`):
 
 - **Syntax highlighting** — the grammar in `syntaxes/wavelet.tmLanguage.json`
   mirrors the language's lexer (`src/lexer.rs`) and the shared Prism grammar used
@@ -32,7 +32,7 @@ $ unzip wavelet-vscode.zip -d ~/.vscode/extensions/
 
 The zip unpacks to a `wavelet/` directory, leaving you with
 `~/.vscode/extensions/wavelet/`. (Use `~/.vscode-insiders/extensions` for
-Insiders, or `~/.vscode-server/extensions` for remote/SSH.) Open any `.wvl` file:
+Insiders, or `~/.vscode-server/extensions` for remote/SSH.) Open any `.wlt` file:
 it is detected as Wavelet, highlighted, and the language server starts
 automatically — the extension picks the bundled binary matching your platform
 (from `server/`).
@@ -63,7 +63,7 @@ automatically — the extension picks the bundled binary matching your platform
    $ cp ../wavelet-lsp/target/release/wavelet-lsp /usr/local/bin/
    ```
 
-3. Reload VS Code. Open any `.wvl` file.
+3. Reload VS Code. Open any `.wlt` file.
 
 ### As a packaged `.vsix`
 

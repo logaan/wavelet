@@ -1,7 +1,7 @@
 //! Resolve an `Import` against external WIT vendored under a project's
 //! `wit/deps` directory (populated by `wkg`, see `dev-notes/decouple-wasi.md`).
 //!
-//! This is the generic, registry-fed counterpart to a sibling-`.wvl`
+//! This is the generic, registry-fed counterpart to a sibling-`.wlt`
 //! dependency: instead of synthesizing a [`Dep`] from another Wavelet file in
 //! the build set, we parse a WIT package with `wit-parser` and project it into
 //! the *same* [`Dep`] shape the emitter already consumes. The emitter therefore

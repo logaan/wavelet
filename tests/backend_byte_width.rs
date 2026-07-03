@@ -76,7 +76,7 @@ Export {name: mk-opt8 params: {} result: option(u8)}
 Def mk-opt8 Fn {}
   some(7)
 "#;
-    let app_path = src.join("app.wvl");
+    let app_path = src.join("app.wlt");
     std::fs::write(&app_path, app).unwrap();
 
     let out = dir.join("out");

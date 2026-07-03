@@ -126,7 +126,7 @@ fn distinct_handles_are_independent() {
 
 // ---- end-to-end through `wavelet run` (`runner::run_files`) ----------------
 
-/// Run one `.wvl` source through the real `wavelet run` path and return the
+/// Run one `.wlt` source through the real `wavelet run` path and return the
 /// outcome. The program is written to a temp file because `run_files` reads
 /// files (it is the interpreter stand-in for `wavelet compose`).
 fn run_source(src: &str) -> Result<(), String> {
@@ -137,7 +137,7 @@ fn run_source(src: &str) -> Result<(), String> {
         RUN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("src.wvl");
+    let path = dir.join("src.wlt");
     std::fs::write(&path, src).unwrap();
     let res = wavelet::runner::run_files(&[path.to_string_lossy().into_owned()]);
     let _ = std::fs::remove_dir_all(&dir);
@@ -194,7 +194,7 @@ fn each_is_not_yet_defined() {
     assert!(err.contains("each"), "unexpected error: {err}");
 }
 
-/// Build one `.wvl` source through `wavelet build` in a throwaway dir, returning
+/// Build one `.wlt` source through `wavelet build` in a throwaway dir, returning
 /// the build result and (on success) the bytes of the single output component.
 fn build_source(src_text: &str) -> Result<Vec<u8>, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -206,7 +206,7 @@ fn build_source(src_text: &str) -> Result<Vec<u8>, String> {
     ));
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
-    let path = src.join("app.wvl");
+    let path = src.join("app.wlt");
     std::fs::write(&path, src_text).unwrap();
 
     let out = dir.join("out");

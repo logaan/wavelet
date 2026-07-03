@@ -23,13 +23,13 @@ fn main() -> ExitCode {
         [cmd, rest @ ..] if cmd == "build" && !rest.is_empty() => build_cmd(rest),
         [cmd, rest @ ..] if cmd == "compose" && !rest.is_empty() => compose_cmd(rest),
         _ => {
-            eprintln!("usage: wavelet read [file.wvl]");
-            eprintln!("       wavelet expand <file.wvl>");
+            eprintln!("usage: wavelet read [file.wlt]");
+            eprintln!("       wavelet expand <file.wlt>");
             eprintln!("       wavelet repl");
-            eprintln!("       wavelet wit <file.wvl>");
+            eprintln!("       wavelet wit <file.wlt>");
             eprintln!("       wavelet new <name> [--type=cli|http]");
-            eprintln!("       wavelet run <file.wvl>... [-- <args>...]");
-            eprintln!("       wavelet build <file.wvl>... [-o <dir>]");
+            eprintln!("       wavelet run <file.wlt>... [-- <args>...]");
+            eprintln!("       wavelet build <file.wlt>... [-o <dir>]");
             eprintln!("       wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]");
             eprintln!("       wavelet --version");
             ExitCode::from(2)
@@ -193,7 +193,7 @@ fn new_cmd(rest: &[String]) -> ExitCode {
             // missing `wkg` or no network just leaves `wit/` unfetched.
             let srcs: Vec<std::path::PathBuf> = files
                 .iter()
-                .filter(|f| f.extension().and_then(|e| e.to_str()) == Some("wvl"))
+                .filter(|f| f.extension().and_then(|e| e.to_str()) == Some("wlt"))
                 .cloned()
                 .collect();
             if let Err(e) = wavelet::build::populate_project_wit(&root, &srcs) {

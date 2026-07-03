@@ -2,7 +2,7 @@
 //! (design.md §6.3; **strategy B: compile the bodies**).
 //!
 //! The payoff of the macro-component feature is that a macro library can be
-//! *written in Wavelet itself*: a `.wvl` file whose top level is `DefMacro`s is
+//! *written in Wavelet itself*: a `.wlt` file whose top level is `DefMacro`s is
 //! compiled into a component exporting `wavelet:meta/macros`, which the Step 1–8
 //! consumer then imports with `macros: true` and uses exactly like a hand-built
 //! macro component. Wavelet thereby dogfoods its own macro system.

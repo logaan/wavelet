@@ -780,7 +780,7 @@ pub fn synthesize(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
 /// only the *host* (`wasi:*`) imports.
 ///
 /// `wkg wit fetch` reads the world(s) in a `wit/` directory and tries to fetch
-/// every referenced package from a registry. Build-set (sibling-`.wvl`) imports
+/// every referenced package from a registry. Build-set (sibling-`.wlt`) imports
 /// have no registry — they are satisfied locally — so handing them to `wkg`
 /// fails with "no registry configured". The host imports are exactly the ones
 /// `wkg` *should* fetch into `wit/deps`, and their WIT text here is byte-for-byte

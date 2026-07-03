@@ -80,7 +80,7 @@ Export {name: ltmix params: {a: s64 b: f64} result: bool}
 Def ltmix Fn {a: s64 b: f64}
   lt(a b)
 "#;
-    let app_path = src.join("app.wvl");
+    let app_path = src.join("app.wlt");
     std::fs::write(&app_path, app).unwrap();
 
     let out = dir.join("out");

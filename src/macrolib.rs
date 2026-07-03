@@ -1,7 +1,7 @@
 //! One-step interpreter macro expansion, retained as the differential **oracle**
 //! (`CLAUDE.md`) the compiled macro components are validated against.
 //!
-//! A macro library written in Wavelet is a `.wvl` file whose top level is a
+//! A macro library written in Wavelet is a `.wlt` file whose top level is a
 //! `Package` declaration plus `DefMacro`s (and nothing the file exports as a
 //! runtime function — see [`crate::macrobuild`] for the build trigger). Producing
 //! one now **compiles each macro body to wasm** (strategy B, via

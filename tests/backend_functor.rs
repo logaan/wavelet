@@ -19,7 +19,7 @@
 
 use wavelet::host::{HostComponent, Val};
 
-/// Build one `.wvl` source through the real `wavelet build` path in a throwaway
+/// Build one `.wlt` source through the real `wavelet build` path in a throwaway
 /// dir, returning the bytes of the single output component.
 ///
 /// The per-call dir is keyed on `(pid, seq)`, not pid alone: two concurrent
@@ -33,7 +33,7 @@ fn build_component(src_text: &str) -> HostComponent {
     let _ = std::fs::remove_dir_all(&dir);
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
-    let path = src.join("app.wvl");
+    let path = src.join("app.wlt");
     std::fs::write(&path, src_text).unwrap();
     let out = dir.join("out");
     let bytes = wavelet::build::build_files(

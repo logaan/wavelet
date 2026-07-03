@@ -24,7 +24,7 @@ pub enum ModState {
     Done,
 }
 
-/// Load and evaluate a set of `.wvl` files; the first is the entry component.
+/// Load and evaluate a set of `.wlt` files; the first is the entry component.
 /// Imports are resolved by package id against the other files — an
 /// interpreter stand-in for `wavelet compose` (§6.5).
 pub fn run_files(paths: &[String]) -> Result<(), String> {

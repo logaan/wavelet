@@ -36,7 +36,7 @@ The in-browser playground runs a single component's worth of code with the stand
 ## A taste of components
 
 ```wavelet
-// shout.wvl — compiles to demo:shout.wasm
+// shout.wlt — compiles to demo:shout.wasm
 Package "demo:shout@0.1.0"
 
 Export shout
@@ -45,7 +45,7 @@ Def shout Fn {phrase: string}
 ```
 
 ```wavelet
-// main.wvl — compiles to demo:main.wasm
+// main.wlt — compiles to demo:main.wasm
 Package "demo:main@0.1.0"
 
 // Output is an ordinary import of a WASI interface, not a builtin.
@@ -63,13 +63,13 @@ Def run Fn {}
 ```
 
 ```console
-$ wavelet build src/*.wvl -o out
+$ wavelet build src/*.wlt -o out
 built out/app.wasm
 $ wasmtime run out/app.wasm
 WASM!
 ```
 
-Each file declares its own package and becomes its own component; `wavelet build` composes them into a single `out/app.wasm`, wiring `main`'s import of `demo:shout/api` to `shout`'s export. Swapping in a Rust implementation of `demo:shout/api` would require changing nothing in `main.wvl`.
+Each file declares its own package and becomes its own component; `wavelet build` composes them into a single `out/app.wasm`, wiring `main`'s import of `demo:shout/api` to `shout`'s export. Swapping in a Rust implementation of `demo:shout/api` would require changing nothing in `main.wlt`.
 
 ## Where to next
 

@@ -30,7 +30,7 @@ fn build_against_wit(tag: &str, wit_file: &str, wit: &str, app: &str) -> Vec<u8>
     std::fs::create_dir_all(&deps).unwrap();
     std::fs::write(deps.join(wit_file), wit).unwrap();
 
-    let app_path = src.join("app.wvl");
+    let app_path = src.join("app.wlt");
     std::fs::write(&app_path, app).unwrap();
 
     let out = dir.join("out");

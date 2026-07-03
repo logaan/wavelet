@@ -66,7 +66,7 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
 
     // Project-level WIT vendored by `wkg` lives in `wit/deps`, a sibling of the
     // `src/` directory the sources come from. Used as a fallback source of
-    // dependency interfaces after sibling-`.wvl` resolution.
+    // dependency interfaces after sibling-`.wlt` resolution.
     let wit_deps_dir = wit_deps_dir(paths);
 
     // Macro-library components produced above are part of the build's outputs.
@@ -165,7 +165,7 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
     Ok(outputs)
 }
 
-/// Compile a pure macro-library `.wvl` file into a `wavelet:meta/macros`
+/// Compile a pure macro-library `.wlt` file into a `wavelet:meta/macros`
 /// component (§6.3, Step 9), writing it to `<out_dir>/<package-path>.wasm` and
 /// returning that path.
 ///
@@ -334,7 +334,7 @@ fn versioned_iface(iface_path: &str, package_versioned: &str) -> String {
 ///
 /// Used by `wavelet new` so a fresh project ships with its dependency WIT
 /// already vendored under `wit/deps` and pinned in `wkg.lock`. `root` is the
-/// project root (the parent of `src/`); `src_paths` are its `.wvl` source files.
+/// project root (the parent of `src/`); `src_paths` are its `.wlt` source files.
 /// Like the build-time path, a `wkg` failure (absent tool, offline) is the
 /// caller's to treat as a warning.
 pub fn populate_project_wit(root: &Path, src_paths: &[PathBuf]) -> Result<(), String> {
@@ -416,7 +416,7 @@ fn project_root(paths: &[String]) -> Option<PathBuf> {
     let first = paths.first()?;
     let src_dir = Path::new(first).parent()?;
     let root = src_dir.parent().unwrap_or(src_dir);
-    // A bare `src/foo.wvl` yields an empty parent; normalize to `.` so callers
+    // A bare `src/foo.wlt` yields an empty parent; normalize to `.` so callers
     // never hand an empty path to `current_dir` (which the OS rejects).
     Some(if root.as_os_str().is_empty() {
         PathBuf::from(".")

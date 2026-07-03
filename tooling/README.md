@@ -4,7 +4,7 @@ Editor integrations for the [Wavelet](../README.md) language.
 
 | Editor          | Where                          | Provides                                  |
 | --------------- | ------------------------------ | ----------------------------------------- |
-| Neovim          | [`neovim/`](neovim/) submodule (repo [`logaan/wavelet.nvim`](https://github.com/logaan/wavelet.nvim)) | a runtime-path package: syntax highlighting + `.wvl` filetype + `wavelet-lsp` autostart |
+| Neovim          | [`neovim/`](neovim/) submodule (repo [`logaan/wavelet.nvim`](https://github.com/logaan/wavelet.nvim)) | a runtime-path package: syntax highlighting + `.wlt` filetype + `wavelet-lsp` autostart |
 | VS Code         | [`vscode/`](vscode/)           | a language extension: syntax highlighting + bundled language server |
 | Any LSP client  | [`wavelet-lsp/`](wavelet-lsp/) | the `wavelet-lsp` language server (diagnostics, completion, hover, symbols) |
 

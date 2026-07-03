@@ -49,7 +49,7 @@ Add `./target/release` to your `PATH`, or invoke the binary directly.
 
 ## Editor support
 
-`.wvl` files get syntax highlighting plus the `wavelet-lsp` language server (diagnostics, completion, hover, document symbols). The highlighting grammars are derived from the compiler's lexer, so they match the language exactly. `wavelet-lsp` ships as a standalone `wavelet-lsp-<platform>` binary on the [releases page](https://github.com/logaan/wavelet/releases/latest) and is used automatically by the VS Code extension and the Neovim plugin.
+`.wlt` files get syntax highlighting plus the `wavelet-lsp` language server (diagnostics, completion, hover, document symbols). The highlighting grammars are derived from the compiler's lexer, so they match the language exactly. `wavelet-lsp` ships as a standalone `wavelet-lsp-<platform>` binary on the [releases page](https://github.com/logaan/wavelet/releases/latest) and is used automatically by the VS Code extension and the Neovim plugin.
 
 ### Neovim (LazyVim / lazy.nvim)
 
@@ -61,13 +61,13 @@ return {
     "logaan/wavelet.nvim",
     ft = "wavelet",
     init = function()
-      vim.filetype.add({ extension = { wvl = "wavelet" } })
+      vim.filetype.add({ extension = { wlt = "wavelet" } })
     end,
   },
 }
 ```
 
-Open any `.wvl` file and it is highlighted. For language features, put the `wavelet-lsp` server on your `PATH` (`brew install logaan/tap/wavelet`, `cargo install --path tooling/wavelet-lsp`, or download a prebuilt binary from the releases page) — the plugin starts it automatically. Point at a specific binary with `vim.g.wavelet_lsp_path`.
+Open any `.wlt` file and it is highlighted. For language features, put the `wavelet-lsp` server on your `PATH` (`brew install logaan/tap/wavelet`, `cargo install --path tooling/wavelet-lsp`, or download a prebuilt binary from the releases page) — the plugin starts it automatically. Point at a specific binary with `vim.g.wavelet_lsp_path`.
 
 ### VS Code
 
@@ -90,8 +90,8 @@ $ wavelet new hello
 created hello/
   hello/.gitignore
   hello/README.md
-  hello/src/greeting.wvl
-  hello/src/main.wvl
+  hello/src/greeting.wlt
+  hello/src/main.wlt
   hello/scripts/build.sh
   hello/scripts/run.sh
 
@@ -102,7 +102,7 @@ $ scripts/run.sh Ada
 Hello, Ada!
 ```
 
-The default `cli` template lays down two components. `src/greeting.wvl` is the pure domain model:
+The default `cli` template lays down two components. `src/greeting.wlt` is the pure domain model:
 
 ```wavelet
 Package "hello:greeting@0.1.0"
@@ -112,7 +112,7 @@ Def greet Fn {name: string}
   str-cat("Hello, " name "!")
 ```
 
-`src/main.wvl` is the entry point. It adopts the CLI world by **exporting `wasi:cli/run`** — there is no compiler-known target world — and does its output and argument reading through ordinary imported WASI interfaces (`wasi:cli/stdout`, `wasi:io/streams`, `wasi:cli/environment`), lowered through the generic WIT bridge:
+`src/main.wlt` is the entry point. It adopts the CLI world by **exporting `wasi:cli/run`** — there is no compiler-known target world — and does its output and argument reading through ordinary imported WASI interfaces (`wasi:cli/stdout`, `wasi:io/streams`, `wasi:cli/environment`), lowered through the generic WIT bridge:
 
 ```wavelet
 Package "hello:main@0.1.0"
@@ -135,7 +135,7 @@ A scaffolded project pins its dependency WIT in the repository:
 
 ```text
 hello/
-  src/            # your .wvl components
+  src/            # your .wlt components
   wit/            # synthesized world + fetched dependency WIT
     deps/         # wkg-fetched packages (wasi:cli, wasi:io, …)
   wkg.lock        # pinned dependency versions
@@ -159,10 +159,10 @@ The interpreter exists so the language's semantics can be validated independentl
 
 ## A two-component program
 
-The `greeting` and `main` files above are a two-component program: `main.wvl` imports `hello:greeting/api`, and `greeting.wvl` declares `Package "hello:greeting@…"`, so the composer wires them together. `wavelet build` emits each component and links them into one artifact:
+The `greeting` and `main` files above are a two-component program: `main.wlt` imports `hello:greeting/api`, and `greeting.wlt` declares `Package "hello:greeting@…"`, so the composer wires them together. `wavelet build` emits each component and links them into one artifact:
 
 ```console
-$ wavelet build src/*.wvl -o out
+$ wavelet build src/*.wlt -o out
 built out/app.wasm
 $ wasmtime run out/app.wasm Ada
 Hello, Ada!

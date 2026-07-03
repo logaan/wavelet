@@ -486,7 +486,7 @@ Def quarter Fn {n}
 
     #[test]
     fn wit_synthesis_matches_spec() {
-        // §6.1: the exact WIT the design doc shows for shout.wvl
+        // §6.1: the exact WIT the design doc shows for shout.wlt
         let src = "Package \"demo:shout@0.1.0\"\n\
                    Export shout\n\
                    Def shout Fn {phrase: string}\n\
@@ -768,15 +768,15 @@ world shout {
 
     #[test]
     fn emit_components_for_spec_demo() {
-        // shout.wvl: no deps, exports api#shout
-        let (sa, sr) = read_file(include_str!("../examples/shout.wvl")).unwrap();
+        // shout.wlt: no deps, exports api#shout
+        let (sa, sr) = read_file(include_str!("../examples/shout.wlt")).unwrap();
         let sinfo = wit::collect(&sa, &sr).unwrap();
         let bytes = emit::emit_component(&sa, &sr, &sinfo, &Default::default())
             .expect("shout componentizes");
         assert_eq!(&bytes[0..4], b"\0asm");
 
-        // main.wvl: imports demo:shout/api, exports run
-        let (ma, mr) = read_file(include_str!("../examples/main.wvl")).unwrap();
+        // main.wlt: imports demo:shout/api, exports run
+        let (ma, mr) = read_file(include_str!("../examples/main.wlt")).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
         deps.insert(

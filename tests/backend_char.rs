@@ -52,7 +52,7 @@ Export {name: echo-opt-char params: {x: option(char)} result: option(char)}
 Def echo-opt-char Fn {x}
   x
 "#;
-    let app_path = src.join("app.wvl");
+    let app_path = src.join("app.wlt");
     std::fs::write(&app_path, app).unwrap();
 
     let out = dir.join("out");

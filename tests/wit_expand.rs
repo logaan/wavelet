@@ -26,7 +26,7 @@ fn scratch(tag: &str) -> PathBuf {
 #[test]
 fn wit_command_expands_derive_before_synthesizing() {
     let dir = scratch("derive");
-    let file = dir.join("demo.wvl");
+    let file = dir.join("demo.wlt");
     std::fs::write(
         &file,
         r#"Package "demo:geo@0.1.0"

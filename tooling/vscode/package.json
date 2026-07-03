@@ -1,7 +1,7 @@
 {
   "name": "wavelet",
   "displayName": "Wavelet",
-  "description": "Syntax highlighting and language server support for the Wavelet language (.wvl).",
+  "description": "Syntax highlighting and language server support for the Wavelet language (.wlt).",
   "version": "0.2.0",
   "publisher": "wavelet",
   "license": "MIT",
@@ -17,7 +17,7 @@
       {
         "id": "wavelet",
         "aliases": ["Wavelet", "wavelet"],
-        "extensions": [".wvl"],
+        "extensions": [".wlt"],
         "configuration": "./language-configuration.json"
       }
     ],

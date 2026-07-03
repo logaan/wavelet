@@ -56,7 +56,7 @@ fn build_rejects_an_ill_typed_program() {
     // fix the program emitted a component; now the checker rejects it pre-emit.
     let file = write_src(
         &dir,
-        "bad.wvl",
+        "bad.wlt",
         r#"Package "demo:bad@0.1.0"
 Export run
 Def run Fn {} add("a" "b")
@@ -83,7 +83,7 @@ fn build_still_succeeds_on_a_well_typed_program() {
     let dir = scratch("build-good");
     let file = write_src(
         &dir,
-        "good.wvl",
+        "good.wlt",
         r#"Package "demo:good@0.1.0"
 Export shout
 Def shout Fn {phrase: string}
@@ -91,7 +91,7 @@ Def shout Fn {phrase: string}
 "#,
     );
 
-    let out = run_wavelet("build", &dir.join("good.wvl"));
+    let out = run_wavelet("build", &dir.join("good.wlt"));
     let stderr = String::from_utf8_lossy(&out.stderr);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
@@ -112,7 +112,7 @@ fn wit_rejects_an_ill_typed_program() {
     let dir = scratch("wit-bad");
     let file = write_src(
         &dir,
-        "bad.wvl",
+        "bad.wlt",
         r#"Package "demo:bad@0.1.0"
 Export run
 Def run Fn {} add("a" "b")
@@ -139,7 +139,7 @@ fn wit_still_succeeds_on_a_well_typed_program() {
     let dir = scratch("wit-good");
     let file = write_src(
         &dir,
-        "good.wvl",
+        "good.wlt",
         r#"Package "demo:good@0.1.0"
 Export shout
 Def shout Fn {phrase: string}
@@ -171,7 +171,7 @@ fn run_rejects_an_ill_typed_program() {
     // ill-typed. The checker rejects the whole module before evaluation.
     let file = write_src(
         &dir,
-        "bad.wvl",
+        "bad.wlt",
         r#"Package "demo:bad@0.1.0"
 Def bad Fn {} add("a" "b")
 Export run
@@ -209,7 +209,7 @@ fn run_resolves_an_overloaded_call_to_the_correct_member() {
     //     by which def was read last.
     let file = write_src(
         &dir,
-        "overload.wvl",
+        "overload.wlt",
         r#"Package "demo:over@0.1.0"
 Def show Fn {x: s32} x
 Def show Fn {x: string} upper(x)

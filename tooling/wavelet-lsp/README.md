@@ -62,7 +62,7 @@ The snippet below is the equivalent manual setup if you'd rather not use the
 plugin:
 
 ```lua
-vim.filetype.add({ extension = { wvl = "wavelet" } })
+vim.filetype.add({ extension = { wlt = "wavelet" } })
 
 vim.api.nvim_create_autocmd("FileType", {
   pattern = "wavelet",
@@ -90,7 +90,7 @@ for details.
 [[language]]
 name = "wavelet"
 scope = "source.wavelet"
-file-types = ["wvl"]
+file-types = ["wlt"]
 language-servers = ["wavelet-lsp"]
 
 [language-server.wavelet-lsp]

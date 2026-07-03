@@ -40,7 +40,7 @@ fn collect(src: &str) -> wit::FileInfo {
 fn http_fetch_world_is_host_only() {
     let proj = scratch("http-synth").join("widgets");
     scaffold::create(proj.to_str().unwrap(), ProjectKind::Http).unwrap();
-    let app = std::fs::read_to_string(proj.join("src/app.wvl")).unwrap();
+    let app = std::fs::read_to_string(proj.join("src/app.wlt")).unwrap();
 
     let world = fetch_world(&app);
     assert!(world.contains("import wasi:http/types@0.2.0;"), "{world}");
@@ -62,7 +62,7 @@ fn http_fetch_world_is_host_only() {
 fn cli_fetch_world_references_wasi_cli_run() {
     let proj = scratch("cli-synth").join("widgets");
     scaffold::create(proj.to_str().unwrap(), ProjectKind::Cli).unwrap();
-    let main = std::fs::read_to_string(proj.join("src/main.wvl")).unwrap();
+    let main = std::fs::read_to_string(proj.join("src/main.wlt")).unwrap();
 
     let world = fetch_world(&main);
     assert!(world.contains("export wasi:cli/run@0.2.0;"), "{world}");
@@ -78,8 +78,8 @@ fn cli_fetch_world_references_wasi_cli_run() {
 fn has_host_deps_only_flags_components_with_wasi() {
     let proj = scratch("hostdeps").join("widgets");
     scaffold::create(proj.to_str().unwrap(), ProjectKind::Http).unwrap();
-    let app = std::fs::read_to_string(proj.join("src/app.wvl")).unwrap();
-    let greeting = std::fs::read_to_string(proj.join("src/greeting.wvl")).unwrap();
+    let app = std::fs::read_to_string(proj.join("src/app.wlt")).unwrap();
+    let greeting = std::fs::read_to_string(proj.join("src/greeting.wlt")).unwrap();
 
     assert!(wit::has_host_deps(&collect(&app)), "http app should need fetching");
     assert!(
@@ -128,13 +128,13 @@ fn build_populates_wit_deps_and_lock() {
     // `wasi:cli/environment`, and `wasi:io/streams` directly, so their parsed
     // WIT must be present before emit can lower the calls through the generic
     // bridge.
-    let src_paths = vec![proj.join("src/greeting.wvl"), proj.join("src/main.wvl")];
+    let src_paths = vec![proj.join("src/greeting.wlt"), proj.join("src/main.wlt")];
     wavelet::build::populate_project_wit(&proj, &src_paths).expect("populate wit/deps via wkg");
 
     let out = proj.join("out");
     let sources = vec![
-        proj.join("src/greeting.wvl").to_str().unwrap().to_string(),
-        proj.join("src/main.wvl").to_str().unwrap().to_string(),
+        proj.join("src/greeting.wlt").to_str().unwrap().to_string(),
+        proj.join("src/main.wlt").to_str().unwrap().to_string(),
     ];
     wavelet::build::build_files(&sources, out.to_str().unwrap()).expect("build");
 

@@ -2027,7 +2027,7 @@ impl<'a> Emitter<'a> {
             Node::Qsym(alias, fname) => {
                 // Every imported call goes through the generic canonical-ABI
                 // bridge, driven by the import's parsed WIT signature (from a
-                // sibling `.wvl` or a `wit/deps` package — host `wasi:*`
+                // sibling `.wlt` or a `wit/deps` package — host `wasi:*`
                 // packages included).
                 self.dep_call(fx, &alias, &fname, args)
             }

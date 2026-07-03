@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Wavelet",
   "scopeName": "source.wavelet",
-  "fileTypes": ["wvl"],
+  "fileTypes": ["wlt"],
   "comment": "Token classes mirror the Wavelet lexer (src/lexer.rs) and the shared Prism grammar (docs/src/prism/wavelet.js). Keep the two in sync.",
   "patterns": [
     { "include": "#comment" },

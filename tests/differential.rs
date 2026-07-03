@@ -210,7 +210,7 @@ fn compiled_eval(id: &str, program: &str) -> Result<String, String> {
     let _ = std::fs::remove_dir_all(&dir);
     let src = dir.join("src");
     std::fs::create_dir_all(&src).map_err(|e| format!("setup: {e}"))?;
-    let path = src.join("snippet.wvl");
+    let path = src.join("snippet.wlt");
     std::fs::write(&path, program).map_err(|e| format!("setup: {e}"))?;
 
     let out_dir = dir.join("out");
