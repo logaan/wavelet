@@ -15,11 +15,11 @@ There are four evaluation rules. That's the whole model.
 
 ## Functions take exactly one value
 
-This is the rule that makes everything else fit together. A call bundles its arguments into one value — a scalar (1 argument) or a tuple (≥2) — which may also be a record or list, and that's what gives calls their n-ary feel. The `Fn`'s parameter braces describe how to receive it:
+This is the rule that makes everything else fit together. A call bundles its arguments into one value — a scalar (1 argument) or a tuple (≥2) — which may also be a record, and that's what gives calls their n-ary feel. The `Fn`'s parameter braces describe how to receive it:
 
 - A **record** argument binds parameters by **name**.
-- A **list** or **tuple** argument binds them by **order**.
-- A **scalar** argument binds a sole parameter directly.
+- A **tuple** argument binds them by **order**.
+- Any **single value** — a scalar, a **list**, a record, anything — binds a sole parameter directly. (A list is one value; it is *not* spread across several parameters. Positional multi-binding is the tuple's job.)
 
 So both of these reach the same two-parameter function:
 

@@ -472,9 +472,9 @@ fn bind_params(c: &Closure, arg: Value) -> R<Env> {
     let env = c.env.child();
     let n = c.params.len();
     match (n, &arg) {
-        (0, Value::Lst(v)) | (0, Value::Tup(v)) if v.is_empty() => return Ok(env),
-        (0, Value::Rec(f)) if f.is_empty() => return Ok(env),
-        (0, Value::Flg(f)) if f.is_empty() => return Ok(env),
+        // Only the empty tuple `()` denotes "no arguments"; an empty list,
+        // record, or flags value is a value in its own right (2.1 proposal 1).
+        (0, Value::Tup(v)) if v.is_empty() => return Ok(env),
         (0, _) => return err("function takes no arguments"),
         _ => {}
     }
@@ -498,7 +498,10 @@ fn bind_params(c: &Closure, arg: Value) -> R<Env> {
         return Ok(env);
     }
     match arg {
-        Value::Lst(vs) | Value::Tup(vs) if vs.len() == n => {
+        // A tuple destructures positionally across parameters; a list is one
+        // value (bound above when n == 1) and never fills multiple parameters
+        // (2.1 proposal 1).
+        Value::Tup(vs) if vs.len() == n => {
             for (p, v) in c.params.iter().zip(vs) {
                 bind_one(&env, p, v)?;
             }

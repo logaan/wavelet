@@ -218,7 +218,9 @@ E['std-conv'] = `{byte: to-u8(255) signed: to-s8(-128) float: to-f64(3)}`;
 E['std-conv-bad'] = `to-u8(256)`;
 E['std-char-conv'] = `{code: to-u32('a') char: to-char(98) next: to-char(add(to-u32('a') 1))}`;
 E['std-char-conv-bad'] = `to-char(55296)`;
-E['std-apply'] = `apply(Fn {a b} add(a b) [20 22])`;
+// A single list argument is one value bound to one parameter (2.1), so a
+// computed multi-parameter function is fed a *record* payload, binding by name.
+E['std-apply'] = `apply(Fn {a b} add(a b) {a: 20 b: 22})`;
 // A quoted call is a tuple now, so 'form-kind(Quote foo(1))' reports "tup"; a
 // runtime variant with a payload ('ok(1)') still reports "call".
 E['std-form-kind'] = `[form-kind(42)  form-kind("hi")  form-kind(Quote foo)  form-kind(Quote foo(1))  form-kind(ok(1))  form-kind([1 2])]`;
