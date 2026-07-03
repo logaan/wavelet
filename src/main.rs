@@ -37,6 +37,18 @@ fn main() -> ExitCode {
     }
 }
 
+/// Project root for a source file: the parent of the `src/` dir it lives in
+/// (so foreign macro imports resolve their `.wasm` the same way `wavelet
+/// build` does); `.` when there is no parent.
+fn project_root_of(path: &str) -> std::path::PathBuf {
+    std::path::Path::new(path)
+        .parent()
+        .and_then(|d| d.parent())
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
 fn wit_cmd(path: &str) -> ExitCode {
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -50,12 +62,7 @@ fn wit_cmd(path: &str) -> ExitCode {
     // `wavelet wit` agrees with `wavelet build` about the same source. Project
     // root = parent of the `src/` dir the file lives in; default to `.` when
     // there is no parent.
-    let root = std::path::Path::new(path)
-        .parent()
-        .and_then(|d| d.parent())
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let root = project_root_of(path);
     let result = wavelet::macrodep::read_file_with_macros(&src, &root)
         .map_err(|e| e.to_string())
         .and_then(|(arena, roots)| {
@@ -242,12 +249,7 @@ fn expand_cmd(path: &str) -> ExitCode {
     // Project root = parent of the `src/` dir the file lives in, so foreign
     // macro imports (`Import {… macros: true}`) resolve their `.wasm` the same
     // way `wavelet build` does. Default to `.` when there is no parent.
-    let root = std::path::Path::new(path)
-        .parent()
-        .and_then(|d| d.parent())
-        .filter(|p| !p.as_os_str().is_empty())
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let root = project_root_of(path);
     let result = wavelet::macrodep::read_file_with_macros(&src, &root)
         .map_err(|e| e.to_string())
         .and_then(|(arena, roots)| {
