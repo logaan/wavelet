@@ -478,10 +478,7 @@ fn parse_params(arena: &Arena, id: NodeId) -> R<Vec<Param>> {
     // Parameter *types* are a static concern (`crate::check`); the runtime
     // closure keeps only the names to bind (3.11).
     match arena.node(id) {
-        Node::Flg(names) => Ok(names
-            .iter()
-            .map(|n| Param { name: n.clone() })
-            .collect()),
+        Node::Flg(names) => Ok(names.iter().map(|n| Param { name: n.clone() }).collect()),
         Node::Rec(fields) => Ok(fields
             .iter()
             .map(|(k, _v)| Param { name: k.clone() })
@@ -489,7 +486,6 @@ fn parse_params(arena: &Arena, id: NodeId) -> R<Vec<Param>> {
         _ => err("Fn expects parameter braces"),
     }
 }
-
 
 /// §4.2 patterns: literals match by equality, a bare name binds (unless it is
 /// bound to a payload-less variant case, which matches by equality), call

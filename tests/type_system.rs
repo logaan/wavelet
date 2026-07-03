@@ -655,7 +655,10 @@ fn def_call_result_type_flows_into_the_caller() {
     // g() is inferred string; using it as an arithmetic operand must fail.
     let r = run(r#"Def g Fn {} "s"
 Def f Fn {} add(g() 1)"#);
-    assert!(!r.ok, "string-returning def used as a number must be rejected");
+    assert!(
+        !r.ok,
+        "string-returning def used as a number must be rejected"
+    );
 }
 
 #[test]
@@ -775,7 +778,10 @@ fn defmacro_params_are_trees_in_the_body() {
     // Using a macro parameter as a number is a compile error: parameters are
     // forms (tree), not numbers.
     let r = run("DefMacro bad {x} add(x 1)");
-    assert!(!r.ok, "tree-typed macro parameter used as a number must be rejected");
+    assert!(
+        !r.ok,
+        "tree-typed macro parameter used as a number must be rejected"
+    );
 }
 
 // --- 3.8: richer inference for lists, options, and results --------------------
@@ -831,7 +837,10 @@ Export pick
 Def pick Fn {b: bool} If b days(30) forever"#,
     )
     .expect("nominal variant result should be inferable");
-    assert!(wit.contains("-> ttl"), "variant result not inferred:\n{wit}");
+    assert!(
+        wit.contains("-> ttl"),
+        "variant result not inferred:\n{wit}"
+    );
 }
 
 // --- 3.6: macro-expanded code is checked, not just source forms ---------------
@@ -841,17 +850,13 @@ fn macro_generated_type_error_is_a_compile_error() {
     // The macro's expansion (`add("a" "b")`) is ill-typed even though the
     // source form is an opaque macro call; the post-expansion check catches it
     // before evaluation would.
-    let r = run(
-        "DefMacro bad-add {} Quasi add(\"a\" \"b\")\nDef f Fn {} Bad-add()",
-    );
+    let r = run("DefMacro bad-add {} Quasi add(\"a\" \"b\")\nDef f Fn {} Bad-add()");
     assert!(!r.ok, "macro-generated ill-typed code must be rejected");
 }
 
 #[test]
 fn macro_generated_well_typed_code_still_runs() {
-    let r = run(
-        "DefMacro twice {x} Quasi mul(2 Unquote(x))\nTwice(21)",
-    );
+    let r = run("DefMacro twice {x} Quasi mul(2 Unquote(x))\nTwice(21)");
     assert!(r.ok, "well-typed macro expansion failed: {}", r.error);
     assert_eq!(r.value, "42");
 }
@@ -869,7 +874,11 @@ fn match_on_bool_must_cover_both_literals() {
 fn match_on_bool_with_both_literals_is_total() {
     let r = run(r#"Def f Fn {b: bool} Match b [(true 1) (false 2)]
 f(true)"#);
-    assert!(r.ok, "two-clause bool-literal Match should be total: {}", r.error);
+    assert!(
+        r.ok,
+        "two-clause bool-literal Match should be total: {}",
+        r.error
+    );
     assert_eq!(r.value, "1");
 }
 
@@ -900,7 +909,10 @@ fn match_on_deftype_variant_must_cover_every_case() {
 DefType ttl [days(u32) forever]
 Def f Fn {t: ttl} Match t [(days(d) d)]"#,
     );
-    assert!(r.is_err(), "variant Match missing `forever` must be rejected");
+    assert!(
+        r.is_err(),
+        "variant Match missing `forever` must be rejected"
+    );
     assert!(
         r.as_ref().unwrap_err().contains("missing case `forever`"),
         "{r:?}"
@@ -911,5 +923,8 @@ Def f Fn {t: ttl} Match t [(days(d) d)]"#,
 fn refutable_subpatterns_do_not_count_as_coverage() {
     // `ok([])`/`ok([a])` are refutable list patterns: `ok` is not covered.
     let r = run(r#"Def f Fn {} Match ok([1 2]) [(ok([]) 0) (err(e) 1)]"#);
-    assert!(!r.ok, "refutable ok-subpattern must not count as covering `ok`");
+    assert!(
+        !r.ok,
+        "refutable ok-subpattern must not count as covering `ok`"
+    );
 }

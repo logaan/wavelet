@@ -142,9 +142,9 @@ impl Type {
                         Box::new(Type::from_form(arena, *ok)),
                         Box::new(Type::from_form(arena, *err)),
                     ),
-                    ("tuple", elems) => Type::Tuple(
-                        elems.iter().map(|&e| Type::from_form(arena, e)).collect(),
-                    ),
+                    ("tuple", elems) => {
+                        Type::Tuple(elems.iter().map(|&e| Type::from_form(arena, e)).collect())
+                    }
                     _ => Type::Unknown,
                 }
             }
@@ -235,19 +235,14 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             Box::new(unify(tbl, xe, ye)?),
         )),
         (Tuple(xs), Tuple(ys)) if xs.len() == ys.len() => {
-            let elems: std::option::Option<Vec<Type>> = xs
-                .iter()
-                .zip(ys)
-                .map(|(x, y)| unify(tbl, x, y))
-                .collect();
+            let elems: std::option::Option<Vec<Type>> =
+                xs.iter().zip(ys).map(|(x, y)| unify(tbl, x, y)).collect();
             Some(Tuple(elems?))
         }
 
         // A nominal alias is transparent: unify the other side against its
         // target, keeping the nominal name in the result.
-        (Named(n), t) | (t, Named(n))
-            if matches!(tbl.get(n), Some(TypeDef::Alias(_))) =>
-        {
+        (Named(n), t) | (t, Named(n)) if matches!(tbl.get(n), Some(TypeDef::Alias(_))) => {
             let Some(TypeDef::Alias(target)) = tbl.get(n) else {
                 unreachable!("guard matched an alias")
             };
@@ -481,10 +476,16 @@ fn type_from_wit_text(text: &str) -> Type {
     if let Some(inner) = text.strip_prefix("list<").and_then(|t| t.strip_suffix('>')) {
         return Type::List(Box::new(type_from_wit_text(inner)));
     }
-    if let Some(inner) = text.strip_prefix("option<").and_then(|t| t.strip_suffix('>')) {
+    if let Some(inner) = text
+        .strip_prefix("option<")
+        .and_then(|t| t.strip_suffix('>'))
+    {
         return Type::Option(Box::new(type_from_wit_text(inner)));
     }
-    if let Some(inner) = text.strip_prefix("result<").and_then(|t| t.strip_suffix('>')) {
+    if let Some(inner) = text
+        .strip_prefix("result<")
+        .and_then(|t| t.strip_suffix('>'))
+    {
         let parts = split_wit_args(inner);
         return match parts.as_slice() {
             [ok] => Type::Result(Box::new(type_from_wit_text(ok)), Box::new(Type::Unknown)),
@@ -495,8 +496,16 @@ fn type_from_wit_text(text: &str) -> Type {
             _ => Type::Unknown,
         };
     }
-    if let Some(inner) = text.strip_prefix("tuple<").and_then(|t| t.strip_suffix('>')) {
-        return Type::Tuple(split_wit_args(inner).iter().map(|t| type_from_wit_text(t)).collect());
+    if let Some(inner) = text
+        .strip_prefix("tuple<")
+        .and_then(|t| t.strip_suffix('>'))
+    {
+        return Type::Tuple(
+            split_wit_args(inner)
+                .iter()
+                .map(|t| type_from_wit_text(t))
+                .collect(),
+        );
     }
     if text.contains('<') || text.contains('>') {
         return Type::Unknown;
@@ -591,8 +600,7 @@ impl<'a> Checker<'a> {
             if let Some((name, def)) = as_deftype(arena, root) {
                 if let TypeDef::Variant(cases) = &def {
                     for (case, payload) in cases {
-                        variant_cases
-                            .insert(case.clone(), (name.to_string(), payload.clone()));
+                        variant_cases.insert(case.clone(), (name.to_string(), payload.clone()));
                     }
                 }
                 types.insert(name.to_string(), def);
@@ -848,10 +856,7 @@ fn as_deftype(arena: &Arena, id: NodeId) -> Option<(&str, TypeDef)> {
                         let Node::Sym(case) = arena.node(h) else {
                             return None;
                         };
-                        let tys = payload
-                            .iter()
-                            .map(|&t| Type::from_form(arena, t))
-                            .collect();
+                        let tys = payload.iter().map(|&t| Type::from_form(arena, t)).collect();
                         out.push((case.clone(), tys));
                     }
                     _ => return None,
@@ -1027,9 +1032,9 @@ impl<'a> Checker<'a> {
                 };
                 let mut out = Vec::with_capacity(fields.len());
                 for (k, v) in fields {
-                    let exp = exp_fields.as_ref().and_then(|fs| {
-                        fs.iter().find(|(n, _)| n == k).map(|(_, t)| t.clone())
-                    });
+                    let exp = exp_fields
+                        .as_ref()
+                        .and_then(|fs| fs.iter().find(|(n, _)| n == k).map(|(_, t)| t.clone()));
                     let t = self.check(*v, exp.as_ref(), scope)?;
                     out.push((k.clone(), t));
                 }
@@ -1787,10 +1792,8 @@ impl<'a> Checker<'a> {
                     .unwrap_or(Type::Unknown);
                 Ok(Type::List(Box::new(elem)))
             }
-            "concat" if arg_tys.len() == 2 => {
-                Ok(unify(&self.types, &arg_tys[0], &arg_tys[1])
-                    .unwrap_or(Type::List(Box::new(Type::Unknown))))
-            }
+            "concat" if arg_tys.len() == 2 => Ok(unify(&self.types, &arg_tys[0], &arg_tys[1])
+                .unwrap_or(Type::List(Box::new(Type::Unknown)))),
             "range" => Ok(Type::List(Box::new(Type::S64))),
             "zip" if arg_tys.len() == 2 => Ok(Type::List(Box::new(Type::Tuple(vec![
                 elem_type(arg_tys.first()),
@@ -1822,8 +1825,7 @@ impl<'a> Checker<'a> {
             // Numeric conversions: the result is the named concrete type. A
             // literal argument is range-checked at compile time with the SAME
             // message the runtime conversion produces (3.4).
-            "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32"
-            | "to-s64" => {
+            "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32" | "to-s64" => {
                 let ty = Type::from_name(&name[3..]);
                 if let [arg] = args
                     && let Node::Int(n) = self.arena.node(*arg)
@@ -1965,7 +1967,10 @@ impl<'a> Checker<'a> {
                 }
             }
             Type::Option(t) => self.check_cases_covered(
-                &[("some".to_string(), vec![(**t).clone()]), ("none".to_string(), vec![])],
+                &[
+                    ("some".to_string(), vec![(**t).clone()]),
+                    ("none".to_string(), vec![]),
+                ],
                 pats,
             ),
             Type::Result(o, e) => self.check_cases_covered(

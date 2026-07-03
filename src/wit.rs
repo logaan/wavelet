@@ -857,11 +857,7 @@ pub fn export_names(arena: &Arena, roots: &[NodeId]) -> std::collections::HashSe
 /// Build checker import signatures (3.1) for one resolved import: every
 /// function the dependency exports in `iface`, keyed `alias/name`, its WIT
 /// param/result texts parsed into checker types.
-pub fn import_sigs_for(
-    alias: &str,
-    funcs: &[FuncSig],
-    iface: &str,
-) -> crate::check::ImportSigs {
+pub fn import_sigs_for(alias: &str, funcs: &[FuncSig], iface: &str) -> crate::check::ImportSigs {
     let mut out = crate::check::ImportSigs::new();
     for f in funcs.iter().filter(|f| f.iface == iface) {
         let params: Vec<(String, crate::check::Type)> = f

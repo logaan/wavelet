@@ -154,11 +154,7 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                 continue;
             }
             if let Some(dep) = deps.get(&imp.package) {
-                let iface = imp
-                    .path
-                    .split_once('/')
-                    .map(|(_, i)| i)
-                    .unwrap_or("api");
+                let iface = imp.path.split_once('/').map(|(_, i)| i).unwrap_or("api");
                 import_sigs.extend(wit::import_sigs_for(&imp.alias, &dep.funcs, iface));
             }
         }
