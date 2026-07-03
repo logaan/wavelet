@@ -142,6 +142,28 @@ pub fn eval_snippet(src: &str) -> EvalOutcome {
             };
         }
     };
+    // 3.6: check what macros *generate*, not just the source forms. Macro
+    // expansion runs to fixpoint on a copy and the checker runs again over the
+    // result, so code a macro produces is typed like code the user wrote.
+    // Evaluation still uses the original tree — the interpreter's lazy runtime
+    // expansion is the semantics oracle. An expansion *failure* is left for
+    // the runtime path so its error message is unchanged.
+    {
+        let copy = Arena {
+            nodes: arena.nodes.clone(),
+            spans: arena.spans.clone(),
+        };
+        if let Ok((xarena, xroots)) = expand::expand_file(copy, &roots, None)
+            && let Err(msg) = check::check_program(&xarena, &xroots)
+        {
+            return EvalOutcome {
+                ok: false,
+                value: String::new(),
+                output: String::new(),
+                error: msg,
+            };
+        }
+    }
     let arena = Rc::new(arena);
 
     let interp = interp::Interp::new();

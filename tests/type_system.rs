@@ -834,3 +834,25 @@ Def pick Fn {b: bool} If b days(30) forever"#,
     .expect("nominal variant result should be inferable");
     assert!(wit.contains("-> ttl"), "variant result not inferred:\n{wit}");
 }
+
+// --- 3.6: macro-expanded code is checked, not just source forms ---------------
+
+#[test]
+fn macro_generated_type_error_is_a_compile_error() {
+    // The macro's expansion (`add("a" "b")`) is ill-typed even though the
+    // source form is an opaque macro call; the post-expansion check catches it
+    // before evaluation would.
+    let r = run(
+        "DefMacro bad-add {} Quasi add(\"a\" \"b\")\nDef f Fn {} Bad-add()",
+    );
+    assert!(!r.ok, "macro-generated ill-typed code must be rejected");
+}
+
+#[test]
+fn macro_generated_well_typed_code_still_runs() {
+    let r = run(
+        "DefMacro twice {x} Quasi mul(2 Unquote(x))\nTwice(21)",
+    );
+    assert!(r.ok, "well-typed macro expansion failed: {}", r.error);
+    assert_eq!(r.value, "42");
+}
