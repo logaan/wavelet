@@ -111,7 +111,6 @@ const SKIP: &[(&str, &str)] = &[
     ("values-options-results", TOSTR_TRAP),
     ("values-quote-days", TOSTR_TRAP), // form result
     ("values-record", TOSTR_TRAP),     // record result
-    ("values-to-u8-ok", BUILTIN),      // to-u8
 ];
 
 const PACKAGE: &str = "docs:snippet@0.1.0";

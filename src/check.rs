@@ -403,7 +403,22 @@ struct Checker<'a> {
     /// inference gets `Unknown` for the recursive call, exactly like the
     /// `visiting` guard in [`crate::wit`]'s inference.
     sig_in_progress: RefCell<std::collections::HashSet<NodeId>>,
+    /// Every expression node's inferred static type, recorded as a side effect
+    /// of [`Self::check`] (goal 5: the wasm backend reads this to choose
+    /// type-directed representations). Last write wins: speculative passes
+    /// (return-type-directed resolution, sig-result inference) may record
+    /// transiently, but the authoritative `check_roots` walk re-records each
+    /// body's settled types. A node absent from the table simply keeps the
+    /// boxed fallback in the backend, so coverage is best-effort by design.
+    node_types: RefCell<NodeTypes>,
 }
+
+/// A per-node static-type table: expression `NodeId` -> inferred [`Type`],
+/// produced by [`node_types_with_imports`] and consumed by the wasm backend
+/// (goal 5, ABI-native representation). Nodes the checker cannot type stay
+/// absent or map to `Type::Unknown` — the backend treats both as "use the
+/// boxed fallback".
+pub type NodeTypes = HashMap<NodeId, Type>;
 
 /// Strict mode (3.9): when set, `Type::Unknown` is an **error** rather than a
 /// gradual top — every expression must have a concrete static type. Shipped
@@ -456,6 +471,23 @@ pub fn check_program_with_imports(
 /// declared import signatures into the checker (3.1).
 pub fn type_from_wit(text: &str) -> Type {
     type_from_wit_text(text)
+}
+
+/// Type-check a program and return the per-node static-type table (goal 5).
+///
+/// Runs exactly the checking of [`check_program_with_imports`]; on success the
+/// returned table maps each checked expression node to its settled type. The
+/// wasm backend calls this on the same (possibly overload-rewritten) arena it
+/// emits from, so the `NodeId` keys line up with the nodes it walks.
+pub fn node_types_with_imports(
+    arena: &Arena,
+    roots: &[NodeId],
+    imports: &ImportSigs,
+) -> Result<NodeTypes, String> {
+    let mut checker = Checker::collect(arena, roots);
+    checker.import_sigs = imports.clone();
+    checker.check_roots(roots)?;
+    Ok(checker.node_types.into_inner())
 }
 
 /// A WIT-rendered inference outcome, for [`infer_wit_result`]. Mirrors the
@@ -656,6 +688,7 @@ impl<'a> Checker<'a> {
             resolved: RefCell::new(HashMap::new()),
             sig_result_cache: RefCell::new(HashMap::new()),
             sig_in_progress: RefCell::new(std::collections::HashSet::new()),
+            node_types: RefCell::new(HashMap::new()),
         }
     }
 
@@ -976,6 +1009,7 @@ impl<'a> Checker<'a> {
                     .to_string(),
             );
         }
+        self.node_types.borrow_mut().insert(id, ty.clone());
         Ok(ty)
     }
 

@@ -13,7 +13,40 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Compiled components reset their heap between export calls.** Every export
+  now carries a canonical post-return function that resets the bump allocator
+  to the arena floor once the caller has read the results, so a long-lived
+  instance no longer grows memory monotonically across calls (arena-per-call;
+  module-level value defs recompute per call). Components that instantiate
+  functors (`Set`) keep the previous never-free behaviour for now, since their
+  resource state lives on the same heap.
+
 ### Added
+
+- **The numeric conversion builtins work in compiled components.**
+  `to-u8`…`to-s64`, `to-f32`/`to-f64`, and `to-char` compile for
+  statically-typed operands, with the interpreter's exact semantics: range
+  errors trap, chars convert through their codepoint, whole floats truncate.
+  The next-Unicode-scalar transform (`to-char(add(to-u32(c) 1))`) now
+  compiles.
+
+- **Flags values work in compiled components.** A flags literal (`{read
+  write}`) evaluates in the wasm backend to the same value the interpreter
+  produces (`Value::Flg` — the set names), crosses boundaries as the
+  canonical i32 bitset, and lifts back with the set names in declaration
+  order; `eq` over flags matches the interpreter exactly. The conformance
+  runner's `permissions-rt` checks are restored — every caller-role check
+  the suite defines is now present and green against both Rust callees.
+
+- **`f32` is supported by the wasm backend.** Exports and imports may use
+  `f32` in any position — flat params/results, record/tuple fields, list
+  elements, variant/option/result payloads. Internally every float remains an
+  `f64` (matching the interpreter, which models all floats as `f64`); `f32`
+  is a boundary-only representation, promoted on lift and demoted on lower.
+  The conformance runner's `f32-rt` and `every-primitive-rt` checks are
+  restored and green against both Rust callees.
 
 - **Variant/enum case constructors are bound values.** A `DefType name
   [case case(t) …]` declaration now binds each case in the value namespace:

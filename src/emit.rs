@@ -89,6 +89,11 @@ enum WitTy {
     IntS(u8), // s8/s16/s32 (byte width 1/2/4) — i32 flat, sign-extended into the int box
     IntU(u8), // u8/u16/u32 (byte width 1/2/4)
     S64,      // s64/u64 — i64 flat
+    /// f32 — a BOUNDARY-ONLY representation (goal 5 / 5.2): one f32 flat,
+    /// stored 4-byte in memory, but carried internally as the interpreter's
+    /// f64 `Value::Dec` (promote on lift, demote on lower), exactly as the
+    /// interpreter models every float as f64.
+    F32,
     F64,
     Str,
     List(Box<WitTy>),
@@ -273,6 +278,7 @@ fn wit_ty(s: &str, env: &TypeEnv) -> Result<WitTy, String> {
         "u16" => WitTy::IntU(2),
         "u32" => WitTy::IntU(4),
         "s64" | "u64" => WitTy::S64,
+        "f32" => WitTy::F32,
         "f64" => WitTy::F64,
         "string" => WitTy::Str,
         other => {
@@ -402,6 +408,7 @@ fn flat_len(ty: &WitTy) -> usize {
         | WitTy::IntS(_)
         | WitTy::IntU(_)
         | WitTy::S64
+        | WitTy::F32
         | WitTy::F64
         | WitTy::Handle
         | WitTy::Enum(_)
@@ -432,6 +439,7 @@ fn flat_checked(ty: &WitTy) -> Result<Vec<ValType>, String> {
         | WitTy::Enum(_)
         | WitTy::Flags(_) => vec![ValType::I32],
         WitTy::S64 => vec![ValType::I64],
+        WitTy::F32 => vec![ValType::F32],
         WitTy::F64 => vec![ValType::F64],
         WitTy::Str | WitTy::List(_) => vec![ValType::I32, ValType::I32],
         WitTy::Record(fields) => {
@@ -471,6 +479,7 @@ fn align_of(ty: &WitTy) -> u64 {
         WitTy::Bool => 1,
         WitTy::Char | WitTy::Handle => 4,
         WitTy::IntS(w) | WitTy::IntU(w) => *w as u64,
+        WitTy::F32 => 4,
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 4, // (ptr, len), pointer-aligned
         WitTy::Record(fields) => fields.iter().map(|(_, t)| align_of(t)).max().unwrap_or(1),
@@ -523,6 +532,7 @@ fn size_of(ty: &WitTy) -> u64 {
         WitTy::Bool => 1,
         WitTy::Char | WitTy::Handle => 4,
         WitTy::IntS(w) | WitTy::IntU(w) => *w as u64,
+        WitTy::F32 => 4,
         WitTy::S64 | WitTy::F64 => 8,
         WitTy::Str | WitTy::List(_) => 8,
         WitTy::Enum(cases) => disc_size(cases.len()),
@@ -598,6 +608,7 @@ fn elem_size(ty: &WitTy) -> u64 {
         WitTy::Bool => 1,
         WitTy::Char | WitTy::Handle => 4,
         WitTy::IntS(w) | WitTy::IntU(w) => *w as u64,
+        WitTy::F32 => 4,
         WitTy::S64 | WitTy::F64 | WitTy::Str | WitTy::List(_) => 8,
         WitTy::Enum(_) | WitTy::Flags(_) => size_of(ty),
         WitTy::Record(_)
@@ -682,7 +693,7 @@ struct FnCtx {
     instrs: Vec<I<'static>>,
     n_params: u32,
     extra_locals: Vec<ValType>,
-    scopes: Vec<HashMap<String, u32>>,
+    scopes: Vec<HashMap<String, Binding>>,
 }
 
 impl FnCtx {
@@ -702,10 +713,10 @@ impl FnCtx {
     fn op(&mut self, i: I<'static>) {
         self.instrs.push(i);
     }
-    fn lookup(&self, name: &str) -> Option<u32> {
+    fn lookup(&self, name: &str) -> Option<Binding> {
         for scope in self.scopes.iter().rev() {
-            if let Some(&i) = scope.get(name) {
-                return Some(i);
+            if let Some(&b) = scope.get(name) {
+                return Some(b);
             }
         }
         None
@@ -722,6 +733,7 @@ impl FnCtx {
 
 // ------------------------------------------------------------- helper ids
 
+#[derive(Default)]
 struct Helpers {
     alloc: u32,
     realloc: u32,
@@ -745,6 +757,14 @@ struct Helpers {
     arith_raw: u32,
     cmp_raw: u32,
     neg_raw: u32,
+    /// `arith_int(a: i64, b: i64, op: i32) -> i64` — the checked integer
+    /// arithmetic core (op: 0=add 1=sub 2=mul 3=div 4=rem), shared by the
+    /// boxed `arith_raw` and the goal-5 typed scalar path so their semantics
+    /// cannot drift.
+    arith_int: u32,
+    /// `cmp_f64(x: f64, y: f64) -> i32` in {-1,0,1}; traps on NaN. The
+    /// numeric tail of `cmp_raw`, shared with the typed scalar path.
+    cmp_f64: u32,
 }
 
 // ---------------------------------------------------------------- emitter
@@ -1234,6 +1254,56 @@ fn dep_case(dep: &Dep, name: &str) -> Option<bool> {
     })
 }
 
+/// One name in a function's lexical scope: which wasm local holds it and,
+/// under goal 5, whether that local is an UNBOXED scalar (`Some(kind)`) or a
+/// box pointer (`None`).
+#[derive(Clone, Copy)]
+struct Binding {
+    local: u32,
+    scalar: Option<Scalar>,
+}
+
+impl Binding {
+    /// A boxed (i32 box-pointer) binding — the pre-goal-5 default.
+    fn boxed(local: u32) -> Binding {
+        Binding {
+            local,
+            scalar: None,
+        }
+    }
+}
+
+/// The unboxed representation of a *scalar-kinded* value on the wasm stack
+/// (goal 5, 5.2/5.6.1). The kind mirrors the interpreter's value variants —
+/// NOT the WIT width — so typed code computes exactly what the oracle
+/// computes: every integer type (and an unresolved int literal) is the
+/// interpreter's `Value::Int` domain, i.e. one i64; every float type is
+/// `Value::Dec` (f64; f32 is a boundary-only representation); `Value::Bool`
+/// is an i32 0/1; `Value::Char` is its Unicode scalar as an i64.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Scalar {
+    Int,
+    Float,
+    Bool,
+    Char,
+}
+
+impl Scalar {
+    /// The static-scalar kind of a checker type, if it has one.
+    fn of(ty: &crate::check::Type) -> Option<Scalar> {
+        use crate::check::Type as T;
+        Some(match ty {
+            T::Bool => Scalar::Bool,
+            T::U8 | T::U16 | T::U32 | T::U64 | T::S8 | T::S16 | T::S32 | T::S64 | T::IntLit(_) => {
+                Scalar::Int
+            }
+            T::F32 | T::F64 | T::FloatLit => Scalar::Float,
+            T::Char => Scalar::Char,
+            _ => return None,
+        })
+    }
+}
+
 struct Emitter<'a> {
     arena: &'a Arena,
     info: &'a FileInfo,
@@ -1270,6 +1340,11 @@ struct Emitter<'a> {
     /// an `alias/op` call (`pts/new`, `pts/add`, …) to the matching resource fn
     /// while those bodies are still being lowered (step 04 routing).
     functor_fns: HashMap<String, ResourceFns>,
+    /// Per-node static types from the checker (goal 5): the emitter consults
+    /// this to choose type-directed (unboxed/ABI-native) representations.
+    /// Empty when checking failed or was skipped — every node then keeps the
+    /// boxed fallback, which is always semantics-preserving.
+    node_types: crate::check::NodeTypes,
 }
 
 impl<'a> Emitter<'a> {
@@ -1343,7 +1418,13 @@ impl<'a> Emitter<'a> {
                 self.box_char(fx);
             }
             Node::Sym(name) => match fx.lookup(&name) {
-                Some(idx) => fx.op(I::LocalGet(idx)),
+                Some(b) => {
+                    fx.op(I::LocalGet(b.local));
+                    // a goal-5 typed local boxes at the seam to boxed code
+                    if let Some(kind) = b.scalar {
+                        self.box_scalar(fx, kind);
+                    }
+                }
                 None => return self.value_def_ref(fx, &name),
             },
             // Every fully-expanded tuple in evaluation position is a call.
@@ -1355,8 +1436,10 @@ impl<'a> Emitter<'a> {
             }
             Node::Lst(items) => return self.list_box(fx, &items),
             Node::Rec(fields) => return self.rec_box(fx, &fields),
-            Node::Flg(_) => {
-                return Err("flag literals not supported by the wasm backend yet".into());
+            Node::Flg(names) => {
+                // A flags literal IS the interpreter's `Value::Flg(names)`:
+                // a TAG_FLG box over the set names, in source order (5.4).
+                self.flg_box(fx, &names);
             }
             Node::Qsym(a, n) => {
                 // A dep-declared nullary variant/enum case referenced through
@@ -2020,14 +2103,14 @@ impl<'a> Emitter<'a> {
 
         // captures: every visible local by name (later scopes shadow earlier),
         // sorted so the layout is deterministic
-        let mut cap_map: HashMap<String, u32> = HashMap::new();
+        let mut cap_map: HashMap<String, Binding> = HashMap::new();
         for scope in &fx.scopes {
             for (k, &v) in scope {
                 cap_map.insert(k.clone(), v);
             }
         }
-        let mut caps: Vec<(String, u32)> = cap_map.into_iter().collect();
-        caps.sort();
+        let mut caps: Vec<(String, Binding)> = cap_map.into_iter().collect();
+        caps.sort_by(|a, b| a.0.cmp(&b.0));
 
         let mut cf = FnCtx::new(2);
         let mut scope = HashMap::new();
@@ -2036,12 +2119,12 @@ impl<'a> Emitter<'a> {
             cf.op(I::LocalGet(0));
             cf.op(I::I32Load(ma(12 + 4 * j as u64, 2)));
             cf.op(I::LocalSet(l));
-            scope.insert(cname.clone(), l);
+            scope.insert(cname.clone(), Binding::boxed(l));
         }
         match params.len() {
             0 => {}
             1 => {
-                scope.insert(params[0].clone(), 1);
+                scope.insert(params[0].clone(), Binding::boxed(1));
             }
             n => {
                 // payload must be a list box of exactly n elements
@@ -2064,7 +2147,7 @@ impl<'a> Emitter<'a> {
                     cf.op(I::LocalGet(1));
                     cf.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
                     cf.op(I::LocalSet(l));
-                    scope.insert(p.clone(), l);
+                    scope.insert(p.clone(), Binding::boxed(l));
                 }
             }
         }
@@ -2088,9 +2171,14 @@ impl<'a> Emitter<'a> {
         fx.op(I::LocalGet(p));
         fx.op(I::I32Const(k as i32));
         fx.op(I::I32Store(ma(8, 2)));
-        for (j, (_, lidx)) in caps.iter().enumerate() {
+        for (j, (_, cap)) in caps.iter().enumerate() {
             fx.op(I::LocalGet(p));
-            fx.op(I::LocalGet(*lidx));
+            fx.op(I::LocalGet(cap.local));
+            // a goal-5 typed local boxes at the capture seam (closure
+            // capture slots hold box pointers)
+            if let Some(kind) = cap.scalar {
+                self.box_scalar(fx, kind);
+            }
             fx.op(I::I32Store(ma(12 + 4 * j as u64, 2)));
         }
         fx.op(I::LocalGet(p));
@@ -2220,8 +2308,14 @@ impl<'a> Emitter<'a> {
         let [c, t, e] = *args else {
             return Err("malformed If".into());
         };
-        self.expr(fx, c, false)?;
-        fx.op(I::Call(self.h.truthy));
+        // Goal 5: a statically-bool condition evaluates unboxed — a typed
+        // comparison as an If condition allocates nothing at all.
+        if self.node_scalar(c) == Some(Scalar::Bool) {
+            self.expr_scalar(fx, c, Scalar::Bool)?;
+        } else {
+            self.expr(fx, c, false)?;
+            fx.op(I::Call(self.h.truthy));
+        }
         fx.op(I::If(BlockType::Result(ValType::I32)));
         self.expr(fx, t, tail)?;
         fx.op(I::Else);
@@ -2257,10 +2351,26 @@ impl<'a> Emitter<'a> {
         };
         fx.scopes.push(HashMap::new());
         for (k, v) in &fields {
-            self.expr(fx, *v, false)?;
-            let l = fx.local(ValType::I32);
-            fx.op(I::LocalSet(l));
-            fx.scopes.last_mut().unwrap().insert(k.clone(), l);
+            // Goal 5 (5.2): a binding with a statically-known scalar type
+            // lives UNBOXED in a typed wasm local; scalar consumers read it
+            // directly, boxed consumers box at the reference seam.
+            let binding = if let Some(kind) = self.node_scalar(*v) {
+                self.expr_scalar(fx, *v, kind)?;
+                let l = fx.local(match kind {
+                    Scalar::Int | Scalar::Char => ValType::I64,
+                    Scalar::Float => ValType::F64,
+                    Scalar::Bool => ValType::I32,
+                });
+                Binding {
+                    local: l,
+                    scalar: Some(kind),
+                }
+            } else {
+                self.expr(fx, *v, false)?;
+                Binding::boxed(fx.local(ValType::I32))
+            };
+            fx.op(I::LocalSet(binding.local));
+            fx.scopes.last_mut().unwrap().insert(k.clone(), binding);
         }
         let r = self.expr(fx, body, tail);
         fx.scopes.pop();
@@ -2332,7 +2442,10 @@ impl<'a> Emitter<'a> {
                 let l = fx.local(ValType::I32);
                 fx.op(I::LocalGet(v));
                 fx.op(I::LocalSet(l));
-                fx.scopes.last_mut().unwrap().insert(name, l);
+                fx.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(name, Binding::boxed(l));
                 Ok(())
             }
             Node::Int(_) | Node::Dec(_) | Node::Bool(_) | Node::Str(_) => {
@@ -2727,6 +2840,11 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32WrapI64);
             }
             WitTy::S64 => fx.op(I::Call(self.h.unbox_int)),
+            WitTy::F32 => {
+                // boundary-only f32: internally an f64 Dec box, demoted here
+                fx.op(I::Call(self.h.unbox_dec));
+                fx.op(I::F32DemoteF64);
+            }
             WitTy::F64 => fx.op(I::Call(self.h.unbox_dec)),
             WitTy::Str => {
                 let t = fx.local(ValType::I32);
@@ -2812,7 +2930,11 @@ impl<'a> Emitter<'a> {
                 self.lower_enum_chain(fx, b, cases, resty, 0)?;
             }
             WitTy::Flags(names) => {
-                // flags record box → bitset i32: OR `1<<i` for each set flag.
+                // flags value box (TAG_FLG: the set names, like the
+                // interpreter's `Value::Flg`) → bitset i32: OR `1<<i` for
+                // each declared member present in the box. Names the type
+                // does not declare contribute no bit (the checker rejects
+                // them statically for typed literals).
                 let b = fx.local(ValType::I32);
                 let acc = fx.local(ValType::I32);
                 fx.op(I::LocalSet(b));
@@ -2820,11 +2942,11 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalSet(acc));
                 for (i, name) in names.iter().enumerate() {
                     let kaddr = self.intern_str(name);
-                    fx.op(I::LocalGet(acc));
-                    fx.op(I::LocalGet(b));
+                    let needle = fx.local(ValType::I32);
                     fx.op(I::I32Const(kaddr as i32));
-                    fx.op(I::Call(self.h.rec_get));
-                    fx.op(I::Call(self.h.truthy));
+                    fx.op(I::LocalSet(needle));
+                    fx.op(I::LocalGet(acc));
+                    emit_list_contains(self, fx, b, needle);
                     fx.op(I::I32Const(i as i32));
                     fx.op(I::I32Shl);
                     fx.op(I::I32Or);
@@ -3064,6 +3186,10 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.box_int));
             }
             WitTy::S64 => fx.op(I::Call(self.h.box_int)),
+            WitTy::F32 => {
+                fx.op(I::F64PromoteF32);
+                fx.op(I::Call(self.h.box_dec));
+            }
             WitTy::F64 => fx.op(I::Call(self.h.box_dec)),
             WitTy::Enum(cases) => {
                 // disc i32 on stack → payload-less variant box of the i-th case.
@@ -3122,34 +3248,49 @@ impl<'a> Emitter<'a> {
         fx.op(I::End);
     }
 
-    /// bitset in local `v` → record box `{name: bool …}`, one field per flag set
-    /// to `(v >> i) & 1`.
+    /// bitset in local `v` → flags value box (TAG_FLG: the names of the set
+    /// bits, in declaration order — the interpreter's `Value::Flg`).
     fn lift_flags(&mut self, fx: &mut FnCtx, v: u32, names: &[String]) {
         let n = names.len();
         let p = fx.local(ValType::I32);
-        fx.op(I::I32Const(8 + 8 * n as i32));
+        let idx = fx.local(ValType::I32);
+        // allocate for the worst case (all bits set); the bump allocator
+        // wastes the unset slots, which die with the arena
+        fx.op(I::I32Const(8 + 4 * n as i32));
         fx.op(I::Call(self.h.alloc));
         fx.op(I::LocalSet(p));
         fx.op(I::LocalGet(p));
-        fx.op(I::I32Const(TAG_REC));
+        fx.op(I::I32Const(TAG_FLG));
         fx.op(I::I32Store(ma(0, 2)));
-        fx.op(I::LocalGet(p));
-        fx.op(I::I32Const(n as i32));
-        fx.op(I::I32Store(ma(4, 2)));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(idx));
         for (i, name) in names.iter().enumerate() {
             let kaddr = self.intern_str(name);
-            fx.op(I::LocalGet(p));
-            fx.op(I::I32Const(kaddr as i32));
-            fx.op(I::I32Store(ma(8 + 8 * i as u64, 2)));
-            fx.op(I::LocalGet(p));
+            // if (v >> i) & 1 { box[8 + 4*idx] = name; idx += 1 }
             fx.op(I::LocalGet(v));
             fx.op(I::I32Const(i as i32));
             fx.op(I::I32ShrU);
             fx.op(I::I32Const(1));
             fx.op(I::I32And);
-            fx.op(I::Call(self.h.box_bool));
-            fx.op(I::I32Store(ma(12 + 8 * i as u64, 2)));
+            fx.op(I::If(BlockType::Empty));
+            fx.op(I::LocalGet(p));
+            fx.op(I::I32Const(8));
+            fx.op(I::I32Add);
+            fx.op(I::LocalGet(idx));
+            fx.op(I::I32Const(2));
+            fx.op(I::I32Shl);
+            fx.op(I::I32Add);
+            fx.op(I::I32Const(kaddr as i32));
+            fx.op(I::I32Store(ma(0, 2)));
+            fx.op(I::LocalGet(idx));
+            fx.op(I::I32Const(1));
+            fx.op(I::I32Add);
+            fx.op(I::LocalSet(idx));
+            fx.op(I::End);
         }
+        fx.op(I::LocalGet(p));
+        fx.op(I::LocalGet(idx));
+        fx.op(I::I32Store(ma(4, 2)));
         fx.op(I::LocalGet(p));
     }
 
@@ -3346,6 +3487,13 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(src));
                 fx.op(I::Call(self.h.unbox_int));
                 fx.op(I::I64Store(ma(off, 3)));
+            }
+            WitTy::F32 => {
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(src));
+                fx.op(I::Call(self.h.unbox_dec));
+                fx.op(I::F32DemoteF64);
+                fx.op(I::F32Store(ma(off, 2)));
             }
             WitTy::F64 => {
                 fx.op(I::LocalGet(dst));
@@ -3553,6 +3701,12 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(src));
                 fx.op(I::I64Load(ma(off, 3)));
                 fx.op(I::Call(self.h.box_int));
+            }
+            WitTy::F32 => {
+                fx.op(I::LocalGet(src));
+                fx.op(I::F32Load(ma(off, 2)));
+                fx.op(I::F64PromoteF32);
+                fx.op(I::Call(self.h.box_dec));
             }
             WitTy::F64 => {
                 fx.op(I::LocalGet(src));
@@ -3828,7 +3982,369 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// The scalar kind of `id`'s checker-inferred static type, if any
+    /// (goal 5). Absent/unknown/compound types return `None` — the boxed
+    /// fallback.
+    fn node_scalar(&self, id: NodeId) -> Option<Scalar> {
+        Scalar::of(self.node_types.get(&id)?)
+    }
+
+    /// Box an unboxed scalar on the stack (the typed→boxed seam).
+    fn box_scalar(&mut self, fx: &mut FnCtx, kind: Scalar) {
+        match kind {
+            Scalar::Int => fx.op(I::Call(self.h.box_int)),
+            Scalar::Float => fx.op(I::Call(self.h.box_dec)),
+            Scalar::Bool => fx.op(I::Call(self.h.box_bool)),
+            Scalar::Char => self.box_char(fx),
+        }
+    }
+
+    /// Emit expression `id` UNBOXED as scalar kind `want` (goal 5, 5.2).
+    ///
+    /// The caller must have established that `id`'s static value kind is
+    /// `want` — or is `Int` while `want` is `Float`, which widens like the
+    /// interpreter's `want_num` in mixed arithmetic. Literals and nested
+    /// scalar operations compile natively with no intermediate boxes;
+    /// anything else falls back to the boxed emitter plus one unbox. The
+    /// unbox helpers trap on a tag the static type ruled out, exactly where
+    /// the boxed path traps inside the polymorphic runtime helper, so the
+    /// two representations fail on the same programs.
+    fn expr_scalar(&mut self, fx: &mut FnCtx, id: NodeId, want: Scalar) -> Result<(), String> {
+        match self.arena.node(id).clone() {
+            Node::Int(n) => {
+                if want == Scalar::Float {
+                    // an int literal in float context: the interpreter widens
+                    fx.op(I::F64Const((n as f64).into()));
+                } else {
+                    fx.op(I::I64Const(n));
+                }
+                return Ok(());
+            }
+            Node::Dec(d) => {
+                fx.op(I::F64Const(d.into()));
+                return Ok(());
+            }
+            Node::Bool(b) => {
+                fx.op(I::I32Const(b as i32));
+                return Ok(());
+            }
+            Node::Char(c) => {
+                fx.op(I::I64Const(c as u32 as i64));
+                return Ok(());
+            }
+            Node::Sym(name) => {
+                // a goal-5 typed local reads directly — no box round-trip
+                if let Some(b) = fx.lookup(&name)
+                    && let Some(kind) = b.scalar
+                {
+                    fx.op(I::LocalGet(b.local));
+                    if kind == Scalar::Int && want == Scalar::Float {
+                        fx.op(I::F64ConvertI64S);
+                    }
+                    return Ok(());
+                }
+            }
+            Node::Tup(items) if !items.is_empty() => {
+                if let Node::Sym(name) = self.arena.node(items[0]).clone()
+                    && fx.lookup(&name).is_none()
+                    && let Some(kind) = self.scalar_op(fx, &name, &items[1..])?
+                {
+                    if kind == Scalar::Int && want == Scalar::Float {
+                        fx.op(I::F64ConvertI64S);
+                    }
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+        // Boxed fallback + one unbox at the seam.
+        self.expr(fx, id, false)?;
+        match (self.node_scalar(id), want) {
+            (Some(Scalar::Int), Scalar::Float) => {
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::F64ConvertI64S);
+            }
+            (_, Scalar::Int) => fx.op(I::Call(self.h.unbox_int)),
+            (_, Scalar::Float) => fx.op(I::Call(self.h.as_f64)),
+            (_, Scalar::Bool) => fx.op(I::Call(self.h.truthy)),
+            (_, Scalar::Char) => fx.op(I::Call(self.h.unbox_char)),
+        }
+        Ok(())
+    }
+
+    /// If `name(args)` is a scalar builtin whose operand kinds are statically
+    /// known, emit it UNBOXED and return the result kind; `Ok(None)` (with
+    /// nothing emitted) means "not eligible — use the boxed path". This is
+    /// the goal-5 static resolution of the polymorphic builtins (5.6.1):
+    /// arithmetic picks the int/float path at compile time, comparisons pick
+    /// codepoint/numeric at compile time, and eq compiles to one machine
+    /// comparison. Semantics are shared with the boxed path via the
+    /// arith_int/cmp_f64 helper cores.
+    fn scalar_op(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        args: &[NodeId],
+    ) -> Result<Option<Scalar>, String> {
+        use Scalar::*;
+        match name {
+            "add" | "sub" | "mul" | "div" | "rem" if args.len() == 2 => {
+                let (Some(ka), Some(kb)) = (self.node_scalar(args[0]), self.node_scalar(args[1]))
+                else {
+                    return Ok(None);
+                };
+                if !matches!(ka, Int | Float) || !matches!(kb, Int | Float) {
+                    return Ok(None);
+                }
+                if ka == Float || kb == Float {
+                    // float path: both widened to f64, like the interpreter
+                    self.expr_scalar(fx, args[0], Float)?;
+                    self.expr_scalar(fx, args[1], Float)?;
+                    match name {
+                        "add" => fx.op(I::F64Add),
+                        "sub" => fx.op(I::F64Sub),
+                        "mul" => fx.op(I::F64Mul),
+                        "div" => fx.op(I::F64Div),
+                        _ => {
+                            // rem: x - trunc(x/y)*y (Rust f64 `%`, like arith_raw)
+                            let y = fx.local(ValType::F64);
+                            let x = fx.local(ValType::F64);
+                            fx.op(I::LocalSet(y));
+                            fx.op(I::LocalSet(x));
+                            fx.op(I::LocalGet(x));
+                            fx.op(I::LocalGet(x));
+                            fx.op(I::LocalGet(y));
+                            fx.op(I::F64Div);
+                            fx.op(I::F64Trunc);
+                            fx.op(I::LocalGet(y));
+                            fx.op(I::F64Mul);
+                            fx.op(I::F64Sub);
+                        }
+                    }
+                    Ok(Some(Float))
+                } else {
+                    // int path: the shared checked-arithmetic core
+                    self.expr_scalar(fx, args[0], Int)?;
+                    self.expr_scalar(fx, args[1], Int)?;
+                    fx.op(I::I32Const(match name {
+                        "add" => 0,
+                        "sub" => 1,
+                        "mul" => 2,
+                        "div" => 3,
+                        _ => 4,
+                    }));
+                    fx.op(I::Call(self.h.arith_int));
+                    Ok(Some(Int))
+                }
+            }
+            "neg" if args.len() == 1 => match self.node_scalar(args[0]) {
+                Some(Int) => {
+                    // wrapping 0 - x, exactly neg_raw's int arm
+                    fx.op(I::I64Const(0));
+                    self.expr_scalar(fx, args[0], Int)?;
+                    fx.op(I::I64Sub);
+                    Ok(Some(Int))
+                }
+                Some(Float) => {
+                    self.expr_scalar(fx, args[0], Float)?;
+                    fx.op(I::F64Neg);
+                    Ok(Some(Float))
+                }
+                _ => Ok(None),
+            },
+            "lt" | "le" | "gt" | "ge" if args.len() == 2 => {
+                let (Some(ka), Some(kb)) = (self.node_scalar(args[0]), self.node_scalar(args[1]))
+                else {
+                    return Ok(None);
+                };
+                match (ka, kb) {
+                    (Char, Char) => {
+                        // by codepoint, like cmp_raw's char arm
+                        self.expr_scalar(fx, args[0], Char)?;
+                        self.expr_scalar(fx, args[1], Char)?;
+                    }
+                    (Int | Float, Int | Float) => {
+                        // widened to f64 (cmp_f64 core), like the
+                        // interpreter's `compare` — ints included
+                        self.expr_scalar(fx, args[0], Float)?;
+                        self.expr_scalar(fx, args[1], Float)?;
+                        fx.op(I::Call(self.h.cmp_f64));
+                        fx.op(I::I64ExtendI32S);
+                        fx.op(I::I64Const(0));
+                    }
+                    // strings keep the boxed cmp_raw; mixed char/number is a
+                    // runtime error either way (boxed path traps in as_f64)
+                    _ => return Ok(None),
+                }
+                fx.op(match name {
+                    "lt" => I::I64LtS,
+                    "le" => I::I64LeS,
+                    "gt" => I::I64GtS,
+                    _ => I::I64GeS,
+                });
+                Ok(Some(Bool))
+            }
+            "eq" if args.len() == 2 => {
+                let (Some(ka), Some(kb)) = (self.node_scalar(args[0]), self.node_scalar(args[1]))
+                else {
+                    return Ok(None);
+                };
+                if ka != kb {
+                    // Int-vs-Float etc. is `false` at the value level, but the
+                    // boxed eq_raw already answers that: keep one source of
+                    // truth for cross-kind eq.
+                    return Ok(None);
+                }
+                self.expr_scalar(fx, args[0], ka)?;
+                self.expr_scalar(fx, args[1], ka)?;
+                fx.op(match ka {
+                    Int | Char => I::I64Eq,
+                    Float => I::F64Eq,
+                    Bool => I::I32Eq,
+                });
+                Ok(Some(Bool))
+            }
+            "not" if args.len() == 1 => {
+                if self.node_scalar(args[0]) != Some(Bool) {
+                    return Ok(None);
+                }
+                self.expr_scalar(fx, args[0], Bool)?;
+                fx.op(I::I32Eqz);
+                Ok(Some(Bool))
+            }
+            // Numeric conversions (5.6): the interpreter accepts an int
+            // (range-checked), a char (its codepoint), or a whole float
+            // (truncated), and yields Value::Int; to-f32/f64 widen to
+            // Value::Dec. Statically-typed operands compile per kind; a
+            // gradual operand keeps the honest "not supported" error.
+            "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32" | "to-s64"
+                if args.len() == 1 =>
+            {
+                match self.node_scalar(args[0]) {
+                    Some(k @ (Int | Char)) => self.expr_scalar(fx, args[0], k)?,
+                    Some(Float) => {
+                        // `Dec(f) if f.fract() == 0.0` — else the interpreter
+                        // errors (NaN included); then Rust's saturating `as`
+                        self.expr_scalar(fx, args[0], Float)?;
+                        let f = fx.local(ValType::F64);
+                        fx.op(I::LocalTee(f));
+                        fx.op(I::LocalGet(f));
+                        fx.op(I::F64Trunc);
+                        fx.op(I::F64Ne); // true for any fraction and for NaN
+                        fx.op(I::If(BlockType::Empty));
+                        fx.op(I::Unreachable);
+                        fx.op(I::End);
+                        fx.op(I::LocalGet(f));
+                        fx.op(I::I64TruncSatF64S);
+                    }
+                    _ => return Ok(None),
+                }
+                // range check, trapping exactly where the interpreter errors
+                let range = match name {
+                    "to-u8" => Some((0, u8::MAX as i64)),
+                    "to-u16" => Some((0, u16::MAX as i64)),
+                    "to-u32" => Some((0, u32::MAX as i64)),
+                    "to-u64" => Some((0, i64::MAX)),
+                    "to-s8" => Some((i8::MIN as i64, i8::MAX as i64)),
+                    "to-s16" => Some((i16::MIN as i64, i16::MAX as i64)),
+                    "to-s32" => Some((i32::MIN as i64, i32::MAX as i64)),
+                    _ => None, // to-s64: every i64 is in range
+                };
+                if let Some((lo, hi)) = range {
+                    let n = fx.local(ValType::I64);
+                    fx.op(I::LocalTee(n));
+                    fx.op(I::I64Const(lo));
+                    fx.op(I::I64LtS);
+                    fx.op(I::LocalGet(n));
+                    fx.op(I::I64Const(hi));
+                    fx.op(I::I64GtS);
+                    fx.op(I::I32Or);
+                    fx.op(I::If(BlockType::Empty));
+                    fx.op(I::Unreachable);
+                    fx.op(I::End);
+                    fx.op(I::LocalGet(n));
+                }
+                Ok(Some(Int))
+            }
+            "to-f32" | "to-f64" if args.len() == 1 => match self.node_scalar(args[0]) {
+                Some(Int | Float) => {
+                    // want_num widening: int → f64, float unchanged
+                    self.expr_scalar(fx, args[0], Float)?;
+                    Ok(Some(Float))
+                }
+                _ => Ok(None),
+            },
+            "to-char" if args.len() == 1 => match self.node_scalar(args[0]) {
+                Some(Char) => {
+                    // a char passes through
+                    self.expr_scalar(fx, args[0], Char)?;
+                    Ok(Some(Char))
+                }
+                Some(Int) => {
+                    // must be a Unicode scalar: ≤ 0x10FFFF (unsigned, catches
+                    // negatives) and not a surrogate
+                    self.expr_scalar(fx, args[0], Int)?;
+                    let n = fx.local(ValType::I64);
+                    fx.op(I::LocalTee(n));
+                    fx.op(I::I64Const(0x10FFFF));
+                    fx.op(I::I64GtU);
+                    fx.op(I::If(BlockType::Empty));
+                    fx.op(I::Unreachable);
+                    fx.op(I::End);
+                    fx.op(I::LocalGet(n));
+                    fx.op(I::I64Const(0xD800));
+                    fx.op(I::I64GeU);
+                    fx.op(I::LocalGet(n));
+                    fx.op(I::I64Const(0xDFFF));
+                    fx.op(I::I64LeU);
+                    fx.op(I::I32And);
+                    fx.op(I::If(BlockType::Empty));
+                    fx.op(I::Unreachable);
+                    fx.op(I::End);
+                    fx.op(I::LocalGet(n));
+                    Ok(Some(Char))
+                }
+                _ => Ok(None),
+            },
+            _ => Ok(None),
+        }
+    }
+
     fn builtin(&mut self, fx: &mut FnCtx, name: &str, args: &[NodeId]) -> Result<(), String> {
+        // Goal 5 (5.2/5.6.1): when the operand types are statically known
+        // scalars, compile the polymorphic builtin as unboxed per-type code
+        // and box once at the seam. Ineligible calls (unknown/compound
+        // operand types, strings, arity errors) fall through to the boxed
+        // arms below unchanged.
+        if matches!(
+            name,
+            "eq" | "not"
+                | "lt"
+                | "le"
+                | "gt"
+                | "ge"
+                | "add"
+                | "sub"
+                | "mul"
+                | "div"
+                | "rem"
+                | "neg"
+                | "to-u8"
+                | "to-u16"
+                | "to-u32"
+                | "to-u64"
+                | "to-s8"
+                | "to-s16"
+                | "to-s32"
+                | "to-s64"
+                | "to-f32"
+                | "to-f64"
+                | "to-char"
+        ) && let Some(kind) = self.scalar_op(fx, name, args)?
+        {
+            self.box_scalar(fx, kind);
+            return Ok(());
+        }
         let items = args;
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
@@ -4072,6 +4588,16 @@ const BUILTINS: &[&str] = &[
     "lower",
     "to-string",
     "to-char",
+    "to-u8",
+    "to-u16",
+    "to-u32",
+    "to-u64",
+    "to-s8",
+    "to-s16",
+    "to-s32",
+    "to-s64",
+    "to-f32",
+    "to-f64",
     "some",
     "ok",
     "err",
@@ -4092,6 +4618,27 @@ fn emit_core_module(
     deps: &HashMap<String, Dep>,
 ) -> Result<Vec<u8>, String> {
     let feats = features_of(arena, info);
+
+    // Per-node static types (goal 5). Reconstruct the same import-signature
+    // table the build step feeds the checker (`build.rs`), so this table
+    // matches what checking saw — including qualified-call result types. A
+    // program that fails checking yields an *empty* table (boxed fallback
+    // everywhere) rather than a second error surface: the build path has
+    // already rejected ill-typed programs before emitting.
+    let node_types_tbl = {
+        let mut import_sigs = crate::check::ImportSigs::new();
+        for imp in &info.imports {
+            if crate::wit::is_macro_only(imp) {
+                continue;
+            }
+            if let Some(dep) = deps.get(&imp.package) {
+                let iface = imp.path.split_once('/').map(|(_, i)| i).unwrap_or("api");
+                import_sigs.extend(crate::wit::import_sigs_for(&imp.alias, &dep.funcs, iface));
+            }
+        }
+        import_sigs.extend(crate::wit::functor_import_sigs(&info.functors));
+        crate::check::node_types_with_imports(arena, roots, &import_sigs).unwrap_or_default()
+    };
 
     // named types in scope: this file's own DefTypes, plus those of every dep.
     // Records resolve via `records`; enum/variant/flags (dep-only today) via
@@ -4186,30 +4733,7 @@ fn emit_core_module(
         types: Vec::new(),
         imports: Vec::new(),
         import_fn: HashMap::new(),
-        h: Helpers {
-            alloc: 0,
-            realloc: 0,
-            box_int: 0,
-            box_bool: 0,
-            box_dec: 0,
-            box_str: 0,
-            truthy: 0,
-            unbox_int: 0,
-            unbox_char: 0,
-            unbox_dec: 0,
-            eq_raw: 0,
-            len_raw: 0,
-            head_h: 0,
-            tail_h: 0,
-            strcat2: 0,
-            case_h: 0,
-            to_str: 0,
-            rec_get: 0,
-            as_f64: 0,
-            arith_raw: 0,
-            cmp_raw: 0,
-            neg_raw: 0,
-        },
+        h: Helpers::default(),
         funcs: HashMap::new(),
         value_globals: HashMap::new(),
         compiling_values: Vec::new(),
@@ -4222,6 +4746,7 @@ fn emit_core_module(
         true_addr: 0,
         macro_expand_idx: None,
         functor_fns: HashMap::new(),
+        node_types: node_types_tbl,
     };
 
     // static boxes: false @16, true @24
@@ -4350,6 +4875,8 @@ fn emit_core_module(
     em.h.arith_raw = take();
     em.h.cmp_raw = take();
     em.h.neg_raw = take();
+    em.h.arith_int = take();
+    em.h.cmp_f64 = take();
 
     // ---- reserve the functor `set` resource core-func indices (step 04)
     //
@@ -4472,7 +4999,7 @@ fn emit_core_module(
         let mut fx = FnCtx::new(n as u32);
         let mut scope = HashMap::new();
         for (i, p) in params.iter().enumerate() {
-            scope.insert(p.clone(), i as u32);
+            scope.insert(p.clone(), Binding::boxed(i as u32));
         }
         fx.scopes.push(scope);
         em.expr(&mut fx, body, true)
@@ -4488,7 +5015,7 @@ fn emit_core_module(
         let mut fx = FnCtx::new(n as u32);
         let mut scope = HashMap::new();
         for (i, p) in params.iter().enumerate() {
-            scope.insert(p.clone(), i as u32);
+            scope.insert(p.clone(), Binding::boxed(i as u32));
         }
         fx.scopes.push(scope);
         em.expr(&mut fx, body, true)
@@ -4499,6 +5026,9 @@ fn emit_core_module(
 
     // ---- export wrappers
     let mut exports: Vec<(String, u32)> = Vec::new(); // (export name, fn idx)
+    // Each export's (full export name, flat results) — a canonical post-return
+    // companion is emitted per entry after this loop (5.1 arena-per-call).
+    let mut post_returns: Vec<(String, Vec<ValType>)> = Vec::new();
     for sig in &info.exports {
         let (fidx, _) = *em
             .funcs
@@ -4572,7 +5102,7 @@ fn emit_core_module(
                 vec![I32]
             }
         };
-        let t = em.ty_idx(fparams, fresults);
+        let t = em.ty_idx(fparams, fresults.clone());
         em.bodies.push((t, fx.finish()));
         // An external interface (wasi:http/incoming-handler, wasi:cli/run) is
         // exported under its own versioned name — at the version of its resolved
@@ -4583,7 +5113,48 @@ fn emit_core_module(
         } else {
             versioned_iface(&info.package, &sig.iface)
         };
-        exports.push((format!("{own_iface}#{}", sig.name), take()));
+        let export_name = format!("{own_iface}#{}", sig.name);
+        post_returns.push((export_name.clone(), fresults));
+        exports.push((export_name, take()));
+    }
+
+    // ---- per-call arena reset via canonical post-return (5.1)
+    //
+    // The memory story decided on 5.1 (arena-per-call, headerless): every
+    // export gets a `cabi_post_<export-name>` companion, which wit-component
+    // wires as the export's post-return function and the host runtime invokes
+    // once the caller has finished reading the results. At that point nothing
+    // allocated during the call is live — the lowered arguments, the call's
+    // temporaries, and the result area are all dead — so the bump pointer
+    // resets to the arena floor (the heap base) and the lazily-cached
+    // value-def globals clear to recompute on the next call (their cached
+    // boxes died with the arena; value defs are pure in the backend, so
+    // recomputation is semantics-neutral). Interned statics live below the
+    // heap base and are untouched.
+    //
+    // Components with functor instantiations OPT OUT for now and keep the
+    // never-free behaviour: a `set` resource's cell and stored list live on
+    // this same heap and must survive across calls. They move to an explicit
+    // persistent region when the ABI-native layout work rebuilds value
+    // construction (see the 5.1 decision record).
+    //
+    // Global indices: 0 = heap ptr, 1..=n value defs, 1+n gensym counter,
+    // 2+n = the immutable arena floor (initialized to the heap base in the
+    // globals section below).
+    let arena_floor_g = 2 + info.value_defs.len() as u32;
+    if info.functors.is_empty() {
+        for (name, fresults) in post_returns {
+            let mut fx = FnCtx::new(fresults.len() as u32);
+            fx.op(I::GlobalGet(arena_floor_g));
+            fx.op(I::GlobalSet(0));
+            for i in 0..info.value_defs.len() {
+                fx.op(I::I32Const(0));
+                fx.op(I::GlobalSet(1 + i as u32));
+            }
+            let t = em.ty_idx(fresults, vec![]);
+            em.bodies.push((t, fx.finish()));
+            exports.push((format!("cabi_post_{name}"), take()));
+        }
     }
 
     let _ = take; // `next`/`take` are done; the resource bodies were emitted above.
@@ -4691,6 +5262,17 @@ fn emit_core_module(
             shared: false,
         },
         &ConstExpr::i64_const(0),
+    );
+    // The arena floor (5.1 arena-per-call): the heap base, as an immutable
+    // global the per-export post-return bodies reset the heap pointer to.
+    // Index = 2 + value_defs.len() (see the post-return emission above).
+    gs.global(
+        GlobalType {
+            val_type: I32,
+            mutable: false,
+            shared: false,
+        },
+        &ConstExpr::i32_const(heap_base as i32),
     );
     module.section(&gs);
 
@@ -5125,30 +5707,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         types: Vec::new(),
         imports: Vec::new(),
         import_fn: HashMap::new(),
-        h: Helpers {
-            alloc: 0,
-            realloc: 0,
-            box_int: 0,
-            box_bool: 0,
-            box_dec: 0,
-            box_str: 0,
-            truthy: 0,
-            unbox_int: 0,
-            unbox_char: 0,
-            unbox_dec: 0,
-            eq_raw: 0,
-            len_raw: 0,
-            head_h: 0,
-            tail_h: 0,
-            strcat2: 0,
-            case_h: 0,
-            to_str: 0,
-            rec_get: 0,
-            as_f64: 0,
-            arith_raw: 0,
-            cmp_raw: 0,
-            neg_raw: 0,
-        },
+        h: Helpers::default(),
         funcs: HashMap::new(),
         value_globals: HashMap::new(),
         compiling_values: Vec::new(),
@@ -5161,6 +5720,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         true_addr: 0,
         macro_expand_idx: None,
         functor_fns: HashMap::new(),
+        node_types: Default::default(),
     };
 
     // static boxes: false @16, true @24
@@ -5200,6 +5760,8 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     em.h.arith_raw = take();
     em.h.cmp_raw = take();
     em.h.neg_raw = take();
+    em.h.arith_int = take();
+    em.h.cmp_f64 = take();
     emit_helpers(&mut em)?;
 
     // macro body functions (each compiles like a Fn over its param forms)
@@ -5363,7 +5925,7 @@ fn mc_macro_body(em: &mut Emitter, m: &MacroDef) -> Result<(u32, Function), Stri
     let mut fx = FnCtx::new(n as u32);
     let mut scope = HashMap::new();
     for (i, p) in m.params.iter().enumerate() {
-        scope.insert(p.clone(), i as u32);
+        scope.insert(p.clone(), Binding::boxed(i as u32));
     }
     fx.scopes.push(scope);
     em.expr(&mut fx, m.body, false)
@@ -7971,12 +8533,9 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
     // arith_raw(a, b, op) -> box   op: 0=add 1=sub 2=mul 3=div 4=rem.
     // Matches the interpreter `arith`: both ints → checked i64 (trap on
     // overflow / div-0 / INT_MIN÷-1); otherwise both widened to f64.
-    // [locals: ia=3, ib=4, r=5 (i64); xf=6, yf=7 (f64)]
+    // [locals: xf=3, yf=4 (f64)]
     {
         let mut fx = FnCtx::new(3);
-        let ia = fx.local(I64);
-        let ib = fx.local(I64);
-        let r = fx.local(I64);
         let xf = fx.local(F64);
         let yf = fx.local(F64);
         // both int?
@@ -7990,12 +8549,259 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Eq);
         fx.op(I::I32And);
         fx.op(I::If(BlockType::Result(I32)));
-        // ---- int path
+        // ---- int path: the shared checked-arithmetic core (arith_int), so
+        // the boxed and typed (goal 5) paths cannot drift apart
         fx.op(I::LocalGet(0));
         fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::LocalSet(ia));
         fx.op(I::LocalGet(1));
         fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(2));
+        fx.op(I::Call(em.h.arith_int));
+        fx.op(I::Call(em.h.box_int));
+        fx.op(I::Else);
+        // ---- float path
+        fx.op(I::LocalGet(0));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::LocalSet(xf));
+        fx.op(I::LocalGet(1));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::LocalSet(yf));
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(0));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Add);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Sub);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Mul);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(3));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(F64)));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Div);
+        fx.op(I::Else);
+        // rem: xf - trunc(xf/yf)*yf  (matches Rust f64 `%`)
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(xf));
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Div);
+        fx.op(I::F64Trunc);
+        fx.op(I::LocalGet(yf));
+        fx.op(I::F64Mul);
+        fx.op(I::F64Sub);
+        fx.op(I::End); // op == 3
+        fx.op(I::End); // op == 2
+        fx.op(I::End); // op == 1
+        fx.op(I::End); // op == 0
+        fx.op(I::Call(em.h.box_dec));
+        fx.op(I::End); // int vs float
+        let t = em.ty_idx(vec![I32, I32, I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // cmp_raw(a, b) -> i32 in {-1, 0, 1}   total order over strings (byte
+    // lexicographic), chars (by codepoint) and numbers (widened to f64); traps
+    // on NaN/non-comparable, matching the interpreter's `compare`.
+    // [locals: la=2, lb=3, n=4, i=5, ca=6, cb=7 (i32)]
+    {
+        let mut fx = FnCtx::new(2);
+        let la = fx.local(I32);
+        let lb = fx.local(I32);
+        let n = fx.local(I32);
+        let i = fx.local(I32);
+        let ca = fx.local(I32);
+        let cb = fx.local(I32);
+        // both char? order by codepoint (interpreter: `Char(x).cmp(Char(y))`)
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Eq);
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Eq);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64LtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(-1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64GtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        fx.op(I::Return);
+        fx.op(I::End);
+        // both str?
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_STR));
+        fx.op(I::I32Eq);
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_STR));
+        fx.op(I::I32Eq);
+        fx.op(I::I32And);
+        fx.op(I::If(BlockType::Result(I32)));
+        // ---- string lexicographic compare
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(la));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(lb));
+        // n = min(la, lb)
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(lb));
+        fx.op(I::I32LtU);
+        fx.op(I::If(BlockType::Result(I32)));
+        fx.op(I::LocalGet(la));
+        fx.op(I::Else);
+        fx.op(I::LocalGet(lb));
+        fx.op(I::End);
+        fx.op(I::LocalSet(n));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(n));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(8, 0)));
+        fx.op(I::LocalSet(ca));
+        fx.op(I::LocalGet(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(8, 0)));
+        fx.op(I::LocalSet(cb));
+        fx.op(I::LocalGet(ca));
+        fx.op(I::LocalGet(cb));
+        fx.op(I::I32LtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(-1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(ca));
+        fx.op(I::LocalGet(cb));
+        fx.op(I::I32GtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End); // loop
+        fx.op(I::End); // block
+        // equal prefix: shorter string is less
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(lb));
+        fx.op(I::I32LtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(-1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::LocalGet(la));
+        fx.op(I::LocalGet(lb));
+        fx.op(I::I32GtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(1));
+        fx.op(I::Return);
+        fx.op(I::End);
+        fx.op(I::I32Const(0));
+        fx.op(I::Else);
+        // ---- numeric compare: the shared cmp_f64 core (widened to f64;
+        // traps on NaN), so the boxed and typed (goal 5) paths cannot drift
+        fx.op(I::LocalGet(0));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::LocalGet(1));
+        fx.op(I::Call(em.h.as_f64));
+        fx.op(I::Call(em.h.cmp_f64));
+        fx.op(I::End); // str vs numeric
+        let t = em.ty_idx(vec![I32, I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // neg_raw(box) -> box   negates an int (wrapping, as the interpreter's `-n`)
+    // or a dec; traps on anything else.
+    {
+        let mut fx = FnCtx::new(1);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_INT));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(I32)));
+        fx.op(I::I64Const(0));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::I64Sub);
+        fx.op(I::Call(em.h.box_int));
+        fx.op(I::Else);
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::I32Const(TAG_DEC));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(0));
+        fx.op(I::F64Load(ma(8, 3)));
+        fx.op(I::F64Neg);
+        fx.op(I::Call(em.h.box_dec));
+        fx.op(I::End);
+        let t = em.ty_idx(vec![I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // arith_int(a: i64, b: i64, op: i32) -> i64 — the checked integer
+    // arithmetic core (op: 0=add 1=sub 2=mul 3=div 4=rem): trap on overflow /
+    // div-0 / INT_MIN÷-1, exactly the interpreter's checked_* semantics. The
+    // boxed arith_raw and the goal-5 typed scalar path both call this, so the
+    // two representations share one copy of the semantics.
+    // [locals: ia=3, ib=4, r=5 (i64)]
+    {
+        let mut fx = FnCtx::new(3);
+        let ia = fx.local(I64);
+        let ib = fx.local(I64);
+        let r = fx.local(I64);
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalSet(ia));
+        fx.op(I::LocalGet(1));
         fx.op(I::LocalSet(ib));
         // op == 0 : add
         fx.op(I::LocalGet(2));
@@ -8129,217 +8935,29 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::End); // op == 2
         fx.op(I::End); // op == 1
         fx.op(I::End); // op == 0
-        fx.op(I::Call(em.h.box_int));
-        fx.op(I::Else);
-        // ---- float path
-        fx.op(I::LocalGet(0));
-        fx.op(I::Call(em.h.as_f64));
-        fx.op(I::LocalSet(xf));
-        fx.op(I::LocalGet(1));
-        fx.op(I::Call(em.h.as_f64));
-        fx.op(I::LocalSet(yf));
-        fx.op(I::LocalGet(2));
-        fx.op(I::I32Const(0));
-        fx.op(I::I32Eq);
-        fx.op(I::If(BlockType::Result(F64)));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Add);
-        fx.op(I::Else);
-        fx.op(I::LocalGet(2));
-        fx.op(I::I32Const(1));
-        fx.op(I::I32Eq);
-        fx.op(I::If(BlockType::Result(F64)));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Sub);
-        fx.op(I::Else);
-        fx.op(I::LocalGet(2));
-        fx.op(I::I32Const(2));
-        fx.op(I::I32Eq);
-        fx.op(I::If(BlockType::Result(F64)));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Mul);
-        fx.op(I::Else);
-        fx.op(I::LocalGet(2));
-        fx.op(I::I32Const(3));
-        fx.op(I::I32Eq);
-        fx.op(I::If(BlockType::Result(F64)));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Div);
-        fx.op(I::Else);
-        // rem: xf - trunc(xf/yf)*yf  (matches Rust f64 `%`)
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Div);
-        fx.op(I::F64Trunc);
-        fx.op(I::LocalGet(yf));
-        fx.op(I::F64Mul);
-        fx.op(I::F64Sub);
-        fx.op(I::End); // op == 3
-        fx.op(I::End); // op == 2
-        fx.op(I::End); // op == 1
-        fx.op(I::End); // op == 0
-        fx.op(I::Call(em.h.box_dec));
-        fx.op(I::End); // int vs float
-        let t = em.ty_idx(vec![I32, I32, I32], vec![I32]);
+        let t = em.ty_idx(vec![I64, I64, I32], vec![I64]);
         em.bodies.push((t, fx.finish()));
     }
 
-    // cmp_raw(a, b) -> i32 in {-1, 0, 1}   total order over strings (byte
-    // lexicographic), chars (by codepoint) and numbers (widened to f64); traps
-    // on NaN/non-comparable, matching the interpreter's `compare`.
-    // [locals: xf=2, yf=3 (f64); la=4, lb=5, n=6, i=7, ca=8, cb=9 (i32)]
+    // cmp_f64(x: f64, y: f64) -> i32 in {-1, 0, 1}; traps on NaN (the
+    // interpreter's "values are not comparable"). The numeric tail of
+    // cmp_raw, shared with the goal-5 typed scalar path.
     {
         let mut fx = FnCtx::new(2);
-        let xf = fx.local(F64);
-        let yf = fx.local(F64);
-        let la = fx.local(I32);
-        let lb = fx.local(I32);
-        let n = fx.local(I32);
-        let i = fx.local(I32);
-        let ca = fx.local(I32);
-        let cb = fx.local(I32);
-        // both char? order by codepoint (interpreter: `Char(x).cmp(Char(y))`)
         fx.op(I::LocalGet(0));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_CHAR));
-        fx.op(I::I32Eq);
         fx.op(I::LocalGet(1));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_CHAR));
-        fx.op(I::I32Eq);
-        fx.op(I::I32And);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::LocalGet(0));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::LocalGet(1));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::I64LtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(-1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::LocalGet(0));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::LocalGet(1));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::I64GtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::I32Const(0));
-        fx.op(I::Return);
-        fx.op(I::End);
-        // both str?
-        fx.op(I::LocalGet(0));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_STR));
-        fx.op(I::I32Eq);
-        fx.op(I::LocalGet(1));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_STR));
-        fx.op(I::I32Eq);
-        fx.op(I::I32And);
-        fx.op(I::If(BlockType::Result(I32)));
-        // ---- string lexicographic compare
-        fx.op(I::LocalGet(0));
-        fx.op(I::I32Load(ma(4, 2)));
-        fx.op(I::LocalSet(la));
-        fx.op(I::LocalGet(1));
-        fx.op(I::I32Load(ma(4, 2)));
-        fx.op(I::LocalSet(lb));
-        // n = min(la, lb)
-        fx.op(I::LocalGet(la));
-        fx.op(I::LocalGet(lb));
-        fx.op(I::I32LtU);
-        fx.op(I::If(BlockType::Result(I32)));
-        fx.op(I::LocalGet(la));
-        fx.op(I::Else);
-        fx.op(I::LocalGet(lb));
-        fx.op(I::End);
-        fx.op(I::LocalSet(n));
-        fx.op(I::I32Const(0));
-        fx.op(I::LocalSet(i));
-        fx.op(I::Block(BlockType::Empty));
-        fx.op(I::Loop(BlockType::Empty));
-        fx.op(I::LocalGet(i));
-        fx.op(I::LocalGet(n));
-        fx.op(I::I32GeU);
-        fx.op(I::BrIf(1));
-        fx.op(I::LocalGet(0));
-        fx.op(I::LocalGet(i));
-        fx.op(I::I32Add);
-        fx.op(I::I32Load8U(ma(8, 0)));
-        fx.op(I::LocalSet(ca));
-        fx.op(I::LocalGet(1));
-        fx.op(I::LocalGet(i));
-        fx.op(I::I32Add);
-        fx.op(I::I32Load8U(ma(8, 0)));
-        fx.op(I::LocalSet(cb));
-        fx.op(I::LocalGet(ca));
-        fx.op(I::LocalGet(cb));
-        fx.op(I::I32LtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(-1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::LocalGet(ca));
-        fx.op(I::LocalGet(cb));
-        fx.op(I::I32GtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::LocalGet(i));
-        fx.op(I::I32Const(1));
-        fx.op(I::I32Add);
-        fx.op(I::LocalSet(i));
-        fx.op(I::Br(0));
-        fx.op(I::End); // loop
-        fx.op(I::End); // block
-        // equal prefix: shorter string is less
-        fx.op(I::LocalGet(la));
-        fx.op(I::LocalGet(lb));
-        fx.op(I::I32LtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(-1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::LocalGet(la));
-        fx.op(I::LocalGet(lb));
-        fx.op(I::I32GtU);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::I32Const(1));
-        fx.op(I::Return);
-        fx.op(I::End);
-        fx.op(I::I32Const(0));
-        fx.op(I::Else);
-        // ---- numeric compare (widened to f64)
-        fx.op(I::LocalGet(0));
-        fx.op(I::Call(em.h.as_f64));
-        fx.op(I::LocalSet(xf));
-        fx.op(I::LocalGet(1));
-        fx.op(I::Call(em.h.as_f64));
-        fx.op(I::LocalSet(yf));
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
         fx.op(I::F64Lt);
         fx.op(I::If(BlockType::Result(I32)));
         fx.op(I::I32Const(-1));
         fx.op(I::Else);
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(1));
         fx.op(I::F64Gt);
         fx.op(I::If(BlockType::Result(I32)));
         fx.op(I::I32Const(1));
         fx.op(I::Else);
-        fx.op(I::LocalGet(xf));
-        fx.op(I::LocalGet(yf));
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(1));
         fx.op(I::F64Eq);
         fx.op(I::If(BlockType::Result(I32)));
         fx.op(I::I32Const(0));
@@ -8349,39 +8967,7 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::End);
         fx.op(I::End);
         fx.op(I::End);
-        fx.op(I::End); // str vs numeric
-        let t = em.ty_idx(vec![I32, I32], vec![I32]);
-        em.bodies.push((t, fx.finish()));
-    }
-
-    // neg_raw(box) -> box   negates an int (wrapping, as the interpreter's `-n`)
-    // or a dec; traps on anything else.
-    {
-        let mut fx = FnCtx::new(1);
-        fx.op(I::LocalGet(0));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_INT));
-        fx.op(I::I32Eq);
-        fx.op(I::If(BlockType::Result(I32)));
-        fx.op(I::I64Const(0));
-        fx.op(I::LocalGet(0));
-        fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::I64Sub);
-        fx.op(I::Call(em.h.box_int));
-        fx.op(I::Else);
-        fx.op(I::LocalGet(0));
-        fx.op(I::I32Load(ma(0, 2)));
-        fx.op(I::I32Const(TAG_DEC));
-        fx.op(I::I32Ne);
-        fx.op(I::If(BlockType::Empty));
-        fx.op(I::Unreachable);
-        fx.op(I::End);
-        fx.op(I::LocalGet(0));
-        fx.op(I::F64Load(ma(8, 3)));
-        fx.op(I::F64Neg);
-        fx.op(I::Call(em.h.box_dec));
-        fx.op(I::End);
-        let t = em.ty_idx(vec![I32], vec![I32]);
+        let t = em.ty_idx(vec![F64, F64], vec![I32]);
         em.bodies.push((t, fx.finish()));
     }
 
@@ -8814,30 +9400,7 @@ world app {
             types: Vec::new(),
             imports: Vec::new(),
             import_fn: HashMap::new(),
-            h: Helpers {
-                alloc: 0,
-                realloc: 0,
-                box_int: 0,
-                box_bool: 0,
-                box_dec: 0,
-                box_str: 0,
-                truthy: 0,
-                unbox_int: 0,
-                unbox_char: 0,
-                unbox_dec: 0,
-                eq_raw: 0,
-                len_raw: 0,
-                head_h: 0,
-                tail_h: 0,
-                strcat2: 0,
-                case_h: 0,
-                to_str: 0,
-                rec_get: 0,
-                as_f64: 0,
-                arith_raw: 0,
-                cmp_raw: 0,
-                neg_raw: 0,
-            },
+            h: Helpers::default(),
             funcs: HashMap::new(),
             value_globals: HashMap::new(),
             compiling_values: Vec::new(),
@@ -8850,6 +9413,7 @@ world app {
             true_addr: 0,
             macro_expand_idx: None,
             functor_fns: HashMap::new(),
+            node_types: Default::default(),
         };
 
         // static boxes: false @16, true @24 (same as emit_core_module).
@@ -8907,6 +9471,8 @@ world app {
         em.h.arith_raw = take();
         em.h.cmp_raw = take();
         em.h.neg_raw = take();
+        em.h.arith_int = take();
+        em.h.cmp_f64 = take();
 
         // helper bodies (must precede our set bodies, matching index order).
         emit_helpers(&mut em)?;

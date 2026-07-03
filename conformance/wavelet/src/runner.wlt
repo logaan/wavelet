@@ -4,11 +4,7 @@ Package "conformance:wavelet@0.1.0"
 // values + resources, exports the runner. Seeds and expected responses are
 // both literals (chosen within wavelet's expressible range).
 //
-// Checks that wavelet cannot express today are ABSENT and recorded as
-// shortcomings on the LoT task instead:
-//   - permissions-rt: flag literals are not supported by the wasm backend.
-//   - f32-rt and every-primitive-rt (f32 field): f32 unsupported by backend.
-//   - option-u8-rt none side: none() missing from the wasm backend.
+// Every check the suite defines for the caller role is present below.
 //
 // All present checks pass against a correct callee. (list-u8-rt, option-u8-rt
 // some, and result-tuple-direction-rt ok used to fail to a backend bug —
@@ -46,12 +42,14 @@ Def values-fails Fn {}
              check("u32-rt" eq(iv/u32-rt(4000000000) 4000000001))
              check("u64-rt" eq(iv/u64-rt(9007199254740991) 9007199254740992))
              check("f64-rt" eq(iv/f64-rt(-0.75) 0.25))
+             check("f32-rt" eq(iv/f32-rt(-0.75) 0.25))
              check("char-rt" eq(iv/char-rt('a') 'b'))
              check("string-rt" eq(iv/string-rt("wave") "wave!"))
              check("list-u8-rt" eq(iv/list-u8-rt([1 2 3]) [2 3 4]))
              check("list-string-rt" eq(iv/list-string-rt(["a" ""]) ["a!" "!"]))
              check("list-list-u8-rt" eq(iv/list-list-u8-rt([[1] []]) [[2] []]))
              check("option-u8-rt some" eq(iv/option-u8-rt(some(7)) some(8)))
+             check("option-u8-rt none" eq(iv/option-u8-rt(none) none))
              check("option-shape-rt some"
                    eq(iv/option-shape-rt(some(t/dot)) some(t/circle(1.0))))
              check("shape-rt circle"
@@ -82,6 +80,19 @@ Def values-fails Fn {}
              check("tuple-nested-rt"
                    eq(iv/tuple-nested-rt(Quote ({x: 1 y: 2} [3])) Quote ({x: 2 y: 3} [4])))
              check("point-rt" eq(iv/point-rt({x: 3 y: 4}) {x: 4 y: 5}))
+             check("permissions-rt"
+                   eq(iv/permissions-rt({read exec}) {write admin}))
+             check("permissions-rt empty"
+                   eq(iv/permissions-rt({read write exec admin}) {}))
+             check("every-primitive-rt"
+                   eq(iv/every-primitive-rt({a: true b: -5 c: -300 d: -70000
+                                             e: -5000000000 f: 250 g: 65000
+                                             h: 4000000000 i: 9007199254740991
+                                             j: -0.75 k: -0.75 l: 'a'
+                                             m: "wave"})
+                      {a: false b: -4 c: -299 d: -69999 e: -4999999999 f: 251
+                       g: 65001 h: 4000000001 i: 9007199254740992 j: 0.25
+                       k: 0.25 l: 'b' m: "wave!"}))
              check("points-rt" eq(iv/points-rt([{x: 1 y: 2} {x: 3 y: 4}])
                                   [{x: 2 y: 3} {x: 4 y: 5}]))
              check("awkward-rt" eq(iv/awkward-rt({record: 1 list: "r"})
