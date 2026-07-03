@@ -13,7 +13,49 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- **Pattern exhaustiveness checking.** Every `Match` whose scrutinee's type is
+  known must now be total, at compile time: `bool`, `option`, `result`, and
+  `DefType` variant scrutinees must cover every case, and types that cannot
+  be enumerated (numbers, strings, chars, lists, trees) require a catch-all
+  clause. What used to be the runtime "no Match clause for …" error is now a
+  compile-time "non-exhaustive Match" diagnostic.
+
+- **Cross-component calls are type-checked.** On the build path, qualified
+  calls (`alias/fn`) are checked against — and typed by — the imported
+  function's declared WIT signature (sibling components, `wit/deps` packages,
+  and functor instantiations), so a mistyped argument to an import is a
+  compile error instead of an emit failure or a runtime trap.
+
+- **The meta layer is typed.** `Quote`/`Quasi` have the static type `tree`
+  (the `wavelet:meta` interchange record); `DefMacro` templates check as
+  `tree -> tree` (template bodies are checked, with parameters typed as
+  forms); `Quasi`'s `Unquote`/`Splice` holes are checked as ordinary
+  expressions; `gensym`/`expand`/`rec-key` return `tree` and `read` returns
+  `result<tree, string>`. Macro-*generated* code is also now type-checked
+  after expansion on every path, including the playground.
+
+- **Richer static types everywhere.** The checker now models records
+  (structural and `DefType`-nominal), variants and their constructors,
+  options, results, tuples, and type aliases; every builtin has a typed
+  signature; non-overloaded def calls carry their inferred result type; and
+  `Match` patterns bind variables at the types the scrutinee implies. WIT
+  synthesis falls back to the full checker, so exports returning options,
+  results, list literals, or `DefType` values synthesize without an explicit
+  `Export` record form.
+
 ### Changed
+
+- **Out-of-range integer literals are compile errors.** A literal that meets
+  a concrete integer context (a typed parameter, a `to-*` conversion, an
+  overload filter) is resolved and range-checked statically, with the same
+  message the runtime check used to produce.
+
+- **Non-exported overload sets now dispatch correctly in compiled
+  components.** The build path resolves and rewrites internal overloaded
+  calls exactly as the interpreter does (previously every internal call
+  dispatched to the last definition).
 
 - **The official file extension is now `.wlt`** (was `.wvl`). The CLI usage
   text, `wavelet new` scaffolding, the macro-library build pipeline, the

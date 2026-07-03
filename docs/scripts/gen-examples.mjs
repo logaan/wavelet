@@ -136,10 +136,12 @@ E['pm-record'] = `Match {name: "Ada" born: 1815 field: "maths"} [
 ]`;
 E['pm-nested'] = `Match ok([1 2 3]) [
   (ok([first rest-ignored more])  first)
-  (ok([])                         0)
+  (ok(other)                      0)
   (err(e)                         -1)
 ]`;
-E['pm-no-clause'] = `Match 5 [
+E['pm-no-clause'] = `// The checker proves every Match total: clauses that cannot cover
+// every value are a compile error, not a runtime surprise.
+Match 5 [
   (1  "one")
   (2  "two")
 ]`;

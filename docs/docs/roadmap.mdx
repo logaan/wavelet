@@ -50,13 +50,9 @@ Everything below is part of the [design](./philosophy) but **does not work yet**
 - Expansion is **unhygienic**; [`gensym`](./stdlib#meta--reflection) is the only discipline. A syntax-object / scope-set hygiene layer is sketched but **not implemented**.
 - Relatedly, the reader requires **literal names** for binding keys, so a `gensym`'d name can't be `Unquote`d into a `Let`/`Fn` binding *position* yet. See the [Macros caution](./language/macros#hygiene-and-gensym).
 
-### Pattern exhaustiveness checking
-
-- [`Match`](./language/pattern-matching) does no compile-time exhaustiveness checking. An unmatched value is a **runtime error**; the design envisions this as a lint where the scrutinee's boundary type is known.
-
 ### Richer type inference
 
-- Inference of export signatures from use is **limited**; lean on typed `Fn` parameters and explicit `Export` records.
+- Inference of export signatures from use is **limited** across component boundaries: an export whose result comes from an imported function's call still needs an explicit `Export` record. (Local inference covers literals, builtins, lists, options, results, and `DefType` values.)
 
 ### Async
 

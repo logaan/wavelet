@@ -856,3 +856,61 @@ fn macro_generated_well_typed_code_still_runs() {
     assert!(r.ok, "well-typed macro expansion failed: {}", r.error);
     assert_eq!(r.value, "42");
 }
+
+// --- 3.12: pattern exhaustiveness is enforced ----------------------------------
+
+#[test]
+fn match_on_bool_must_cover_both_literals() {
+    let r = run(r#"Def f Fn {b: bool} Match b [(true 1)]"#);
+    assert!(!r.ok, "bool Match missing `false` must be rejected");
+    assert!(r.error.contains("missing case `false`"), "{}", r.error);
+}
+
+#[test]
+fn match_on_bool_with_both_literals_is_total() {
+    let r = run(r#"Def f Fn {b: bool} Match b [(true 1) (false 2)]
+f(true)"#);
+    assert!(r.ok, "two-clause bool-literal Match should be total: {}", r.error);
+    assert_eq!(r.value, "1");
+}
+
+#[test]
+fn match_on_option_must_cover_none() {
+    let r = run(r#"Def f Fn {} Match some(1) [(some(x) x)]"#);
+    assert!(!r.ok, "option Match missing `none` must be rejected");
+    assert!(r.error.contains("missing case `none`"), "{}", r.error);
+}
+
+#[test]
+fn match_on_int_requires_catch_all() {
+    let r = run(r#"Def f Fn {} Match 5 [(1 "one")]"#);
+    assert!(!r.ok, "int Match without catch-all must be rejected");
+    assert!(r.error.contains("catch-all"), "{}", r.error);
+}
+
+#[test]
+fn match_with_catch_all_is_total() {
+    let r = run(r#"Match 5 [(1 "one") (n "many")]"#);
+    assert!(r.ok, "catch-all Match rejected: {}", r.error);
+}
+
+#[test]
+fn match_on_deftype_variant_must_cover_every_case() {
+    let r = check_src(
+        r#"Package "demo:var@0.1.0"
+DefType ttl [days(u32) forever]
+Def f Fn {t: ttl} Match t [(days(d) d)]"#,
+    );
+    assert!(r.is_err(), "variant Match missing `forever` must be rejected");
+    assert!(
+        r.as_ref().unwrap_err().contains("missing case `forever`"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn refutable_subpatterns_do_not_count_as_coverage() {
+    // `ok([])`/`ok([a])` are refutable list patterns: `ok` is not covered.
+    let r = run(r#"Def f Fn {} Match ok([1 2]) [(ok([]) 0) (err(e) 1)]"#);
+    assert!(!r.ok, "refutable ok-subpattern must not count as covering `ok`");
+}

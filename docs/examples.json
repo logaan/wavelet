@@ -216,13 +216,13 @@
     "output": ""
   },
   "pm-nested": {
-    "code": "Match ok([1 2 3]) [\n  (ok([first rest-ignored more])  first)\n  (ok([])                         0)\n  (err(e)                         -1)\n]",
+    "code": "Match ok([1 2 3]) [\n  (ok([first rest-ignored more])  first)\n  (ok(other)                      0)\n  (err(e)                         -1)\n]",
     "value": "1",
     "output": ""
   },
   "pm-no-clause": {
-    "code": "Match 5 [\n  (1  \"one\")\n  (2  \"two\")\n]",
-    "error": "eval error: no Match clause for 5"
+    "code": "// The checker proves every Match total: clauses that cannot cover\n// every value are a compile error, not a runtime surprise.\nMatch 5 [\n  (1  \"one\")\n  (2  \"two\")\n]",
+    "error": "eval error: non-exhaustive Match: no clause matches every possible value (add a catch-all clause)"
   },
   "macro-swap": {
     "code": "DefMacro swap {a b}\n  Quasi [Unquote(b) Unquote(a)]\nLet {x: 1 y: 2}\n  Swap x y",

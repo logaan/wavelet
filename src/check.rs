@@ -1117,6 +1117,16 @@ impl<'a> Checker<'a> {
                         })?,
                     });
                 }
+                // Exhaustiveness (3.12): wherever the scrutinee's type is
+                // known, the clauses must cover every possible value.
+                let pats: Vec<NodeId> = items
+                    .iter()
+                    .filter_map(|&clause| match self.arena.node(clause) {
+                        Node::Tup(pair) if pair.len() == 2 => Some(pair[0]),
+                        _ => None,
+                    })
+                    .collect();
+                self.check_exhaustive(&scrut_ty, &pats)?;
                 Ok(result.unwrap_or(Type::Unknown))
             }
             "the-MACRO" => {
@@ -1802,6 +1812,189 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Enforce Match exhaustiveness (3.12) for a scrutinee of type `ty` against
+    /// clause patterns `pats`. Where the type cannot be enumerated (numbers,
+    /// strings, chars, lists, trees), an irrefutable catch-all clause is
+    /// required; bools and variant-shaped types (`option`, `result`, nominal
+    /// `DefType` variants) must cover every case. Gradual `Unknown` scrutinees
+    /// are not enforced.
+    fn check_exhaustive(&self, ty: &Type, pats: &[NodeId]) -> Result<(), String> {
+        // An irrefutable clause anywhere makes the Match total.
+        if pats.iter().any(|&p| self.irrefutable(p, ty)) {
+            return Ok(());
+        }
+        let ty = self.resolve_alias(ty);
+        match &ty {
+            Type::Bool => {
+                let mut have = [false, false];
+                for &p in pats {
+                    if let Node::Bool(b) = self.arena.node(p) {
+                        have[*b as usize] = true;
+                    }
+                }
+                if have[0] && have[1] {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "eval error: non-exhaustive Match: missing case `{}`",
+                        if have[1] { "false" } else { "true" }
+                    ))
+                }
+            }
+            Type::Option(t) => self.check_cases_covered(
+                &[("some".to_string(), vec![(**t).clone()]), ("none".to_string(), vec![])],
+                pats,
+            ),
+            Type::Result(o, e) => self.check_cases_covered(
+                &[
+                    ("ok".to_string(), vec![(**o).clone()]),
+                    ("err".to_string(), vec![(**e).clone()]),
+                ],
+                pats,
+            ),
+            Type::Named(n) => match self.types.get(n) {
+                Some(TypeDef::Variant(cases)) => {
+                    let cases = cases.clone();
+                    self.check_cases_covered(&cases, pats)
+                }
+                // A nominal record: an irrefutable record pattern would have
+                // returned above; anything else does not cover every value.
+                Some(TypeDef::Record(_)) => Err(non_exhaustive_catch_all()),
+                // Unresolved nominal (imported type) or flags: stay gradual.
+                _ => Ok(()),
+            },
+            // Enumerable by literals never, so a catch-all is required.
+            Type::U8
+            | Type::U16
+            | Type::U32
+            | Type::U64
+            | Type::S8
+            | Type::S16
+            | Type::S32
+            | Type::S64
+            | Type::F32
+            | Type::F64
+            | Type::IntLit(_)
+            | Type::FloatLit
+            | Type::Char
+            | Type::String
+            | Type::List(_)
+            | Type::Tuple(_)
+            | Type::Record(_)
+            | Type::Tree => Err(non_exhaustive_catch_all()),
+            // Gradual or unenforceable.
+            Type::Unit | Type::Unknown => Ok(()),
+        }
+    }
+
+    /// Check that every declared case is covered by some clause pattern.
+    fn check_cases_covered(
+        &self,
+        cases: &[(String, Vec<Type>)],
+        pats: &[NodeId],
+    ) -> Result<(), String> {
+        let mut missing = Vec::new();
+        for (case, payload) in cases {
+            let covered = pats.iter().any(|&p| self.covers_case(p, case, payload));
+            if !covered {
+                missing.push(format!("`{case}`"));
+            }
+        }
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(format!(
+                "eval error: non-exhaustive Match: missing case{} {}",
+                if missing.len() == 1 { "" } else { "s" },
+                missing.join(", ")
+            ))
+        }
+    }
+
+    /// Whether pattern `p` covers *all* values of variant case `case` with
+    /// payload types `payload`.
+    fn covers_case(&self, p: NodeId, case: &str, payload: &[Type]) -> bool {
+        match self.arena.node(p) {
+            // A bare symbol naming the (nullary) case.
+            Node::Sym(s) => s == case && payload.is_empty(),
+            Node::Tup(items) => {
+                let Some((&h, rest)) = items.split_first() else {
+                    return false;
+                };
+                if !matches!(self.arena.node(h), Node::Sym(s) if s == case) {
+                    return false;
+                }
+                if rest.len() == payload.len() {
+                    rest.iter()
+                        .zip(payload)
+                        .all(|(&sub, t)| self.irrefutable(sub, t))
+                } else if rest.len() == 1 && payload.len() > 1 {
+                    self.irrefutable(rest[0], &Type::Tuple(payload.to_vec()))
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether pattern `p` matches every value of type `ty` (a catch-all for
+    /// that type). A bare symbol binds anything — unless it names a nullary
+    /// case of the scrutinee's variant-shaped type, where it matches by
+    /// equality instead. A record pattern over a known record type is
+    /// irrefutable when its field sub-patterns are; a tuple pattern over a
+    /// same-length tuple type likewise.
+    fn irrefutable(&self, p: NodeId, ty: &Type) -> bool {
+        match self.arena.node(p) {
+            Node::Sym(name) => !self.case_payload(name, ty).is_some_and(|pl| pl.is_empty()),
+            Node::Rec(fields) => {
+                let ty = self.resolve_alias(ty);
+                let rec_fields: Option<Vec<(String, Type)>> = match &ty {
+                    Type::Record(fs) => Some(fs.clone()),
+                    Type::Named(n) => match self.types.get(n) {
+                        Some(TypeDef::Record(fs)) => Some(fs.clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let Some(rec_fields) = rec_fields else {
+                    return false;
+                };
+                fields.iter().all(|(k, v)| {
+                    rec_fields
+                        .iter()
+                        .find(|(n, _)| n == k)
+                        .is_some_and(|(_, t)| self.irrefutable(*v, t))
+                })
+            }
+            Node::Tup(items) => {
+                let ty = self.resolve_alias(ty);
+                match &ty {
+                    Type::Tuple(ts) if ts.len() == items.len() => items
+                        .iter()
+                        .zip(ts)
+                        .all(|(&sub, t)| self.irrefutable(sub, t)),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Resolve a nominal alias to its target type (transparently, one level at
+    /// a time up to a small depth bound to tolerate alias cycles).
+    fn resolve_alias(&self, ty: &Type) -> Type {
+        let mut ty = ty.clone();
+        for _ in 0..8 {
+            let Type::Named(n) = &ty else { break };
+            let Some(TypeDef::Alias(target)) = self.types.get(n) else {
+                break;
+            };
+            ty = target.clone();
+        }
+        ty
+    }
+
     /// The payload types of variant case `case` under scrutinee type `ty`:
     /// `Some(payloads)` when `ty` declares that case (a `DefType` variant, an
     /// `option`, or a `result`), `None` otherwise. A nullary case yields an
@@ -1849,6 +2042,13 @@ fn ctor_payload(arg_tys: &[Type]) -> Type {
         [one] => one.clone(),
         many => Type::Tuple(many.to_vec()),
     }
+}
+
+/// The catch-all flavour of the non-exhaustive Match error.
+fn non_exhaustive_catch_all() -> String {
+    "eval error: non-exhaustive Match: no clause matches every possible value \
+     (add a catch-all clause)"
+        .to_string()
 }
 
 /// Whether a type is admissible to the ordering builtins (`lt`/`min`/…):

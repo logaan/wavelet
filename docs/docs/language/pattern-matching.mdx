@@ -48,12 +48,8 @@ Nested patterns compose:
 
 <Playground id="pm-nested" />
 
-## No match is an error
+## Every Match must be total
 
-There is no implicit fall-through. Provide a catch-all clause if the scrutinee might not be covered.
+There is no implicit fall-through, and the checker enforces it at compile time: wherever the scrutinee's type is known, the clauses must cover every possible value. Types that can't be enumerated (numbers, strings, lists, trees) need a catch-all clause; `bool`, `option`, `result`, and `DefType` variants must cover every case (a catch-all also works).
 
 <Playground id="pm-no-clause" />
-
-:::info[Exhaustiveness checking]
-Compile-time exhaustiveness checking (warning when a `Match` can't cover its scrutinee's boundary type) is **not yet implemented** — see the [roadmap](../roadmap). Today an unmatched value is a runtime error.
-:::
