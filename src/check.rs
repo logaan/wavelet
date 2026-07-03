@@ -1442,6 +1442,14 @@ impl<'a> Checker<'a> {
         args: &[NodeId],
         scope: &mut Scope,
     ) -> Result<Type, String> {
+        // A nullary case is a value, not a function: `north()` is an error the
+        // interpreter also raises ("not callable"); write the bare name.
+        if payload.is_empty() {
+            return Err(format!(
+                "eval error: variant case `{case}` of `{tyname}` takes no payload \
+                 and is not callable; write the bare case name"
+            ));
+        }
         if args.len() != payload.len() {
             return Err(format!(
                 "eval error: variant case `{case}` of `{tyname}` takes {} argument(s), got {}",

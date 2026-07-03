@@ -1096,6 +1096,23 @@ pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String
         }
         Node::Flg(names) => Ok(format!("flags {name} {{ {} }}", names.join(", "))),
         Node::Lst(cases) => {
+            // A list whose cases are all payload-less is a WIT `enum`; any
+            // payloaded case makes it a `variant` (4.1). Same single-i32
+            // discriminant ABI either way, but the synthesized WIT now says
+            // what a WIT author would say.
+            if cases
+                .iter()
+                .all(|&c| matches!(arena.node(c), Node::Sym(_)))
+            {
+                let names: Vec<String> = cases
+                    .iter()
+                    .map(|&c| match arena.node(c) {
+                        Node::Sym(s) => s.clone(),
+                        _ => unreachable!("all-Sym checked above"),
+                    })
+                    .collect();
+                return Ok(format!("enum {name} {{ {} }}", names.join(", ")));
+            }
             let mut parts = Vec::new();
             for &c in cases {
                 match arena.node(c) {

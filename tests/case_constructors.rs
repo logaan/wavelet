@@ -124,3 +124,86 @@ fn dep_cases_bind_under_the_import_alias() {
     wavelet::runner::run_files(&paths).expect("dep cases resolve through the alias");
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ---------------------------------------------------------------------------
+// Backend agreement: the same constructions compile and cross the boundary.
+// ---------------------------------------------------------------------------
+
+use wavelet::host::{HostComponent, Val};
+
+fn cases_component() -> HostComponent {
+    let dir = std::env::temp_dir().join(format!("wvl-cases-emit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+
+    let app = r#"Package "demo:cases@0.1.0"
+
+DefType direction [north east south west]
+DefType ttl [days(u32) forever]
+
+// Rotate a direction: nullary cases constructed bare, like the interpreter.
+Export {name: rotate params: {d: direction} result: direction}
+Def rotate Fn {d}
+  Match d [(north east) (east south) (south west) (west north)]
+
+// Payloaded construction and destructuring.
+Export {name: extend params: {t: ttl} result: ttl}
+Def extend Fn {t}
+  Match t [((days n) days(add(n 1))) (forever forever)]
+
+Export {name: mk-days params: {n: u32} result: ttl}
+Def mk-days Fn {n}
+  days(n)
+"#;
+    let app_path = src.join("app.wlt");
+    std::fs::write(&app_path, app).unwrap();
+    let out = dir.join("out");
+    let outputs = wavelet::build::build_files(
+        &[app_path.to_str().unwrap().to_string()],
+        out.to_str().unwrap(),
+    )
+    .expect("build the cases component");
+    let bytes = std::fs::read(&outputs[0]).expect("read built component");
+    let _ = std::fs::remove_dir_all(&dir);
+    HostComponent::from_bytes(&bytes).expect("instantiate the cases component")
+}
+
+const IFACE: &str = "demo:cases/api@0.1.0";
+
+#[test]
+fn backend_constructs_enum_and_variant_cases() {
+    let mut c = cases_component();
+    let out = c
+        .call_instance(IFACE, "rotate", &[Val::Enum("north".into())])
+        .expect("rotate(north)");
+    assert_eq!(out[0], Val::Enum("east".into()));
+    let out = c
+        .call_instance(IFACE, "rotate", &[Val::Enum("west".into())])
+        .expect("rotate(west)");
+    assert_eq!(out[0], Val::Enum("north".into()));
+
+    let out = c
+        .call_instance(
+            IFACE,
+            "extend",
+            &[Val::Variant("days".into(), Some(Box::new(Val::U32(30))))],
+        )
+        .expect("extend(days(30))");
+    assert_eq!(
+        out[0],
+        Val::Variant("days".into(), Some(Box::new(Val::U32(31))))
+    );
+    let out = c
+        .call_instance(IFACE, "extend", &[Val::Variant("forever".into(), None)])
+        .expect("extend(forever)");
+    assert_eq!(out[0], Val::Variant("forever".into(), None));
+
+    let out = c
+        .call_instance(IFACE, "mk-days", &[Val::U32(7)])
+        .expect("mk-days(7)");
+    assert_eq!(
+        out[0],
+        Val::Variant("days".into(), Some(Box::new(Val::U32(7))))
+    );
+}
