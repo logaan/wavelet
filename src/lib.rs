@@ -426,19 +426,10 @@ mod tests {
             eval_str("Def s Fn {phrase: string} upper(phrase) s(\"hi\")"),
             "\"HI\""
         );
-        let (arena, roots) = read_file("Def s Fn {phrase: string} phrase s(42)").unwrap();
-        let arena = std::rc::Rc::new(arena);
-        let env = value::Env::root();
-        builtins::install(&env);
-        let interp = interp::Interp::new();
-        let mut result = Ok(value::unit());
-        for root in roots {
-            result = interp.eval(&arena, root, &env);
-            if result.is_err() {
-                break;
-            }
-        }
-        assert!(result.is_err(), "type check should reject 42 for string");
+        // Parameter conformance is a *static* check now (3.11): the checker
+        // rejects the call; the interpreter itself binds unconditionally.
+        let out = eval_snippet("Def s Fn {phrase: string} phrase s(42)");
+        assert!(!out.ok, "type check should reject 42 for string");
     }
 
     #[test]

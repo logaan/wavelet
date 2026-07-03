@@ -280,18 +280,13 @@ impl Interp {
                 env.define(format!("{n}-MACRO"), mac);
                 Step::Done(unit())
             }
+            // `The` is a pure static ascription (checked in `crate::check`);
+            // at runtime it evaluates to its expression's value, unchecked
+            // (3.11: the total checker runs first, so the old runtime
+            // conformance path was unreachable on every checked path).
             "the-MACRO" => {
-                let [ty, expr] = args2(args, "The")?;
-                let v = self.eval(arena, expr, env)?;
-                if let Node::Sym(t) = arena.node(ty)
-                    && !check_type(t, &v)
-                {
-                    return err(format!(
-                        "The: {} does not conform to type `{t}`",
-                        crate::value::print_value(&v)
-                    ));
-                }
-                Step::Done(v)
+                let [_ty, expr] = args2(args, "The")?;
+                Step::Jump(arena.clone(), expr, env.clone())
             }
             "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO" => {
                 return err(format!(
@@ -471,57 +466,30 @@ fn bind_params(c: &Closure, arg: Value) -> R<Env> {
     }
 }
 
+// Parameter conformance is checked statically (`crate::check`); binding is
+// unconditional (3.11 — the wasm backend never emitted these checks either,
+// so deleting them also removes an interpreter/backend divergence).
 fn bind_one(env: &Env, p: &Param, v: Value) -> R<()> {
-    if let Some(ty) = &p.ty
-        && !check_type(ty, &v)
-    {
-        return err(format!(
-            "parameter `{}`: {} does not conform to type `{ty}`",
-            p.name,
-            crate::value::print_value(&v)
-        ));
-    }
     env.define(p.name.clone(), v);
     Ok(())
 }
 
 fn parse_params(arena: &Arena, id: NodeId) -> R<Vec<Param>> {
+    // Parameter *types* are a static concern (`crate::check`); the runtime
+    // closure keeps only the names to bind (3.11).
     match arena.node(id) {
         Node::Flg(names) => Ok(names
             .iter()
-            .map(|n| Param {
-                name: n.clone(),
-                ty: None,
-            })
+            .map(|n| Param { name: n.clone() })
             .collect()),
         Node::Rec(fields) => Ok(fields
             .iter()
-            .map(|(k, v)| Param {
-                name: k.clone(),
-                ty: match arena.node(*v) {
-                    Node::Sym(t) => Some(t.clone()),
-                    _ => None,
-                },
-            })
+            .map(|(k, _v)| Param { name: k.clone() })
             .collect()),
         _ => err("Fn expects parameter braces"),
     }
 }
 
-fn check_type(ty: &str, v: &Value) -> bool {
-    match ty {
-        "string" => matches!(v, Value::Str(_)),
-        "bool" => matches!(v, Value::Bool(_)),
-        "char" => matches!(v, Value::Char(_)),
-        "f32" | "f64" => matches!(v, Value::Dec(_) | Value::Int(_)),
-        // The eight integer widths share their bounds with the compile-time
-        // checker via `value::int_fits`, the single source of truth for ranges.
-        "u8" | "u16" | "u32" | "u64" | "s8" | "s16" | "s32" | "s64" => {
-            matches!(v, Value::Int(n) if crate::value::int_fits(ty, *n) == Some(true))
-        }
-        _ => true,
-    }
-}
 
 /// §4.2 patterns: literals match by equality, a bare name binds (unless it is
 /// bound to a payload-less variant case, which matches by equality), call

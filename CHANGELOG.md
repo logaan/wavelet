@@ -63,8 +63,12 @@ you work, and rename it to the new version when you cut a release.
 
 - **`The` is a pure static ascription.** The annotated type is checked
   against the expression at compile time for every annotation shape
-  (constructor annotations like `list(s32)` included); no runtime check
-  survives on checked paths.
+  (constructor annotations like `list(s32)` included). The runtime `The`
+  conformance check and the runtime typed-parameter conformance check are
+  **deleted** — the total checker runs ahead of the interpreter, and the
+  wasm backend never emitted them, so removing them also removes an
+  interpreter/backend divergence. (`The` is now also tail-transparent at
+  runtime.)
 
 - **Out-of-range integer literals are compile errors.** A literal that meets
   a concrete integer context (a typed parameter, a `to-*` conversion, an
