@@ -2620,9 +2620,10 @@ impl<'a> Emitter<'a> {
 
     /// A clause's top-level pattern over a canonical-layout scrutinee (5.3):
     /// a bare binder aliases the pointer (a `Repr::Mem` binding), a record
-    /// pattern destructures at despec offsets, and any other pattern
-    /// rebuilds the box once and delegates to the uniform matcher (where a
-    /// non-record pattern against a record value fails, like the oracle).
+    /// pattern destructures a record layout at despec offsets, a tuple
+    /// pattern destructures a tuple layout element-wise, and any other
+    /// pattern rebuilds the box once and delegates to the uniform matcher
+    /// (where a mismatched pattern fails, like the oracle).
     fn pattern_top_mem(
         &mut self,
         fx: &mut FnCtx,
@@ -2643,6 +2644,19 @@ impl<'a> Emitter<'a> {
                 Ok(())
             }
             Node::Rec(fields) => self.pattern_mem_rec(fx, &fields, &ty, v, 0, 0),
+            Node::Tup(pats) if matches!(ty, WitTy::Tuple(_)) => {
+                self.pattern_mem_tup(fx, &pats, &ty, v, 0, 0)
+            }
+            Node::Lst(pats) if matches!(ty, WitTy::List(_)) => {
+                self.pattern_mem_lst(fx, &pats, &ty, v, 0, 0)
+            }
+            Node::Tup(pats)
+                if !pats.is_empty()
+                    && ty.variant_cases().is_some()
+                    && matches!(self.arena.node(pats[0]), Node::Sym(_)) =>
+            {
+                self.pattern_mem_var(fx, &pats, &ty, v, 0, 0)
+            }
             Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
                 let l = fx.local(ValType::I32);
@@ -2682,6 +2696,119 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// A tuple pattern over canonical layout: element sub-patterns
+    /// destructure positionally at their despec offsets. The scrutinee is
+    /// statically a tuple, so EVERY tuple pattern destructures element-wise
+    /// — the oracle disambiguates tuple-vs-variant patterns by the VALUE,
+    /// and a tuple value never matches a variant case — which is why a
+    /// Sym-headed pattern binds its first element here instead of reading
+    /// as a variant case (the boxed matcher's recorded 5.9 limitation). A
+    /// length mismatch can never match: the clause branches out.
+    fn pattern_mem_tup(
+        &mut self,
+        fx: &mut FnCtx,
+        pats: &[NodeId],
+        ty: &WitTy,
+        v: u32,
+        off: u64,
+        fail: u32,
+    ) -> Result<(), String> {
+        let WitTy::Tuple(elems) = ty else {
+            return Err("internal: tuple pattern over a non-tuple layout".into());
+        };
+        if pats.len() != elems.len() {
+            fx.op(I::Br(fail));
+            return Ok(());
+        }
+        for (&p, (o, tf)) in pats.iter().zip(record_field_offsets(ty)) {
+            self.pattern_mem_field(fx, p, &tf, v, off + o, fail)?;
+        }
+        Ok(())
+    }
+
+    /// A list pattern over a canonical (ptr, len) list at `v + off` (5.5):
+    /// the length must equal the pattern's arity (checked at runtime — a
+    /// list's length is a value property, unlike a tuple's static arity),
+    /// then each element sub-pattern destructures the packed element at its
+    /// stride offset.
+    fn pattern_mem_lst(
+        &mut self,
+        fx: &mut FnCtx,
+        pats: &[NodeId],
+        ty: &WitTy,
+        v: u32,
+        off: u64,
+        fail: u32,
+    ) -> Result<(), String> {
+        let WitTy::List(elem) = ty else {
+            return Err("internal: list pattern over a non-list layout".into());
+        };
+        fx.op(I::LocalGet(v));
+        fx.op(I::I32Load(ma(off + 4, 2)));
+        fx.op(I::I32Const(pats.len() as i32));
+        fx.op(I::I32Ne);
+        fx.op(I::BrIf(fail));
+        let base = fx.local(ValType::I32);
+        fx.op(I::LocalGet(v));
+        fx.op(I::I32Load(ma(off, 2)));
+        fx.op(I::LocalSet(base));
+        let esz = elem_size(elem);
+        for (i, &p) in pats.iter().enumerate() {
+            self.pattern_mem_field(fx, p, elem, base, i as u64 * esz, fail)?;
+        }
+        Ok(())
+    }
+
+    /// A variant-case pattern `(case p…)` over a canonical variant layout
+    /// (5.4): the case name resolves to its numeric discriminant at COMPILE
+    /// time, so the match is one integer comparison — no runtime case-name
+    /// strings — and the payload destructures at the canonical payload
+    /// offset. A case the static type lacks, or an arity the case's payload
+    /// cannot satisfy, can never match: the clause branches out.
+    fn pattern_mem_var(
+        &mut self,
+        fx: &mut FnCtx,
+        pats: &[NodeId],
+        ty: &WitTy,
+        v: u32,
+        off: u64,
+        fail: u32,
+    ) -> Result<(), String> {
+        let cases = ty
+            .variant_cases()
+            .ok_or("internal: case pattern over a non-variant layout")?;
+        let Node::Sym(head) = self.arena.node(pats[0]).clone() else {
+            return Err("internal: pattern_mem_var expects a Sym-headed pattern".into());
+        };
+        let Some(i) = cases.iter().position(|(n, _)| *n == head) else {
+            fx.op(I::Br(fail));
+            return Ok(());
+        };
+        let payload = cases[i].1.cloned();
+        fx.op(I::LocalGet(v));
+        fx.op(I::I32Load8U(ma(off, 0)));
+        fx.op(I::I32Const(i as i32));
+        fx.op(I::I32Ne);
+        fx.op(I::BrIf(fail));
+        let poff = variant_payload_offset(ty);
+        let rest = &pats[1..];
+        match (rest.len(), payload) {
+            (0, None) => Ok(()),
+            (1, Some(pt)) => self.pattern_mem_field(fx, rest[0], &pt, v, off + poff, fail),
+            // several sub-patterns destructure a tuple payload element-wise,
+            // exactly like the interpreter's `(case p q …)` rule
+            (n, Some(WitTy::Tuple(es))) if n > 1 && es.len() == n => {
+                let t = WitTy::Tuple(es);
+                self.pattern_mem_tup(fx, rest, &t, v, off + poff, fail)
+            }
+            // payload/arity mismatch can never match
+            _ => {
+                fx.op(I::Br(fail));
+                Ok(())
+            }
+        }
+    }
+
     /// One canonical field against a sub-pattern: a bare binder binds the
     /// field at its natural representation (typed scalar / interior record
     /// pointer / rebuilt box), a nested record pattern recurses in place,
@@ -2705,6 +2832,19 @@ impl<'a> Emitter<'a> {
             Node::Rec(fields) if matches!(tf, WitTy::Record(_)) => {
                 self.pattern_mem_rec(fx, &fields, tf, v, off, fail)
             }
+            Node::Tup(pats) if matches!(tf, WitTy::Tuple(_)) => {
+                self.pattern_mem_tup(fx, &pats, tf, v, off, fail)
+            }
+            Node::Lst(pats) if matches!(tf, WitTy::List(_)) => {
+                self.pattern_mem_lst(fx, &pats, tf, v, off, fail)
+            }
+            Node::Tup(pats)
+                if !pats.is_empty()
+                    && tf.variant_cases().is_some()
+                    && matches!(self.arena.node(pats[0]), Node::Sym(_)) =>
+            {
+                self.pattern_mem_var(fx, &pats, tf, v, off, fail)
+            }
             Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
                 let l = fx.local(ValType::I32);
@@ -2717,8 +2857,8 @@ impl<'a> Emitter<'a> {
 
     /// Bind one canonical field at its natural representation: scalar fields
     /// load unboxed into typed locals (widening to the interpreter's value
-    /// domains), a nested record binds an interior pointer (headerless
-    /// layout — 5.1), everything else rebuilds its box.
+    /// domains), a nested record or tuple binds an interior pointer
+    /// (headerless layout — 5.1), everything else rebuilds its box.
     fn mem_field_binding(
         &mut self,
         fx: &mut FnCtx,
@@ -2776,7 +2916,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::F64Load(ma(off, 3)));
                 scalar(fx, ValType::F64, Scalar::Float)
             }
-            WitTy::Record(_) => {
+            WitTy::Record(_) | WitTy::Tuple(_) | WitTy::Str | WitTy::List(_) => {
                 fx.op(I::LocalGet(v));
                 if off > 0 {
                     fx.op(I::I32Const(off as i32));
@@ -3271,11 +3411,14 @@ impl<'a> Emitter<'a> {
                         | WitTy::Option(_)
                         | WitTy::Result(..)
                         | WitTy::Variant(_)
-                ) {
+                ) || (want_mem.is_some() && matches!(rty, WitTy::Str | WitTy::List(_)))
+                {
                     // allocate a result area sized to the value, pass it as the
                     // canonical retptr, then read the value back out of it —
                     // or, when the caller wants this canonical layout (5.3),
-                    // the area IS the value: no lift, no boxes
+                    // the area IS the value: no lift, no boxes. A string/list
+                    // result's canonical form is the (ptr, len) pair the area
+                    // carries (5.5), so the same fast path applies.
                     let area = fx.local(ValType::I32);
                     fx.op(I::I32Const(size_of(&rty) as i32));
                     fx.op(I::Call(self.h.alloc));
@@ -3294,12 +3437,6 @@ impl<'a> Emitter<'a> {
                         None => self.load_from_mem(fx, &rty, area, 0)?,
                     }
                 } else {
-                    if want_mem.is_some() {
-                        return Err(
-                            "internal: Mem repr requested for a string/list dep result (5.3)"
-                                .into(),
-                        );
-                    }
                     fx.op(I::I32Const(SCRATCH));
                     fx.op(I::Call(fidx));
                     // (ptr, len) written at the scratch area
@@ -4543,6 +4680,10 @@ impl<'a> Emitter<'a> {
             T::String => WitTy::Str,
             T::List(e) => WitTy::List(Box::new(self.wit_of_check_type(e)?)),
             T::Option(e) => WitTy::Option(Box::new(self.wit_of_check_type(e)?)),
+            T::Result(o, e) => WitTy::Result(
+                Box::new(self.wit_of_check_type(o)?),
+                Box::new(self.wit_of_check_type(e)?),
+            ),
             T::Tuple(es) => WitTy::Tuple(
                 es.iter()
                     .map(|e| self.wit_of_check_type(e))
@@ -4560,6 +4701,85 @@ impl<'a> Emitter<'a> {
         })
     }
 
+    /// When `id` is a variant-case constructor call/reference for the
+    /// variant-shaped layout `ty` — one the current name resolution actually
+    /// routes to a constructor — its case index, payload type, and argument
+    /// forms. Mirrors `expr`'s routing exactly: a local binding shadows
+    /// everything; `some`/`ok`/`err` are builtins (which outrank defs);
+    /// any other head must resolve through `local_cases` (module defs and
+    /// value globals shadow those); a bare Sym is a constructor only for
+    /// `none` and nullary local cases (`value_def_ref`'s rule). `fx` is
+    /// `None` in a prediction walk, where local shadowing is unknowable —
+    /// the emission side falls back to the boxed store when resolution
+    /// turns out different, so an optimistic answer here stays sound.
+    fn ctor_parts(
+        &self,
+        fx: Option<&FnCtx>,
+        id: NodeId,
+        ty: &WitTy,
+    ) -> Option<(usize, Option<WitTy>, Vec<NodeId>)> {
+        let cases = ty.variant_cases()?;
+        let (head, args, bare): (String, Vec<NodeId>, bool) = match self.arena.node(id).clone() {
+            Node::Sym(n) => (n, vec![], true),
+            Node::Tup(items) if !items.is_empty() => match self.arena.node(items[0]).clone() {
+                Node::Sym(n) => (n, items[1..].to_vec(), false),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        if let Some(fx) = fx
+            && fx.lookup(&head).is_some()
+        {
+            return None;
+        }
+        if bare {
+            if head != "none" && self.local_cases.get(&head) != Some(&false) {
+                return None;
+            }
+        } else if !matches!(head.as_str(), "some" | "ok" | "err") {
+            if self.funcs.contains_key(&head) || self.value_globals.contains_key(&head) {
+                return None;
+            }
+            // a payload-less local case is not callable (nor is any other name)
+            if self.local_cases.get(&head) != Some(&true) {
+                return None;
+            }
+        }
+        let i = cases.iter().position(|(n, _)| *n == head)?;
+        let payload = cases[i].1.cloned();
+        Some((i, payload, args))
+    }
+
+    /// 5.4 construction gating: is `id` a case-constructor form whose value
+    /// can be BUILT natively in the canonical layout of `ty` — the numeric
+    /// discriminant plus a losslessly-stored payload? A case's value is its
+    /// name plus payload (no field-order hazard), so the gate is just the
+    /// constructor resolution plus per-payload lossless storability, with
+    /// the interpreter's bundling rule: one argument is the payload, two or
+    /// more bundle into a tuple payload.
+    fn ctor_admissible(&self, look: &MemLookup, id: NodeId, ty: &WitTy) -> bool {
+        let fx = match look {
+            MemLookup::Fx(fx) => Some(*fx),
+            MemLookup::Sim(_) => None,
+        };
+        let Some((_, payload, args)) = self.ctor_parts(fx, id, ty) else {
+            return false;
+        };
+        // 1-byte discriminants only (the large-types child rides 5.4)
+        if ty.variant_cases().is_some_and(|c| c.len() > 0x100) {
+            return false;
+        }
+        match (args.len(), payload) {
+            (0, None) => true,
+            (1, Some(pt)) => self.mem_field_ok(look, args[0], &pt),
+            (n, Some(WitTy::Tuple(es))) if n >= 2 && es.len() == n => args
+                .iter()
+                .zip(&es)
+                .all(|(&a, et)| self.mem_field_ok(look, a, et)),
+            _ => false,
+        }
+    }
+
     /// 5.3 gating: may expression `id` be emitted NATIVELY in the canonical
     /// layout of `ty`, yielding exactly the value the interpreter would
     /// build? Field order is observable (`eq`/`to-string` compare records
@@ -4575,15 +4795,34 @@ impl<'a> Emitter<'a> {
                         .zip(tfs)
                         .all(|((k, v), (tk, tf))| k == tk && self.mem_field_ok(look, *v, tf))
             }
-            (Node::Sym(name), _) => self.lookup_mem(look, name).is_some_and(|t| t == *ty),
+            (Node::Lst(items), WitTy::List(elem)) => items
+                .iter()
+                .all(|&v| self.mem_field_ok(look, v, elem)),
+            (Node::Sym(name), _) => {
+                self.lookup_mem(look, name).is_some_and(|t| t == *ty)
+                    // `none` / a nullary local case as a value (5.4)
+                    || (self.lookup_mem(look, name).is_none()
+                        && self.ctor_admissible(look, id, ty))
+            }
             // A dep call whose declared result IS this layout: the retptr
             // area arrives in canonical form, in declared field order —
             // exactly the order the interpreter's boundary lift produces.
-            (Node::Tup(items), WitTy::Record(_)) if !items.is_empty() => {
+            (
+                Node::Tup(items),
+                WitTy::Record(_)
+                | WitTy::Tuple(_)
+                | WitTy::Str
+                | WitTy::List(_)
+                | WitTy::Option(_)
+                | WitTy::Result(..)
+                | WitTy::Variant(_),
+            ) if !items.is_empty() => {
                 match self.arena.node(items[0]) {
                     Node::Qsym(alias, fname) => self
                         .dep_result_mem_ty(alias, fname)
                         .is_some_and(|t| t == *ty),
+                    // a variant-case constructor call builds in place (5.4)
+                    Node::Sym(_) => self.ctor_admissible(look, id, ty),
                     _ => false,
                 }
             }
@@ -4592,7 +4831,10 @@ impl<'a> Emitter<'a> {
     }
 
     /// The canonical layout a dep call's result area carries, when it is a
-    /// retptr-lowered non-empty record. `None` for functor ops (they are not
+    /// retptr-lowered non-empty record or tuple, a string or list (whose
+    /// canonical form is the (ptr, len) pair the area carries — 5.5), or an
+    /// option/result/variant (numeric discriminant + payload at the
+    /// canonical offset — 5.4). `None` for functor ops (they are not
     /// imports), scalar/One-flat results, and anything unresolvable.
     fn dep_result_mem_ty(&self, alias: &str, fname: &str) -> Option<WitTy> {
         let imp = self.info.imports.iter().find(|i| i.alias == alias)?;
@@ -4603,7 +4845,13 @@ impl<'a> Emitter<'a> {
             return None;
         }
         let rty = wit_ty(sig.result.as_deref()?, &self.type_env).ok()?;
-        matches!(&rty, WitTy::Record(fs) if !fs.is_empty()).then_some(rty)
+        (matches!(&rty, WitTy::Record(fs) if !fs.is_empty())
+            || matches!(&rty, WitTy::Tuple(es) if !es.is_empty())
+            || matches!(
+                &rty,
+                WitTy::Str | WitTy::List(_) | WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_)
+            ))
+        .then_some(rty)
     }
 
     /// The canonical-layout type a name is bound at, if any — through the
@@ -4642,19 +4890,31 @@ impl<'a> Emitter<'a> {
             WitTy::Record(_) => {
                 matches!(self.arena.node(v), Node::Rec(_)) && self.can_mem_as(look, v, tf)
             }
-            // f32 (demoting would lose the f64 the oracle keeps), lists,
-            // options/results/variants, flags, handles: not yet — those
-            // representations ride 5.4/5.5
+            WitTy::List(_) => {
+                matches!(self.arena.node(v), Node::Lst(_)) && self.can_mem_as(look, v, tf)
+            }
+            WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
+                self.can_mem_as(look, v, tf)
+            }
+            // f32 (demoting would lose the f64 the oracle keeps), flags
+            // (order-observable Value::Flg), handles: not yet
             _ => false,
         }
     }
 
-    /// The canonical layout for `id` when 5.3 admits one: a known non-empty
-    /// record type whose construction here is provably faithful.
+    /// The canonical layout for `id` when 5.3/5.5 admit one: a known
+    /// non-empty record or tuple, or a string or list, whose construction
+    /// here is provably faithful.
     fn node_mem_ty(&self, look: &MemLookup, id: NodeId) -> Option<WitTy> {
         let t = self.node_types.get(&id)?.clone();
         let ty = self.wit_of_check_type(&t)?;
-        if !matches!(&ty, WitTy::Record(fs) if !fs.is_empty()) {
+        if !(matches!(&ty, WitTy::Record(fs) if !fs.is_empty())
+            || matches!(&ty, WitTy::Tuple(es) if !es.is_empty())
+            || matches!(
+                &ty,
+                WitTy::Str | WitTy::List(_) | WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_)
+            ))
+        {
             return None;
         }
         if !self.can_mem_as(look, id, &ty) {
@@ -4698,8 +4958,14 @@ impl<'a> Emitter<'a> {
     /// `Let` scopes.
     fn predict_body_mem(&self, id: NodeId, env: &mut Vec<HashMap<String, WitTy>>) -> Option<WitTy> {
         match self.arena.node(id).clone() {
-            Node::Rec(_) => self.node_mem_ty(&MemLookup::Sim(env), id),
-            Node::Sym(name) => env.iter().rev().find_map(|s| s.get(&name)).cloned(),
+            Node::Rec(_) | Node::Lst(_) => self.node_mem_ty(&MemLookup::Sim(env), id),
+            Node::Sym(name) => env
+                .iter()
+                .rev()
+                .find_map(|s| s.get(&name))
+                .cloned()
+                // `none` / a nullary case as the whole body (5.4)
+                .or_else(|| self.node_mem_ty(&MemLookup::Sim(env), id)),
             Node::Tup(items) if !items.is_empty() => {
                 if matches!(self.arena.node(items[0]), Node::Qsym(..)) {
                     return self.node_mem_ty(&MemLookup::Sim(env), id);
@@ -4738,7 +5004,9 @@ impl<'a> Emitter<'a> {
                         r
                     }
                     ("the-MACRO", [_ty, expr]) => self.predict_body_mem(*expr, env),
-                    _ => None,
+                    // a case-constructor call (5.4); non-constructors gate
+                    // to None inside can_mem_as
+                    _ => self.node_mem_ty(&MemLookup::Sim(env), id),
                 }
             }
             _ => None,
@@ -4756,15 +5024,41 @@ impl<'a> Emitter<'a> {
             // a binding already in this layout: alias it (values are
             // immutable, so sharing the memory is unobservable)
             Node::Sym(name) => {
-                let b = fx
-                    .lookup(&name)
-                    .ok_or("internal: Mem repr requested for an unbound name")?;
-                match b.repr {
-                    Repr::Mem(bt) if bt == t => {
-                        fx.op(I::LocalGet(b.local));
+                match fx.lookup(&name) {
+                    Some(b) => match b.repr {
+                        Repr::Mem(bt) if bt == t => {
+                            fx.op(I::LocalGet(b.local));
+                            Ok(())
+                        }
+                        // a boxed binding of a variant-shaped type stores
+                        // canonically (name+payload — no order hazard)
+                        Repr::Boxed if ty.variant_cases().is_some() => {
+                            let l = fx.local(ValType::I32);
+                            fx.op(I::LocalGet(b.local));
+                            fx.op(I::LocalSet(l));
+                            let a = fx.local(ValType::I32);
+                            fx.op(I::I32Const(size_of(&ty) as i32));
+                            fx.op(I::Call(self.h.alloc));
+                            fx.op(I::LocalSet(a));
+                            self.store_to_mem(fx, &ty, l, a, 0)?;
+                            fx.op(I::LocalGet(a));
+                            Ok(())
+                        }
+                        _ => Err("internal: Mem repr requested for a non-Mem binding".into()),
+                    },
+                    // `none` / a nullary local case as a value (5.4), or —
+                    // if resolution differs from the prediction — the boxed
+                    // fallback inside mem_var_into
+                    None if ty.variant_cases().is_some() => {
+                        let a = fx.local(ValType::I32);
+                        fx.op(I::I32Const(size_of(&ty) as i32));
+                        fx.op(I::Call(self.h.alloc));
+                        fx.op(I::LocalSet(a));
+                        self.mem_var_into(fx, id, &ty, a, 0)?;
+                        fx.op(I::LocalGet(a));
                         Ok(())
                     }
-                    _ => Err("internal: Mem repr requested for a non-Mem binding".into()),
+                    None => Err("internal: Mem repr requested for an unbound name".into()),
                 }
             }
             Node::Rec(_) => {
@@ -4773,6 +5067,17 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.alloc));
                 fx.op(I::LocalSet(p));
                 self.expr_mem_into(fx, id, &ty, p, 0)?;
+                fx.op(I::LocalGet(p));
+                Ok(())
+            }
+            Node::Lst(_) => {
+                // the canonical list VALUE is a pointer to its (ptr, len)
+                // pair; the elements pack into their own buffer (5.5)
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                self.mem_field_into(fx, id, &ty, p, 0)?;
                 fx.op(I::LocalGet(p));
                 Ok(())
             }
@@ -4792,6 +5097,19 @@ impl<'a> Emitter<'a> {
                             if let [_ty, expr] = *args {
                                 return self.expr_mem(fx, expr, t, tail);
                             }
+                        }
+                        _ if ty.variant_cases().is_some() => {
+                            // a case-constructor call builds disc+payload in
+                            // place (5.4); mem_var_into falls back to the
+                            // boxed store when resolution differs from the
+                            // gate's view
+                            let a = fx.local(ValType::I32);
+                            fx.op(I::I32Const(size_of(&ty) as i32));
+                            fx.op(I::Call(self.h.alloc));
+                            fx.op(I::LocalSet(a));
+                            self.mem_var_into(fx, id, &ty, a, 0)?;
+                            fx.op(I::LocalGet(a));
+                            return Ok(());
                         }
                         _ => {}
                     }
@@ -4818,6 +5136,50 @@ impl<'a> Emitter<'a> {
         };
         for ((o, tf), (_, v)) in record_field_offsets(ty).into_iter().zip(&fields) {
             self.mem_field_into(fx, *v, &tf, dst, off + o)?;
+        }
+        Ok(())
+    }
+
+    /// Store a variant-shaped value at `dst + off` (5.4): a case-constructor
+    /// form stores its numeric discriminant and constructs the payload in
+    /// place at the canonical payload offset (bundling several arguments as
+    /// a tuple payload, the interpreter's rule). Anything else — a bound
+    /// name, a call, a resolution the prediction walk could not see —
+    /// evaluates boxed and stores through the canonical seam: a variant's
+    /// value is its case name plus payload, so unlike records there is no
+    /// field-order hazard in the box-to-mem direction.
+    fn mem_var_into(
+        &mut self,
+        fx: &mut FnCtx,
+        id: NodeId,
+        ty: &WitTy,
+        dst: u32,
+        off: u64,
+    ) -> Result<(), String> {
+        let parts = self.ctor_parts(Some(fx), id, ty).filter(|_| {
+            let look = MemLookup::Fx(fx);
+            self.ctor_admissible(&look, id, ty)
+        });
+        let Some((i, payload, args)) = parts else {
+            let l = fx.local(ValType::I32);
+            self.expr(fx, id, false)?;
+            fx.op(I::LocalSet(l));
+            return self.store_to_mem(fx, ty, l, dst, off);
+        };
+        fx.op(I::LocalGet(dst));
+        fx.op(I::I32Const(i as i32));
+        fx.op(I::I32Store8(ma(off, 0)));
+        let poff = variant_payload_offset(ty);
+        match (args.len(), payload) {
+            (0, None) => {}
+            (1, Some(pt)) => self.mem_field_into(fx, args[0], &pt, dst, off + poff)?,
+            (_, Some(WitTy::Tuple(es))) => {
+                let t = WitTy::Tuple(es);
+                for ((o, et), &a) in record_field_offsets(&t).into_iter().zip(&args) {
+                    self.mem_field_into(fx, a, &et, dst, off + poff + o)?;
+                }
+            }
+            _ => return Err("internal: ctor_admissible admitted a payload/arity mismatch".into()),
         }
         Ok(())
     }
@@ -4873,6 +5235,31 @@ impl<'a> Emitter<'a> {
                 self.store_to_mem(fx, tf, l, dst, off)?;
             }
             WitTy::Record(_) => self.expr_mem_into(fx, v, tf, dst, off)?,
+            WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
+                self.mem_var_into(fx, v, tf, dst, off)?;
+            }
+            WitTy::List(elem) => {
+                // a list literal packs its elements at their canonical
+                // stride into a fresh buffer; the field itself is the
+                // (ptr, len) pair (5.5)
+                let Node::Lst(items) = self.arena.node(v).clone() else {
+                    return Err("internal: canonical list store expects a list literal".into());
+                };
+                let esz = elem_size(elem);
+                let buf = fx.local(ValType::I32);
+                fx.op(I::I32Const((items.len() as u64 * esz) as i32));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(buf));
+                for (i, &it) in items.iter().enumerate() {
+                    self.mem_field_into(fx, it, elem, buf, i as u64 * esz)?;
+                }
+                fx.op(I::LocalGet(dst));
+                fx.op(I::LocalGet(buf));
+                fx.op(I::I32Store(ma(off, 2)));
+                fx.op(I::LocalGet(dst));
+                fx.op(I::I32Const(items.len() as i32));
+                fx.op(I::I32Store(ma(off + 4, 2)));
+            }
             _ => return Err("internal: field type not Mem-storable yet (5.3)".into()),
         }
         Ok(())
