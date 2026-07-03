@@ -90,7 +90,10 @@ fn generic_bridge_lowers_primitives_records_tuples() {
     // forwarding API — proof the generic import lowering and export wrapper both
     // ran (and `wit-component` re-validated their canonical-ABI signatures).
     let text = String::from_utf8_lossy(&bytes);
-    assert!(text.contains("acme:shapes/api"), "import not wired into the component");
+    assert!(
+        text.contains("acme:shapes/api"),
+        "import not wired into the component"
+    );
     assert!(text.contains("demo:app/api"), "forwarding api not exported");
 }
 
@@ -182,7 +185,10 @@ fn generic_bridge_lowers_enum_variant_flags_lists_options() {
 
     let bytes = build_against_wit("kinds", "acme-kinds.wit", wit, app);
     let text = String::from_utf8_lossy(&bytes);
-    assert!(text.contains("acme:kinds/api"), "import not wired into the component");
+    assert!(
+        text.contains("acme:kinds/api"),
+        "import not wired into the component"
+    );
     assert!(text.contains("demo:app/api"), "forwarding api not exported");
 }
 
@@ -225,7 +231,10 @@ fn generic_bridge_passes_resource_handles_own_borrow() {
 
     let bytes = build_against_wit("res", "acme-res.wit", wit, app);
     let text = String::from_utf8_lossy(&bytes);
-    assert!(text.contains("acme:res/api"), "import not wired into the component");
+    assert!(
+        text.contains("acme:res/api"),
+        "import not wired into the component"
+    );
     assert!(text.contains("demo:app/api"), "forwarding api not exported");
 }
 
@@ -311,7 +320,10 @@ fn generic_bridge_lowers_resource_methods_static_constructor_drop() {
 
     let bytes = build_against_wit("wire", "acme-wire.wit", wit, app);
     let text = String::from_utf8_lossy(&bytes);
-    assert!(text.contains("acme:wire/api"), "import not wired into the component");
+    assert!(
+        text.contains("acme:wire/api"),
+        "import not wired into the component"
+    );
     assert!(text.contains("demo:app/api"), "forwarding api not exported");
 }
 
@@ -426,5 +438,8 @@ fn generic_bridge_widens_variant_arms_and_strings_as_byte_lists() {
 
     let bytes = build_against_wit("wire2", "acme-wire2.wit", wit, app);
     let text = String::from_utf8_lossy(&bytes);
-    assert!(text.contains("acme:wire2/api"), "import not wired into the component");
+    assert!(
+        text.contains("acme:wire2/api"),
+        "import not wired into the component"
+    );
 }

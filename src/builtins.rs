@@ -2,24 +2,73 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::form::{Arena, Node, NodeId};
-use crate::interp::{err, EvalError, Interp};
-use crate::value::{form_to_value, print_value, unit, Env, Value};
+use crate::interp::{EvalError, Interp, err};
+use crate::value::{Env, Value, form_to_value, print_value, unit};
 
 type R<T> = Result<T, EvalError>;
 
 pub const NAMES: &[&str] = &[
-    "eq", "lt", "le", "gt", "ge", "not",
-    "add", "sub", "mul", "div", "rem", "neg", "min", "max", "abs",
-    "len", "empty", "get", "put", "push", "concat", "head", "tail",
-    "reverse", "range", "map", "filter", "fold", "zip",
-    "str-cat", "upper", "lower", "split", "join", "contains",
-    "to-string", "read",
-    "to-u8", "to-u16", "to-u32", "to-u64", "to-s8", "to-s16", "to-s32", "to-s64",
-    "to-f32", "to-f64", "to-char",
-    "apply", "gensym", "expand",
-    "form-kind", "rec-key", "rec-val",
-    "some", "ok", "err",
-    "cell-new", "cell-get", "cell-set", "drop",
+    "eq",
+    "lt",
+    "le",
+    "gt",
+    "ge",
+    "not",
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "rem",
+    "neg",
+    "min",
+    "max",
+    "abs",
+    "len",
+    "empty",
+    "get",
+    "put",
+    "push",
+    "concat",
+    "head",
+    "tail",
+    "reverse",
+    "range",
+    "map",
+    "filter",
+    "fold",
+    "zip",
+    "str-cat",
+    "upper",
+    "lower",
+    "split",
+    "join",
+    "contains",
+    "to-string",
+    "read",
+    "to-u8",
+    "to-u16",
+    "to-u32",
+    "to-u64",
+    "to-s8",
+    "to-s16",
+    "to-s32",
+    "to-s64",
+    "to-f32",
+    "to-f64",
+    "to-char",
+    "apply",
+    "gensym",
+    "expand",
+    "form-kind",
+    "rec-key",
+    "rec-val",
+    "some",
+    "ok",
+    "err",
+    "cell-new",
+    "cell-get",
+    "cell-set",
+    "drop",
 ];
 
 /// The functor `Set` operation builtins, kept out of [`NAMES`] so they are *not*
@@ -68,10 +117,12 @@ pub fn parse_functor_import(arena: &Arena, payload: NodeId) -> Option<FunctorImp
     let Node::Rec(fields) = arena.node(payload) else {
         return None;
     };
-    let pkg = fields.iter().find_map(|(k, v)| match (k.as_str(), arena.node(*v)) {
-        ("pkg", Node::Str(s)) => Some(s.clone()),
-        _ => None,
-    })?;
+    let pkg = fields
+        .iter()
+        .find_map(|(k, v)| match (k.as_str(), arena.node(*v)) {
+            ("pkg", Node::Str(s)) => Some(s.clone()),
+            _ => None,
+        })?;
     let path = pkg.split('@').next().unwrap_or(&pkg);
     let kind = if path.ends_with("coll/set") {
         FunctorKind::Set
@@ -122,7 +173,10 @@ fn args_n(arg: Value, n: usize, name: &str) -> R<Vec<Value>> {
 fn want_list(v: Value, name: &str) -> R<Vec<Value>> {
     match v {
         Value::Lst(items) => Ok(items),
-        other => err(format!("`{name}` expects a list, got {}", print_value(&other))),
+        other => err(format!(
+            "`{name}` expects a list, got {}",
+            print_value(&other)
+        )),
     }
 }
 
@@ -141,14 +195,20 @@ fn payload_parts(v: Value) -> Vec<Value> {
 fn want_str(v: Value, name: &str) -> R<String> {
     match v {
         Value::Str(s) => Ok(s),
-        other => err(format!("`{name}` expects a string, got {}", print_value(&other))),
+        other => err(format!(
+            "`{name}` expects a string, got {}",
+            print_value(&other)
+        )),
     }
 }
 
 fn want_int(v: &Value, name: &str) -> R<i64> {
     match v {
         Value::Int(n) => Ok(*n),
-        other => err(format!("`{name}` expects an integer, got {}", print_value(other))),
+        other => err(format!(
+            "`{name}` expects an integer, got {}",
+            print_value(other)
+        )),
     }
 }
 
@@ -161,19 +221,34 @@ fn want_num(v: &Value, name: &str) -> R<Num> {
     match v {
         Value::Int(n) => Ok(Num::I(*n)),
         Value::Dec(f) => Ok(Num::D(*f)),
-        other => err(format!("`{name}` expects a number, got {}", print_value(other))),
+        other => err(format!(
+            "`{name}` expects a number, got {}",
+            print_value(other)
+        )),
     }
 }
 
-fn arith(name: &str, a: &Value, b: &Value, fi: fn(i64, i64) -> Option<i64>, fd: fn(f64, f64) -> f64) -> R<Value> {
+fn arith(
+    name: &str,
+    a: &Value,
+    b: &Value,
+    fi: fn(i64, i64) -> Option<i64>,
+    fd: fn(f64, f64) -> f64,
+) -> R<Value> {
     match (want_num(a, name)?, want_num(b, name)?) {
         (Num::I(x), Num::I(y)) => match fi(x, y) {
             Some(n) => Ok(Value::Int(n)),
             None => err(format!("`{name}`: integer overflow or division by zero")),
         },
         (x, y) => {
-            let xf = match x { Num::I(n) => n as f64, Num::D(f) => f };
-            let yf = match y { Num::I(n) => n as f64, Num::D(f) => f };
+            let xf = match x {
+                Num::I(n) => n as f64,
+                Num::D(f) => f,
+            };
+            let yf = match y {
+                Num::I(n) => n as f64,
+                Num::D(f) => f,
+            };
             Ok(Value::Dec(fd(xf, yf)))
         }
     }
@@ -184,8 +259,14 @@ fn compare(name: &str, a: &Value, b: &Value) -> R<std::cmp::Ordering> {
         (Value::Str(x), Value::Str(y)) => Ok(x.cmp(y)),
         (Value::Char(x), Value::Char(y)) => Ok(x.cmp(y)),
         _ => {
-            let xf = match want_num(a, name)? { Num::I(n) => n as f64, Num::D(f) => f };
-            let yf = match want_num(b, name)? { Num::I(n) => n as f64, Num::D(f) => f };
+            let xf = match want_num(a, name)? {
+                Num::I(n) => n as f64,
+                Num::D(f) => f,
+            };
+            let yf = match want_num(b, name)? {
+                Num::I(n) => n as f64,
+                Num::D(f) => f,
+            };
             match xf.partial_cmp(&yf) {
                 Some(o) => Ok(o),
                 None => err(format!("`{name}`: values are not comparable")),
@@ -216,13 +297,42 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             Value::Bool(b) => Ok(Value::Bool(!b)),
             other => err(format!("`not` expects a bool, got {}", print_value(&other))),
         },
-        "add" => { let a = args_n(arg, 2, name)?; arith(name, &a[0], &a[1], i64::checked_add, |x, y| x + y) }
-        "sub" => { let a = args_n(arg, 2, name)?; arith(name, &a[0], &a[1], i64::checked_sub, |x, y| x - y) }
-        "mul" => { let a = args_n(arg, 2, name)?; arith(name, &a[0], &a[1], i64::checked_mul, |x, y| x * y) }
-        "div" => { let a = args_n(arg, 2, name)?; arith(name, &a[0], &a[1], i64::checked_div, |x, y| x / y) }
-        "rem" => { let a = args_n(arg, 2, name)?; arith(name, &a[0], &a[1], i64::checked_rem, |x, y| x % y) }
-        "min" => { let a = args_n(arg, 2, name)?; if compare(name, &a[0], &a[1])? == Greater { Ok(a[1].clone()) } else { Ok(a[0].clone()) } }
-        "max" => { let a = args_n(arg, 2, name)?; if compare(name, &a[0], &a[1])? == Less { Ok(a[1].clone()) } else { Ok(a[0].clone()) } }
+        "add" => {
+            let a = args_n(arg, 2, name)?;
+            arith(name, &a[0], &a[1], i64::checked_add, |x, y| x + y)
+        }
+        "sub" => {
+            let a = args_n(arg, 2, name)?;
+            arith(name, &a[0], &a[1], i64::checked_sub, |x, y| x - y)
+        }
+        "mul" => {
+            let a = args_n(arg, 2, name)?;
+            arith(name, &a[0], &a[1], i64::checked_mul, |x, y| x * y)
+        }
+        "div" => {
+            let a = args_n(arg, 2, name)?;
+            arith(name, &a[0], &a[1], i64::checked_div, |x, y| x / y)
+        }
+        "rem" => {
+            let a = args_n(arg, 2, name)?;
+            arith(name, &a[0], &a[1], i64::checked_rem, |x, y| x % y)
+        }
+        "min" => {
+            let a = args_n(arg, 2, name)?;
+            if compare(name, &a[0], &a[1])? == Greater {
+                Ok(a[1].clone())
+            } else {
+                Ok(a[0].clone())
+            }
+        }
+        "max" => {
+            let a = args_n(arg, 2, name)?;
+            if compare(name, &a[0], &a[1])? == Less {
+                Ok(a[1].clone())
+            } else {
+                Ok(a[0].clone())
+            }
+        }
         "neg" => match want_num(&arg, name)? {
             Num::I(n) => Ok(Value::Int(-n)),
             Num::D(f) => Ok(Value::Dec(-f)),
@@ -234,12 +344,18 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
         "len" => match &arg {
             Value::Lst(v) | Value::Tup(v) => Ok(Value::Int(v.len() as i64)),
             Value::Str(s) => Ok(Value::Int(s.chars().count() as i64)),
-            other => err(format!("`len` expects a list or string, got {}", print_value(other))),
+            other => err(format!(
+                "`len` expects a list or string, got {}",
+                print_value(other)
+            )),
         },
         "empty" => match &arg {
             Value::Lst(v) | Value::Tup(v) => Ok(Value::Bool(v.is_empty())),
             Value::Str(s) => Ok(Value::Bool(s.is_empty())),
-            other => err(format!("`empty` expects a list or string, got {}", print_value(other))),
+            other => err(format!(
+                "`empty` expects a list or string, got {}",
+                print_value(other)
+            )),
         },
         "get" => {
             let a = args_n(arg, 2, name)?;
@@ -311,7 +427,10 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             let b = want_list(a.pop().unwrap(), name)?;
             let x = want_list(a.pop().unwrap(), name)?;
             Ok(Value::Lst(
-                x.into_iter().zip(b).map(|(p, q)| Value::Tup(vec![p, q])).collect(),
+                x.into_iter()
+                    .zip(b)
+                    .map(|(p, q)| Value::Tup(vec![p, q]))
+                    .collect(),
             ))
         }
         "map" => {
@@ -337,7 +456,7 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
                         return err(format!(
                             "`filter` predicate must return a bool, got {}",
                             print_value(&other)
-                        ))
+                        ));
                     }
                 }
             }
@@ -364,7 +483,7 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
                         return err(format!(
                             "`str-cat` expects strings, got {} (use to-string)",
                             print_value(&other)
-                        ))
+                        ));
                     }
                 }
             }
@@ -376,7 +495,9 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             let mut a = args_n(arg, 2, name)?;
             let sep = want_str(a.pop().unwrap(), name)?;
             let s = want_str(a.pop().unwrap(), name)?;
-            Ok(Value::Lst(s.split(&sep).map(|p| Value::Str(p.to_string())).collect()))
+            Ok(Value::Lst(
+                s.split(&sep).map(|p| Value::Str(p.to_string())).collect(),
+            ))
         }
         "join" => {
             let mut a = args_n(arg, 2, name)?;
@@ -395,14 +516,18 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
         "read" => {
             let s = want_str(arg, name)?;
             match crate::read_file(&s) {
-                Ok((arena, roots)) if roots.len() == 1 => {
-                    Ok(Value::Variant("ok".into(), Some(Rc::new(form_to_value(&arena, roots[0])))))
-                }
+                Ok((arena, roots)) if roots.len() == 1 => Ok(Value::Variant(
+                    "ok".into(),
+                    Some(Rc::new(form_to_value(&arena, roots[0]))),
+                )),
                 Ok(_) => Ok(Value::Variant(
                     "err".into(),
                     Some(Rc::new(Value::Str("expected exactly one form".into()))),
                 )),
-                Err(e) => Ok(Value::Variant("err".into(), Some(Rc::new(Value::Str(e.to_string()))))),
+                Err(e) => Ok(Value::Variant(
+                    "err".into(),
+                    Some(Rc::new(Value::Str(e.to_string()))),
+                )),
             }
         }
         "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32" | "to-s64" => {
@@ -410,7 +535,12 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
                 Value::Int(n) => *n,
                 Value::Dec(f) if f.fract() == 0.0 => *f as i64,
                 Value::Char(c) => *c as i64,
-                other => return err(format!("`{name}` expects a number, got {}", print_value(other))),
+                other => {
+                    return err(format!(
+                        "`{name}` expects a number, got {}",
+                        print_value(other)
+                    ));
+                }
             };
             let ok = match name {
                 "to-u8" => (0..=u8::MAX as i64).contains(&n),
@@ -438,7 +568,10 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
                 Some(c) => Ok(Value::Char(c)),
                 None => err(format!("`to-char`: {n} is not a Unicode scalar value")),
             },
-            other => return err(format!("`to-char` expects an int, got {}", print_value(other))),
+            other => err(format!(
+                "`to-char` expects an int, got {}",
+                print_value(other)
+            )),
         },
         "apply" => {
             let mut a = args_n(arg, 2, name)?;
@@ -470,8 +603,9 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             let mut arena = crate::form::Arena::new();
             let mut arg_nodes = Vec::with_capacity(rest.len());
             for v in rest {
-                arg_nodes
-                    .push(crate::value::value_to_form(v, &mut arena).map_err(|msg| EvalError { msg })?);
+                arg_nodes.push(
+                    crate::value::value_to_form(v, &mut arena).map_err(|msg| EvalError { msg })?,
+                );
             }
             let arena = Rc::new(arena);
             let (out, root) = interp.expand_once(&mac, &arena, &arg_nodes)?;
@@ -500,11 +634,17 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             Value::Rec(fields) if !fields.is_empty() => {
                 Ok(Value::Variant(fields[0].0.clone(), None))
             }
-            other => err(format!("`rec-key` expects a non-empty record, got {}", print_value(other))),
+            other => err(format!(
+                "`rec-key` expects a non-empty record, got {}",
+                print_value(other)
+            )),
         },
         "rec-val" => match &arg {
             Value::Rec(fields) if !fields.is_empty() => Ok(fields[0].1.clone()),
-            other => err(format!("`rec-val` expects a non-empty record, got {}", print_value(other))),
+            other => err(format!(
+                "`rec-val` expects a non-empty record, got {}",
+                print_value(other)
+            )),
         },
         "some" => Ok(Value::Variant("some".into(), Some(Rc::new(arg)))),
         "ok" => Ok(Value::Variant("ok".into(), Some(Rc::new(arg)))),
@@ -512,7 +652,10 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
         "cell-new" => Ok(Value::Cell(Rc::new(RefCell::new(arg)))),
         "cell-get" => match &arg {
             Value::Cell(c) => Ok(c.borrow().clone()),
-            other => err(format!("`cell-get` expects a cell, got {}", print_value(other))),
+            other => err(format!(
+                "`cell-get` expects a cell, got {}",
+                print_value(other)
+            )),
         },
         "cell-set" => {
             let mut a = args_n(arg, 2, name)?;
@@ -522,7 +665,10 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
                     *c.borrow_mut() = v;
                     Ok(unit())
                 }
-                other => err(format!("`cell-set` expects a cell, got {}", print_value(&other))),
+                other => err(format!(
+                    "`cell-set` expects a cell, got {}",
+                    print_value(&other)
+                )),
             }
         }
         "drop" => Ok(unit()),
@@ -567,7 +713,10 @@ fn set_elems(v: &Value, name: &str) -> R<Vec<Value>> {
                 print_value(other)
             )),
         },
-        other => err(format!("`{name}` expects a set handle, got {}", print_value(other))),
+        other => err(format!(
+            "`{name}` expects a set handle, got {}",
+            print_value(other)
+        )),
     }
 }
 

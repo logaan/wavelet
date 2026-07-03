@@ -30,7 +30,7 @@ fn scratch(tag: &str) -> PathBuf {
 }
 
 /// Write `src` to `<dir>/<name>` and return its path.
-fn write_src(dir: &PathBuf, name: &str, src: &str) -> PathBuf {
+fn write_src(dir: &std::path::Path, name: &str, src: &str) -> PathBuf {
     let file = dir.join(name);
     std::fs::write(&file, src).expect("write source file");
     file
@@ -155,7 +155,10 @@ Def shout Fn {phrase: string}
         "`wavelet wit` wrongly rejected a well-typed program (exit {:?})\nstderr:\n{stderr}",
         out.status.code(),
     );
-    assert!(stdout.contains("shout: func(phrase: string) -> string"), "{stdout}");
+    assert!(
+        stdout.contains("shout: func(phrase: string) -> string"),
+        "{stdout}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

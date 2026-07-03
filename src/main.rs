@@ -87,7 +87,7 @@ fn wit_cmd(path: &str) -> ExitCode {
     }
 }
 
-fn split_out<'a>(rest: &'a [String], default: &str) -> (Vec<String>, String) {
+fn split_out(rest: &[String], default: &str) -> (Vec<String>, String) {
     match rest.iter().position(|a| a == "-o") {
         Some(i) if i + 1 < rest.len() => (rest[..i].to_vec(), rest[i + 1].clone()),
         _ => (rest.to_vec(), default.to_string()),

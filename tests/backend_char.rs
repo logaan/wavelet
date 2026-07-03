@@ -94,9 +94,8 @@ fn lifted_chars_stay_chars_in_guest() {
 #[test]
 fn chars_order_by_codepoint() {
     let mut c = char_component();
-    let lt = |c: &mut HostComponent, a: char, b: char| {
-        ok(c, "lt-chars", &[Val::Char(a), Val::Char(b)])
-    };
+    let lt =
+        |c: &mut HostComponent, a: char, b: char| ok(c, "lt-chars", &[Val::Char(a), Val::Char(b)]);
     assert_eq!(lt(&mut c, 'a', 'b'), Val::Bool(true));
     assert_eq!(lt(&mut c, 'b', 'a'), Val::Bool(false));
     assert_eq!(lt(&mut c, 'a', 'a'), Val::Bool(false));
@@ -117,7 +116,13 @@ fn chars_in_memory_payloads() {
     assert_eq!(ok(&mut c, "chars-ok", &[cs]), Val::Bool(true));
 
     let some = Val::Option(Some(Box::new(Val::Char('w'))));
-    assert_eq!(ok(&mut c, "echo-opt-char", &[some.clone()]), some);
+    assert_eq!(
+        ok(&mut c, "echo-opt-char", std::slice::from_ref(&some)),
+        some
+    );
     let none = Val::Option(None);
-    assert_eq!(ok(&mut c, "echo-opt-char", &[none.clone()]), none);
+    assert_eq!(
+        ok(&mut c, "echo-opt-char", std::slice::from_ref(&none)),
+        none
+    );
 }

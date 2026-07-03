@@ -25,7 +25,9 @@ impl ProjectKind {
         match s {
             "cli" => Ok(ProjectKind::Cli),
             "http" => Ok(ProjectKind::Http),
-            other => Err(format!("unknown project type `{other}` (supported: cli, http)")),
+            other => Err(format!(
+                "unknown project type `{other}` (supported: cli, http)"
+            )),
         }
     }
 }
@@ -47,7 +49,8 @@ pub fn create(name: &str, kind: ProjectKind) -> Result<(PathBuf, Vec<PathBuf>), 
     let mut write = |rel: &str, contents: String, exec: bool| -> Result<(), String> {
         let path = root.join(rel);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("creating {}: {e}", parent.display()))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("creating {}: {e}", parent.display()))?;
         }
         fs::write(&path, contents).map_err(|e| format!("writing {}: {e}", path.display()))?;
         if exec {
@@ -107,7 +110,11 @@ fn slugify(name: &str) -> Result<String, String> {
     let slug = match slug.chars().next() {
         Some(c) if c.is_ascii_alphabetic() => slug,
         Some(_) => format!("app-{slug}"),
-        None => return Err(format!("`{name}` has no letters or digits to name a package after")),
+        None => {
+            return Err(format!(
+                "`{name}` has no letters or digits to name a package after"
+            ));
+        }
     };
     Ok(slug)
 }
@@ -417,10 +424,8 @@ mod tests {
 
     /// A fresh temp directory unique to this test, cleaned on entry and exit.
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "wavelet-scaffold-{}-{tag}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("wavelet-scaffold-{}-{tag}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
     }
@@ -451,10 +456,16 @@ mod tests {
         assert!(main.contains("Package \"widgets:main@0.1.0\""), "{main}");
         // The cli entry exports wasi:cli/run generically and drops `Target`.
         assert!(main.contains("wasi:cli/run"), "{main}");
-        assert!(!main.contains("Target"), "cli template should not use Target: {main}");
+        assert!(
+            !main.contains("Target"),
+            "cli template should not use Target: {main}"
+        );
         assert!(main.contains("widgets:greeting/api"), "{main}");
         let greeting = fs::read_to_string(root.join("src/greeting.wlt")).unwrap();
-        assert!(greeting.contains("Package \"widgets:greeting@0.1.0\""), "{greeting}");
+        assert!(
+            greeting.contains("Package \"widgets:greeting@0.1.0\""),
+            "{greeting}"
+        );
 
         // The run script is executable.
         #[cfg(unix)]
@@ -501,10 +512,16 @@ mod tests {
         assert!(app.contains("wasi:http/incoming-handler"), "{app}");
         assert!(app.contains("wasi:http/types"), "{app}");
         assert!(app.contains("wasi:io/streams"), "{app}");
-        assert!(!app.contains("Target"), "http template should not use Target: {app}");
+        assert!(
+            !app.contains("Target"),
+            "http template should not use Target: {app}"
+        );
         assert!(app.contains("widgets:greeting/api"), "{app}");
         let greeting = fs::read_to_string(root.join("src/greeting.wlt")).unwrap();
-        assert!(greeting.contains("Package \"widgets:greeting@0.1.0\""), "{greeting}");
+        assert!(
+            greeting.contains("Package \"widgets:greeting@0.1.0\""),
+            "{greeting}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

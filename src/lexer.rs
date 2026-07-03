@@ -45,7 +45,10 @@ impl fmt::Display for ReadError {
 impl std::error::Error for ReadError {}
 
 fn err<T>(msg: impl Into<String>, at: u32) -> Result<T, ReadError> {
-    Err(ReadError { msg: msg.into(), at })
+    Err(ReadError {
+        msg: msg.into(),
+        at,
+    })
 }
 
 pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
@@ -115,7 +118,12 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
                     let (tok2, next2) = lex_name(src, i + 1)?;
                     let alias = match tok {
                         Tok::Ident(s) => s,
-                        _ => return err("alias part of a qualified name must be kebab-case", start as u32),
+                        _ => {
+                            return err(
+                                "alias part of a qualified name must be kebab-case",
+                                start as u32,
+                            );
+                        }
                     };
                     let q = match tok2 {
                         Tok::Ident(s) => Tok::QIdent(alias, s, false),
@@ -135,7 +143,10 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
 }
 
 fn span(start: usize, end: usize) -> Token {
-    Token { start: start as u32, end: end as u32 }
+    Token {
+        start: start as u32,
+        end: end as u32,
+    }
 }
 
 fn is_name_char(c: u8) -> bool {
@@ -168,7 +179,10 @@ fn lex_name(src: &str, start: usize) -> Result<(Tok, usize), ReadError> {
     }
     if is_title(text) {
         if escaped {
-            return err("`%` escape applies to kebab-case identifiers only", start as u32);
+            return err(
+                "`%` escape applies to kebab-case identifiers only",
+                start as u32,
+            );
         }
         Ok((Tok::Title(title_to_macro_name(text)), i))
     } else {
@@ -318,9 +332,7 @@ fn read_escape(
                     _ => return err("bad \\u{...} escape", at),
                 }
             }
-            let code = u32::from_str_radix(&hex, 16)
-                .ok()
-                .and_then(char::from_u32);
+            let code = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32);
             match code {
                 Some(ch) => ch,
                 None => return err("invalid unicode scalar in \\u{...}", at),
@@ -343,7 +355,10 @@ mod tests {
     fn neg_inf_is_a_whole_word() {
         // bare `-inf` is the negative-infinity literal, including at a boundary
         assert_eq!(toks("-inf"), vec![Tok::Dec(f64::NEG_INFINITY)]);
-        assert_eq!(toks("(-inf)"), vec![Tok::LParen, Tok::Dec(f64::NEG_INFINITY), Tok::RParen]);
+        assert_eq!(
+            toks("(-inf)"),
+            vec![Tok::LParen, Tok::Dec(f64::NEG_INFINITY), Tok::RParen]
+        );
         // it must not be split out of a longer token (the old prefix match gave
         // `[-inf, o]`); since identifiers can't begin with `-`, the leftover
         // `-` is now a lex error rather than a bogus split.

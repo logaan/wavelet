@@ -107,10 +107,26 @@ struct SetOp {
 
 /// The `Set` functor's operations, in interface order (constructor first).
 const SET_OPS: &[SetOp] = &[
-    SetOp { name: "new", takes_value: false, result: SetOpResult::Handle },
-    SetOp { name: "add", takes_value: true, result: SetOpResult::Unit },
-    SetOp { name: "contains", takes_value: true, result: SetOpResult::Ty("bool") },
-    SetOp { name: "size", takes_value: false, result: SetOpResult::Ty("u32") },
+    SetOp {
+        name: "new",
+        takes_value: false,
+        result: SetOpResult::Handle,
+    },
+    SetOp {
+        name: "add",
+        takes_value: true,
+        result: SetOpResult::Unit,
+    },
+    SetOp {
+        name: "contains",
+        takes_value: true,
+        result: SetOpResult::Ty("bool"),
+    },
+    SetOp {
+        name: "size",
+        takes_value: false,
+        result: SetOpResult::Ty("u32"),
+    },
 ];
 
 #[derive(Clone)]
@@ -124,7 +140,11 @@ pub struct FuncSig {
 
 impl FuncSig {
     pub fn to_wit(&self) -> String {
-        let ps: Vec<String> = self.params.iter().map(|(n, t)| format!("{n}: {t}")).collect();
+        let ps: Vec<String> = self
+            .params
+            .iter()
+            .map(|(n, t)| format!("{n}: {t}"))
+            .collect();
         match &self.result {
             Some(r) => format!("{}: func({}) -> {r};", self.name, ps.join(", ")),
             None => format!("{}: func({});", self.name, ps.join(", ")),
@@ -146,15 +166,19 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
     for &root in roots {
         // Top-level forms are tuples `Tup[head, …args]`. The arity-1 special
         // heads take their single payload from `items[1]`; Def/DefType take two.
-        let Node::Tup(items) = arena.node(root) else { continue };
+        let Node::Tup(items) = arena.node(root) else {
+            continue;
+        };
         let Some(&head) = items.first() else { continue };
-        let Node::Sym(head_name) = arena.node(head) else { continue };
+        let Node::Sym(head_name) = arena.node(head) else {
+            continue;
+        };
         match head_name.as_str() {
             "package-MACRO" => {
-                if let Some(&p) = items.get(1) {
-                    if let Node::Str(s) = arena.node(p) {
-                        package = Some(s.clone());
-                    }
+                if let Some(&p) = items.get(1)
+                    && let Node::Str(s) = arena.node(p)
+                {
+                    package = Some(s.clone());
                 }
             }
             "import-MACRO" => {
@@ -193,10 +217,15 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                 let (pkg_str, alias, macros, from) = spec.ok_or("malformed Import")?;
                 let path = strip_version(&pkg_str);
                 let pkg_part = path.split('/').next().unwrap_or(&path).to_string();
-                let alias = alias.unwrap_or_else(|| {
-                    path.rsplit('/').next().unwrap_or(&path).to_string()
+                let alias =
+                    alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
+                imports.push(ImportInfo {
+                    path,
+                    package: pkg_part,
+                    alias,
+                    macros,
+                    from,
                 });
-                imports.push(ImportInfo { path, package: pkg_part, alias, macros, from });
             }
             "export-MACRO" => {
                 let Some(&p) = items.get(1) else { continue };
@@ -210,33 +239,32 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
                 }
             }
             "deftype-MACRO" => {
-                if items.len() >= 3 {
-                    if let Node::Sym(name) = arena.node(items[1]) {
-                        types.push((name.clone(), items[2]));
-                    }
+                if items.len() >= 3
+                    && let Node::Sym(name) = arena.node(items[1])
+                {
+                    types.push((name.clone(), items[2]));
                 }
             }
             "def-MACRO" => {
-                if items.len() >= 3 {
-                    if let Node::Sym(name) = arena.node(items[1]) {
-                        // A function def binds an `Fn` form, which now reads as
-                        // `Tup[fn-MACRO, params, body]`.
-                        let mut is_fn = false;
-                        if let Node::Tup(fn_items) = arena.node(items[2]) {
-                            if fn_items.len() == 3
-                                && matches!(arena.node(fn_items[0]), Node::Sym(s) if s == "fn-MACRO")
-                            {
-                                defs.insert(name.clone(), (fn_items[1], fn_items[2]));
-                                fn_defs
-                                    .entry(name.clone())
-                                    .or_default()
-                                    .push((fn_items[1], fn_items[2]));
-                                is_fn = true;
-                            }
-                        }
-                        if !is_fn {
-                            value_defs.push((name.clone(), items[2]));
-                        }
+                if items.len() >= 3
+                    && let Node::Sym(name) = arena.node(items[1])
+                {
+                    // A function def binds an `Fn` form, which now reads as
+                    // `Tup[fn-MACRO, params, body]`.
+                    let mut is_fn = false;
+                    if let Node::Tup(fn_items) = arena.node(items[2])
+                        && fn_items.len() == 3
+                        && matches!(arena.node(fn_items[0]), Node::Sym(s) if s == "fn-MACRO")
+                    {
+                        defs.insert(name.clone(), (fn_items[1], fn_items[2]));
+                        fn_defs
+                            .entry(name.clone())
+                            .or_default()
+                            .push((fn_items[1], fn_items[2]));
+                        is_fn = true;
+                    }
+                    if !is_fn {
+                        value_defs.push((name.clone(), items[2]));
                     }
                 }
             }
@@ -274,12 +302,15 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
         // does not overload. Lower each member to its own concrete, mangled
         // function `name-<first-param-type>` (Phase C, Step 8). This applies
         // only when the Export does not supply an explicit signature override.
-        let explicit_overrides = matches!(&explicit, Some(s) if !s.params.is_empty() || s.result.is_some());
+        let explicit_overrides =
+            matches!(&explicit, Some(s) if !s.params.is_empty() || s.result.is_some());
         if !explicit_overrides && is_overload_export(&name, &fn_defs) {
             let members = fn_defs
                 .get(&name)
                 .ok_or(format!("Export `{name}` has no definition"))?;
-            let iface = explicit.map(|s| s.iface).unwrap_or_else(|| "api".to_string());
+            let iface = explicit
+                .map(|s| s.iface)
+                .unwrap_or_else(|| "api".to_string());
 
             // First-parameter labels disambiguate the set only if they are all
             // distinct (preserving the established `eq-point` / `eq-string`
@@ -328,7 +359,9 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
 
         let sig = match explicit {
             // a record form that only names/groups still gets an inferred sig
-            Some(sig) if sig.params.is_empty() && sig.result.is_none() && defs.contains_key(&name) => {
+            Some(sig)
+                if sig.params.is_empty() && sig.result.is_none() && defs.contains_key(&name) =>
+            {
                 let (params_id, body) = defs[&name];
                 let mut inferred = infer_sig(arena, &name, params_id, body, &defs, &functor_ops)?;
                 inferred.iface = sig.iface;
@@ -426,10 +459,12 @@ fn parse_functor(
 ) -> Result<Option<FunctorInst>, String> {
     // Classify on the package, not the fields: read `pkg:` first and bail out as
     // an ordinary import unless it names a known functor package.
-    let pkg = fields.iter().find_map(|(k, v)| match (k.as_str(), arena.node(*v)) {
-        ("pkg", Node::Str(s)) => Some(s.clone()),
-        _ => None,
-    });
+    let pkg = fields
+        .iter()
+        .find_map(|(k, v)| match (k.as_str(), arena.node(*v)) {
+            ("pkg", Node::Str(s)) => Some(s.clone()),
+            _ => None,
+        });
     let Some(pkg) = pkg else { return Ok(None) };
     let path = strip_version(&pkg);
     let kind = if path.ends_with("coll/set") {
@@ -453,7 +488,12 @@ fn parse_functor(
     let elem = elem.ok_or_else(|| format!("functor Import `{path}` is missing `elem:`"))?;
     let alias = alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
     let iface = format!("{elem}-set");
-    Ok(Some(FunctorInst { kind, alias, elem, iface }))
+    Ok(Some(FunctorInst {
+        kind,
+        alias,
+        elem,
+        iface,
+    }))
 }
 
 /// The result type of one functor op: `Some(t)` is a Known WIT type, `None` is
@@ -502,10 +542,8 @@ fn functor_op_table(functors: &[FunctorInst]) -> FunctorOps {
 /// `builtins::NAMES`, but they are derivable and so belong here.
 const OVERLOADABLE_OPS: &[&str] = &[
     // derivable ops (Eq / Ord / Show / Hash)
-    "eq", "compare", "show", "hash",
-    // comparison operators
-    "lt", "le", "gt", "ge",
-    // arithmetic / ordering operators
+    "eq", "compare", "show", "hash", // comparison operators
+    "lt", "le", "gt", "ge", // arithmetic / ordering operators
     "add", "sub", "mul", "div", "rem", "neg", "min", "max", "abs",
 ];
 
@@ -660,7 +698,12 @@ fn infer_sig(
             ));
         }
     };
-    Ok(FuncSig { name: name.to_string(), iface: "api".to_string(), params, result })
+    Ok(FuncSig {
+        name: name.to_string(),
+        iface: "api".to_string(),
+        params,
+        result,
+    })
 }
 
 /// The WIT type a builtin imposes on its argument at position `pos`, if known.
@@ -721,9 +764,7 @@ fn scan_param_uses(
                 for (pos, &arg) in args.iter().enumerate() {
                     // Is this argument the parameter used directly?
                     let is_param = matches!(arena.node(arg), Node::Sym(s) if s == pname);
-                    if is_param
-                        && let Some(t) = call_param_type(arena, callee, pos, defs)
-                    {
+                    if is_param && let Some(t) = call_param_type(arena, callee, pos, defs) {
                         on_use(t);
                     }
                 }
@@ -1115,14 +1156,14 @@ fn infer(
                     Node::Lst(clauses) => {
                         let mut acc: Option<Inferred> = None;
                         for &c in clauses {
-                            if let Node::Tup(pair) = arena.node(c) {
-                                if pair.len() == 2 {
-                                    let r = infer(arena, pair[1], params, defs, functor_ops, visiting);
-                                    acc = Some(match acc {
-                                        None => r,
-                                        Some(prev) => unify(prev, r),
-                                    });
-                                }
+                            if let Node::Tup(pair) = arena.node(c)
+                                && pair.len() == 2
+                            {
+                                let r = infer(arena, pair[1], params, defs, functor_ops, visiting);
+                                acc = Some(match acc {
+                                    None => r,
+                                    Some(prev) => unify(prev, r),
+                                });
                             }
                         }
                         acc.unwrap_or(Inferred::Unknown)

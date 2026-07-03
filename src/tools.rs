@@ -232,7 +232,11 @@ pub fn wac_compose(
 pub fn wac_targets(component: &Path, world: &str) -> Result<String, String> {
     run(
         Tool::Wac,
-        [OsStr::new("targets"), component.as_os_str(), OsStr::new(world)],
+        [
+            OsStr::new("targets"),
+            component.as_os_str(),
+            OsStr::new(world),
+        ],
     )
 }
 
@@ -269,7 +273,10 @@ mod tests {
     fn run_dir_for_normalizes_empty_parent() {
         assert_eq!(run_dir_for(Path::new("wit")), Path::new("."));
         assert_eq!(run_dir_for(Path::new("proj/wit")), Path::new("proj"));
-        assert_eq!(run_dir_for(Path::new("/abs/proj/wit")), Path::new("/abs/proj"));
+        assert_eq!(
+            run_dir_for(Path::new("/abs/proj/wit")),
+            Path::new("/abs/proj")
+        );
     }
 
     /// Only runs when the tools are actually installed (they are on this dev

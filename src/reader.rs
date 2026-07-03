@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::form::{Arena, Node, NodeId};
-use crate::lexer::{lex, ReadError, Tok, Token};
+use crate::lexer::{ReadError, Tok, Token, lex};
 
 /// Where a macro arity registration came from, so the table can tell a benign
 /// re-registration (same origin) from a genuine *collision* (two different
@@ -63,7 +63,11 @@ impl MacroTable {
         ] {
             map.insert(name.to_string(), (arity, Origin::Local));
         }
-        Self { map, qualified: HashMap::new(), ambiguous: HashMap::new() }
+        Self {
+            map,
+            qualified: HashMap::new(),
+            ambiguous: HashMap::new(),
+        }
     }
 
     /// Arity of an unambiguous bare TitleCase head. Returns `None` for an unknown
@@ -110,10 +114,10 @@ impl MacroTable {
         // Already ambiguous: just record this origin's alias (if an import) and
         // keep the bare name out of `map`.
         if let Some(aliases) = self.ambiguous.get_mut(&name) {
-            if let Origin::Import(alias) = &origin {
-                if !aliases.contains(alias) {
-                    aliases.push(alias.clone());
-                }
+            if let Origin::Import(alias) = &origin
+                && !aliases.contains(alias)
+            {
+                aliases.push(alias.clone());
             }
             return;
         }
@@ -132,10 +136,10 @@ impl MacroTable {
                 if let Origin::Import(a) = &existing {
                     aliases.push(a.clone());
                 }
-                if let Origin::Import(a) = &origin {
-                    if !aliases.contains(a) {
-                        aliases.push(a.clone());
-                    }
+                if let Origin::Import(a) = &origin
+                    && !aliases.contains(a)
+                {
+                    aliases.push(a.clone());
                 }
                 self.ambiguous.insert(name, aliases);
             }
@@ -159,8 +163,7 @@ impl MacroTable {
 /// runtime and thus no hook is supplied, and foreign registration is simply
 /// absent. An `Err` returned by the hook aborts the read with that error (e.g.
 /// a macro component that fails to instantiate, tied to the import's span).
-pub type FormHook<'a> =
-    dyn FnMut(&Arena, NodeId, &mut MacroTable) -> Result<(), ReadError> + 'a;
+pub type FormHook<'a> = dyn FnMut(&Arena, NodeId, &mut MacroTable) -> Result<(), ReadError> + 'a;
 
 /// Recover a TitleCase flag entry's spelling from the macro-name token the lexer
 /// produced for it: `"eq-MACRO"` → `"Eq"`. Used for derive-class flags
@@ -181,10 +184,7 @@ pub fn read_file(src: &str) -> Result<(Arena, Vec<NodeId>), ReadError> {
 
 /// Like [`read_file`] but with a caller-owned arity table, so `DefMacro`
 /// registrations persist across inputs (used by the REPL).
-pub fn read_with(
-    src: &str,
-    macros: &mut MacroTable,
-) -> Result<(Arena, Vec<NodeId>), ReadError> {
+pub fn read_with(src: &str, macros: &mut MacroTable) -> Result<(Arena, Vec<NodeId>), ReadError> {
     read_with_hook(src, macros, None)
 }
 
@@ -256,11 +256,17 @@ impl Parser {
 
     fn eof_err(&self) -> ReadError {
         let at = self.toks.last().map(|(_, s)| s.end).unwrap_or(0);
-        ReadError { msg: "unexpected end of input".into(), at }
+        ReadError {
+            msg: "unexpected end of input".into(),
+            at,
+        }
     }
 
     fn err<T>(&self, msg: impl Into<String>, at: u32) -> Result<T, ReadError> {
-        Err(ReadError { msg: msg.into(), at })
+        Err(ReadError {
+            msg: msg.into(),
+            at,
+        })
     }
 
     /// §2.2: only `(` attaches to an identifier to form a call. An attached
@@ -349,7 +355,10 @@ impl Parser {
             let (_, dot) = self.next()?; // the attached `.`
             let (tok, name_span) = self.next()?;
             if name_span.start != dot.end {
-                return self.err("a chained call name must immediately follow `.`", name_span.start);
+                return self.err(
+                    "a chained call name must immediately follow `.`",
+                    name_span.start,
+                );
             }
             let nsp = (name_span.start, name_span.end);
             let head = match tok {
@@ -409,7 +418,7 @@ impl Parser {
                 if let Some(aliases) = self.macros.is_ambiguous(&name) {
                     let pretty = name.trim_end_matches("-MACRO");
                     let hint = if aliases.is_empty() {
-                        format!("qualify it or alias the conflicting import")
+                        "qualify it or alias the conflicting import".to_string()
                     } else {
                         let qualified: Vec<String> =
                             aliases.iter().map(|a| format!("`{a}/{pretty}`")).collect();
@@ -427,9 +436,7 @@ impl Parser {
                     Some(a) => a,
                     None => {
                         return self.err(
-                            format!(
-                                "unknown macro `{name}` (macros must be in scope before use)"
-                            ),
+                            format!("unknown macro `{name}` (macros must be in scope before use)"),
                             span.start,
                         );
                     }
@@ -527,12 +534,14 @@ impl Parser {
             loop {
                 match self.next()? {
                     (Tok::RBrace, close) => {
-                        return Ok(self.arena.add(Node::Rec(fields), (start, close.end)))
+                        return Ok(self.arena.add(Node::Rec(fields), (start, close.end)));
                     }
                     (Tok::Ident(name), _) => {
                         match self.next()? {
                             (Tok::Colon, _) => {}
-                            (_, s) => return self.err("expected `:` after record field name", s.start),
+                            (_, s) => {
+                                return self.err("expected `:` after record field name", s.start);
+                            }
                         }
                         let value = self.parse_form()?;
                         fields.push((name, value));
@@ -545,7 +554,7 @@ impl Parser {
             loop {
                 match self.next()? {
                     (Tok::RBrace, close) => {
-                        return Ok(self.arena.add(Node::Flg(names), (start, close.end)))
+                        return Ok(self.arena.add(Node::Flg(names), (start, close.end)));
                     }
                     (Tok::Ident(name), _) => names.push(name),
                     // TitleCase flag entries (e.g. `Derive {Eq Ord Show}`): the
@@ -565,15 +574,21 @@ impl Parser {
     fn register_if_def_macro(&mut self, id: NodeId) {
         // A top-level `DefMacro name {params} body` reads as the 4-element
         // tuple `Tup[defmacro-MACRO, name, params, body]`.
-        let Node::Tup(items) = self.arena.node(id) else { return };
+        let Node::Tup(items) = self.arena.node(id) else {
+            return;
+        };
         if items.len() != 4 {
             return;
         }
-        let Node::Sym(h) = self.arena.node(items[0]) else { return };
+        let Node::Sym(h) = self.arena.node(items[0]) else {
+            return;
+        };
         if h != "defmacro-MACRO" {
             return;
         }
-        let Node::Sym(name) = self.arena.node(items[1]) else { return };
+        let Node::Sym(name) = self.arena.node(items[1]) else {
+            return;
+        };
         let arity = match self.arena.node(items[2]) {
             Node::Flg(names) => names.len(),
             Node::Rec(fields) => fields.len(),
@@ -662,7 +677,10 @@ mod title_flags_scope_tests {
         let Node::Flg(names) = arena.node(items[1]) else {
             panic!("expected a flags literal for Derive's first argument");
         };
-        assert_eq!(names, &["Eq".to_string(), "Ord".to_string(), "Show".to_string()]);
+        assert_eq!(
+            names,
+            &["Eq".to_string(), "Ord".to_string(), "Show".to_string()]
+        );
     }
 
     /// A TitleCase token in any *other* flags literal (here a free-standing

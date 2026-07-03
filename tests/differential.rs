@@ -38,8 +38,7 @@ const TOSTR_STRING: &str =
 /// The backend's `to-string` helper only covers int/bool/string; floats,
 /// chars, lists, records, tuples, variants, and symbols hit `unreachable`.
 /// Fixed by 6.2 F2: port `print_value` over the box layout.
-const TOSTR_TRAP: &str =
-    "backend `to-string` traps on anything but int/bool/string (6.2 F2)";
+const TOSTR_TRAP: &str = "backend `to-string` traps on anything but int/bool/string (6.2 F2)";
 /// A stdlib builtin the wasm backend does not implement yet (5.6/5.7).
 const BUILTIN: &str = "stdlib builtin missing from the wasm backend (5.6/5.7)";
 /// The stdlib constant `pi` has no module-level binding in the backend (5.7).
@@ -52,8 +51,7 @@ const EXPAND: &str = "`expand` is only available inside a macro library when bui
 /// `resolve_overloads`, so a *non-exported* overload set collapses to
 /// `FileInfo::defs`'s last-wins entry and every call dispatches there,
 /// whatever the argument (or `The`-expected) type says. Tracked as 3.14.
-const OVERLOAD: &str =
-    "non-exported overload sets dispatch last-wins in the backend (no \
+const OVERLOAD: &str = "non-exported overload sets dispatch last-wins in the backend (no \
      resolve_overloads on the build path; 3.14)";
 /// The interpreter checks `If` conditions are bools at runtime; compiled code
 /// applies bare truthiness. Closed when the checker rejects it statically
@@ -61,62 +59,61 @@ const OVERLOAD: &str =
 const IF_BOOL: &str = "compiled If skips the interpreter's runtime bool-condition check (goal 3)";
 /// The interpreter checks typed-parameter conformance (e.g. u8 range) at the
 /// call boundary; compiled code does not. Tracked under 2.2.4 / goal 3.
-const U8_CHECK: &str =
-    "runtime parameter-conformance checks are not emitted (2.2.4 / goal 3)";
+const U8_CHECK: &str = "runtime parameter-conformance checks are not emitted (2.2.4 / goal 3)";
 
 /// Examples the compiled artifact is known to disagree on, with the current
 /// reason. Removing a fixed entry is part of fixing the backend gap.
 const SKIP: &[(&str, &str)] = &[
-    ("eval-apply-list", BUILTIN),      // apply
-    ("eval-fn-by-name", TOSTR_TRAP),   // list result
-    ("eval-fn-by-order", TOSTR_TRAP),  // list result
+    ("eval-apply-list", BUILTIN),     // apply
+    ("eval-fn-by-name", TOSTR_TRAP),  // list result
+    ("eval-fn-by-order", TOSTR_TRAP), // list result
     ("gs-hello", TOSTR_STRING),
     ("hello-shout", TOSTR_STRING),
     ("macro-expand", EXPAND),
     ("macro-gensym-three", TOSTR_TRAP), // list of symbols
     ("macro-swap", TOSTR_TRAP),
     ("macro-trylet", TOSTR_TRAP),
-    ("map-square", BUILTIN),           // map
+    ("map-square", BUILTIN), // map
     ("noffi-shout", TOSTR_STRING),
     ("pm-catch-all", TOSTR_STRING),
     ("pm-describe", TOSTR_STRING),
     ("pm-none", TOSTR_STRING),
     ("pm-record", TOSTR_STRING),
-    ("sf-def", TOSTR_TRAP),            // float result
-    ("sf-defmacro", FLAGS),            // `{}` in the expansion
+    ("sf-def", TOSTR_TRAP), // float result
+    ("sf-defmacro", FLAGS), // `{}` in the expansion
     ("sf-fn-shout", TOSTR_STRING),
     ("sf-if", TOSTR_STRING),
     ("sf-if-nonbool", IF_BOOL),
     ("sf-let", PI),
     ("sf-match", TOSTR_STRING),
-    ("sf-quasi", TOSTR_TRAP),          // form result
-    ("sf-quote", TOSTR_TRAP),          // form result
-    ("sf-splice", TOSTR_TRAP),         // form result
-    ("sf-unquote", TOSTR_TRAP),        // form result
-    ("std-apply", BUILTIN),            // apply
-    ("std-arith", BUILTIN),            // abs
-    ("std-cells", BUILTIN),            // cell-new
-    ("std-char-conv", BUILTIN),        // to-u32
-    ("std-constructors", TOSTR_TRAP),  // list of variants
-    ("std-conv", BUILTIN),             // to-u8
-    ("std-div-float", TOSTR_TRAP),     // float result
-    ("std-filter", BUILTIN),           // filter
-    ("std-fold", BUILTIN),             // fold
-    ("std-form-kind", TOSTR_TRAP),     // list result
-    ("std-map", BUILTIN),              // map
+    ("sf-quasi", TOSTR_TRAP),         // form result
+    ("sf-quote", TOSTR_TRAP),         // form result
+    ("sf-splice", TOSTR_TRAP),        // form result
+    ("sf-unquote", TOSTR_TRAP),       // form result
+    ("std-apply", BUILTIN),           // apply
+    ("std-arith", BUILTIN),           // abs
+    ("std-cells", BUILTIN),           // cell-new
+    ("std-char-conv", BUILTIN),       // to-u32
+    ("std-constructors", TOSTR_TRAP), // list of variants
+    ("std-conv", BUILTIN),            // to-u8
+    ("std-div-float", TOSTR_TRAP),    // float result
+    ("std-filter", BUILTIN),          // filter
+    ("std-fold", BUILTIN),            // fold
+    ("std-form-kind", TOSTR_TRAP),    // list result
+    ("std-map", BUILTIN),             // map
     ("std-pi", PI),
-    ("std-predicates", TOSTR_TRAP),    // list of bools
-    ("std-read", BUILTIN),             // read
-    ("std-rec-key-val", TOSTR_TRAP),   // list result
-    ("std-seq-basics", BUILTIN),       // reverse
-    ("std-seq-mutate", BUILTIN),       // get
+    ("std-predicates", TOSTR_TRAP),  // list of bools
+    ("std-read", BUILTIN),           // read
+    ("std-rec-key-val", TOSTR_TRAP), // list result
+    ("std-seq-basics", BUILTIN),     // reverse
+    ("std-seq-mutate", BUILTIN),     // get
     ("std-strcat", TOSTR_STRING),
     ("std-strcat-tostring", TOSTR_STRING),
-    ("std-strings", BUILTIN),          // split
-    ("std-tostring", TOSTR_TRAP),      // string result of to-string, then list
-    ("std-zip", BUILTIN),              // zip
+    ("std-strings", BUILTIN),     // split
+    ("std-tostring", TOSTR_TRAP), // string result of to-string, then list
+    ("std-zip", BUILTIN),         // zip
     ("syntax-chain", TOSTR_STRING),
-    ("syntax-commas", TOSTR_TRAP),     // list result
+    ("syntax-commas", TOSTR_TRAP), // list result
     ("syntax-if-arity", TOSTR_STRING),
     ("syntax-quote-call", TOSTR_TRAP), // form result
     ("tail-count-down", TOSTR_STRING),
@@ -151,8 +148,12 @@ const DECL_HEADS: &[&str] = &[
 ];
 
 fn is_decl(arena: &Arena, root: NodeId) -> bool {
-    let Node::Tup(items) = arena.node(root) else { return false };
-    let Some(&head) = items.first() else { return false };
+    let Node::Tup(items) = arena.node(root) else {
+        return false;
+    };
+    let Some(&head) = items.first() else {
+        return false;
+    };
     matches!(arena.node(head), Node::Sym(s) if DECL_HEADS.contains(&s.as_str()))
 }
 
@@ -281,11 +282,12 @@ fn run_example(id: &str, code: &str, expect_error: bool) -> Outcome {
 #[test]
 fn every_documented_example_agrees_with_the_compiled_artifact() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples.json");
-    let text = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+    let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
     let examples: serde_json::Value =
         serde_json::from_str(&text).expect("docs/examples.json is not valid JSON");
-    let map = examples.as_object().expect("examples.json must be an object");
+    let map = examples
+        .as_object()
+        .expect("examples.json must be an object");
     assert!(!map.is_empty(), "no examples found");
 
     let mut ids: Vec<&String> = map.keys().collect();

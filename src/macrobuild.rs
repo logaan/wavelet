@@ -43,9 +43,15 @@ pub fn is_macro_library(arena: &Arena, roots: &[NodeId]) -> bool {
     let mut saw_macro = false;
     let mut saw_package = false;
     for &root in roots {
-        let Node::Tup(items) = arena.node(root) else { return false };
-        let Some(&head) = items.first() else { return false };
-        let Node::Sym(head_name) = arena.node(head) else { return false };
+        let Node::Tup(items) = arena.node(root) else {
+            return false;
+        };
+        let Some(&head) = items.first() else {
+            return false;
+        };
+        let Node::Sym(head_name) = arena.node(head) else {
+            return false;
+        };
         match head_name.as_str() {
             "package-MACRO" => saw_package = true,
             "defmacro-MACRO" => saw_macro = true,

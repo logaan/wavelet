@@ -12,7 +12,7 @@
 //! This guards every later backend change: a compiled expansion that diverges
 //! from the interpreter is a bug.
 
-use wavelet::expand::{expand_file, ForeignExpander};
+use wavelet::expand::{ForeignExpander, expand_file};
 use wavelet::macrodep::FileExpander;
 use wavelet::printer::print;
 use wavelet::reader::read_file;
@@ -21,19 +21,25 @@ use wavelet::reader::read_file;
 fn interp_expand(src: &str) -> String {
     let (arena, roots) = read_file(src).expect("read");
     let (out, new_roots) = expand_file(arena, &roots, None).expect("interpreter expand");
-    new_roots.iter().map(|&r| print(&out, r)).collect::<Vec<_>>().join("\n")
+    new_roots
+        .iter()
+        .map(|&r| print(&out, r))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Expand `src` via the compiled local-macro component (strategy B), returning
 /// the printed forms.
 fn compiled_expand(src: &str) -> String {
     let (arena, roots) = read_file(src).expect("read");
-    let mut fx = FileExpander::for_file(".", &arena, &roots)
-        .expect("file defines local macros");
-    let (out, new_roots) =
-        expand_file(arena, &roots, Some(&mut fx as &mut dyn ForeignExpander))
-            .expect("compiled expand");
-    new_roots.iter().map(|&r| print(&out, r)).collect::<Vec<_>>().join("\n")
+    let mut fx = FileExpander::for_file(".", &arena, &roots).expect("file defines local macros");
+    let (out, new_roots) = expand_file(arena, &roots, Some(&mut fx as &mut dyn ForeignExpander))
+        .expect("compiled expand");
+    new_roots
+        .iter()
+        .map(|&r| print(&out, r))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Assert the compiled expansion matches the interpreter oracle for `src`.

@@ -54,7 +54,9 @@ pub fn run_files(paths: &[String]) -> Result<(), String> {
         let (arena, roots) = crate::expand::expand_file(
             arena,
             &roots,
-            foreign.as_mut().map(|f| f as &mut dyn crate::expand::ForeignExpander),
+            foreign
+                .as_mut()
+                .map(|f| f as &mut dyn crate::expand::ForeignExpander),
         )
         .map_err(|e| format!("{path}: {e}"))?;
         // Static type checking + overload resolution before evaluation, exactly
@@ -63,8 +65,8 @@ pub fn run_files(paths: &[String]) -> Result<(), String> {
         // overloaded calls are rewritten to uniquely-named defs so the
         // interpreter dispatches to the correct member rather than relying on
         // last-wins shadowing. With no overload set the rewrite is an identity.
-        let (arena, roots) = crate::check::resolve_overloads(arena, &roots)
-            .map_err(|e| format!("{path}: {e}"))?;
+        let (arena, roots) =
+            crate::check::resolve_overloads(arena, &roots).map_err(|e| format!("{path}: {e}"))?;
         let arena = Rc::new(arena);
         let package = find_package(&arena, &roots);
         if let Some(pkg) = &package {
@@ -145,8 +147,8 @@ fn eval_module(
         match (head_name, payload) {
             ("package-MACRO" | "target-MACRO" | "deftype-MACRO", _) => {}
             ("export-MACRO", Some(payload)) => {
-                let entry = export_entry(&arena, payload)
-                    .ok_or(format!("{path}: malformed Export"))?;
+                let entry =
+                    export_entry(&arena, payload).ok_or(format!("{path}: malformed Export"))?;
                 modules[idx].exports.push(entry);
             }
             ("import-MACRO", Some(payload)) => {
@@ -158,8 +160,8 @@ fn eval_module(
                     builtins::bind_functor(&modules[idx].env, &functor);
                     continue;
                 }
-                let spec = parse_import(&arena, payload)
-                    .ok_or(format!("{path}: malformed Import"))?;
+                let spec =
+                    parse_import(&arena, payload).ok_or(format!("{path}: malformed Import"))?;
                 let dep = *by_package.get(&spec.package).ok_or(format!(
                     "{path}: unresolved import `{}` (no file provides package `{}`)",
                     spec.path, spec.package
@@ -187,7 +189,9 @@ fn eval_module(
                         "{}: exported `{name}` is not defined",
                         modules[dep].path
                     ))?;
-                    modules[idx].env.define(format!("{}/{name}", spec.alias), v.clone());
+                    modules[idx]
+                        .env
+                        .define(format!("{}/{name}", spec.alias), v.clone());
                     if spec.open {
                         modules[idx].env.define(name, v);
                     }
@@ -221,14 +225,12 @@ fn project_root(paths: &[String]) -> std::path::PathBuf {
 
 fn find_package(arena: &Arena, roots: &[NodeId]) -> Option<String> {
     for &root in roots {
-        if let Node::Tup(items) = arena.node(root) {
-            if items.len() >= 2
-                && matches!(arena.node(items[0]), Node::Sym(s) if s == "package-MACRO")
-            {
-                if let Node::Str(s) = arena.node(items[1]) {
-                    return Some(strip_version(s));
-                }
-            }
+        if let Node::Tup(items) = arena.node(root)
+            && items.len() >= 2
+            && matches!(arena.node(items[0]), Node::Sym(s) if s == "package-MACRO")
+            && let Node::Str(s) = arena.node(items[1])
+        {
+            return Some(strip_version(s));
         }
     }
     None
@@ -243,12 +245,13 @@ fn export_entry(arena: &Arena, payload: NodeId) -> Option<(String, String)> {
     match arena.node(payload) {
         Node::Sym(s) => Some(("api".to_string(), s.clone())),
         Node::Rec(fields) => {
-            let name = fields.iter().find(|(k, _)| k == "name").and_then(|(_, v)| {
-                match arena.node(*v) {
+            let name = fields
+                .iter()
+                .find(|(k, _)| k == "name")
+                .and_then(|(_, v)| match arena.node(*v) {
                     Node::Sym(s) => Some(s.clone()),
                     _ => None,
-                }
-            })?;
+                })?;
             let iface = fields
                 .iter()
                 .find(|(k, _)| k == "iface")
@@ -303,5 +306,10 @@ fn parse_import(arena: &Arena, payload: NodeId) -> Option<ImportSpec> {
             .unwrap_or(&path)
             .to_string()
     });
-    Some(ImportSpec { path, package, alias, open })
+    Some(ImportSpec {
+        path,
+        package,
+        alias,
+        open,
+    })
 }

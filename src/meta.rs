@@ -172,12 +172,7 @@ mod tests {
     /// Structurally compare the sub-tree rooted at `a` in `arena_a` with the
     /// one rooted at `b` in `arena_b`. Ids will differ (the round trip
     /// re-indexes), so we compare shape + payload + spans, not raw ids.
-    fn forms_eq(
-        arena_a: &Arena,
-        a: NodeId,
-        arena_b: &Arena,
-        b: NodeId,
-    ) -> bool {
+    fn forms_eq(arena_a: &Arena, a: NodeId, arena_b: &Arena, b: NodeId) -> bool {
         if arena_a.span(a) != arena_b.span(b) {
             return false;
         }
@@ -189,8 +184,7 @@ mod tests {
             (FormNode::Str(x), FormNode::Str(y)) => x == y,
             (FormNode::Sym(x), FormNode::Sym(y)) => x == y,
             (FormNode::Qsym(x1, x2), FormNode::Qsym(y1, y2)) => x1 == y1 && x2 == y2,
-            (FormNode::Tup(xs), FormNode::Tup(ys))
-            | (FormNode::Lst(xs), FormNode::Lst(ys)) => {
+            (FormNode::Tup(xs), FormNode::Tup(ys)) | (FormNode::Lst(xs), FormNode::Lst(ys)) => {
                 xs.len() == ys.len()
                     && xs
                         .iter()

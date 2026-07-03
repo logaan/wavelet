@@ -49,7 +49,10 @@ fn http_fetch_world_is_host_only() {
         "{world}"
     );
     // The sibling build-set dependency must be dropped from the fetch world.
-    assert!(!world.contains("greeting"), "sibling import leaked: {world}");
+    assert!(
+        !world.contains("greeting"),
+        "sibling import leaked: {world}"
+    );
 
     let _ = std::fs::remove_dir_all(proj.parent().unwrap());
 }
@@ -66,8 +69,14 @@ fn cli_fetch_world_references_wasi_cli_run() {
 
     let world = fetch_world(&main);
     assert!(world.contains("export wasi:cli/run@0.2.0;"), "{world}");
-    assert!(!world.contains("include"), "include leaked into fetch world: {world}");
-    assert!(!world.contains("greeting"), "sibling import leaked: {world}");
+    assert!(
+        !world.contains("include"),
+        "include leaked into fetch world: {world}"
+    );
+    assert!(
+        !world.contains("greeting"),
+        "sibling import leaked: {world}"
+    );
 
     let _ = std::fs::remove_dir_all(proj.parent().unwrap());
 }
@@ -81,7 +90,10 @@ fn has_host_deps_only_flags_components_with_wasi() {
     let app = std::fs::read_to_string(proj.join("src/app.wlt")).unwrap();
     let greeting = std::fs::read_to_string(proj.join("src/greeting.wlt")).unwrap();
 
-    assert!(wit::has_host_deps(&collect(&app)), "http app should need fetching");
+    assert!(
+        wit::has_host_deps(&collect(&app)),
+        "http app should need fetching"
+    );
     assert!(
         !wit::has_host_deps(&collect(&greeting)),
         "pure greeting should not need fetching"

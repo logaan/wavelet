@@ -62,14 +62,20 @@ fn scaffold_and_build(proj: &Path, kind: ProjectKind, entry: &str) -> PathBuf {
     wavelet::build::populate_project_wit(proj, &src_paths).expect("populate wit/deps via wkg");
 
     let out = proj.join("out");
-    let sources: Vec<String> = src_paths.iter().map(|p| p.to_str().unwrap().to_string()).collect();
+    let sources: Vec<String> = src_paths
+        .iter()
+        .map(|p| p.to_str().unwrap().to_string())
+        .collect();
     let outputs =
         wavelet::build::build_files(&sources, out.to_str().unwrap()).expect("build components");
 
     // The headline output is one composed artifact, alongside the per-component
     // wasm the build still emits.
     let app = out.join("app.wasm");
-    assert!(app.is_file(), "build did not produce a composed app.wasm: {outputs:?}");
+    assert!(
+        app.is_file(),
+        "build did not produce a composed app.wasm: {outputs:?}"
+    );
     app
 }
 
@@ -97,7 +103,11 @@ fn cli_template_builds_and_runs() {
             .args(args)
             .output()
             .expect("run wasmtime");
-        assert!(out.status.success(), "wasmtime run failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "wasmtime run failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stdout).into_owned()
     };
 
@@ -130,8 +140,14 @@ fn http_template_builds_and_serves() {
     // Decode the component's WIT and assert on the world's import/export lines
     // (a raw-byte search would false-match the *embedded* greeting package text).
     let wit = component_wit(&app);
-    assert!(wit.contains("export wasi:http/incoming-handler"), "app does not export the handler:\n{wit}");
-    assert!(wit.contains("import wasi:http/types"), "app does not import wasi:http/types:\n{wit}");
+    assert!(
+        wit.contains("export wasi:http/incoming-handler"),
+        "app does not export the handler:\n{wit}"
+    );
+    assert!(
+        wit.contains("import wasi:http/types"),
+        "app does not import wasi:http/types:\n{wit}"
+    );
     assert!(
         !wit.contains("import web:greeting"),
         "greeting dep was not composed in (still imported):\n{wit}"
@@ -153,8 +169,14 @@ fn http_template_builds_and_serves() {
     let _ = child.wait();
 
     let body = body.expect("server never answered");
-    assert!(body.contains("Hello, world!"), "missing greeting in page: {body}");
-    assert!(body.contains("You requested: /hello/path"), "missing echoed path: {body}");
+    assert!(
+        body.contains("Hello, world!"),
+        "missing greeting in page: {body}"
+    );
+    assert!(
+        body.contains("You requested: /hello/path"),
+        "missing echoed path: {body}"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -193,16 +215,22 @@ fn multi_component_composes_to_one() {
         src.join("shout.wlt").to_str().unwrap().to_string(),
         src.join("main.wlt").to_str().unwrap().to_string(),
     ];
-    let outputs =
-        wavelet::build::build_files(&sources, out.to_str().unwrap()).expect("build demo components");
+    let outputs = wavelet::build::build_files(&sources, out.to_str().unwrap())
+        .expect("build demo components");
 
     let app = out.join("app.wasm");
-    assert!(app.is_file(), "multi-component build produced no app.wasm: {outputs:?}");
+    assert!(
+        app.is_file(),
+        "multi-component build produced no app.wasm: {outputs:?}"
+    );
 
     // The composed component must embed demo:shout (no longer an import) and keep
     // demo:main's own interface as its export.
     let wit = String::from_utf8_lossy(&std::fs::read(&app).unwrap()).into_owned();
-    assert!(wit.contains("demo:main"), "composed component lost demo:main export");
+    assert!(
+        wit.contains("demo:main"),
+        "composed component lost demo:main export"
+    );
     assert!(
         !wit.contains("import demo:shout"),
         "demo:shout was not composed in (still imported): {wit}"
@@ -241,9 +269,8 @@ fn poll_get(url: &str) -> Option<String> {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
         if let Ok(mut stream) = TcpStream::connect(&authority) {
-            let req = format!(
-                "GET {path} HTTP/1.0\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
-            );
+            let req =
+                format!("GET {path} HTTP/1.0\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
             if stream.write_all(req.as_bytes()).is_ok() {
                 let mut buf = String::new();
                 if stream.read_to_string(&mut buf).is_ok() && !buf.is_empty() {

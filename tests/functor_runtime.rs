@@ -16,7 +16,7 @@
 
 use wavelet::builtins;
 use wavelet::interp::Interp;
-use wavelet::value::{unit, Value};
+use wavelet::value::{Value, unit};
 
 /// Call a `set-*` builtin with positional args, as the interpreter does after
 /// bundling a call's arguments.
@@ -105,9 +105,8 @@ fn element_equality_matches_eq_for_records() {
     );
 
     // Cross-check: the set's "same element" agrees with the `eq` builtin.
-    let eq = |a: Value, b: Value| {
-        builtins::call(&interp, "eq", Value::Tup(vec![a, b]), None).unwrap()
-    };
+    let eq =
+        |a: Value, b: Value| builtins::call(&interp, "eq", Value::Tup(vec![a, b]), None).unwrap();
     assert_eq!(eq(point(1, 2), point(1, 2)), Value::Bool(true));
     assert_eq!(eq(point(1, 2), point(3, 4)), Value::Bool(false));
 }
@@ -245,10 +244,19 @@ Def count-distinct Fn {ps: list(point)}
     let bytes = build_source(SRC).expect("a functor program now builds");
     let wit = wasm_tools_component_wit(&bytes);
     // The specialized interface and its `set` resource with all four ops.
-    assert!(wit.contains("interface point-set"), "WIT missing point-set: {wit}");
-    assert!(wit.contains("resource set"), "WIT missing the set resource: {wit}");
+    assert!(
+        wit.contains("interface point-set"),
+        "WIT missing point-set: {wit}"
+    );
+    assert!(
+        wit.contains("resource set"),
+        "WIT missing the set resource: {wit}"
+    );
     for op in ["constructor()", "add:", "contains:", "size:"] {
-        assert!(wit.contains(op), "WIT missing `{op}` on the set resource: {wit}");
+        assert!(
+            wit.contains(op),
+            "WIT missing `{op}` on the set resource: {wit}"
+        );
     }
 }
 
@@ -294,7 +302,10 @@ fn wasm_tools_component_wit(bytes: &[u8]) -> String {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("c.wasm");
-    std::fs::File::create(&path).unwrap().write_all(bytes).unwrap();
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(bytes)
+        .unwrap();
     let out = std::process::Command::new("wasm-tools")
         .args(["component", "wit"])
         .arg(&path)

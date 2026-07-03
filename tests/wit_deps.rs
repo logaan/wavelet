@@ -179,10 +179,8 @@ fn build_resolves_import_from_wit_deps() {
     .unwrap();
 
     let out = dir.join("out");
-    let res = wavelet::build::build_files(
-        &[app.to_str().unwrap().to_string()],
-        out.to_str().unwrap(),
-    );
+    let res =
+        wavelet::build::build_files(&[app.to_str().unwrap().to_string()], out.to_str().unwrap());
 
     // The build may still fail in later codegen (lowering a dep call is a
     // future step), but it must not fail at *import resolution*: the dependency
@@ -205,6 +203,12 @@ fn wit_deps_is_sibling_of_src() {
     // src/app.wlt -> ../wit/deps
     let p = Path::new("/proj/src/app.wlt");
     let expected = Path::new("/proj/wit/deps");
-    let derived = p.parent().unwrap().parent().unwrap().join("wit").join("deps");
+    let derived = p
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("wit")
+        .join("deps");
     assert_eq!(derived, expected);
 }

@@ -323,10 +323,7 @@ impl<'a> Checker<'a> {
 /// unrenamed and fail at runtime as an unbound name. No current program does
 /// this; Phase D should revisit it if derived/functor ops are ever passed by
 /// value.
-pub fn resolve_overloads(
-    arena: Arena,
-    roots: &[NodeId],
-) -> Result<(Arena, Vec<NodeId>), String> {
+pub fn resolve_overloads(arena: Arena, roots: &[NodeId]) -> Result<(Arena, Vec<NodeId>), String> {
     let checker = Checker::collect(&arena, roots);
     checker.check_roots(roots)?;
 
@@ -718,8 +715,8 @@ impl<'a> Checker<'a> {
             // not check it. Top-level file forms (`Package`/`Import`/`Export`/
             // `DefType`) carry annotations, not value expressions. All of these
             // are opaque to the value checker.
-            "quote-MACRO" | "quasi-MACRO" | "defmacro-MACRO" | "package-MACRO"
-            | "import-MACRO" | "export-MACRO" | "deftype-MACRO" => Ok(Type::Unknown),
+            "quote-MACRO" | "quasi-MACRO" | "defmacro-MACRO" | "package-MACRO" | "import-MACRO"
+            | "export-MACRO" | "deftype-MACRO" => Ok(Type::Unknown),
             // Any other `-MACRO` head is a user (or foreign) macro call that
             // `eval_snippet` expands at runtime. We cannot statically see
             // through it, so check nothing and stay gradual. Crucially we do NOT
@@ -878,7 +875,9 @@ impl<'a> Checker<'a> {
         // body is checked properly when its own Def is checked); treat them as
         // an unconstrained result so resolution stays gradual.
         let result = self.infer(body, None, &mut scope).unwrap_or(Type::Unknown);
-        self.sig_result_cache.borrow_mut().insert(body, result.clone());
+        self.sig_result_cache
+            .borrow_mut()
+            .insert(body, result.clone());
         result
     }
 
@@ -953,9 +952,7 @@ impl<'a> Checker<'a> {
                 let mut seeded = false;
                 for t in &arg_tys {
                     if !t.numeric() {
-                        return Err(format!(
-                            "eval error: `{name}` requires numeric operands"
-                        ));
+                        return Err(format!("eval error: `{name}` requires numeric operands"));
                     }
                     if matches!(t, Type::Unknown) {
                         any_unknown = true;
@@ -991,9 +988,7 @@ impl<'a> Checker<'a> {
             "str-cat" => {
                 for t in &arg_tys {
                     if !matches!(t, Type::String | Type::Char | Type::Unknown) {
-                        return Err(format!(
-                            "eval error: `{name}` requires string operands"
-                        ));
+                        return Err(format!("eval error: `{name}` requires string operands"));
                     }
                 }
                 Ok(Type::String)
@@ -1001,9 +996,7 @@ impl<'a> Checker<'a> {
             "upper" | "lower" => {
                 for t in &arg_tys {
                     if !matches!(t, Type::String | Type::Unknown) {
-                        return Err(format!(
-                            "eval error: `{name}` requires a string operand"
-                        ));
+                        return Err(format!("eval error: `{name}` requires a string operand"));
                     }
                 }
                 Ok(Type::String)

@@ -28,8 +28,7 @@ fn numeric_component() -> HostComponent {
     use std::sync::atomic::{AtomicU32, Ordering};
     static SEQ: AtomicU32 = AtomicU32::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir =
-        std::env::temp_dir().join(format!("wavelet-numeric-{}-{n}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("wavelet-numeric-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let src = dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
@@ -110,26 +109,72 @@ fn float_and_string_builtins_run_instead_of_trapping() {
     let mut c = numeric_component();
 
     // f64 arithmetic — interpreter: add(1.5 2.5) -> 4.0
-    assert_eq!(ok(&mut c, "addf", &[Val::Float64(1.5), Val::Float64(2.5)]), Val::Float64(4.0));
+    assert_eq!(
+        ok(&mut c, "addf", &[Val::Float64(1.5), Val::Float64(2.5)]),
+        Val::Float64(4.0)
+    );
     // f64 rem — interpreter: rem(5.5 2.0) -> 1.5
-    assert_eq!(ok(&mut c, "remf", &[Val::Float64(5.5), Val::Float64(2.0)]), Val::Float64(1.5));
+    assert_eq!(
+        ok(&mut c, "remf", &[Val::Float64(5.5), Val::Float64(2.0)]),
+        Val::Float64(1.5)
+    );
     // f64 div by zero is +inf (no trap), matching f64 `/` in the interpreter
     match ok(&mut c, "divf", &[Val::Float64(1.0), Val::Float64(0.0)]) {
-        Val::Float64(v) => assert!(v.is_infinite() && v > 0.0, "1.0/0.0 should be +inf, got {v}"),
+        Val::Float64(v) => assert!(
+            v.is_infinite() && v > 0.0,
+            "1.0/0.0 should be +inf, got {v}"
+        ),
         other => panic!("unexpected {other:?}"),
     }
     // mixed int/float widens to float, as `arith` does: add(2 0.5) -> 2.5
-    assert_eq!(ok(&mut c, "mix", &[Val::S64(2), Val::Float64(0.5)]), Val::Float64(2.5));
+    assert_eq!(
+        ok(&mut c, "mix", &[Val::S64(2), Val::Float64(0.5)]),
+        Val::Float64(2.5)
+    );
 
     // string comparison — interpreter compares by byte/codepoint order
-    assert_eq!(ok(&mut c, "lts", &[Val::String("a".into()), Val::String("b".into())]), Val::Bool(true));
-    assert_eq!(ok(&mut c, "lts", &[Val::String("b".into()), Val::String("a".into())]), Val::Bool(false));
+    assert_eq!(
+        ok(
+            &mut c,
+            "lts",
+            &[Val::String("a".into()), Val::String("b".into())]
+        ),
+        Val::Bool(true)
+    );
+    assert_eq!(
+        ok(
+            &mut c,
+            "lts",
+            &[Val::String("b".into()), Val::String("a".into())]
+        ),
+        Val::Bool(false)
+    );
     // a proper prefix is less than the longer string
-    assert_eq!(ok(&mut c, "lts", &[Val::String("ab".into()), Val::String("abc".into())]), Val::Bool(true));
-    assert_eq!(ok(&mut c, "lts", &[Val::String("ab".into()), Val::String("ab".into())]), Val::Bool(false));
+    assert_eq!(
+        ok(
+            &mut c,
+            "lts",
+            &[Val::String("ab".into()), Val::String("abc".into())]
+        ),
+        Val::Bool(true)
+    );
+    assert_eq!(
+        ok(
+            &mut c,
+            "lts",
+            &[Val::String("ab".into()), Val::String("ab".into())]
+        ),
+        Val::Bool(false)
+    );
     // float and mixed comparison
-    assert_eq!(ok(&mut c, "ltf", &[Val::Float64(1.5), Val::Float64(2.5)]), Val::Bool(true));
-    assert_eq!(ok(&mut c, "ltmix", &[Val::S64(2), Val::Float64(2.5)]), Val::Bool(true));
+    assert_eq!(
+        ok(&mut c, "ltf", &[Val::Float64(1.5), Val::Float64(2.5)]),
+        Val::Bool(true)
+    );
+    assert_eq!(
+        ok(&mut c, "ltmix", &[Val::S64(2), Val::Float64(2.5)]),
+        Val::Bool(true)
+    );
 }
 
 #[test]
@@ -137,22 +182,49 @@ fn integer_arithmetic_is_checked_like_the_interpreter() {
     let mut c = numeric_component();
 
     // in-range integer arithmetic still works
-    assert_eq!(ok(&mut c, "addi", &[Val::S64(2), Val::S64(40)]), Val::S64(42));
-    assert_eq!(ok(&mut c, "muli", &[Val::S64(6), Val::S64(7)]), Val::S64(42));
+    assert_eq!(
+        ok(&mut c, "addi", &[Val::S64(2), Val::S64(40)]),
+        Val::S64(42)
+    );
+    assert_eq!(
+        ok(&mut c, "muli", &[Val::S64(6), Val::S64(7)]),
+        Val::S64(42)
+    );
     assert_eq!(ok(&mut c, "divi", &[Val::S64(7), Val::S64(2)]), Val::S64(3));
     assert_eq!(ok(&mut c, "remi", &[Val::S64(7), Val::S64(2)]), Val::S64(1));
 
     // overflow traps (interpreter returns a checked error)
-    assert!(call(&mut c, "addi", &[Val::S64(i64::MAX), Val::S64(1)]).is_err(), "add overflow should trap");
-    assert!(call(&mut c, "muli", &[Val::S64(i64::MAX), Val::S64(2)]).is_err(), "mul overflow should trap");
-    assert!(call(&mut c, "muli", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(), "MIN*-1 should trap");
+    assert!(
+        call(&mut c, "addi", &[Val::S64(i64::MAX), Val::S64(1)]).is_err(),
+        "add overflow should trap"
+    );
+    assert!(
+        call(&mut c, "muli", &[Val::S64(i64::MAX), Val::S64(2)]).is_err(),
+        "mul overflow should trap"
+    );
+    assert!(
+        call(&mut c, "muli", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(),
+        "MIN*-1 should trap"
+    );
 
     // division edge cases trap
-    assert!(call(&mut c, "divi", &[Val::S64(1), Val::S64(0)]).is_err(), "div by zero should trap");
-    assert!(call(&mut c, "divi", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(), "MIN/-1 should trap");
+    assert!(
+        call(&mut c, "divi", &[Val::S64(1), Val::S64(0)]).is_err(),
+        "div by zero should trap"
+    );
+    assert!(
+        call(&mut c, "divi", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(),
+        "MIN/-1 should trap"
+    );
     // INT_MIN % -1: the interpreter's checked_rem errors; wasm i64.rem_s alone
     // would return 0, so the guard must make this trap too.
-    assert!(call(&mut c, "remi", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(), "MIN %% -1 should trap");
+    assert!(
+        call(&mut c, "remi", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(),
+        "MIN %% -1 should trap"
+    );
     // rem by zero traps as well
-    assert!(call(&mut c, "remi", &[Val::S64(1), Val::S64(0)]).is_err(), "rem by zero should trap");
+    assert!(
+        call(&mut c, "remi", &[Val::S64(1), Val::S64(0)]).is_err(),
+        "rem by zero should trap"
+    );
 }

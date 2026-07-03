@@ -31,7 +31,9 @@ use wavelet::printer::print;
 use wavelet::reader::read_file;
 
 fn fixtures() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
 }
 
 /// The macro-library source the checked-in component was produced from.
@@ -113,7 +115,7 @@ fn expand_unknown_macro_is_an_error() {
 /// the result matches local expansion of the same macro.
 #[test]
 fn consumer_path_uses_produced_macro() {
-    use wavelet::macrodep::{read_file_with_macros, FileExpander};
+    use wavelet::macrodep::{FileExpander, read_file_with_macros};
 
     let comp = fixtures().join("produced-macros.wasm");
     let src = format!(

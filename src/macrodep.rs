@@ -62,7 +62,10 @@ impl MacroResolver {
     /// `src/`). Relative `from:` paths and the conventional `wit/macros/`
     /// location are resolved against it.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        MacroResolver { root: root.into(), cache: HashMap::new() }
+        MacroResolver {
+            root: root.into(),
+            cache: HashMap::new(),
+        }
     }
 
     /// Resolve and instantiate the macro component for a `macros: true` import,
@@ -166,9 +169,7 @@ impl MacroResolver {
             return Ok(());
         };
         let span = arena.span(id);
-        let comp = self
-            .resolve(&import)
-            .map_err(|msg| read_err(msg, span.0))?;
+        let comp = self.resolve(&import).map_err(|msg| read_err(msg, span.0))?;
         let manifest = comp.manifest().map_err(|e| {
             read_err(
                 format!("import `{}` (macros): manifest() failed: {e}", import.path),
@@ -354,11 +355,15 @@ impl FileExpander {
 /// (`Tup[defmacro-MACRO, Sym(name), {params}, body]`), or `None` for any other
 /// form. Mirrors how `macrolib::manifest` reads a macro's name.
 fn local_macro_name(arena: &Arena, id: NodeId) -> Option<String> {
-    let Node::Tup(items) = arena.node(id) else { return None };
+    let Node::Tup(items) = arena.node(id) else {
+        return None;
+    };
     if items.len() != 4 {
         return None;
     }
-    let Node::Sym(head) = arena.node(items[0]) else { return None };
+    let Node::Sym(head) = arena.node(items[0]) else {
+        return None;
+    };
     if head != "defmacro-MACRO" {
         return None;
     }
@@ -464,13 +469,19 @@ pub fn register_macro_imports<'a>(resolver: &'a mut MacroResolver) -> Box<FormHo
 /// already-read file, whereas the reader hook needs one form at a time, before
 /// the rest of the file is read.
 fn parse_macro_import(arena: &Arena, id: NodeId) -> Option<ImportInfo> {
-    let Node::Tup(items) = arena.node(id) else { return None };
+    let Node::Tup(items) = arena.node(id) else {
+        return None;
+    };
     let head = *items.first()?;
-    let Node::Sym(head_name) = arena.node(head) else { return None };
+    let Node::Sym(head_name) = arena.node(head) else {
+        return None;
+    };
     if head_name != "import-MACRO" {
         return None;
     }
-    let Node::Rec(fields) = arena.node(*items.get(1)?) else { return None };
+    let Node::Rec(fields) = arena.node(*items.get(1)?) else {
+        return None;
+    };
 
     let mut pkg = None;
     let mut alias = None;
@@ -492,12 +503,21 @@ fn parse_macro_import(arena: &Arena, id: NodeId) -> Option<ImportInfo> {
     let path = pkg_str.split('@').next().unwrap_or(&pkg_str).to_string();
     let package = path.split('/').next().unwrap_or(&path).to_string();
     let alias = alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
-    Some(ImportInfo { path, package, alias, macros, from })
+    Some(ImportInfo {
+        path,
+        package,
+        alias,
+        macros,
+        from,
+    })
 }
 
 /// A read-time error tied to a source offset.
 fn read_err(msg: impl Into<String>, at: u32) -> ReadError {
-    ReadError { msg: msg.into(), at }
+    ReadError {
+        msg: msg.into(),
+        at,
+    }
 }
 
 #[cfg(test)]
@@ -585,8 +605,14 @@ mod tests {
         let import = macros_import(Some("does-not-exist.wasm"));
         let err = resolve_err(&mut r, &import);
         assert!(err.contains("macros: true"), "unexpected error: {err}");
-        assert!(err.contains("does-not-exist.wasm"), "should name the from path: {err}");
-        assert!(err.contains("wit/macros/acme-html.wasm"), "should name the convention: {err}");
+        assert!(
+            err.contains("does-not-exist.wasm"),
+            "should name the from path: {err}"
+        );
+        assert!(
+            err.contains("wit/macros/acme-html.wasm"),
+            "should name the convention: {err}"
+        );
     }
 
     #[test]
@@ -647,7 +673,10 @@ mod tests {
         let last = *roots.last().unwrap();
         // `Unless false "ran"` -> `(unless-MACRO, false, "ran")` — the head plus
         // exactly two consumed following forms.
-        assert_eq!(crate::printer::print(&arena, last), r#"(unless-MACRO, false, "ran")"#);
+        assert_eq!(
+            crate::printer::print(&arena, last),
+            r#"(unless-MACRO, false, "ran")"#
+        );
     }
 
     /// A 0-arity foreign macro reads paren-free, consuming nothing after it; the
@@ -668,7 +697,10 @@ mod tests {
         let src = src_importing_fixture("Identity add(1 2)");
         let (arena, roots) = read(&src).expect("reads one-arity foreign macro");
         let last = *roots.last().unwrap();
-        assert_eq!(crate::printer::print(&arena, last), "(identity-MACRO, (add, 1, 2))");
+        assert_eq!(
+            crate::printer::print(&arena, last),
+            "(identity-MACRO, (add, 1, 2))"
+        );
     }
 
     /// An explicit-payload spelling reads identically (§2.4) once registered.
@@ -677,7 +709,10 @@ mod tests {
         let src = src_importing_fixture(r#"Unless(false "ran")"#);
         let (arena, roots) = read(&src).expect("reads explicit-payload foreign macro");
         let last = *roots.last().unwrap();
-        assert_eq!(crate::printer::print(&arena, last), r#"(unless-MACRO, false, "ran")"#);
+        assert_eq!(
+            crate::printer::print(&arena, last),
+            r#"(unless-MACRO, false, "ran")"#
+        );
     }
 
     /// A failed resolve surfaces as a read-time error tied to the import, not a
@@ -687,8 +722,16 @@ mod tests {
         let src = "Package \"demo:app@0.1.0\"\n\
                    Import {pkg: \"acme:html/dsl\" macros: true from: \"nope.wasm\"}\n";
         let err = read_file_with_macros(src, "/no/such/project").expect_err("resolve fails");
-        assert!(err.msg.contains("macros: true"), "unexpected error: {}", err.msg);
-        assert!(err.msg.contains("nope.wasm"), "should name the from path: {}", err.msg);
+        assert!(
+            err.msg.contains("macros: true"),
+            "unexpected error: {}",
+            err.msg
+        );
+        assert!(
+            err.msg.contains("nope.wasm"),
+            "should name the from path: {}",
+            err.msg
+        );
     }
 
     /// A non-`macros` import registers nothing, so its package is not treated as
@@ -700,7 +743,11 @@ mod tests {
                    Unless false \"ran\"\n";
         let err = read_file_with_macros(src, env!("CARGO_MANIFEST_DIR"))
             .expect_err("non-macro import does not register Unless");
-        assert!(err.msg.contains("unknown macro"), "unexpected error: {}", err.msg);
+        assert!(
+            err.msg.contains("unknown macro"),
+            "unexpected error: {}",
+            err.msg
+        );
     }
 
     // -- Step 8: qualified references, aliasing, collisions ---------------------
@@ -726,8 +773,16 @@ mod tests {
     fn colliding_bare_use_is_ambiguous_error() {
         let src = src_two_aliases("Unless false \"ran\"");
         let err = read(&src).expect_err("bare Unless is ambiguous across two imports");
-        assert!(err.msg.contains("ambiguous"), "unexpected error: {}", err.msg);
-        assert!(err.msg.contains("unless"), "should name the macro: {}", err.msg);
+        assert!(
+            err.msg.contains("ambiguous"),
+            "unexpected error: {}",
+            err.msg
+        );
+        assert!(
+            err.msg.contains("unless"),
+            "should name the macro: {}",
+            err.msg
+        );
         // Actionable: mentions both qualified spellings / aliasing.
         assert!(
             err.msg.contains("dsl/unless") && err.msg.contains("web/unless"),
@@ -790,7 +845,11 @@ mod tests {
             fixture_path().to_str().unwrap()
         );
         let err = read(&bad).expect_err("elements is not the alias");
-        assert!(err.msg.contains("unknown qualified macro"), "unexpected: {}", err.msg);
+        assert!(
+            err.msg.contains("unknown qualified macro"),
+            "unexpected: {}",
+            err.msg
+        );
     }
 
     /// Qualified expansion routes to the specific aliased component: a qualified
