@@ -227,6 +227,11 @@ struct Checker<'a> {
     /// its side effects on `resolved` are throwaway, so re-running it for the
     /// same body is pure redundant work during return-type-directed resolution.
     sig_result_cache: RefCell<HashMap<NodeId, Type>>,
+    /// Bodies currently being inferred by [`Self::infer_sig_result`]: the
+    /// recursion guard. A (mutually) recursive def re-entering its own result
+    /// inference gets `Unknown` for the recursive call, exactly like the
+    /// `visiting` guard in [`crate::wit`]'s inference.
+    sig_in_progress: RefCell<std::collections::HashSet<NodeId>>,
 }
 
 /// Check a whole program (the top-level roots). Returns `Err(msg)` on the first
@@ -261,6 +266,7 @@ impl<'a> Checker<'a> {
             defs,
             resolved: RefCell::new(HashMap::new()),
             sig_result_cache: RefCell::new(HashMap::new()),
+            sig_in_progress: RefCell::new(std::collections::HashSet::new()),
         }
     }
 
@@ -870,11 +876,19 @@ impl<'a> Checker<'a> {
         if let Some(cached) = self.sig_result_cache.borrow().get(&body) {
             return cached.clone();
         }
+        // Recursion guard: a recursive (or mutually recursive) def re-enters
+        // its own result inference through the call in its body. The recursive
+        // occurrence contributes no constraint (`Unknown`); the non-recursive
+        // branches still determine the result.
+        if !self.sig_in_progress.borrow_mut().insert(body) {
+            return Type::Unknown;
+        }
         let mut scope: Scope = sig.params.clone();
         // Inference errors inside a candidate body don't disqualify it here (the
         // body is checked properly when its own Def is checked); treat them as
         // an unconstrained result so resolution stays gradual.
         let result = self.infer(body, None, &mut scope).unwrap_or(Type::Unknown);
+        self.sig_in_progress.borrow_mut().remove(&body);
         self.sig_result_cache
             .borrow_mut()
             .insert(body, result.clone());
@@ -896,11 +910,16 @@ impl<'a> Checker<'a> {
 
         let nparams = sig.params.len();
 
+        // The call's result type: inferred from the def's body exactly as
+        // return-type-directed overload resolution does (3.2 — calling a def no
+        // longer erases type information).
+        let result = self.infer_sig_result(sig);
+
         // The single-record-arg-by-name form: `f({a: … b: …})` binds by field
         // name. We do not check those field types in Phase A — accept.
         if args.len() == 1 {
             if let Node::Rec(_) = self.arena.node(args[0]) {
-                return Ok(Type::Unknown);
+                return Ok(result);
             }
             // A single argument to a single parameter taking the whole payload.
             if nparams == 1 {
@@ -909,7 +928,7 @@ impl<'a> Checker<'a> {
                         "eval error: argument to `{name}` has the wrong type"
                     ));
                 }
-                return Ok(Type::Unknown);
+                return Ok(result);
             }
         }
 
@@ -927,7 +946,7 @@ impl<'a> Checker<'a> {
                 ));
             }
         }
-        Ok(Type::Unknown)
+        Ok(result)
     }
 
     /// Check a builtin call, modelling only the operand/result behaviour needed
