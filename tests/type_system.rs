@@ -739,3 +739,42 @@ Def f Fn {p: point}
     );
     assert!(r.is_err(), "s32 field used as a string must be rejected");
 }
+
+// --- 3.7: the meta layer is typed tree -> tree --------------------------------
+
+#[test]
+fn quote_types_as_tree_and_rejects_arithmetic() {
+    let r = run("add(Quote foo 1)");
+    assert!(!r.ok, "a tree is not a number; add must be rejected");
+}
+
+#[test]
+fn quasi_unquote_holes_are_checked() {
+    // The unquote hole references an unbound name: a compile error even though
+    // the template is data.
+    let r = run("Quasi add(Unquote(nope) 1)");
+    assert!(!r.ok, "unbound name inside an Unquote hole must be caught");
+}
+
+#[test]
+fn quasi_data_heads_are_not_value_checked() {
+    // `greeting` is data (a form head), not a value use — no unbound error.
+    let r = run("Let {name: Quote(ada)} Quasi greeting(Unquote(name))");
+    assert!(r.ok, "quasi data head wrongly value-checked: {}", r.error);
+}
+
+#[test]
+fn defmacro_template_body_is_checked() {
+    // The macro body itself contains an unbound name outside any Quasi: caught
+    // at compile time even though the macro is never used.
+    let r = run("DefMacro bad {x} add(nope 1)");
+    assert!(!r.ok, "unbound name in a DefMacro body must be caught");
+}
+
+#[test]
+fn defmacro_params_are_trees_in_the_body() {
+    // Using a macro parameter as a number is a compile error: parameters are
+    // forms (tree), not numbers.
+    let r = run("DefMacro bad {x} add(x 1)");
+    assert!(!r.ok, "tree-typed macro parameter used as a number must be rejected");
+}

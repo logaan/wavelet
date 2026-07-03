@@ -68,6 +68,10 @@ pub enum Type {
     Record(Vec<(String, Type)>),
     /// A `DefType` record/variant, named nominally.
     Named(String),
+    /// A form — the meta layer's WIT interchange type (the `wavelet:meta`
+    /// `tree` record). `Quote`/`Quasi` produce it; macro templates map it to
+    /// itself; the form accessors consume it (3.7).
+    Tree,
     /// The unit type (`{}`), e.g. the result of a `Def`.
     Unit,
     /// An unconstrained integer literal: compatible with any int or float type
@@ -151,6 +155,7 @@ impl Type {
     fn from_name(s: &str) -> Type {
         match s {
             "bool" => Type::Bool,
+            "tree" => Type::Tree,
             "u8" => Type::U8,
             "u16" => Type::U16,
             "u32" => Type::U32,
@@ -915,14 +920,38 @@ impl<'a> Checker<'a> {
                 let ty = Type::from_form(self.arena, ty_form);
                 self.check_the(ty_form, &ty, expr, scope)
             }
-            // Quote/Quasi produce data (the `tree` arena type); their contents
-            // are not value-checked. A `DefMacro` defines a compile-time macro
-            // whose body is a template (data), not a value expression, so we do
-            // not check it. Top-level file forms (`Package`/`Import`/`Export`/
-            // `DefType`) carry annotations, not value expressions. All of these
-            // are opaque to the value checker.
-            "quote-MACRO" | "quasi-MACRO" | "defmacro-MACRO" | "package-MACRO" | "import-MACRO"
-            | "export-MACRO" | "deftype-MACRO" => Ok(Type::Unknown),
+            // `Quote` produces a form: the `tree` interchange type (3.7). Its
+            // contents are data, never value-checked.
+            "quote-MACRO" => Ok(Type::Tree),
+            // `Quasi` also produces a `tree`, but its `Unquote`/`Splice` holes
+            // contain ordinary expressions — check them (3.7).
+            "quasi-MACRO" => {
+                if let [form] = args {
+                    self.check_quasi(*form, scope, 1)?;
+                }
+                Ok(Type::Tree)
+            }
+            // A `DefMacro` template is tree -> tree (3.7): its parameters are
+            // bound forms, and its body is ordinary code evaluated at expansion
+            // time — check it with the parameters in scope at `tree`.
+            "defmacro-MACRO" => {
+                if let [_name_id, params_id, body] = args {
+                    let params = parse_params(self.arena, *params_id);
+                    let mark = scope.len();
+                    for (n, _t) in &params {
+                        scope.push((n.clone(), Type::Tree));
+                    }
+                    self.check(*body, None, scope)?;
+                    scope.truncate(mark);
+                }
+                Ok(Type::Unit)
+            }
+            // Top-level file forms (`Package`/`Import`/`Export`/`DefType`)
+            // carry annotations, not value expressions: opaque to the value
+            // checker.
+            "package-MACRO" | "import-MACRO" | "export-MACRO" | "deftype-MACRO" => {
+                Ok(Type::Unknown)
+            }
             // Any other `-MACRO` head is a user (or foreign) macro call that
             // `eval_snippet` expands at runtime. We cannot statically see
             // through it, so check nothing and stay gradual. Crucially we do NOT
@@ -932,6 +961,64 @@ impl<'a> Checker<'a> {
                 let _ = args;
                 Ok(Type::Unknown)
             }
+        }
+    }
+
+    /// Walk a `Quasi` template's form. Everything is data except the
+    /// `Unquote`/`Splice` holes at depth 1, whose contents are ordinary
+    /// expressions checked in the enclosing scope; nesting mirrors the
+    /// interpreter's depth rules (`interp::quasi`).
+    fn check_quasi(&self, id: NodeId, scope: &mut Scope, depth: u32) -> Result<(), String> {
+        match self.arena.node(id) {
+            Node::Tup(items) => {
+                if items.len() == 2
+                    && let Node::Sym(name) = self.arena.node(items[0])
+                {
+                    let arg = items[1];
+                    match name.as_str() {
+                        "unquote-MACRO" if depth == 1 => {
+                            self.check(arg, None, scope)?;
+                            return Ok(());
+                        }
+                        "splice-MACRO" if depth == 1 => {
+                            // A splice's expression must be a list (the
+                            // interpreter enforces this at runtime); a `tree`
+                            // can itself be a list form.
+                            let t = self.check(arg, None, scope)?;
+                            if !matches!(t, Type::List(_) | Type::Tree | Type::Unknown) {
+                                return Err(format!(
+                                    "eval error: Splice expects a list, got {t:?}"
+                                ));
+                            }
+                            return Ok(());
+                        }
+                        "unquote-MACRO" | "splice-MACRO" if depth > 1 => {
+                            return self.check_quasi(arg, scope, depth - 1);
+                        }
+                        "quasi-MACRO" => {
+                            return self.check_quasi(arg, scope, depth + 1);
+                        }
+                        _ => {}
+                    }
+                }
+                for &it in items {
+                    self.check_quasi(it, scope, depth)?;
+                }
+                Ok(())
+            }
+            Node::Lst(items) => {
+                for &it in items {
+                    self.check_quasi(it, scope, depth)?;
+                }
+                Ok(())
+            }
+            Node::Rec(fields) => {
+                for (_k, v) in fields {
+                    self.check_quasi(*v, scope, depth)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -1361,12 +1448,14 @@ impl<'a> Checker<'a> {
             "split" => Ok(Type::List(Box::new(Type::String))),
             "join" => Ok(Type::String),
             "to-string" | "form-kind" => Ok(Type::String),
-            // `read` produces a form (typed as tree once 3.7 lands) or an error
-            // string.
-            "read" => Ok(Type::Result(
-                Box::new(Type::Unknown),
-                Box::new(Type::String),
-            )),
+            // `read` produces a form or an error string (3.7).
+            "read" => Ok(Type::Result(Box::new(Type::Tree), Box::new(Type::String))),
+            // Meta-layer builtins are ordinary typed functions over `tree`
+            // (3.7): `gensym` mints a fresh symbol form, `expand` maps a form
+            // to a form, `rec-key` projects a record form's first key as a
+            // symbol form. (`rec-val` yields the field's *value*, which on a
+            // runtime record can be anything — it stays gradual.)
+            "gensym" | "expand" | "rec-key" => Ok(Type::Tree),
             // Numeric conversions: the result is the named concrete type. A
             // literal argument is range-checked at compile time with the SAME
             // message the runtime conversion produces (3.4).
