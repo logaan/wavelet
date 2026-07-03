@@ -106,11 +106,12 @@ fn f32_list_elements_pack_at_stride_4() {
 fn f32_option_payloads_round_trip() {
     let mut c = component();
     assert_eq!(
-        ok(&mut c, "maybe", &[Val::Option(Some(Box::new(Val::Float32(0.5))))]),
+        ok(
+            &mut c,
+            "maybe",
+            &[Val::Option(Some(Box::new(Val::Float32(0.5))))]
+        ),
         Val::Option(Some(Box::new(Val::Float32(1.5))))
     );
-    assert_eq!(
-        ok(&mut c, "maybe", &[Val::Option(None)]),
-        Val::Option(None)
-    );
+    assert_eq!(ok(&mut c, "maybe", &[Val::Option(None)]), Val::Option(None));
 }

@@ -693,7 +693,7 @@ struct FnCtx {
     instrs: Vec<I<'static>>,
     n_params: u32,
     extra_locals: Vec<ValType>,
-    scopes: Vec<HashMap<String, u32>>,
+    scopes: Vec<HashMap<String, Binding>>,
 }
 
 impl FnCtx {
@@ -713,10 +713,10 @@ impl FnCtx {
     fn op(&mut self, i: I<'static>) {
         self.instrs.push(i);
     }
-    fn lookup(&self, name: &str) -> Option<u32> {
+    fn lookup(&self, name: &str) -> Option<Binding> {
         for scope in self.scopes.iter().rev() {
-            if let Some(&i) = scope.get(name) {
-                return Some(i);
+            if let Some(&b) = scope.get(name) {
+                return Some(b);
             }
         }
         None
@@ -1254,6 +1254,25 @@ fn dep_case(dep: &Dep, name: &str) -> Option<bool> {
     })
 }
 
+/// One name in a function's lexical scope: which wasm local holds it and,
+/// under goal 5, whether that local is an UNBOXED scalar (`Some(kind)`) or a
+/// box pointer (`None`).
+#[derive(Clone, Copy)]
+struct Binding {
+    local: u32,
+    scalar: Option<Scalar>,
+}
+
+impl Binding {
+    /// A boxed (i32 box-pointer) binding — the pre-goal-5 default.
+    fn boxed(local: u32) -> Binding {
+        Binding {
+            local,
+            scalar: None,
+        }
+    }
+}
+
 /// The unboxed representation of a *scalar-kinded* value on the wasm stack
 /// (goal 5, 5.2/5.6.1). The kind mirrors the interpreter's value variants —
 /// NOT the WIT width — so typed code computes exactly what the oracle
@@ -1399,7 +1418,13 @@ impl<'a> Emitter<'a> {
                 self.box_char(fx);
             }
             Node::Sym(name) => match fx.lookup(&name) {
-                Some(idx) => fx.op(I::LocalGet(idx)),
+                Some(b) => {
+                    fx.op(I::LocalGet(b.local));
+                    // a goal-5 typed local boxes at the seam to boxed code
+                    if let Some(kind) = b.scalar {
+                        self.box_scalar(fx, kind);
+                    }
+                }
                 None => return self.value_def_ref(fx, &name),
             },
             // Every fully-expanded tuple in evaluation position is a call.
@@ -2076,14 +2101,14 @@ impl<'a> Emitter<'a> {
 
         // captures: every visible local by name (later scopes shadow earlier),
         // sorted so the layout is deterministic
-        let mut cap_map: HashMap<String, u32> = HashMap::new();
+        let mut cap_map: HashMap<String, Binding> = HashMap::new();
         for scope in &fx.scopes {
             for (k, &v) in scope {
                 cap_map.insert(k.clone(), v);
             }
         }
-        let mut caps: Vec<(String, u32)> = cap_map.into_iter().collect();
-        caps.sort();
+        let mut caps: Vec<(String, Binding)> = cap_map.into_iter().collect();
+        caps.sort_by(|a, b| a.0.cmp(&b.0));
 
         let mut cf = FnCtx::new(2);
         let mut scope = HashMap::new();
@@ -2092,12 +2117,12 @@ impl<'a> Emitter<'a> {
             cf.op(I::LocalGet(0));
             cf.op(I::I32Load(ma(12 + 4 * j as u64, 2)));
             cf.op(I::LocalSet(l));
-            scope.insert(cname.clone(), l);
+            scope.insert(cname.clone(), Binding::boxed(l));
         }
         match params.len() {
             0 => {}
             1 => {
-                scope.insert(params[0].clone(), 1);
+                scope.insert(params[0].clone(), Binding::boxed(1));
             }
             n => {
                 // payload must be a list box of exactly n elements
@@ -2120,7 +2145,7 @@ impl<'a> Emitter<'a> {
                     cf.op(I::LocalGet(1));
                     cf.op(I::I32Load(ma(8 + 4 * i as u64, 2)));
                     cf.op(I::LocalSet(l));
-                    scope.insert(p.clone(), l);
+                    scope.insert(p.clone(), Binding::boxed(l));
                 }
             }
         }
@@ -2144,9 +2169,14 @@ impl<'a> Emitter<'a> {
         fx.op(I::LocalGet(p));
         fx.op(I::I32Const(k as i32));
         fx.op(I::I32Store(ma(8, 2)));
-        for (j, (_, lidx)) in caps.iter().enumerate() {
+        for (j, (_, cap)) in caps.iter().enumerate() {
             fx.op(I::LocalGet(p));
-            fx.op(I::LocalGet(*lidx));
+            fx.op(I::LocalGet(cap.local));
+            // a goal-5 typed local boxes at the capture seam (closure
+            // capture slots hold box pointers)
+            if let Some(kind) = cap.scalar {
+                self.box_scalar(fx, kind);
+            }
             fx.op(I::I32Store(ma(12 + 4 * j as u64, 2)));
         }
         fx.op(I::LocalGet(p));
@@ -2319,10 +2349,26 @@ impl<'a> Emitter<'a> {
         };
         fx.scopes.push(HashMap::new());
         for (k, v) in &fields {
-            self.expr(fx, *v, false)?;
-            let l = fx.local(ValType::I32);
-            fx.op(I::LocalSet(l));
-            fx.scopes.last_mut().unwrap().insert(k.clone(), l);
+            // Goal 5 (5.2): a binding with a statically-known scalar type
+            // lives UNBOXED in a typed wasm local; scalar consumers read it
+            // directly, boxed consumers box at the reference seam.
+            let binding = if let Some(kind) = self.node_scalar(*v) {
+                self.expr_scalar(fx, *v, kind)?;
+                let l = fx.local(match kind {
+                    Scalar::Int | Scalar::Char => ValType::I64,
+                    Scalar::Float => ValType::F64,
+                    Scalar::Bool => ValType::I32,
+                });
+                Binding {
+                    local: l,
+                    scalar: Some(kind),
+                }
+            } else {
+                self.expr(fx, *v, false)?;
+                Binding::boxed(fx.local(ValType::I32))
+            };
+            fx.op(I::LocalSet(binding.local));
+            fx.scopes.last_mut().unwrap().insert(k.clone(), binding);
         }
         let r = self.expr(fx, body, tail);
         fx.scopes.pop();
@@ -2394,7 +2440,10 @@ impl<'a> Emitter<'a> {
                 let l = fx.local(ValType::I32);
                 fx.op(I::LocalGet(v));
                 fx.op(I::LocalSet(l));
-                fx.scopes.last_mut().unwrap().insert(name, l);
+                fx.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(name, Binding::boxed(l));
                 Ok(())
             }
             Node::Int(_) | Node::Dec(_) | Node::Bool(_) | Node::Str(_) => {
@@ -3962,6 +4011,18 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I64Const(c as u32 as i64));
                 return Ok(());
             }
+            Node::Sym(name) => {
+                // a goal-5 typed local reads directly — no box round-trip
+                if let Some(b) = fx.lookup(&name)
+                    && let Some(kind) = b.scalar
+                {
+                    fx.op(I::LocalGet(b.local));
+                    if kind == Scalar::Int && want == Scalar::Float {
+                        fx.op(I::F64ConvertI64S);
+                    }
+                    return Ok(());
+                }
+            }
             Node::Tup(items) if !items.is_empty() => {
                 if let Node::Sym(name) = self.arena.node(items[0]).clone()
                     && fx.lookup(&name).is_none()
@@ -4802,7 +4863,7 @@ fn emit_core_module(
         let mut fx = FnCtx::new(n as u32);
         let mut scope = HashMap::new();
         for (i, p) in params.iter().enumerate() {
-            scope.insert(p.clone(), i as u32);
+            scope.insert(p.clone(), Binding::boxed(i as u32));
         }
         fx.scopes.push(scope);
         em.expr(&mut fx, body, true)
@@ -4818,7 +4879,7 @@ fn emit_core_module(
         let mut fx = FnCtx::new(n as u32);
         let mut scope = HashMap::new();
         for (i, p) in params.iter().enumerate() {
-            scope.insert(p.clone(), i as u32);
+            scope.insert(p.clone(), Binding::boxed(i as u32));
         }
         fx.scopes.push(scope);
         em.expr(&mut fx, body, true)
@@ -5728,7 +5789,7 @@ fn mc_macro_body(em: &mut Emitter, m: &MacroDef) -> Result<(u32, Function), Stri
     let mut fx = FnCtx::new(n as u32);
     let mut scope = HashMap::new();
     for (i, p) in m.params.iter().enumerate() {
-        scope.insert(p.clone(), i as u32);
+        scope.insert(p.clone(), Binding::boxed(i as u32));
     }
     fx.scopes.push(scope);
     em.expr(&mut fx, m.body, false)
