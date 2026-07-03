@@ -3016,8 +3016,11 @@ impl<'a> Emitter<'a> {
             // eq_raw the `eq` builtin uses, so char (codepoint) and flags
             // (set-name list) literals match exactly like the interpreter's
             // `match_pattern` (5.9).
+            // Float literals are rejected as patterns at check time (2.1
+            // proposal 2); the backend refuses them too, matching the
+            // interpreter's `match_pattern`, so the two never diverge.
+            Node::Dec(_) => Err("a float literal cannot be a Match pattern".into()),
             Node::Int(_)
-            | Node::Dec(_)
             | Node::Bool(_)
             | Node::Str(_)
             | Node::Char(_)
