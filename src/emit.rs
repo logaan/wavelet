@@ -1270,6 +1270,11 @@ struct Emitter<'a> {
     /// an `alias/op` call (`pts/new`, `pts/add`, …) to the matching resource fn
     /// while those bodies are still being lowered (step 04 routing).
     functor_fns: HashMap<String, ResourceFns>,
+    /// Per-node static types from the checker (goal 5): the emitter consults
+    /// this to choose type-directed (unboxed/ABI-native) representations.
+    /// Empty when checking failed or was skipped — every node then keeps the
+    /// boxed fallback, which is always semantics-preserving.
+    node_types: crate::check::NodeTypes,
 }
 
 impl<'a> Emitter<'a> {
@@ -4093,6 +4098,27 @@ fn emit_core_module(
 ) -> Result<Vec<u8>, String> {
     let feats = features_of(arena, info);
 
+    // Per-node static types (goal 5). Reconstruct the same import-signature
+    // table the build step feeds the checker (`build.rs`), so this table
+    // matches what checking saw — including qualified-call result types. A
+    // program that fails checking yields an *empty* table (boxed fallback
+    // everywhere) rather than a second error surface: the build path has
+    // already rejected ill-typed programs before emitting.
+    let node_types_tbl = {
+        let mut import_sigs = crate::check::ImportSigs::new();
+        for imp in &info.imports {
+            if crate::wit::is_macro_only(imp) {
+                continue;
+            }
+            if let Some(dep) = deps.get(&imp.package) {
+                let iface = imp.path.split_once('/').map(|(_, i)| i).unwrap_or("api");
+                import_sigs.extend(crate::wit::import_sigs_for(&imp.alias, &dep.funcs, iface));
+            }
+        }
+        import_sigs.extend(crate::wit::functor_import_sigs(&info.functors));
+        crate::check::node_types_with_imports(arena, roots, &import_sigs).unwrap_or_default()
+    };
+
     // named types in scope: this file's own DefTypes, plus those of every dep.
     // Records resolve via `records`; enum/variant/flags (dep-only today) via
     // `defs`.
@@ -4222,6 +4248,7 @@ fn emit_core_module(
         true_addr: 0,
         macro_expand_idx: None,
         functor_fns: HashMap::new(),
+        node_types: node_types_tbl,
     };
 
     // static boxes: false @16, true @24
@@ -5161,6 +5188,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         true_addr: 0,
         macro_expand_idx: None,
         functor_fns: HashMap::new(),
+        node_types: Default::default(),
     };
 
     // static boxes: false @16, true @24
@@ -8850,6 +8878,7 @@ world app {
             true_addr: 0,
             macro_expand_idx: None,
             functor_fns: HashMap::new(),
+            node_types: Default::default(),
         };
 
         // static boxes: false @16, true @24 (same as emit_core_module).

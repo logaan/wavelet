@@ -961,3 +961,31 @@ fn refutable_subpatterns_do_not_count_as_coverage() {
         "refutable ok-subpattern must not count as covering `ok`"
     );
 }
+
+// ---------------------------------------------------------------- goal 5
+
+/// Goal 5 foundation: the checker exports a per-node static-type table the
+/// wasm backend uses to pick type-directed representations. Typed parameter
+/// references and literal expressions must appear with concrete types.
+#[test]
+fn node_type_table_types_param_refs_and_literals() {
+    use wavelet::check::{self, Type};
+    let (arena, roots) = read_file("Def double Fn {x: u32} add(x x)").expect("reads");
+    let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expands");
+    let table = check::node_types_with_imports(&arena, &roots, &check::ImportSigs::new())
+        .expect("checks");
+    assert!(
+        table.values().any(|t| *t == Type::U32),
+        "the `x` param references should be typed u32: {table:?}"
+    );
+}
+
+/// A program the checker rejects must not reach the table (callers fall back
+/// to an empty table / boxed representation).
+#[test]
+fn node_type_table_propagates_check_errors() {
+    use wavelet::check;
+    let (arena, roots) = read_file("Def bad Fn {x: u32} add(x true)").expect("reads");
+    let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expands");
+    assert!(check::node_types_with_imports(&arena, &roots, &check::ImportSigs::new()).is_err());
+}
