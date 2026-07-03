@@ -2189,12 +2189,14 @@ impl<'a> Emitter<'a> {
                 }
             }
             n => {
-                // payload must be a list box of exactly n elements, same guard
-                // `fn_form` emits, so a malformed indirect call traps rather
-                // than reading garbage past the box.
+                // payload must be a tuple box of exactly n elements (the
+                // `payload_box` bundle), same guard `fn_form` emits, so a
+                // malformed indirect call — e.g. a single list value passed to
+                // an n-ary function (2.1 proposal 1) — traps rather than reading
+                // garbage past the box.
                 fx.op(I::LocalGet(1));
                 fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Const(TAG_TUP));
                 fx.op(I::I32Ne);
                 fx.op(I::If(BlockType::Empty));
                 fx.op(I::Unreachable);
@@ -2272,10 +2274,12 @@ impl<'a> Emitter<'a> {
                 scope.insert(params[0].clone(), Binding::boxed(1));
             }
             n => {
-                // payload must be a list box of exactly n elements
+                // payload must be a tuple box of exactly n elements (the
+                // `payload_box` bundle); a single list value never spreads
+                // across parameters (2.1 proposal 1).
                 cf.op(I::LocalGet(1));
                 cf.op(I::I32Load(ma(0, 2)));
-                cf.op(I::I32Const(TAG_LIST));
+                cf.op(I::I32Const(TAG_TUP));
                 cf.op(I::I32Ne);
                 cf.op(I::If(BlockType::Empty));
                 cf.op(I::Unreachable);
@@ -2369,14 +2373,16 @@ impl<'a> Emitter<'a> {
     }
 
     /// Bundle a call's evaluated arguments into one payload box, mirroring the
-    /// interpreter: 0 args ⇒ an empty list box, 1 arg ⇒ the value itself, ≥2 ⇒ a
-    /// list box. (A record arg binds by name, a list/tuple by order, a scalar to
-    /// the sole parameter — matching `bind_args`.)
+    /// interpreter's `bundle_args`: 0 args ⇒ the empty tuple, 1 arg ⇒ the value
+    /// itself, ≥2 ⇒ a tuple box. The multi-arg bundle is a TAG_TUP (not a list)
+    /// so the wrapper can tell an argument bundle apart from a single list value
+    /// passed as the sole argument — a list never spreads across parameters
+    /// (2.1 proposal 1), matching the interpreter.
     fn payload_box(&mut self, fx: &mut FnCtx, args: &[NodeId]) -> Result<(), String> {
         match args {
-            [] => self.list_box(fx, &[]),
+            [] => self.seq_box(fx, &[], TAG_TUP),
             [one] => self.expr(fx, *one, false),
-            many => self.list_box(fx, many),
+            many => self.seq_box(fx, many, TAG_TUP),
         }
     }
 
@@ -3010,8 +3016,11 @@ impl<'a> Emitter<'a> {
             // eq_raw the `eq` builtin uses, so char (codepoint) and flags
             // (set-name list) literals match exactly like the interpreter's
             // `match_pattern` (5.9).
+            // Float literals are rejected as patterns at check time (2.1
+            // proposal 2); the backend refuses them too, matching the
+            // interpreter's `match_pattern`, so the two never diverge.
+            Node::Dec(_) => Err("a float literal cannot be a Match pattern".into()),
             Node::Int(_)
-            | Node::Dec(_)
             | Node::Bool(_)
             | Node::Str(_)
             | Node::Char(_)

@@ -1310,6 +1310,7 @@ impl<'a> Checker<'a> {
                     // the declared payload types, a record pattern binds fields
                     // at their field types, and so on. Anything the scrutinee
                     // type doesn't determine binds as Unknown.
+                    self.reject_float_patterns(pair[0])?;
                     let mark = scope.len();
                     self.bind_pattern(pair[0], &scrut_ty, scope);
                     let rt = self.check(pair[1], expected, scope)?;
@@ -2039,6 +2040,34 @@ impl<'a> Checker<'a> {
             }
             // Literals in patterns bind nothing.
             _ => {}
+        }
+    }
+
+    /// Reject float-literal patterns (2.1 proposal 2). A `Dec` in pattern
+    /// position would match by f64 equality — a classic footgun (`0.1 + 0.2`
+    /// never matches `0.3`; a `nan` pattern matches nothing, ever) — and no set
+    /// of float literals can ever be exhaustive. Point the author at an explicit
+    /// comparison. Int/bool/char/string literal patterns are unaffected (their
+    /// equality is exact).
+    fn reject_float_patterns(&self, pat: NodeId) -> Result<(), String> {
+        match self.arena.node(pat) {
+            Node::Dec(_) => Err("eval error: a float literal cannot be a Match \
+                 pattern (float equality is unreliable); use an explicit \
+                 comparison such as `If eq(x 0.5) …` instead"
+                .to_string()),
+            Node::Tup(items) | Node::Lst(items) => {
+                for &it in items {
+                    self.reject_float_patterns(it)?;
+                }
+                Ok(())
+            }
+            Node::Rec(fields) => {
+                for (_, v) in fields {
+                    self.reject_float_patterns(*v)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
 

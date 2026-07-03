@@ -371,7 +371,7 @@
     "error": "eval error: `to-char`: 55296 is not a Unicode scalar value"
   },
   "std-apply": {
-    "code": "apply(Fn {a b} add(a b) [20 22])",
+    "code": "apply(Fn {a b} add(a b) {a: 20 b: 22})",
     "value": "42",
     "output": ""
   },

@@ -89,7 +89,9 @@ pub fn run_files(paths: &[String]) -> Result<(), String> {
     match entry.env.lookup("run") {
         Some(run @ Value::Closure(_)) => {
             interp
-                .apply(&run, Value::Lst(vec![]))
+                // The empty tuple `()` is the "no arguments" payload (2.1
+                // proposal 1); an empty list is a value in its own right.
+                .apply(&run, Value::Tup(vec![]))
                 .map_err(|e| format!("{}: {e}", entry.path))?;
         }
         Some(_) => {

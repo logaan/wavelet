@@ -472,9 +472,9 @@ fn bind_params(c: &Closure, arg: Value) -> R<Env> {
     let env = c.env.child();
     let n = c.params.len();
     match (n, &arg) {
-        (0, Value::Lst(v)) | (0, Value::Tup(v)) if v.is_empty() => return Ok(env),
-        (0, Value::Rec(f)) if f.is_empty() => return Ok(env),
-        (0, Value::Flg(f)) if f.is_empty() => return Ok(env),
+        // Only the empty tuple `()` denotes "no arguments"; an empty list,
+        // record, or flags value is a value in its own right (2.1 proposal 1).
+        (0, Value::Tup(v)) if v.is_empty() => return Ok(env),
         (0, _) => return err("function takes no arguments"),
         _ => {}
     }
@@ -498,7 +498,10 @@ fn bind_params(c: &Closure, arg: Value) -> R<Env> {
         return Ok(env);
     }
     match arg {
-        Value::Lst(vs) | Value::Tup(vs) if vs.len() == n => {
+        // A tuple destructures positionally across parameters; a list is one
+        // value (bound above when n == 1) and never fills multiple parameters
+        // (2.1 proposal 1).
+        Value::Tup(vs) if vs.len() == n => {
             for (p, v) in c.params.iter().zip(vs) {
                 bind_one(&env, p, v)?;
             }
@@ -540,7 +543,10 @@ fn match_pattern(arena: &Rc<Arena>, pat: NodeId, v: &Value, binds: &Env, scope: 
     match arena.node(pat) {
         Node::Bool(b) => Ok(matches!(v, Value::Bool(x) if x == b)),
         Node::Int(n) => Ok(matches!(v, Value::Int(x) if x == n)),
-        Node::Dec(f) => Ok(matches!(v, Value::Dec(x) if x == f)),
+        // Float literals are rejected as patterns at check time (2.1 proposal
+        // 2); the interpreter refuses them too so it stays a faithful oracle
+        // when run standalone. Int/bool/char/string literals are exact and fine.
+        Node::Dec(_) => err("a float literal cannot be a Match pattern"),
         Node::Char(c) => Ok(matches!(v, Value::Char(x) if x == c)),
         Node::Str(s) => Ok(matches!(v, Value::Str(x) if x == s)),
         Node::Flg(names) => Ok(matches!(v, Value::Flg(x) if x == names)),

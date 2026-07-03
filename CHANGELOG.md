@@ -15,6 +15,21 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- **A list argument no longer spreads across parameters.** A single list value
+  passed to a function is one value bound to one parameter, like any other
+  value; positional multi-binding across parameters is the tuple's job, by-name
+  binding the record's. The empty-list, empty-flags, and empty-record "no
+  arguments" acceptances are also gone — only the empty tuple `()` denotes no
+  arguments. (Coupling a function's arity to a runtime list length was a
+  runtime shape-dispatch the checker could not see.)
+
+- **A float literal is rejected as a Match pattern.** Matching a `Dec` literal
+  by floating-point equality is a footgun (`0.1 + 0.2` never equals `0.3`; a
+  `nan` pattern matches nothing) and no set of float literals can ever be
+  exhaustive, so it is now a check-time error pointing at an explicit
+  comparison. Integer, boolean, character, and string literal patterns are
+  unaffected — their equality is exact.
+
 - **Compiled components reset their heap between export calls.** Every export
   now carries a canonical post-return function that resets the bump allocator
   to the arena floor once the caller has read the results, so a long-lived

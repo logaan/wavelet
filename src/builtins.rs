@@ -470,7 +470,9 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             let mut acc = a.pop().unwrap();
             let f = a.pop().unwrap();
             for v in lst {
-                acc = interp.apply(&f, Value::Lst(vec![acc, v]))?;
+                // Bundle the two arguments as a tuple, the call payload shape
+                // (2.1 proposal 1): a list no longer spreads across parameters.
+                acc = interp.apply(&f, Value::Tup(vec![acc, v]))?;
             }
             Ok(acc)
         }
