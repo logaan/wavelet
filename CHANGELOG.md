@@ -13,6 +13,16 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Changed
+
+- **Compiled components reset their heap between export calls.** Every export
+  now carries a canonical post-return function that resets the bump allocator
+  to the arena floor once the caller has read the results, so a long-lived
+  instance no longer grows memory monotonically across calls (arena-per-call;
+  module-level value defs recompute per call). Components that instantiate
+  functors (`Set`) keep the previous never-free behaviour for now, since their
+  resource state lives on the same heap.
+
 ### Added
 
 - **Variant/enum case constructors are bound values.** A `DefType name

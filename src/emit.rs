@@ -4526,6 +4526,9 @@ fn emit_core_module(
 
     // ---- export wrappers
     let mut exports: Vec<(String, u32)> = Vec::new(); // (export name, fn idx)
+    // Each export's (full export name, flat results) — a canonical post-return
+    // companion is emitted per entry after this loop (5.1 arena-per-call).
+    let mut post_returns: Vec<(String, Vec<ValType>)> = Vec::new();
     for sig in &info.exports {
         let (fidx, _) = *em
             .funcs
@@ -4599,7 +4602,7 @@ fn emit_core_module(
                 vec![I32]
             }
         };
-        let t = em.ty_idx(fparams, fresults);
+        let t = em.ty_idx(fparams, fresults.clone());
         em.bodies.push((t, fx.finish()));
         // An external interface (wasi:http/incoming-handler, wasi:cli/run) is
         // exported under its own versioned name — at the version of its resolved
@@ -4610,7 +4613,48 @@ fn emit_core_module(
         } else {
             versioned_iface(&info.package, &sig.iface)
         };
-        exports.push((format!("{own_iface}#{}", sig.name), take()));
+        let export_name = format!("{own_iface}#{}", sig.name);
+        post_returns.push((export_name.clone(), fresults));
+        exports.push((export_name, take()));
+    }
+
+    // ---- per-call arena reset via canonical post-return (5.1)
+    //
+    // The memory story decided on 5.1 (arena-per-call, headerless): every
+    // export gets a `cabi_post_<export-name>` companion, which wit-component
+    // wires as the export's post-return function and the host runtime invokes
+    // once the caller has finished reading the results. At that point nothing
+    // allocated during the call is live — the lowered arguments, the call's
+    // temporaries, and the result area are all dead — so the bump pointer
+    // resets to the arena floor (the heap base) and the lazily-cached
+    // value-def globals clear to recompute on the next call (their cached
+    // boxes died with the arena; value defs are pure in the backend, so
+    // recomputation is semantics-neutral). Interned statics live below the
+    // heap base and are untouched.
+    //
+    // Components with functor instantiations OPT OUT for now and keep the
+    // never-free behaviour: a `set` resource's cell and stored list live on
+    // this same heap and must survive across calls. They move to an explicit
+    // persistent region when the ABI-native layout work rebuilds value
+    // construction (see the 5.1 decision record).
+    //
+    // Global indices: 0 = heap ptr, 1..=n value defs, 1+n gensym counter,
+    // 2+n = the immutable arena floor (initialized to the heap base in the
+    // globals section below).
+    let arena_floor_g = 2 + info.value_defs.len() as u32;
+    if info.functors.is_empty() {
+        for (name, fresults) in post_returns {
+            let mut fx = FnCtx::new(fresults.len() as u32);
+            fx.op(I::GlobalGet(arena_floor_g));
+            fx.op(I::GlobalSet(0));
+            for i in 0..info.value_defs.len() {
+                fx.op(I::I32Const(0));
+                fx.op(I::GlobalSet(1 + i as u32));
+            }
+            let t = em.ty_idx(fresults, vec![]);
+            em.bodies.push((t, fx.finish()));
+            exports.push((format!("cabi_post_{name}"), take()));
+        }
     }
 
     let _ = take; // `next`/`take` are done; the resource bodies were emitted above.
@@ -4718,6 +4762,17 @@ fn emit_core_module(
             shared: false,
         },
         &ConstExpr::i64_const(0),
+    );
+    // The arena floor (5.1 arena-per-call): the heap base, as an immutable
+    // global the per-export post-return bodies reset the heap pointer to.
+    // Index = 2 + value_defs.len() (see the post-return emission above).
+    gs.global(
+        GlobalType {
+            val_type: I32,
+            mutable: false,
+            shared: false,
+        },
+        &ConstExpr::i32_const(heap_base as i32),
     );
     module.section(&gs);
 
