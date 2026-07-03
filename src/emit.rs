@@ -1266,14 +1266,19 @@ struct FnSig {
     result: Repr,
 }
 
+/// An interned canonical-layout type: an index into `Emitter::mem_tys`.
+/// Interning keeps [`Repr`] (and so [`Binding`]) `Copy`.
+type MemTy = u32;
+
 /// The representation of one value slot (a local, parameter, or result) in
-/// goal-5 typed code: a box pointer (the uniform fallback) or an unboxed
-/// scalar on the wasm stack (5.2). `Copy` on purpose — reprs are threaded
-/// through every expression context.
+/// goal-5 typed code: a box pointer (the uniform fallback), an unboxed
+/// scalar on the wasm stack (5.2), or a pointer to the value's canonical
+/// ABI layout in linear memory, typed by the interned WIT type (5.3).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Repr {
     Boxed,
     Scalar(Scalar),
+    Mem(MemTy),
 }
 
 impl Repr {
@@ -1292,7 +1297,7 @@ fn repr_vt(repr: Repr) -> ValType {
     match repr {
         Repr::Scalar(Scalar::Int) | Repr::Scalar(Scalar::Char) => ValType::I64,
         Repr::Scalar(Scalar::Float) => ValType::F64,
-        Repr::Scalar(Scalar::Bool) | Repr::Boxed => ValType::I32,
+        Repr::Scalar(Scalar::Bool) | Repr::Boxed | Repr::Mem(_) => ValType::I32,
     }
 }
 
@@ -1339,6 +1344,39 @@ fn wit_scalar(ty: &WitTy) -> Option<Scalar> {
         WitTy::Char => Some(Scalar::Char),
         _ => None,
     }
+}
+
+/// The inclusive i64 range a canonical int field of `ty` holds losslessly.
+fn wit_int_range(ty: &WitTy) -> Option<(i64, i64)> {
+    Some(match ty {
+        WitTy::IntU(1) => (0, u8::MAX as i64),
+        WitTy::IntU(2) => (0, u16::MAX as i64),
+        WitTy::IntU(4) => (0, u32::MAX as i64),
+        WitTy::IntS(1) => (i8::MIN as i64, i8::MAX as i64),
+        WitTy::IntS(2) => (i16::MIN as i64, i16::MAX as i64),
+        WitTy::IntS(4) => (i32::MIN as i64, i32::MAX as i64),
+        WitTy::S64 => (i64::MIN, i64::MAX),
+        _ => return None,
+    })
+}
+
+/// The inclusive range every runtime value of checker int type `t` is known
+/// to lie in (`IntLit(Some(v))` is exactly `v`). `None` = unbounded or not
+/// an int — the 5.3 gate then keeps the boxed representation.
+fn check_int_range(t: &crate::check::Type) -> Option<(i64, i64)> {
+    use crate::check::Type as T;
+    Some(match t {
+        T::U8 => (0, u8::MAX as i64),
+        T::U16 => (0, u16::MAX as i64),
+        T::U32 => (0, u32::MAX as i64),
+        T::S8 => (i8::MIN as i64, i8::MAX as i64),
+        T::S16 => (i16::MIN as i64, i16::MAX as i64),
+        T::S32 => (i32::MIN as i64, i32::MAX as i64),
+        // u64 rides the interpreter's i64 domain (the 5.2 residue)
+        T::S64 | T::U64 => (i64::MIN, i64::MAX),
+        T::IntLit(Some(v)) => (*v, *v),
+        _ => return None,
+    })
 }
 
 /// One name in a function's lexical scope: which wasm local holds it and,
@@ -1431,6 +1469,9 @@ struct Emitter<'a> {
     /// Empty when checking failed or was skipped — every node then keeps the
     /// boxed fallback, which is always semantics-preserving.
     node_types: crate::check::NodeTypes,
+    /// Interned canonical-layout types for [`Repr::Mem`] slots (5.3), indexed
+    /// by [`MemTy`].
+    mem_tys: Vec<WitTy>,
 }
 
 impl<'a> Emitter<'a> {
@@ -1504,13 +1545,20 @@ impl<'a> Emitter<'a> {
                 self.box_char(fx);
             }
             Node::Sym(name) => match fx.lookup(&name) {
-                Some(b) => {
-                    fx.op(I::LocalGet(b.local));
-                    // a goal-5 typed local boxes at the seam to boxed code
-                    if let Repr::Scalar(kind) = b.repr {
+                // a goal-5 typed local boxes at the seam to boxed code; a
+                // canonical-layout local (5.3) rebuilds the box it is a
+                // faithful image of
+                Some(b) => match b.repr {
+                    Repr::Boxed => fx.op(I::LocalGet(b.local)),
+                    Repr::Scalar(kind) => {
+                        fx.op(I::LocalGet(b.local));
                         self.box_scalar(fx, kind);
                     }
-                }
+                    Repr::Mem(t) => {
+                        let ty = self.mem_tys[t as usize].clone();
+                        self.load_from_mem(fx, &ty, b.local, 0)?;
+                    }
+                },
                 None => return self.value_def_ref(fx, &name),
             },
             // Every fully-expanded tuple in evaluation position is a call.
@@ -2274,11 +2322,18 @@ impl<'a> Emitter<'a> {
         fx.op(I::I32Store(ma(8, 2)));
         for (j, (_, cap)) in caps.iter().enumerate() {
             fx.op(I::LocalGet(p));
-            fx.op(I::LocalGet(cap.local));
             // a goal-5 typed local boxes at the capture seam (closure
             // capture slots hold box pointers)
-            if let Repr::Scalar(kind) = cap.repr {
-                self.box_scalar(fx, kind);
+            match cap.repr {
+                Repr::Boxed => fx.op(I::LocalGet(cap.local)),
+                Repr::Scalar(kind) => {
+                    fx.op(I::LocalGet(cap.local));
+                    self.box_scalar(fx, kind);
+                }
+                Repr::Mem(t) => {
+                    let ty = self.mem_tys[t as usize].clone();
+                    self.load_from_mem(fx, &ty, cap.local, 0)?;
+                }
             }
             fx.op(I::I32Store(ma(12 + 4 * j as u64, 2)));
         }
@@ -2448,8 +2503,14 @@ impl<'a> Emitter<'a> {
             // the unit value; a scalar `want` unboxes it and traps, exactly
             // like the interpreter erroring on a unit in a numeric context
             fx.op(I::I32Const(self.unit_addr() as i32));
-            if let Repr::Scalar(k) = want {
-                self.unbox_scalar(fx, k);
+            match want {
+                Repr::Boxed => {}
+                // a scalar want unboxes the unit and traps, exactly like the
+                // interpreter erroring on a unit in a numeric context
+                Repr::Scalar(k) => self.unbox_scalar(fx, k),
+                Repr::Mem(_) => {
+                    return Err("internal: Mem repr requested for an empty Do".into());
+                }
             }
             return Ok(());
         }
@@ -2488,6 +2549,15 @@ impl<'a> Emitter<'a> {
                 Binding {
                     local: l,
                     repr: Repr::Scalar(kind),
+                }
+            } else if let Some(t) = self.node_mem(fx, *v) {
+                // 5.3: a record binding whose construction is provably
+                // faithful to its static type lives in canonical layout;
+                // boxed consumers rebuild the box at the reference seam
+                self.expr_mem(fx, *v, t)?;
+                Binding {
+                    local: fx.local(ValType::I32),
+                    repr: Repr::Mem(t),
                 }
             } else {
                 self.expr(fx, *v, false)?;
@@ -2813,6 +2883,21 @@ impl<'a> Emitter<'a> {
             }
             (Repr::Scalar(k), Repr::Boxed) => self.box_scalar(fx, k),
             (Repr::Boxed, Repr::Scalar(k)) => self.unbox_scalar(fx, k),
+            (Repr::Mem(t), Repr::Boxed) => {
+                let l = fx.local(ValType::I32);
+                fx.op(I::LocalSet(l));
+                let ty = self.mem_tys[t as usize].clone();
+                self.load_from_mem(fx, &ty, l, 0)?;
+            }
+            (Repr::Mem(t), Repr::Scalar(k)) => {
+                // rebuild the box, then unbox: traps exactly where the boxed
+                // path would (a record where a scalar is required)
+                let l = fx.local(ValType::I32);
+                fx.op(I::LocalSet(l));
+                let ty = self.mem_tys[t as usize].clone();
+                self.load_from_mem(fx, &ty, l, 0)?;
+                self.unbox_scalar(fx, k);
+            }
             (a, b) => {
                 return Err(format!(
                     "internal: `{name}` returns {a:?} where {b:?} is expected"
@@ -4218,6 +4303,233 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    // -------------------------------------------- canonical memory (5.3)
+
+    /// Intern a canonical-layout type; equal types share a [`MemTy`] index.
+    fn mem_ty(&mut self, ty: &WitTy) -> MemTy {
+        if let Some(i) = self.mem_tys.iter().position(|t| t == ty) {
+            return i as MemTy;
+        }
+        self.mem_tys.push(ty.clone());
+        (self.mem_tys.len() - 1) as MemTy
+    }
+
+    /// Map a checker type to the WIT type that drives canonical layout.
+    /// Unresolved int/float literals live in the interpreter's full value
+    /// domains (`Value::Int` = i64, `Value::Dec` = f64), so they lay out as
+    /// s64/f64 — the layout must round-trip the oracle's value exactly.
+    /// `None` = no (known) canonical layout; the boxed repr stays.
+    fn wit_of_check_type(&self, t: &crate::check::Type) -> Option<WitTy> {
+        use crate::check::Type as T;
+        Some(match t {
+            T::Bool => WitTy::Bool,
+            T::U8 => WitTy::IntU(1),
+            T::U16 => WitTy::IntU(2),
+            T::U32 => WitTy::IntU(4),
+            T::S8 => WitTy::IntS(1),
+            T::S16 => WitTy::IntS(2),
+            T::S32 => WitTy::IntS(4),
+            // u64 rides the interpreter's i64 domain (the 5.2 residue)
+            T::U64 | T::S64 | T::IntLit(_) => WitTy::S64,
+            T::F32 => WitTy::F32,
+            T::F64 | T::FloatLit => WitTy::F64,
+            T::Char => WitTy::Char,
+            T::String => WitTy::Str,
+            T::List(e) => WitTy::List(Box::new(self.wit_of_check_type(e)?)),
+            T::Option(e) => WitTy::Option(Box::new(self.wit_of_check_type(e)?)),
+            T::Tuple(es) => WitTy::Tuple(
+                es.iter()
+                    .map(|e| self.wit_of_check_type(e))
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+            T::Record(fs) if !fs.is_empty() => WitTy::Record(
+                fs.iter()
+                    .map(|(k, ft)| Some((k.clone(), self.wit_of_check_type(ft)?)))
+                    .collect::<Option<Vec<_>>>()?,
+            ),
+            // a nominal name resolves through the boundary type env (declared
+            // records/variants/aliases); unknown names stay boxed
+            T::Named(n) => return wit_ty(n, &self.type_env).ok(),
+            _ => return None,
+        })
+    }
+
+    /// 5.3 gating: may expression `id` be emitted NATIVELY in the canonical
+    /// layout of `ty`, yielding exactly the value the interpreter would
+    /// build? Field order is observable (`eq`/`to-string` compare records
+    /// positionally), so only a record literal whose field order matches the
+    /// layout's — with losslessly-storable fields — or a binding already
+    /// carrying this layout qualifies. Everything else stays boxed.
+    fn can_mem_as(&self, fx: &FnCtx, id: NodeId, ty: &WitTy) -> bool {
+        match (self.arena.node(id), ty) {
+            (Node::Rec(fields), WitTy::Record(tfs)) if !fields.is_empty() => {
+                fields.len() == tfs.len()
+                    && fields
+                        .iter()
+                        .zip(tfs)
+                        .all(|((k, v), (tk, tf))| k == tk && self.mem_field_ok(fx, *v, tf))
+            }
+            (Node::Sym(name), _) => matches!(
+                fx.lookup(name).map(|b| b.repr),
+                Some(Repr::Mem(t)) if self.mem_tys[t as usize] == *ty
+            ),
+            _ => false,
+        }
+    }
+
+    /// Whether field expression `v` can be stored directly at canonical
+    /// field type `tf` with no observable difference from the boxed value
+    /// the interpreter carries: exact kind, lossless width, and
+    /// (recursively) faithful field order. Anything else keeps the record
+    /// boxed.
+    fn mem_field_ok(&self, fx: &FnCtx, v: NodeId, tf: &WitTy) -> bool {
+        use crate::check::Type as T;
+        let vt = self.node_types.get(&v);
+        match tf {
+            WitTy::Bool => matches!(vt, Some(T::Bool)),
+            WitTy::Char => matches!(vt, Some(T::Char)),
+            WitTy::S64 => self.node_scalar(v) == Some(Scalar::Int),
+            WitTy::F64 => self.node_scalar(v) == Some(Scalar::Float),
+            WitTy::IntS(_) | WitTy::IntU(_) => {
+                match (vt.and_then(check_int_range), wit_int_range(tf)) {
+                    (Some((lo, hi)), Some((tlo, thi))) => tlo <= lo && hi <= thi,
+                    _ => false,
+                }
+            }
+            WitTy::Str => matches!(vt, Some(T::String)),
+            WitTy::Record(_) => {
+                matches!(self.arena.node(v), Node::Rec(_)) && self.can_mem_as(fx, v, tf)
+            }
+            // f32 (demoting would lose the f64 the oracle keeps), lists,
+            // options/results/variants, flags, handles: not yet — those
+            // representations ride 5.4/5.5
+            _ => false,
+        }
+    }
+
+    /// The interned canonical layout for `id` when 5.3 admits one: a known
+    /// non-empty record type whose construction here is provably faithful.
+    fn node_mem(&mut self, fx: &FnCtx, id: NodeId) -> Option<MemTy> {
+        let t = self.node_types.get(&id)?.clone();
+        let ty = self.wit_of_check_type(&t)?;
+        if !matches!(&ty, WitTy::Record(fs) if !fs.is_empty()) {
+            return None;
+        }
+        if !self.can_mem_as(fx, id, &ty) {
+            return None;
+        }
+        Some(self.mem_ty(&ty))
+    }
+
+    /// Emit `id` as a pointer to its canonical layout of type `t`
+    /// ([`Repr::Mem`]). Callers must have established eligibility via
+    /// [`Self::can_mem_as`] / [`Self::node_mem`].
+    fn expr_mem(&mut self, fx: &mut FnCtx, id: NodeId, t: MemTy) -> Result<(), String> {
+        let ty = self.mem_tys[t as usize].clone();
+        match self.arena.node(id).clone() {
+            // a binding already in this layout: alias it (values are
+            // immutable, so sharing the memory is unobservable)
+            Node::Sym(name) => {
+                let b = fx
+                    .lookup(&name)
+                    .ok_or("internal: Mem repr requested for an unbound name")?;
+                match b.repr {
+                    Repr::Mem(bt) if bt == t => {
+                        fx.op(I::LocalGet(b.local));
+                        Ok(())
+                    }
+                    _ => Err("internal: Mem repr requested for a non-Mem binding".into()),
+                }
+            }
+            Node::Rec(_) => {
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(size_of(&ty) as i32));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                self.expr_mem_into(fx, id, &ty, p, 0)?;
+                fx.op(I::LocalGet(p));
+                Ok(())
+            }
+            _ => Err("internal: expression is not Mem-eligible (5.3)".into()),
+        }
+    }
+
+    /// Construct `id`'s value directly INTO canonical memory at `dst + off`
+    /// (in place: a nested record writes its fields into the parent's
+    /// interior — no intermediate allocation, no boxes).
+    fn expr_mem_into(
+        &mut self,
+        fx: &mut FnCtx,
+        id: NodeId,
+        ty: &WitTy,
+        dst: u32,
+        off: u64,
+    ) -> Result<(), String> {
+        let Node::Rec(fields) = self.arena.node(id).clone() else {
+            return Err("internal: expr_mem_into expects a record literal".into());
+        };
+        for ((o, tf), (_, v)) in record_field_offsets(ty).into_iter().zip(&fields) {
+            self.mem_field_into(fx, *v, &tf, dst, off + o)?;
+        }
+        Ok(())
+    }
+
+    /// Store field expression `v` at canonical field type `tf`, `dst + off`.
+    /// Scalar fields evaluate unboxed and store at WIT width (lossless — the
+    /// gate verified the static range); strings evaluate boxed and store
+    /// through the boundary seam; nested records construct in place.
+    fn mem_field_into(
+        &mut self,
+        fx: &mut FnCtx,
+        v: NodeId,
+        tf: &WitTy,
+        dst: u32,
+        off: u64,
+    ) -> Result<(), String> {
+        match tf {
+            WitTy::Bool => {
+                fx.op(I::LocalGet(dst));
+                self.expr_scalar(fx, v, Scalar::Bool)?;
+                fx.op(I::I32Store8(ma(off, 0)));
+            }
+            WitTy::Char => {
+                fx.op(I::LocalGet(dst));
+                self.expr_scalar(fx, v, Scalar::Char)?;
+                fx.op(I::I32WrapI64);
+                fx.op(I::I32Store(ma(off, 2)));
+            }
+            WitTy::IntS(w) | WitTy::IntU(w) => {
+                fx.op(I::LocalGet(dst));
+                self.expr_scalar(fx, v, Scalar::Int)?;
+                fx.op(I::I32WrapI64);
+                match *w {
+                    1 => fx.op(I::I32Store8(ma(off, 0))),
+                    2 => fx.op(I::I32Store16(ma(off, 1))),
+                    _ => fx.op(I::I32Store(ma(off, 2))),
+                }
+            }
+            WitTy::S64 => {
+                fx.op(I::LocalGet(dst));
+                self.expr_scalar(fx, v, Scalar::Int)?;
+                fx.op(I::I64Store(ma(off, 3)));
+            }
+            WitTy::F64 => {
+                fx.op(I::LocalGet(dst));
+                self.expr_scalar(fx, v, Scalar::Float)?;
+                fx.op(I::F64Store(ma(off, 3)));
+            }
+            WitTy::Str => {
+                let l = fx.local(ValType::I32);
+                self.expr(fx, v, false)?;
+                fx.op(I::LocalSet(l));
+                self.store_to_mem(fx, tf, l, dst, off)?;
+            }
+            WitTy::Record(_) => self.expr_mem_into(fx, v, tf, dst, off)?,
+            _ => return Err("internal: field type not Mem-storable yet (5.3)".into()),
+        }
+        Ok(())
+    }
+
     /// Emit expression `id` UNBOXED as scalar kind `want` (goal 5, 5.2).
     ///
     /// The caller must have established that `id`'s static value kind is
@@ -4246,6 +4558,7 @@ impl<'a> Emitter<'a> {
         match want {
             Repr::Boxed => self.expr(fx, id, tail),
             Repr::Scalar(k) => self.expr_scalar_t(fx, id, k, tail),
+            Repr::Mem(t) => self.expr_mem(fx, id, t),
         }
     }
 
@@ -5017,6 +5330,7 @@ fn emit_core_module(
         macro_expand_idx: None,
         functor_fns: HashMap::new(),
         node_types: node_types_tbl,
+        mem_tys: Vec::new(),
     };
 
     // static boxes: false @16, true @24
@@ -5367,6 +5681,9 @@ fn emit_core_module(
                     em.unbox_scalar(&mut fx, k);
                 }
                 (Repr::Boxed, _) => em.lift_flat(&mut fx, ty, *base)?,
+                (Repr::Mem(_), _) => {
+                    return Err("internal: Mem def params are not emitted yet (5.3)".into());
+                }
             }
         }
         fx.op(I::Call(fidx));
@@ -5395,14 +5712,28 @@ fn emit_core_module(
                         em.lower(&mut fx, &t)?;
                     }
                     Repr::Boxed => em.lower(&mut fx, &t)?,
+                    Repr::Mem(mt) => {
+                        let l = fx.local(I32);
+                        fx.op(I::LocalSet(l));
+                        let mty = em.mem_tys[mt as usize].clone();
+                        em.load_from_mem(&mut fx, &mty, l, 0)?;
+                        em.lower(&mut fx, &t)?;
+                    }
                 }
                 flat(&t)
             }
             FlatRes::Retptr => {
                 // compound results are boxed; a (mismatched) typed scalar
                 // result boxes at the seam first
-                if let Repr::Scalar(k) = res_kind {
-                    em.box_scalar(&mut fx, k);
+                match res_kind {
+                    Repr::Boxed => {}
+                    Repr::Scalar(k) => em.box_scalar(&mut fx, k),
+                    Repr::Mem(mt) => {
+                        let l = fx.local(I32);
+                        fx.op(I::LocalSet(l));
+                        let mty = em.mem_tys[mt as usize].clone();
+                        em.load_from_mem(&mut fx, &mty, l, 0)?;
+                    }
                 }
                 let ty = wit_ty(sig.result.as_deref().unwrap(), &em.type_env)?;
                 let area = fx.local(I32);
@@ -6061,6 +6392,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         macro_expand_idx: None,
         functor_fns: HashMap::new(),
         node_types: Default::default(),
+        mem_tys: Vec::new(),
     };
 
     // static boxes: false @16, true @24
@@ -9757,6 +10089,7 @@ world app {
             macro_expand_idx: None,
             functor_fns: HashMap::new(),
             node_types: Default::default(),
+            mem_tys: Vec::new(),
         };
 
         // static boxes: false @16, true @24 (same as emit_core_module).
