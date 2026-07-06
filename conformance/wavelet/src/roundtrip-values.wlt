@@ -12,26 +12,33 @@ Package "conformance:wavelet@0.1.0"
 // so WIT synthesis derives exactly the interface's declared shape.
 //
 // STATUS (5.12): WIT synthesis + type checking succeed for ALL 35 exported
-// functions, and every scalar / char / string / record / tuple / variant /
-// option / result transform COMPILES on the wasm backend (char uses real
-// next-scalar arithmetic via to-u32/to-char). The higher-order list builtins
-// `map` / `filter` / `fold` now compile on the backend too, so all the list
-// functions build:
-//   map    -> list-u8-rt, list-string-rt, list-list-u8-rt, tuple-nested-rt,
-//             points-rt
-//   filter -> permissions-rt (the list-filtering half)
+// functions. On the wasm backend, every scalar / char / string / record /
+// variant / enum / option / result / FLAGS transform and every list function
+// (map/filter/fold) COMPILES — including `permissions-rt`, whose flags
+// complement (`v ^ all()`) is expressed with ZERO new language surface as a
+// Match over the 16 declaration-order flags literals (each result ascribed
+// `The permissions` so the arms unify to the imported flags type; verified in
+// the interpreter oracle and confirmed to lower on the backend). The `none`
+// side of the option round-trips uses the BARE `none` symbol — the
+// parenthesized `none()` is not lowered by the backend, bare `none` is.
 //
-// The ONE remaining blocker is `permissions-rt`, which needs to build a flags
-// value FROM DATA and test flags membership — `flg(list<string>) -> flags` and
-// a flags `contains`. Neither exists in the interpreter/oracle: `flg` is not a
-// builtin, and `contains` is string-substring only (there is no way in the
-// language today to construct a flags value from a runtime list, nor to test
-// membership of a runtime flags value). The suite's transform is a flags
-// complement (`v ^ all()`), which is data-dependent, so it cannot be expressed
-// as a compile-time flags literal. Closing this needs a LANGUAGE decision (add
-// oracle+backend flags builtins), not just backend codegen. Until then, because
-// a `values` export is all-or-nothing, this whole file does not build, and
-// `test-values-callee.sh` (parallel to test-resources-callee.sh) is deferred.
+// The file still does NOT build, blocked by TWO gaps that need new language
+// surface (out of scope for a conformance rewrite — see the goal-5 Thing
+// lot:033iWOnrwIwk9KIjngGGD1 and the flags decision lot:033ky5FRo5Up9Id5G6cTmr,
+// whose premise that permissions-rt was the sole blocker is corrected here):
+//   1. TUPLE CONSTRUCTION. `tup(...)` has NO oracle semantics at all — the
+//      interpreter reports `unbound name tup in call position` — and the
+//      backend has no tuple constructor; bare `(a b)` reads as a call form,
+//      not a tuple. There is no way to BUILD a tuple value in Wavelet source
+//      today (tuple PATTERNS already work). Blocks `tuple-rt`,
+//      `tuple-nested-rt`, and the `ok` side of `result-tuple-direction-rt`.
+//   2. `drop` / no-result bodies. `drop` is an interpreter builtin (returns
+//      unit) but is absent from the backend's builtin set, and a no-result
+//      function needs a unit-producing body the backend can lower. Blocks
+//      `no-result` and `no-params-no-result`.
+// Because a `values` export is all-or-nothing, these keep the whole file
+// un-buildable and `test-values-callee.sh` (parallel to
+// test-resources-callee.sh) is deferred. Everything else compiles.
 
 Import {pkg: "roundtrip:suite/types" as: t}
 
@@ -132,14 +139,14 @@ Export {name: option-u8-rt iface: "roundtrip:suite/values"}
 Def option-u8-rt Fn {v: option(u8)} The option(u8)
   Match v [
     (some(n) some(wrap-u8(n)))
-    (none()  none())
+    (none()  none)
   ]
 
 Export {name: option-shape-rt iface: "roundtrip:suite/values"}
 Def option-shape-rt Fn {v: option(shape)} The option(shape)
   Match v [
     (some(s) some(bump-shape(s)))
-    (none()  none())
+    (none()  none)
   ]
 
 Export {name: result-rt iface: "roundtrip:suite/values"}
@@ -211,8 +218,34 @@ Export {name: direction-rt iface: "roundtrip:suite/values"}
 Def direction-rt Fn {v: direction} The direction bump-direction(v)
 
 Export {name: permissions-rt iface: "roundtrip:suite/values"}
+// The suite transform is the flags COMPLEMENT (`v ^ all()`, toggle every
+// member — transform.rs bump_permissions). Wavelet has no runtime flags
+// constructor or membership test, so we express the complement by matching the
+// runtime value against every declaration-order flags literal (2^4 = 16) and
+// returning its complement literal. Each pattern/result is a duplicate-free
+// declaration-order subsequence of {read write exec admin}, so both the oracle
+// (order-sensitive Flg equality) and the canonical ABI (declaration-order
+// bitset) agree on it. The tested seeds are {read} -> {write exec admin} and
+// {read write exec admin} -> {}.
 Def permissions-rt Fn {v: permissions} The permissions
-  flg(filter(Fn {n} not(contains(v n)) ["read" "write" "exec" "admin"]))
+  Match v [
+    ({}                      The permissions {read write exec admin})
+    ({read}                  The permissions {write exec admin})
+    ({write}                 The permissions {read exec admin})
+    ({exec}                  The permissions {read write admin})
+    ({admin}                 The permissions {read write exec})
+    ({read write}            The permissions {exec admin})
+    ({read exec}             The permissions {write admin})
+    ({read admin}            The permissions {write exec})
+    ({write exec}            The permissions {read admin})
+    ({write admin}           The permissions {read exec})
+    ({exec admin}            The permissions {read write})
+    ({read write exec}       The permissions {admin})
+    ({read write admin}      The permissions {exec})
+    ({read exec admin}       The permissions {write})
+    ({write exec admin}      The permissions {read})
+    ({read write exec admin} The permissions {})
+  ]
 
 Export {name: points-rt iface: "roundtrip:suite/values"}
 Def points-rt Fn {v: points} The points map(bump-point v)
