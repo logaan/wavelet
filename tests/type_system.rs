@@ -989,3 +989,116 @@ fn node_type_table_propagates_check_errors() {
     let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expands");
     assert!(check::node_types_with_imports(&arena, &roots, &check::ImportSigs::new()).is_err());
 }
+
+
+// ---------------------------------------------------------------------------
+// 5.8 — function (arrow) types (Phase D). A `Fn` literal with concretely-typed
+// parameters, and a bare reference to such a function `Def`, carry a static
+// arrow type `(P…) -> R`; applying that value indirectly is checked against it.
+// ---------------------------------------------------------------------------
+
+/// A `Let`-bound closure with a typed parameter has a concrete arrow type, so
+/// applying it indirectly type-checks and evaluates.
+#[test]
+fn let_bound_typed_closure_applies() {
+    let r = run("Let {g: Fn {n: s32} add(n 1)} g(41)");
+    assert!(r.ok, "typed closure application rejected: {}", r.error);
+    assert_eq!(r.value, "42");
+}
+
+/// A bare reference to a typed function `Def` is a first-class value of the
+/// def's arrow type; binding and applying it indirectly type-checks (the
+/// zero-capture case of defunctionalization).
+#[test]
+fn function_def_reference_is_a_typed_value() {
+    let r = run("Def inc Fn {n: s32} add(n 1)
+Let {f: inc} f(5)");
+    assert!(r.ok, "function-def-as-value rejected: {}", r.error);
+    assert_eq!(r.value, "6");
+}
+
+/// Indirect application checks argument types against the arrow's parameters.
+#[test]
+fn indirect_apply_type_mismatch_rejected() {
+    let r = run("Let {g: Fn {n: s32} add(n 1)} g(true)");
+    assert!(!r.ok, "type-mismatched indirect application must be rejected");
+    assert!(r.error.contains("mismatch"), "{}", r.error);
+}
+
+/// Indirect application checks arity against the arrow's parameters.
+#[test]
+fn indirect_apply_arity_mismatch_rejected() {
+    let r = run("Let {g: Fn {n: s32} add(n 1)} g(1 2)");
+    assert!(!r.ok, "wrong-arity indirect application must be rejected");
+    assert!(r.error.contains("argument"), "{}", r.error);
+}
+
+/// The arrow type is recorded in the node-type table (the backend reads it):
+/// a typed `Fn` literal's node types the arrow `(s32) -> s32`.
+#[test]
+fn arrow_type_is_recorded_in_the_node_table() {
+    use wavelet::check::{self, Type};
+    let (arena, roots) =
+        read_file("Let {g: Fn {n: s32} add(n 1)} g(1)").expect("reads");
+    let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expands");
+    let table =
+        check::node_types_with_imports(&arena, &roots, &check::ImportSigs::new()).expect("checks");
+    let arrow = Type::Fn(vec![Type::S32], Box::new(Type::S32));
+    assert!(
+        table.values().any(|t| *t == arrow),
+        "a typed Fn literal should carry the arrow (s32) -> s32: {table:?}"
+    );
+}
+
+/// A closure whose parameters are untyped has no concrete arrow, so it stays
+/// gradual `Unknown` (accepted in gradual mode, the strict "function values"
+/// case) — the existing higher-order examples keep working unchanged.
+#[test]
+fn untyped_closure_stays_gradual() {
+    let r = run("Def twice Fn {f x} f(f(x))\nDef inc Fn {n} add(n 1)\ntwice(inc 10)");
+    assert!(r.ok, "gradual higher-order program rejected: {}", r.error);
+    assert_eq!(r.value, "12");
+}
+
+
+/// Boundary rule (5.8, first cut): an exported def whose result is a function
+/// value is a deliberate compile error with the function-boundary diagnostic —
+/// via WIT synthesis…
+#[test]
+fn exported_function_result_rejected_at_synthesis() {
+    let err = synth(
+        "Package \"test:esc@0.1.0\"\n\nExport make-adder\nDef make-adder Fn {by: s32}\n  Fn {n: s32} add(n by)",
+    )
+    .expect_err("a function-valued export must be rejected");
+    assert!(
+        err.contains("function types cannot cross component boundaries"),
+        "{err}"
+    );
+}
+
+/// …and identically via the checker the runner/interpreter path uses (oracle
+/// parity: both engines reject exactly the same programs).
+#[test]
+fn exported_function_result_rejected_by_the_checker() {
+    let src = "Package \"test:esc@0.1.0\"\n\nExport make-adder\nDef make-adder Fn {by: s32}\n  Fn {n: s32} add(n by)";
+    let (arena, roots) = read_file(src).expect("reads");
+    let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expands");
+    let err = wavelet::check::resolve_overloads(arena, &roots)
+        .err()
+        .expect("the checker must reject a function-valued export");
+    assert!(
+        err.contains("function types cannot cross component boundaries"),
+        "{err}"
+    );
+}
+
+/// A def returning a closure is fine as long as it is NOT exported — the
+/// boundary rule governs only cross-component signatures.
+#[test]
+fn internal_function_result_still_accepted() {
+    let wit = synth(
+        "Package \"test:ok@0.1.0\"\n\nExport shout\nDef make Fn {by: s32}\n  Fn {n: s32} add(n by)\nDef shout Fn {phrase: string} upper(phrase)",
+    )
+    .expect("non-exported closures must not trip the boundary rule");
+    assert!(wit.contains("shout: func(phrase: string) -> string"), "{wit}");
+}

@@ -77,6 +77,14 @@ pub enum Type {
     Flags(Vec<String>),
     /// The unit type (`{}`), e.g. the result of a `Def`.
     Unit,
+    /// A function (arrow) type `(T1 … Tn) -> R` (5.8, Phase D). The value type
+    /// of a `Fn` literal with concretely-typed parameters, of a bare reference
+    /// to such a function `Def`, and the thing an indirect application consumes.
+    /// A function value whose arrow cannot be made concrete stays `Unknown`
+    /// (gradual); this variant only ever carries concrete parameter/result
+    /// types. Function types are not (yet) spellable at component boundaries, so
+    /// they never reach the synthesized WIT (`wit_of_check_type` rejects them).
+    Fn(Vec<Type>, Box<Type>),
     /// An unconstrained integer literal: compatible with any int or float type
     /// (an int type only when the carried literal value, if known, fits its
     /// range — 3.4). `None` for int-typed results whose value is not a literal
@@ -420,6 +428,38 @@ fn args_match(tbl: &TypeTable, params: &[(String, Type)], arg_tys: &[Type]) -> b
         .all(|((_n, pt), at)| compatible(tbl, pt, at))
 }
 
+/// Whether a type is fully concrete: it contains no gradual `Unknown`. A
+/// function's arrow type (5.8) is only formed from fully-concrete parameter and
+/// result types; anything gradual keeps the value at `Unknown` (which under
+/// strict is the "function values" error the flip gate tracks).
+fn fully_concrete(t: &Type) -> bool {
+    match t {
+        Type::Unknown => false,
+        Type::List(e) | Type::Option(e) => fully_concrete(e),
+        Type::Result(o, e) => fully_concrete(o) && fully_concrete(e),
+        Type::Tuple(ts) => ts.iter().all(fully_concrete),
+        Type::Record(fs) => fs.iter().all(|(_, t)| fully_concrete(t)),
+        Type::Fn(ps, r) => ps.iter().all(fully_concrete) && fully_concrete(r),
+        _ => true,
+    }
+}
+
+/// Whether a type contains a function (arrow) type anywhere (5.8). Function
+/// types cannot cross component boundaries in the first defunctionalization
+/// cut, so an exported signature carrying one is rejected with an explicit
+/// diagnostic (in [`Checker::check_roots`] for the run path and via
+/// [`InferredWit::Func`] for WIT synthesis).
+pub(crate) fn contains_fn(t: &Type) -> bool {
+    match t {
+        Type::Fn(..) => true,
+        Type::List(e) | Type::Option(e) => contains_fn(e),
+        Type::Result(o, e) => contains_fn(o) || contains_fn(e),
+        Type::Tuple(ts) => ts.iter().any(contains_fn),
+        Type::Record(fs) => fs.iter().any(|(_, t)| contains_fn(t)),
+        _ => false,
+    }
+}
+
 /// The static signature of a module-level `Def name Fn {params} body`.
 struct Sig {
     /// Parameters in order: their name and declared type (`Unknown` if untyped).
@@ -571,6 +611,11 @@ pub enum InferredWit {
     Known(String),
     Unit,
     Unknown,
+    /// The result is (or contains) a function value (5.8): statically known,
+    /// but unspellable at a component boundary — WIT has no function type.
+    /// Synthesis reports the deliberate boundary diagnostic, not the generic
+    /// cannot-infer one.
+    Func,
 }
 
 /// Phase B bridge (3.8): infer a def's *result* WIT type using the full Phase
@@ -593,6 +638,7 @@ pub fn infer_wit_result(
     };
     match ty {
         Type::Unit => InferredWit::Unit,
+        other if contains_fn(&other) => InferredWit::Func,
         other => match type_to_wit(&other) {
             Some(text) => InferredWit::Known(text),
             None => InferredWit::Unknown,
@@ -715,7 +761,7 @@ pub(crate) fn type_to_wit(t: &Type) -> Option<String> {
         }
         Type::Named(n) => Some(n.clone()),
         Type::Tree => None,
-        Type::Flags(_) | Type::Record(_) | Type::Unit | Type::Unknown => None,
+        Type::Flags(_) | Type::Record(_) | Type::Unit | Type::Unknown | Type::Fn(..) => None,
     }
 }
 
@@ -781,6 +827,8 @@ impl<'a> Checker<'a> {
         // structural checks over the declarations, independent of expression
         // typing (4.5).
         validate_defresources(arena, roots)?;
+        // Exported names, for the 5.8 boundary rule below.
+        let exported = crate::wit::export_names(arena, roots);
         for &root in roots {
             if let Some((name, expr)) = as_def(arena, root) {
                 // Check the bound expression. For an `Fn`, check its body with
@@ -791,13 +839,26 @@ impl<'a> Checker<'a> {
                 // field order and flags bit positions) and Option-A int widening
                 // at the boundary is admitted.
                 let expected = self.export_results.get(name).cloned();
-                if let Some(params) = fn_params(arena, expr) {
+                let ret = if let Some(params) = fn_params(arena, expr) {
                     let mut scope: Scope = params.clone();
                     let body = fn_body(arena, expr).expect("fn with params has a body");
-                    self.check(body, expected.as_ref(), &mut scope)?;
+                    self.check(body, expected.as_ref(), &mut scope)?
                 } else {
                     let mut scope: Scope = Vec::new();
-                    self.check(expr, expected.as_ref(), &mut scope)?;
+                    self.check(expr, expected.as_ref(), &mut scope)?
+                };
+                // Boundary rule (5.8, first cut): a function value cannot cross
+                // a component boundary — an exported def whose (inferred) result
+                // carries a function type is a deliberate compile error, in the
+                // interpreter/runner exactly as in the wasm build (oracle
+                // parity). Gradual (`Unknown`) results are untouched: they
+                // already fail WIT synthesis with the cannot-infer diagnostic.
+                if contains_fn(&ret) && exported.contains(name) {
+                    return Err(format!(
+                        "eval error: export `{name}`: function types cannot cross \
+                         component boundaries yet; import the combinator as a macro \
+                         so it expands into this component instead"
+                    ));
                 }
             } else {
                 // A bare top-level expression (the playground evaluates these).
@@ -1491,10 +1552,20 @@ impl<'a> Checker<'a> {
         }
         if self.defs.contains(name) {
             // A module-level *value* def types as its expression's inferred
-            // type (memoised, recursion-guarded). A function def used as a
-            // value stays gradual — function types are future work.
+            // type (memoised, recursion-guarded).
             if let Some(&expr) = self.value_defs.get(name) {
                 return Ok(self.value_def_type(name, expr));
+            }
+            // A module-level *function* def used as a bare value (5.8, Phase D):
+            // its arrow type `(P…) -> R`, when the def has a single signature
+            // with fully-concrete parameters and result (the zero-capture case
+            // of defunctionalization). An overloaded name, or one whose arrow is
+            // not fully concrete, stays gradual `Unknown`.
+            if let Some(sigs) = self.sigs.get(name)
+                && sigs.len() == 1
+                && let Some(arrow) = self.arrow_of_sig(&sigs[0])
+            {
+                return Ok(arrow);
             }
             return Ok(Type::Unknown);
         }
@@ -1568,6 +1639,20 @@ impl<'a> Checker<'a> {
             if h.ends_with("-MACRO") {
                 return self.infer_special(h, args, expected, scope);
             }
+            // An indirect application of a function-typed *local* value (5.8): a
+            // parameter or `Let`/`Match` binding whose static type is an arrow
+            // `(P…) -> R`. Check the arguments against the parameter types and
+            // yield `R`. A local shadows a module-level def, so this takes
+            // precedence over the call path below (which resolves builtins and
+            // module defs). Only a fully-concrete arrow lands here; a gradual
+            // callback stays `Unknown` and flows through `infer_call`.
+            if let Some((_, Type::Fn(params, ret))) =
+                scope.iter().rev().find(|(n, _)| n == h)
+            {
+                let params = params.clone();
+                let ret = (**ret).clone();
+                return self.check_indirect_apply(&params, ret, args, scope);
+            }
             // A call to a known builtin or module-level def.
             return self.infer_call(id, h, args, expected, scope);
         }
@@ -1597,16 +1682,24 @@ impl<'a> Checker<'a> {
     ) -> Result<Type, String> {
         match head {
             "fn-MACRO" => {
-                // A nested anonymous Fn: check its body with parameters in
-                // scope, but its value type (a callback) is gradual.
+                // A `Fn` literal: check its body with the parameters in scope.
+                // Its value type (5.8, Phase D) is the arrow `(P…) -> R` when
+                // every parameter type and the inferred result are fully
+                // concrete; otherwise it stays gradual `Unknown` (a callback the
+                // checker cannot pin down — the strict "function values" case).
                 if let [params_id, body] = args {
                     let params = parse_params(self.arena, *params_id);
                     let mark = scope.len();
                     for (n, t) in &params {
                         scope.push((n.clone(), t.clone()));
                     }
-                    self.check(*body, None, scope)?;
+                    let ret = self.check(*body, None, scope);
                     scope.truncate(mark);
+                    let ret = ret?;
+                    let ptys: Vec<Type> = params.iter().map(|(_, t)| t.clone()).collect();
+                    if ptys.iter().all(fully_concrete) && fully_concrete(&ret) {
+                        return Ok(Type::Fn(ptys, Box::new(ret)));
+                    }
                 }
                 Ok(Type::Unknown)
             }
@@ -1954,6 +2047,20 @@ impl<'a> Checker<'a> {
 
     /// Infer the result type of an overload candidate by checking its Fn body
     /// with its parameters in scope. Used for return-type-directed resolution.
+    /// The arrow type of a single function signature, when fully concrete
+    /// (5.8). `None` when any parameter or the inferred result is gradual.
+    fn arrow_of_sig(&self, sig: &Sig) -> Option<Type> {
+        let ptys: Vec<Type> = sig.params.iter().map(|(_, t)| t.clone()).collect();
+        if !ptys.iter().all(fully_concrete) {
+            return None;
+        }
+        let ret = self.infer_sig_result(sig);
+        if !fully_concrete(&ret) {
+            return None;
+        }
+        Some(Type::Fn(ptys, Box::new(ret)))
+    }
+
     fn infer_sig_result(&self, sig: &Sig) -> Type {
         let Some(body) = sig.body else {
             return Type::Unknown;
@@ -1995,6 +2102,41 @@ impl<'a> Checker<'a> {
         // longer erases type information).
         let result = self.infer_sig_result(sig);
         self.check_call_shape(name, &sig.params, result, args, scope)
+    }
+
+    /// Check an indirect application of a function-typed value against its
+    /// arrow (5.8): positional arity + argument-type match, plus the single
+    /// bundled-payload shape `f(x)` for a one-parameter arrow. The arrow type
+    /// drops parameter *names*, so the by-name record call form is unavailable
+    /// here — a record argument to a one-parameter arrow is an ordinary sole
+    /// value, exactly as the backend's uniform-payload calling convention sees
+    /// it. Returns the arrow's result type.
+    fn check_indirect_apply(
+        &self,
+        params: &[Type],
+        ret: Type,
+        args: &[NodeId],
+        scope: &mut Scope,
+    ) -> Result<Type, String> {
+        let arg_tys: Vec<Type> = args
+            .iter()
+            .map(|&a| self.check(a, None, scope))
+            .collect::<Result<_, _>>()?;
+        if arg_tys.len() != params.len() {
+            return Err(format!(
+                "eval error: this function takes {} argument(s), got {}",
+                params.len(),
+                arg_tys.len()
+            ));
+        }
+        for (pt, at) in params.iter().zip(&arg_tys) {
+            if !compatible_widening(&self.types, pt, at) {
+                return Err(format!(
+                    "eval error: type mismatch: expected {pt:?}, got {at:?}"
+                ));
+            }
+        }
+        Ok(ret)
     }
 
     /// Check a call against a known signature, in every §4.2 call shape:
@@ -2500,6 +2642,7 @@ impl<'a> Checker<'a> {
             | Type::Tuple(_)
             | Type::Record(_)
             | Type::Flags(_)
+            | Type::Fn(..)
             | Type::Tree => Err(non_exhaustive_catch_all()),
             // Gradual or unenforceable.
             Type::Unit | Type::Unknown => Ok(()),

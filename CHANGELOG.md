@@ -15,6 +15,21 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **Function (arrow) types in the checker (5.8, Phase D).** A `Fn` literal whose
+  parameter types and inferred result are all concrete now carries a static
+  function type `(T1 … Tn) -> R`, and a bare reference to such a single-signature
+  function `Def` is a first-class value of the same arrow type. Applying a
+  function-typed local (`Let {f: inc} f(5)`) is statically checked against the
+  arrow: wrong arity or argument types are compile errors, and the application's
+  result type is known. Untyped/gradual function values behave exactly as before.
+- **Explicit boundary rule for function values.** Exporting a function whose
+  result is (or contains) a function value is now a deliberate compile error —
+  `function types cannot cross component boundaries yet; import the combinator
+  as a macro so it expands into this component instead` — in the interpreter,
+  the runner, WIT synthesis, and the wasm build alike (previously the build
+  failed with a generic "cannot infer result type" while `wavelet run` silently
+  allowed it).
+
 - **User-declared resource types (`DefResource`).** A dedicated
   `DefResource <name> { … }` form declares a resource type that maps 1:1 onto a
   WIT `resource` block. Members are identified by role: `New:` is the

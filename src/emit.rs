@@ -1398,15 +1398,26 @@ fn check_int_range(t: &crate::check::Type) -> Option<(i64, i64)> {
 struct Binding {
     local: u32,
     repr: Repr,
+    /// 5.8 devirtualization: when this binding is statically known to hold
+    /// exactly one named module-level function value (a `Let`-bound bare def
+    /// reference whose checked type is a concrete arrow), the def's name
+    /// (interned in [`Emitter::known_fn_names`]). Apply sites through the
+    /// binding compile to a direct call instead of the TAG_FN indirect path;
+    /// every other use of the binding still reads the boxed closure value.
+    known_fn: Option<u32>,
 }
 
 impl Binding {
-    /// A boxed (i32 box-pointer) binding — the pre-goal-5 default.
-    fn boxed(local: u32) -> Binding {
+    fn new(local: u32, repr: Repr) -> Binding {
         Binding {
             local,
-            repr: Repr::Boxed,
+            repr,
+            known_fn: None,
         }
+    }
+    /// A boxed (i32 box-pointer) binding — the pre-goal-5 default.
+    fn boxed(local: u32) -> Binding {
+        Binding::new(local, Repr::Boxed)
     }
 }
 
@@ -1462,6 +1473,8 @@ struct Emitter<'a> {
     /// uniform `(env, payload) -> box` functions reachable through the
     /// funcref table; slot k = function index `imports + bodies + k`
     closure_bodies: Vec<(u32, Function)>,
+    /// Interned def names for [`Binding::known_fn`] (5.8 devirtualization).
+    known_fn_names: Vec<String>,
     fn_wrappers: HashMap<String, u32>, // def name → table slot of its wrapper
     fn_box_cache: HashMap<String, u32>, // def name → static closure box addr
     var_box_cache: HashMap<String, u32>, // payload-less variant case → static box addr
@@ -2459,7 +2472,19 @@ impl<'a> Emitter<'a> {
                 "def-MACRO" | "defmacro-MACRO" => {
                     Err(format!("`{name}` not supported by the wasm backend yet"))
                 }
-                _ if fx.lookup(&name).is_some() => self.closure_call(fx, head, args, tail),
+                _ if fx.lookup(&name).is_some() => {
+                    // 5.8 devirtualization: an apply through a binding known to
+                    // hold exactly one named def compiles as a direct call —
+                    // the same code path a direct `dname(args…)` takes — instead
+                    // of bundling a payload and calling through the TAG_FN
+                    // table. Semantics agree: the interpreter applies the same
+                    // closure either way.
+                    if let Some(k) = fx.lookup(&name).and_then(|b| b.known_fn) {
+                        let dname = self.known_fn_names[k as usize].clone();
+                        return self.internal_call(fx, &dname, args, Repr::Boxed, tail);
+                    }
+                    self.closure_call(fx, head, args, tail)
+                }
                 _ if BUILTINS.contains(&name.as_str()) => self.builtin(fx, &name, args),
                 _ => {
                     if self.funcs.contains_key(&name) {
@@ -2516,22 +2541,37 @@ impl<'a> Emitter<'a> {
                     Scalar::Float => ValType::F64,
                     Scalar::Bool => ValType::I32,
                 });
-                Binding {
-                    local: l,
-                    repr: Repr::Scalar(kind),
-                }
+                Binding::new(l, Repr::Scalar(kind))
             } else if let Some(t) = self.node_mem(fx, *v) {
                 // 5.3: a record binding whose construction is provably
                 // faithful to its static type lives in canonical layout;
                 // boxed consumers rebuild the box at the reference seam
                 self.expr_mem(fx, *v, t, false)?;
-                Binding {
-                    local: fx.local(ValType::I32),
-                    repr: Repr::Mem(t),
-                }
+                Binding::new(fx.local(ValType::I32), Repr::Mem(t))
             } else {
                 self.expr(fx, *v, false)?;
-                Binding::boxed(fx.local(ValType::I32))
+                let mut b = Binding::boxed(fx.local(ValType::I32));
+                // 5.8 devirtualization: a binding initialised with a bare
+                // module-level def reference whose checked type is a concrete
+                // arrow holds exactly that function value — record the def so
+                // apply sites through this binding compile to a direct call
+                // (the zero-capture defunctionalization case). The boxed
+                // closure value is still built: non-apply uses read it.
+                if let Node::Sym(dname) = self.arena.node(*v)
+                    && self.funcs.contains_key(dname)
+                    && matches!(self.node_types.get(v), Some(crate::check::Type::Fn(..)))
+                {
+                    let idx = self
+                        .known_fn_names
+                        .iter()
+                        .position(|n| n == dname)
+                        .unwrap_or_else(|| {
+                            self.known_fn_names.push(dname.clone());
+                            self.known_fn_names.len() - 1
+                        });
+                    b.known_fn = Some(idx as u32);
+                }
+                b
             };
             fx.op(I::LocalSet(binding.local));
             fx.scopes.last_mut().unwrap().insert(k.clone(), binding);
@@ -2610,10 +2650,7 @@ impl<'a> Emitter<'a> {
             Node::Sym(name) if name != "none" && self.local_cases.get(&name) != Some(&false) => {
                 fx.scopes.last_mut().unwrap().insert(
                     name,
-                    Binding {
-                        local: v,
-                        repr: Repr::Mem(t),
-                    },
+                    Binding::new(v, Repr::Mem(t)),
                 );
                 Ok(())
             }
@@ -2867,10 +2904,7 @@ impl<'a> Emitter<'a> {
         let scalar = |fx: &mut FnCtx, vt: ValType, kind: Scalar| {
             let l = fx.local(vt);
             fx.op(I::LocalSet(l));
-            Binding {
-                local: l,
-                repr: Repr::Scalar(kind),
-            }
+            Binding::new(l, Repr::Scalar(kind))
         };
         Ok(match tf {
             WitTy::Bool => {
@@ -2922,10 +2956,7 @@ impl<'a> Emitter<'a> {
                 }
                 let l = fx.local(ValType::I32);
                 fx.op(I::LocalSet(l));
-                Binding {
-                    local: l,
-                    repr: Repr::Mem(self.mem_ty(tf)),
-                }
+                Binding::new(l, Repr::Mem(self.mem_ty(tf)))
             }
             _ => {
                 let l = fx.local(ValType::I32);
@@ -2957,10 +2988,7 @@ impl<'a> Emitter<'a> {
             fx.op(I::LocalSet(l));
             fx.scopes.last_mut().unwrap().insert(
                 name,
-                Binding {
-                    local: l,
-                    repr: Repr::Scalar(kind),
-                },
+                Binding::new(l, Repr::Scalar(kind)),
             );
             return Ok(());
         }
@@ -6641,6 +6669,7 @@ fn emit_core_module(
         compiling_values: Vec::new(),
         bodies: Vec::new(),
         closure_bodies: Vec::new(),
+        known_fn_names: Vec::new(),
         fn_wrappers: HashMap::new(),
         fn_box_cache: HashMap::new(),
         var_box_cache: HashMap::new(),
@@ -7006,7 +7035,7 @@ fn emit_core_module(
             let mut fx = FnCtx::new(params.len() as u32);
             let mut scope = HashMap::new();
             for (i, pn) in params.iter().enumerate() {
-                scope.insert(pn.clone(), Binding { local: i as u32, repr: sig.params[i] });
+                scope.insert(pn.clone(), Binding::new(i as u32, sig.params[i] ));
             }
             fx.scopes.push(scope);
             em.expr_repr(&mut fx, body, sig.result, true)
@@ -7019,7 +7048,7 @@ fn emit_core_module(
             if let Some((pid, body)) = rf.drop_member {
                 let mut scope = HashMap::new();
                 if let Some(pn) = param_names(arena, pid)?.first() {
-                    scope.insert(pn.clone(), Binding { local: 0, repr: Repr::Boxed });
+                    scope.insert(pn.clone(), Binding::new(0, Repr::Boxed ));
                 }
                 fx.scopes.push(scope);
                 em.expr_repr(&mut fx, body, Repr::Boxed, false)
@@ -7041,10 +7070,7 @@ fn emit_core_module(
         for (i, p) in params.iter().enumerate() {
             scope.insert(
                 p.clone(),
-                Binding {
-                    local: i as u32,
-                    repr: sig.params[i],
-                },
+                Binding::new(i as u32, sig.params[i]),
             );
         }
         fx.scopes.push(scope);
@@ -7063,10 +7089,7 @@ fn emit_core_module(
         for (i, p) in params.iter().enumerate() {
             scope.insert(
                 p.clone(),
-                Binding {
-                    local: i as u32,
-                    repr: sig.params[i],
-                },
+                Binding::new(i as u32, sig.params[i]),
             );
         }
         fx.scopes.push(scope);
@@ -8107,6 +8130,7 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         compiling_values: Vec::new(),
         bodies: Vec::new(),
         closure_bodies: Vec::new(),
+        known_fn_names: Vec::new(),
         fn_wrappers: HashMap::new(),
         fn_box_cache: HashMap::new(),
         var_box_cache: HashMap::new(),
@@ -12201,6 +12225,7 @@ world app {
             compiling_values: Vec::new(),
             bodies: Vec::new(),
             closure_bodies: Vec::new(),
+        known_fn_names: Vec::new(),
             fn_wrappers: HashMap::new(),
             fn_box_cache: HashMap::new(),
             var_box_cache: HashMap::new(),
