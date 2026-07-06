@@ -7612,31 +7612,29 @@ fn emit_core_module(
     // heap base and are untouched.
     //
     // Components with functor instantiations OR user-declared resources (4.5)
-    // OPT OUT for now and keep the never-free behaviour: a resource's rep — the
-    // `set` cell and its stored list, or a user `counter`'s `New` cell — lives on
-    // this same heap and MUST survive across export calls (a later `next`/`value`
-    // dereferences the rep the constructor allocated). Resetting the arena in the
-    // post-return would free it, so a resource-bearing component keeps its arena.
-    // They move to an explicit persistent region when the ABI-native layout work
-    // rebuilds value construction (see the 5.1 decision record).
+    // used to OPT OUT of the reset and keep never-free behaviour, because a
+    // resource's rep — the `set` cell and its stored list, or a user `counter`'s
+    // `New` cell — must survive across export calls. As of the 5.1 evacuation
+    // that state now lives in the PERSISTENT region below the arena floor
+    // (`persist_alloc` + the `persist` write barrier, wired into cell-new/set and
+    // the functor `set` ctor/add), which the reset does not touch — so every
+    // component, resource-bearing or not, resets its arena at post-return.
     //
-    // Global indices: 0 = heap ptr, 1..=n value defs, 1+n gensym counter,
-    // 2+n = the immutable arena floor (initialized to the heap base in the
-    // globals section below).
+    // Global indices: 0 = arena bump ptr, 1..=n value defs, 1+n gensym counter,
+    // 2+n = the arena floor (heap_base + persistent reserve for resource
+    // components, heap_base otherwise), 3+n = the persistent bump ptr.
     let arena_floor_g = 2 + info.value_defs.len() as u32;
-    if info.functors.is_empty() && info.resources.is_empty() {
-        for (name, fresults) in post_returns {
-            let mut fx = FnCtx::new(fresults.len() as u32);
-            fx.op(I::GlobalGet(arena_floor_g));
-            fx.op(I::GlobalSet(0));
-            for i in 0..info.value_defs.len() {
-                fx.op(I::I32Const(0));
-                fx.op(I::GlobalSet(1 + i as u32));
-            }
-            let t = em.ty_idx(fresults, vec![]);
-            em.bodies.push((t, fx.finish()));
-            exports.push((format!("cabi_post_{name}"), take()));
+    for (name, fresults) in post_returns {
+        let mut fx = FnCtx::new(fresults.len() as u32);
+        fx.op(I::GlobalGet(arena_floor_g));
+        fx.op(I::GlobalSet(0));
+        for i in 0..info.value_defs.len() {
+            fx.op(I::I32Const(0));
+            fx.op(I::GlobalSet(1 + i as u32));
         }
+        let t = em.ty_idx(fresults, vec![]);
+        em.bodies.push((t, fx.finish()));
+        exports.push((format!("cabi_post_{name}"), take()));
     }
 
     // ---- user-resource boundary exports (4.5)
