@@ -6220,6 +6220,32 @@ impl<'a> Emitter<'a> {
             }
             "head" => {
                 nargs(1)?;
+                // Type-indexed (5.6): a statically-canonical LIST operand's
+                // first element loads straight from its (ptr, len) area — no
+                // reboxing the whole list. Matches the oracle: `head` of an
+                // empty list traps; otherwise it yields element[0] at its
+                // natural boxed repr (exactly what `load_from_mem` produces at
+                // the reference seam).
+                if let Some(mt) = self.node_mem(fx, items[0])
+                    && let WitTy::List(elem) = self.mem_tys[mt as usize].clone()
+                {
+                    let area = fx.local(ValType::I32);
+                    self.expr_mem(fx, items[0], mt, false)?;
+                    fx.op(I::LocalSet(area));
+                    // trap on the empty list, like the boxed `head_h`
+                    fx.op(I::LocalGet(area));
+                    fx.op(I::I32Load(ma(4, 2)));
+                    fx.op(I::I32Eqz);
+                    fx.op(I::If(BlockType::Empty));
+                    fx.op(I::Unreachable);
+                    fx.op(I::End);
+                    let dataptr = fx.local(ValType::I32);
+                    fx.op(I::LocalGet(area));
+                    fx.op(I::I32Load(ma(0, 2)));
+                    fx.op(I::LocalSet(dataptr));
+                    self.load_from_mem(fx, &elem, dataptr, 0)?;
+                    return Ok(());
+                }
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.head_h));
             }
