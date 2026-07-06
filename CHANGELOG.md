@@ -46,6 +46,18 @@ you work, and rename it to the new version when you cut a release.
   pointer identity), so cells — and the resource reps built on them — work in
   compiled components, not just the interpreter.
 
+### Fixed
+
+- **The compiled backend's `to-string` now matches the interpreter's
+  `print_value` for strings and compound values.** Strings are quoted and
+  escaped (`"` `\\` `\n` `\t` `\r`); lists print as `[a, b]`, tuples as
+  `(a, b)`, records as `{k: v}`, variants as `name` / `name(payload)`, flags as
+  `{a, b}`, and cells as `cell(v)`, each recursing through `to-string` with the
+  same nested quoting the oracle uses. Previously the backend printed strings
+  verbatim and trapped on every compound. Floats and chars remain the only
+  `to-string` cases still unimplemented (they trap). Closes a large batch of
+  differential-test divergences.
+
 ### Changed
 
 - **An exported function's body is checked against its declared result type.**
