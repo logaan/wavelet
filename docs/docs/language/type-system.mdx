@@ -103,6 +103,32 @@ in an uncalled function:
 
 <Playground id="ty-mixed-add" />
 
+## Function values
+
+A `Fn` literal whose parameters (and inferred result) all have concrete WIT
+types carries a **function type** of its own — an arrow like `(s32) -> s32`. A
+bare reference to a `Def`-bound function with such a signature is a first-class
+value of the same arrow type. Applying a function-typed binding is statically
+checked against its arrow: the arity and every argument type must match, and
+the application synthesizes the arrow's result type.
+
+```wavelet
+Def inc Fn {n: s32} add(n 1)
+Let {f: inc} f(41)      // f: (s32) -> s32, so this is 42
+```
+
+A `Fn` whose parameters are untyped has no concrete arrow — it stays a gradual
+function value, exactly as before. (Higher-order stdlib functions like `map`
+and `filter` accept either.)
+
+Function types are **component-internal**: WIT has no function type, so a
+function value cannot cross a component boundary. Exporting a function whose
+result is (or contains) a function value is a compile error with a deliberate
+diagnostic — *function types cannot cross component boundaries yet; import the
+combinator as a macro so it expands into this component instead*. Sharing
+behaviour **across** components is what [macro imports](macros.mdx) are for:
+the combinator's *form* travels, and expands into each consuming component.
+
 ## Derive
 
 `Derive` generates the standard operations for a type so you don't write the
