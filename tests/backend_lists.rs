@@ -90,6 +90,9 @@ Def fwds Fn {} lv/gets()
 Export {name: field params: {} result: s64}
 Def field Fn {}
   Match lv/wrap() [({data: [a b]} add(a b)) (other 0)]
+
+Export {name: count params: {} result: s64}
+Def count Fn {} len(lv/nums())
 "#;
 
     std::fs::write(src.join("lst.wlt"), dep).unwrap();
@@ -183,6 +186,15 @@ fn list_and_string_exports_take_the_retptr_fast_path() {
 fn list_field_inside_canonical_record_destructures() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "field", &[]), Val::S64(15));
+}
+
+#[test]
+// `len` over a statically-canonical dep-born list reads the stored length
+// word directly (5.6 type-indexed builtin) — no rebox, same count as the
+// interpreter's `len`.
+fn len_over_canonical_list_reads_the_length_word() {
+    let Some(mut c) = composed() else { return };
+    assert_eq!(ok(&mut c, "count", &[]), Val::S64(3));
 }
 
 // ---- construction slice: canonical list literals (5.5, no dep needed) ----
