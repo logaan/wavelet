@@ -113,6 +113,8 @@ world shout {
 
 An interactive read-eval-print loop. Enter forms; multi-line input continues until a form is complete; `Ctrl-D` exits. Because values print as WAVE and code *is* WAVE, the REPL's output is always valid input.
 
+On a terminal the REPL supports arrow-key line editing and a persistent input history (stored under `$XDG_STATE_HOME/wavelet/history`, or `~/.local/state/wavelet/history`); `Ctrl-C` abandons the line you are typing and `Ctrl-D` exits. Piped input (a here-doc or a pipeline) is read plainly, unchanged.
+
 ```console
 $ wavelet repl
 wavelet repl — enter forms, Ctrl-D to exit

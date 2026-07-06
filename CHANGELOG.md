@@ -15,6 +15,13 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **Line editing and history in the interactive REPL.** When `wavelet repl` runs
+  on a terminal it now uses `rustyline`: arrow-key line editing, a persistent
+  history file (`$XDG_STATE_HOME/wavelet/history`, else
+  `~/.local/state/wavelet/history`), Ctrl-C to abandon the current entry, and
+  Ctrl-D to exit. Piped/scripted input keeps the plain line-reader, so
+  non-interactive sessions are unchanged.
+
 - **Shebang support for `.wlt` scripts.** A source file may begin with a
   `#!/usr/bin/env wavelet` line so it can be marked executable and run directly
   (`./script.wlt`). The reader skips a leading shebang line — recognised only at

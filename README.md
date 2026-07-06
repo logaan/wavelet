@@ -147,7 +147,7 @@ wavelet new <name> [--type=cli|http]                 # scaffold a new project (c
 wavelet read [file.wlt]                              # parse and print the canonical WAVE form tree (reads stdin if no file)
 wavelet expand <file.wlt>                            # run macros to fixpoint and print the result
 wavelet wit <file.wlt>                               # show the synthesized WIT world
-wavelet repl                                         # interactive read-eval-print loop
+wavelet repl                                         # interactive read-eval-print loop (line editing + history)
 wavelet run <file.wlt>... [-- <args>...]             # compile to a component and run it (interpreter fallback)
 wavelet build <file.wlt>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
 wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
