@@ -148,15 +148,18 @@ wavelet read [file.wlt]                              # parse and print the canon
 wavelet expand <file.wlt>                            # run macros to fixpoint and print the result
 wavelet wit <file.wlt>                               # show the synthesized WIT world
 wavelet repl                                         # interactive read-eval-print loop
-wavelet run <file.wlt>... [-- <args>...]             # interpret directly (no codegen)
+wavelet run <file.wlt>... [-- <args>...]             # compile to a component and run it (interpreter fallback)
 wavelet build <file.wlt>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
 wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
 wavelet --version                                    # print the wavelet version
 ```
 
-`run` interprets a set of files together — resolving `Import`s by package id,
-honoring `Export`/`as:`/`open:`, and calling the exported `run`. It is the
-fastest way to try a program:
+`run` compiles a set of files together — building each through the emitter,
+composing their runtime `Import`s into one component, and calling the exported
+`run` in a capability-free `wasmtime` host. It is the fastest way to try a
+program. A program the backend cannot yet compile (or that hits one of the
+decision-gated backend holes) falls back to the interpreter, announced on
+stderr, so nothing that ran before stops running:
 
 ``` bash
 $ wavelet run examples/main.wlt examples/shout.wlt -- wasm
