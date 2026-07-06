@@ -6547,6 +6547,79 @@ impl<'a> Emitter<'a> {
                 fx.op(I::End); // block
                 fx.op(I::LocalGet(out));
             }
+            "fold" => {
+                // fold(f, acc, list) -> acc: left fold. Each step applies `f`
+                // to the two-element tuple (acc, elem) — the bundle shape the
+                // interpreter uses (`apply(f, Tup([acc, elem]))`) — via the
+                // boxed-closure convention; the closure wrapper unpacks the
+                // TAG_TUP payload into the function's two params.
+                nargs(3)?;
+                let fp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?; // closure box for f
+                fx.op(I::LocalSet(fp));
+                let acc = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?; // initial accumulator box
+                fx.op(I::LocalSet(acc));
+                let lp = fx.local(ValType::I32);
+                self.expr(fx, items[2], false)?; // TAG_LIST box
+                fx.op(I::LocalSet(lp));
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(lp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n));
+                let i = fx.local(ValType::I32);
+                let pay = fx.local(ValType::I32);
+                let apply_ty = self.ty_idx(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                // pay = [TAG_TUP, 2, acc, lp[8+4*i]]
+                fx.op(I::I32Const(16));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(pay));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::I32Const(TAG_TUP));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::I32Const(2));
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::LocalGet(acc));
+                fx.op(I::I32Store(ma(8, 2)));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::LocalGet(lp));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Store(ma(12, 2)));
+                // acc = apply(f, pay)
+                fx.op(I::LocalGet(fp));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::LocalGet(fp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::CallIndirect {
+                    type_index: apply_ty,
+                    table_index: 0,
+                });
+                fx.op(I::LocalSet(acc));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End); // loop
+                fx.op(I::End); // block
+                fx.op(I::LocalGet(acc));
+            }
             "str-cat" => {
                 if items.is_empty() {
                     let a = self.intern_str("");
@@ -6761,6 +6834,7 @@ const BUILTINS: &[&str] = &[
     "head",
     "tail",
     "map",
+    "fold",
     "str-cat",
     "upper",
     "lower",
