@@ -8,7 +8,7 @@
 //! and previously defined macros only — calling file-local *functions* at
 //! expand time is future work (macro components, §6.3).
 //!
-//! ## Local *and* foreign macros (§6.3)
+//! ## Local *and* foreign macros (§6.3), compiled at expand time (goal 6)
 //!
 //! A macro head can resolve two ways at expand time:
 //!
@@ -16,12 +16,17 @@
 //! 2. a **foreign** macro exported by an imported `wavelet:meta/macros`
 //!    component (`Import {… macros: true}`).
 //!
-//! Local macros expand via [`Interp::expand_once`]; foreign macros expand by
-//! shipping the call form across the component boundary and lifting the result
-//! back. Because the component runtime is native-only, the foreign path is
-//! reached through the wasm-safe [`ForeignExpander`] seam: native code (see
-//! [`crate::macrodep`]) supplies an implementation; the wasm playground passes
-//! `None` and only ever sees local macros. Both kinds recurse through
+//! On every native CLI path (`build`/`run`/`expand`), *both* kinds expand as
+//! **compiled wasm**: the caller supplies a [`ForeignExpander`] — the native
+//! [`crate::macrodep::FileExpander`] — that owns a `wavelet:meta/macros`
+//! component built from the file's `DefMacro`s (strategy B, goal 6, Step 1).
+//! A macro call ships its call form across the component boundary and the
+//! lifted result comes back; no interpreter runs the body. The interpreter's
+//! [`Interp::expand_once`] survives only as the fallback taken when *no*
+//! `ForeignExpander` is injected — i.e. the wasm docs playground, which passes
+//! `None` and is deliberately kept on the interpreter (out of goal 6's scope).
+//! `Interp::expand_once`/`Interp::quasi` also remain the differential-testing
+//! oracle (see `tests/macro_differential.rs`). Both kinds recurse through
 //! `expand_form` so an expansion that itself contains a macro call (local *or*
 //! foreign) is expanded to fixpoint — exactly as a local macro would be.
 
