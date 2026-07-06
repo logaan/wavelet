@@ -15,6 +15,13 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **`map` is now compiled by the wasm backend (5.12).** `map(f, list)` applies a
+  function value to each element and collects the results in a length-preserving
+  list, in compiled components as well as the interpreter. `f` may be a named
+  function or an inline `Fn` literal, and maps nest. Previously `map` ran only
+  under the interpreter; the documented `map-square` example now agrees between
+  the interpreter and the compiled artifact.
+
 - **Function (arrow) types in the checker (5.8, Phase D).** A `Fn` literal whose
   parameter types and inferred result are all concrete now carries a static
   function type `(T1 … Tn) -> R`, and a bare reference to such a single-signature

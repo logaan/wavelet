@@ -50,7 +50,6 @@ const EXPAND: &str = "`expand` is only available inside a macro library when bui
 const SKIP: &[(&str, &str)] = &[
     ("eval-apply-list", BUILTIN),     // apply
     ("macro-expand", EXPAND),
-    ("map-square", BUILTIN), // map
     ("sf-def", TOSTR_TRAP), // float result
     ("sf-let", PI),
     ("std-apply", BUILTIN),           // apply

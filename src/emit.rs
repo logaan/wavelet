@@ -6465,6 +6465,88 @@ impl<'a> Emitter<'a> {
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.tail_h));
             }
+            "map" => {
+                // map(f, list) -> list: apply the function value `f` to each
+                // element, collecting results in source order (oracle:
+                // `for v in lst { out.push(interp.apply(&f, v)) }`). Length is
+                // preserved, so the result TAG_LIST box is pre-sized and filled.
+                // `f` is applied through the boxed-closure convention
+                // (`closure_call`): call_indirect(env=closure, payload=elem,
+                // slot=closure[4]) — a single argument passes the value itself as
+                // the payload, exactly as `payload_box`'s one-arg case does.
+                nargs(2)?;
+                let fp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?; // closure box for f
+                fx.op(I::LocalSet(fp));
+                let lp = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?; // TAG_LIST box
+                fx.op(I::LocalSet(lp));
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(lp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n));
+                // out = alloc(8 + 4*n); [TAG_LIST, n, _ …]
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Store(ma(4, 2)));
+                // for i in 0..n: out[8+4i] = apply(f, lp[8+4i])
+                let i = fx.local(ValType::I32);
+                let apply_ty = self.ty_idx(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                // dst = out + 8 + 4*i
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                // env = f
+                fx.op(I::LocalGet(fp));
+                // payload = lp[8+4*i]
+                fx.op(I::LocalGet(lp));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+                // slot = f[4]
+                fx.op(I::LocalGet(fp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::CallIndirect {
+                    type_index: apply_ty,
+                    table_index: 0,
+                });
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End); // loop
+                fx.op(I::End); // block
+                fx.op(I::LocalGet(out));
+            }
             "str-cat" => {
                 if items.is_empty() {
                     let a = self.intern_str("");
@@ -6678,6 +6760,7 @@ const BUILTINS: &[&str] = &[
     "len",
     "head",
     "tail",
+    "map",
     "str-cat",
     "upper",
     "lower",
