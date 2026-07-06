@@ -1614,6 +1614,31 @@ impl<'a> Emitter<'a> {
         addr
     }
 
+    /// Intern a static dec box `[TAG_DEC, _pad, f64]` (the `box_dec` layout with
+    /// the f64 at offset 8); returns its address.
+    fn intern_dec(&mut self, v: f64) -> u32 {
+        self.align8();
+        let addr = DATA_BASE + self.data.len() as u32;
+        self.put_i32(TAG_DEC);
+        self.put_i32(0);
+        self.data.extend_from_slice(&v.to_le_bytes());
+        addr
+    }
+
+    /// Intern the empty-record box `[TAG_REC, 0]` — the backend image of the
+    /// interpreter's unit value (`Value::Rec(vec![])`), which prints as "{}".
+    fn intern_unit_rec(&mut self) -> u32 {
+        if let Some(&a) = self.str_cache.get("\u{1}unit-rec") {
+            return a;
+        }
+        self.align8();
+        let addr = DATA_BASE + self.data.len() as u32;
+        self.put_i32(TAG_REC);
+        self.put_i32(0);
+        self.str_cache.insert("\u{1}unit-rec".to_string(), addr);
+        addr
+    }
+
     fn import_idx(&self, module: &str, field: &str) -> u32 {
         self.import_fn[&(module.to_string(), field.to_string())]
     }
@@ -1696,6 +1721,13 @@ impl<'a> Emitter<'a> {
     /// initialized global; 0 = uncomputed, no box lives at 0) or a named
     /// function used as a value (static closure box over a uniform wrapper).
     fn value_def_ref(&mut self, fx: &mut FnCtx, name: &str) -> Result<(), String> {
+        if name == "pi" {
+            // The stdlib constant `pi` (interp: `env.define("pi", Dec(PI))`) as a
+            // static dec box.
+            let addr = self.intern_dec(std::f64::consts::PI);
+            fx.op(I::I32Const(addr as i32));
+            return Ok(());
+        }
         if name == "none" {
             let addr = self.none_like_box("none");
             fx.op(I::I32Const(addr as i32));
@@ -7955,12 +7987,16 @@ impl<'a> Emitter<'a> {
             }
             "drop" => {
                 // Evaluates its operand(s) for effect and yields unit — the
-                // interpreter's `drop` (a no-result function body's value).
+                // interpreter's `drop`. Unit is `Value::Rec(vec![])` (prints as
+                // "{}"), so return a static empty-record box rather than the
+                // `unit_addr()` false-box (which `to-string` would render
+                // "false"); at a no-result WIT boundary the box is discarded.
                 for &x in items {
                     self.expr(fx, x, false)?;
                     fx.op(I::Drop);
                 }
-                fx.op(I::I32Const(self.unit_addr() as i32));
+                let addr = self.intern_unit_rec();
+                fx.op(I::I32Const(addr as i32));
             }
             other => {
                 return Err(format!(
@@ -7990,6 +8026,7 @@ const BUILTINS: &[&str] = &[
     "abs",
     "len",
     "empty",
+    "drop",
     "get",
     "put",
     "push",
