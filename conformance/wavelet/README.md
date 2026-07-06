@@ -62,24 +62,28 @@ transforms, and harness). The suite's WIT is vendored under
   on the backend). The `none` side of the option round-trips uses the bare
   `none` symbol (parenthesized `none()` is not lowered; bare `none` is).
 
-  The file is still blocked by **two gaps that need new language surface**, not
-  a conformance rewrite (this corrects the earlier note, and the flags decision
-  Thing's premise, which listed `permissions-rt`/flags as the sole blocker):
-    1. **Tuple construction.** `tup(...)` has no oracle semantics at all — the
-       interpreter reports `unbound name tup in call position` — and the backend
-       has no tuple constructor; bare `(a b)` reads as a call form. There is no
-       way to *build* a tuple value in Wavelet source today (tuple *patterns*
-       already work). Blocks `tuple-rt`, `tuple-nested-rt`, and the `ok` side of
-       `result-tuple-direction-rt`.
-    2. **`drop` / no-result bodies.** `drop` is an interpreter builtin (returns
-       unit) but is absent from the backend's builtin set, and a no-result
-       function needs a unit-producing body the backend can lower. Blocks
-       `no-result` and `no-params-no-result`.
+  The file is now blocked by a **single remaining gap that needs new language
+  surface**, not a conformance rewrite (this corrects the earlier note, and the
+  flags decision Thing's premise, which listed `permissions-rt`/flags as the sole
+  blocker):
+    - **Tuple construction.** `tup(...)` has no oracle semantics at all — the
+      interpreter reports `unbound name tup in call position` — and the backend
+      has no tuple constructor; bare `(a b)` reads as a call form. There is no
+      way to *build* a tuple value in Wavelet source today (tuple *patterns*
+      already work). Blocks `tuple-rt`, `tuple-nested-rt`, and the `ok` side of
+      `result-tuple-direction-rt` — the only three exports that call `tup`.
 
-  Because a `values` export is all-or-nothing, these keep the file un-buildable,
-  so `test-values-callee.sh` (parallel to `test-resources-callee.sh`) is
-  deferred until a tuple constructor and backend `drop` land; everything else
-  already compiles.
+  **Resolved** since the last revision: the second blocker, `drop` / no-result
+  bodies. `drop` is now a wasm-backend builtin (it returns the unit empty-record
+  box, which is discarded at a no-result WIT boundary), so `no-result` and
+  `no-params-no-result` compile. Confirmed by building this file with the three
+  `tup` exports removed: the core module — including both `drop` bodies — emits
+  cleanly, leaving only the world-completeness failure for the removed exports.
+
+  Because a `values` export is all-or-nothing, the tuple gap keeps the file
+  un-buildable, so `test-values-callee.sh` (parallel to
+  `test-resources-callee.sh`) is deferred until a tuple constructor lands;
+  everything else already compiles.
 
 - **`src/roundtrip.wlt` — the full symmetric callee role. Does not build; kept
   as the target.** Exporting the whole world at once is all-or-nothing, and a

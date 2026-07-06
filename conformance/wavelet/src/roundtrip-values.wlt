@@ -22,23 +22,30 @@ Package "conformance:wavelet@0.1.0"
 // side of the option round-trips uses the BARE `none` symbol — the
 // parenthesized `none()` is not lowered by the backend, bare `none` is.
 //
-// The file still does NOT build, blocked by TWO gaps that need new language
-// surface (out of scope for a conformance rewrite — see the goal-5 Thing
-// lot:033iWOnrwIwk9KIjngGGD1 and the flags decision lot:033ky5FRo5Up9Id5G6cTmr,
-// whose premise that permissions-rt was the sole blocker is corrected here):
-//   1. TUPLE CONSTRUCTION. `tup(...)` has NO oracle semantics at all — the
-//      interpreter reports `unbound name tup in call position` — and the
-//      backend has no tuple constructor; bare `(a b)` reads as a call form,
-//      not a tuple. There is no way to BUILD a tuple value in Wavelet source
-//      today (tuple PATTERNS already work). Blocks `tuple-rt`,
-//      `tuple-nested-rt`, and the `ok` side of `result-tuple-direction-rt`.
-//   2. `drop` / no-result bodies. `drop` is an interpreter builtin (returns
-//      unit) but is absent from the backend's builtin set, and a no-result
-//      function needs a unit-producing body the backend can lower. Blocks
-//      `no-result` and `no-params-no-result`.
-// Because a `values` export is all-or-nothing, these keep the whole file
-// un-buildable and `test-values-callee.sh` (parallel to
-// test-resources-callee.sh) is deferred. Everything else compiles.
+// The file still does NOT build, blocked by a SINGLE remaining gap that needs
+// new language surface (out of scope for a conformance rewrite — see the goal-5
+// Thing lot:033iWOnrwIwk9KIjngGGD1 and the flags decision
+// lot:033ky5FRo5Up9Id5G6cTmr, whose premise that permissions-rt was the sole
+// blocker is corrected here):
+//   TUPLE CONSTRUCTION. `tup(...)` has NO oracle semantics at all — the
+//   interpreter reports `unbound name tup in call position` — and the backend
+//   has no tuple constructor; bare `(a b)` reads as a call form, not a tuple.
+//   There is no way to BUILD a tuple value in Wavelet source today (tuple
+//   PATTERNS already work). Blocks `tuple-rt`, `tuple-nested-rt`, and the `ok`
+//   side of `result-tuple-direction-rt` — the only three exports that call
+//   `tup`.
+//
+// RESOLVED since the last revision: `drop` / no-result bodies. `drop` is now a
+// wasm-backend builtin (returns the unit empty-record box; discarded at a
+// no-result WIT boundary), so `no-result` and `no-params-no-result` compile.
+// Verified by building this file with the three `tup` exports removed: the core
+// module — including the two `drop` bodies — emits cleanly, and the only
+// residual failure is world-completeness for the intentionally-removed exports.
+//
+// Because a `values` export is all-or-nothing, the tuple gap keeps the whole
+// file un-buildable and `test-values-callee.sh` (parallel to
+// test-resources-callee.sh) is deferred until a tuple constructor lands.
+// Everything else compiles.
 
 Import {pkg: "roundtrip:suite/types" as: t}
 
