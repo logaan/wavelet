@@ -58,7 +58,6 @@ const SKIP: &[(&str, &str)] = &[
     ("std-div-float", TOSTR_TRAP),    // float result
     ("std-pi", PI),
     ("std-read", BUILTIN),           // read
-    ("std-strings", BUILTIN),     // split
     ("values-atoms", FLAGS),
 ];
 

@@ -7397,6 +7397,443 @@ impl<'a> Emitter<'a> {
                 fx.op(I::End);
                 fx.op(I::LocalGet(out));
             }
+            "join" => {
+                // Concatenate the list's string elements with `sep` between them
+                // (oracle: want_list of parts, want_str each, want_str sep).
+                // `strcat2` tag-checks its operands, so a non-string part/sep
+                // traps exactly where the oracle errors; the empty-list result
+                // is "" but `sep` is still validated (oracle pops it first).
+                nargs(2)?;
+                let parts = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(parts));
+                let sep = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::LocalSet(sep));
+                fx.op(I::LocalGet(parts));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(sep));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_STR));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(parts));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n));
+                let acc = fx.local(ValType::I32);
+                fx.op(I::I32Const(self.intern_str("") as i32));
+                fx.op(I::LocalSet(acc));
+                let i = fx.local(ValType::I32);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                // acc = strcat2(acc, sep) when i > 0
+                fx.op(I::LocalGet(i));
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::LocalGet(acc));
+                fx.op(I::LocalGet(sep));
+                fx.op(I::Call(self.h.strcat2));
+                fx.op(I::LocalSet(acc));
+                fx.op(I::End);
+                // acc = strcat2(acc, parts[8+4i])
+                fx.op(I::LocalGet(acc));
+                fx.op(I::LocalGet(parts));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::Call(self.h.strcat2));
+                fx.op(I::LocalSet(acc));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+                fx.op(I::LocalGet(acc));
+            }
+            "contains" => {
+                // Substring test over UTF-8 bytes (oracle: s.contains(sub), both
+                // strings). The empty substring is contained in every string,
+                // matching Rust. Non-string operands trap (want_str).
+                nargs(2)?;
+                let s = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(s));
+                let sub = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::LocalSet(sub));
+                for str_box in [s, sub] {
+                    fx.op(I::LocalGet(str_box));
+                    fx.op(I::I32Load(ma(0, 2)));
+                    fx.op(I::I32Const(TAG_STR));
+                    fx.op(I::I32Ne);
+                    fx.op(I::If(BlockType::Empty));
+                    fx.op(I::Unreachable);
+                    fx.op(I::End);
+                }
+                let slen = fx.local(ValType::I32);
+                fx.op(I::LocalGet(s));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(slen));
+                let sublen = fx.local(ValType::I32);
+                fx.op(I::LocalGet(sub));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(sublen));
+                let found = fx.local(ValType::I32);
+                let matched = fx.local(ValType::I32);
+                let i = fx.local(ValType::I32);
+                let k = fx.local(ValType::I32);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(found));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty)); // outer
+                fx.op(I::Loop(BlockType::Empty)); // iloop
+                fx.op(I::LocalGet(found));
+                fx.op(I::BrIf(1));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(sublen));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(slen));
+                fx.op(I::I32GtU);
+                fx.op(I::BrIf(1));
+                fx.op(I::I32Const(1));
+                fx.op(I::LocalSet(matched));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(k));
+                fx.op(I::Block(BlockType::Empty)); // jbreak
+                fx.op(I::Loop(BlockType::Empty)); // jloop
+                fx.op(I::LocalGet(k));
+                fx.op(I::LocalGet(sublen));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                fx.op(I::LocalGet(s));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(k));
+                fx.op(I::I32Add);
+                fx.op(I::I32Load8U(ma(0, 0)));
+                fx.op(I::LocalGet(sub));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(k));
+                fx.op(I::I32Add);
+                fx.op(I::I32Load8U(ma(0, 0)));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(matched));
+                fx.op(I::Br(2));
+                fx.op(I::End);
+                fx.op(I::LocalGet(k));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(k));
+                fx.op(I::Br(0));
+                fx.op(I::End); // jloop
+                fx.op(I::End); // jbreak
+                fx.op(I::LocalGet(matched));
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::I32Const(1));
+                fx.op(I::LocalSet(found));
+                fx.op(I::End);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End); // iloop
+                fx.op(I::End); // outer
+                fx.op(I::LocalGet(found));
+                fx.op(I::Call(self.h.box_bool));
+            }
+            "split" => {
+                // s.split(sep) over UTF-8 bytes (oracle: want_str s, want_str
+                // sep). Non-empty sep: scan left-to-right for non-overlapping
+                // byte matches, emitting the run before each match and the final
+                // tail (at most slen+1 pieces, so the list is over-allocated and
+                // its length fixed at the end). Empty sep replicates Rust's
+                // char-boundary split: a leading "", one piece per char, a
+                // trailing "".
+                nargs(2)?;
+                let s = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(s));
+                let sep = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::LocalSet(sep));
+                for str_box in [s, sep] {
+                    fx.op(I::LocalGet(str_box));
+                    fx.op(I::I32Load(ma(0, 2)));
+                    fx.op(I::I32Const(TAG_STR));
+                    fx.op(I::I32Ne);
+                    fx.op(I::If(BlockType::Empty));
+                    fx.op(I::Unreachable);
+                    fx.op(I::End);
+                }
+                let slen = fx.local(ValType::I32);
+                fx.op(I::LocalGet(s));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(slen));
+                let seplen = fx.local(ValType::I32);
+                fx.op(I::LocalGet(sep));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(seplen));
+                let out = fx.local(ValType::I32);
+                let oi = fx.local(ValType::I32);
+                let start = fx.local(ValType::I32);
+                let i = fx.local(ValType::I32);
+                let k = fx.local(ValType::I32);
+                let matched = fx.local(ValType::I32);
+                let plen = fx.local(ValType::I32);
+                let pbox = fx.local(ValType::I32);
+                let j = fx.local(ValType::I32);
+                let empty = self.intern_str("") as i32;
+                fx.op(I::LocalGet(seplen));
+                fx.op(I::I32Eqz);
+                fx.op(I::If(BlockType::Empty));
+                // ---- empty-sep path (Rust char-boundary split) ----
+                // out over-allocated to slen+2 pieces; length fixed at the end.
+                fx.op(I::LocalGet(slen));
+                fx.op(I::I32Const(2));
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                // out[8] = ""  (leading empty piece)
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(empty));
+                fx.op(I::I32Store(ma(8, 2)));
+                fx.op(I::I32Const(1));
+                fx.op(I::LocalSet(oi));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i)); // byte cursor
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(slen));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalSet(start)); // char start
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i)); // consume lead byte
+                // advance over continuation bytes (b & 0xC0 == 0x80)
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(slen));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                fx.op(I::LocalGet(s));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Add);
+                fx.op(I::I32Load8U(ma(0, 0)));
+                fx.op(I::I32Const(0xC0));
+                fx.op(I::I32And);
+                fx.op(I::I32Const(0x80));
+                fx.op(I::I32Ne);
+                fx.op(I::BrIf(1));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+                // plen = i - start ; piece = substr(s, start, plen)
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(start));
+                fx.op(I::I32Sub);
+                fx.op(I::LocalSet(plen));
+                emit_substr(self, fx, s, start, plen, pbox, j);
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(oi));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(pbox));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(oi));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(oi));
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+                // trailing empty piece
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(oi));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(empty));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(oi));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(oi));
+                fx.op(I::Else);
+                // ---- non-empty-sep path ----
+                fx.op(I::LocalGet(slen));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(oi));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(start));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(seplen));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(slen));
+                fx.op(I::I32GtU);
+                fx.op(I::BrIf(1));
+                fx.op(I::I32Const(1));
+                fx.op(I::LocalSet(matched));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(k));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(k));
+                fx.op(I::LocalGet(seplen));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                fx.op(I::LocalGet(s));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(k));
+                fx.op(I::I32Add);
+                fx.op(I::I32Load8U(ma(0, 0)));
+                fx.op(I::LocalGet(sep));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(k));
+                fx.op(I::I32Add);
+                fx.op(I::I32Load8U(ma(0, 0)));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(matched));
+                fx.op(I::Br(2));
+                fx.op(I::End);
+                fx.op(I::LocalGet(k));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(k));
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+                fx.op(I::LocalGet(matched));
+                fx.op(I::If(BlockType::Empty));
+                // emit piece s[start..i]
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(start));
+                fx.op(I::I32Sub);
+                fx.op(I::LocalSet(plen));
+                emit_substr(self, fx, s, start, plen, pbox, j);
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(oi));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(pbox));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(oi));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(oi));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(seplen));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalSet(start));
+                fx.op(I::Else);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::End);
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+                // final tail piece s[start..slen]
+                fx.op(I::LocalGet(slen));
+                fx.op(I::LocalGet(start));
+                fx.op(I::I32Sub);
+                fx.op(I::LocalSet(plen));
+                emit_substr(self, fx, s, start, plen, pbox, j);
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(oi));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(pbox));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(oi));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(oi));
+                fx.op(I::End);
+                // fix the list length to the actual piece count
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(oi));
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(out));
+            }
             "abs" => {
                 // |n| over an int (branch: n<0 ? -n : n) or a dec (F64Abs);
                 // any other tag traps, matching the oracle's `want_num`.
@@ -7535,6 +7972,9 @@ const BUILTINS: &[&str] = &[
     "reverse",
     "range",
     "zip",
+    "split",
+    "join",
+    "contains",
     "head",
     "tail",
     "map",
