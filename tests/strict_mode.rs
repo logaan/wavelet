@@ -35,6 +35,15 @@ fn strict_mode_flips_unknown_from_top_to_error() {
     );
     wavelet::check::set_strict(false);
     assert!(r.ok, "typed program must pass under strict: {}", r.error);
+
+    // 5.8: a function value whose arrow type is fully concrete (a closure with
+    // typed parameters, applied indirectly) now passes under strict — the
+    // "function values" backlog category clears once the arrow is concrete.
+    wavelet::check::set_strict(true);
+    let r = wavelet::eval_snippet("Let {g: Fn {n: s32} add(n 1)} g(41)");
+    wavelet::check::set_strict(false);
+    assert!(r.ok, "typed closure must pass under strict: {}", r.error);
+    assert_eq!(r.value, "42");
 }
 
 /// Diagnostic, not a gate: print the strict-mode burn-down backlog over the
