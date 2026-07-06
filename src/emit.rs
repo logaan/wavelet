@@ -4568,6 +4568,347 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// Whether a canonical-layout type is eligible for the type-indexed
+    /// structural `eq` fast path (5.6): its in-memory representation can be
+    /// compared field-by-field with the same boolean the interpreter's
+    /// value-level `eq` (`Value: PartialEq`) would produce.
+    ///
+    /// Excluded (kept on the boxed `eq_raw` path):
+    /// - **Flags**: the canonical bitset is order-free, but the oracle's
+    ///   `Value::Flg` is a `Vec` whose `eq` is order-sensitive; two bitsets
+    ///   could compare equal where the boxed values do not.
+    /// - **Handle**: resource equality is Rc identity in the oracle, not the
+    ///   opaque i32 the canonical form carries.
+    fn mem_eq_eligible(&self, ty: &WitTy) -> bool {
+        match ty {
+            WitTy::Bool
+            | WitTy::Char
+            | WitTy::IntS(_)
+            | WitTy::IntU(_)
+            | WitTy::S64
+            | WitTy::F32
+            | WitTy::F64
+            | WitTy::Str
+            | WitTy::Enum(_) => true,
+            WitTy::List(elem) => self.mem_eq_eligible(elem),
+            WitTy::Record(fields) => fields.iter().all(|(_, t)| self.mem_eq_eligible(t)),
+            WitTy::Tuple(elems) => elems.iter().all(|t| self.mem_eq_eligible(t)),
+            WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => ty
+                .variant_cases()
+                .unwrap()
+                .iter()
+                .all(|(_, p)| p.is_none_or(|pt| self.mem_eq_eligible(pt))),
+            WitTy::Flags(_) | WitTy::Handle => false,
+        }
+    }
+
+    /// Emit a structural equality test of the two canonical values of type
+    /// `ty` at `a + off` and `b + off` (both `a`/`b` are i32 base-pointer
+    /// locals). Leaves an i32 `1`/`0` on the stack. Recurses over the layout
+    /// so the result matches the interpreter's value-level `eq` exactly:
+    /// scalars compare their loaded value, records/tuples compare every field,
+    /// variants compare the discriminant and (when it matches) the active
+    /// case's payload, strings and lists compare length then contents.
+    fn emit_mem_eq(
+        &mut self,
+        fx: &mut FnCtx,
+        ty: &WitTy,
+        a: u32,
+        b: u32,
+        off: u64,
+    ) -> Result<(), String> {
+        match ty {
+            WitTy::Bool => {
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load8U(ma(off, 0)));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load8U(ma(off, 0)));
+                fx.op(I::I32Eq);
+            }
+            WitTy::IntS(w) | WitTy::IntU(w) => {
+                // width-appropriate loads; equality is sign-agnostic, so an
+                // unsigned load on each side compares the stored bytes.
+                let w = *w;
+                fx.op(I::LocalGet(a));
+                match w {
+                    1 => fx.op(I::I32Load8U(ma(off, 0))),
+                    2 => fx.op(I::I32Load16U(ma(off, 1))),
+                    _ => fx.op(I::I32Load(ma(off, 2))),
+                }
+                fx.op(I::LocalGet(b));
+                match w {
+                    1 => fx.op(I::I32Load8U(ma(off, 0))),
+                    2 => fx.op(I::I32Load16U(ma(off, 1))),
+                    _ => fx.op(I::I32Load(ma(off, 2))),
+                }
+                fx.op(I::I32Eq);
+            }
+            WitTy::Char => {
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::I32Eq);
+            }
+            WitTy::S64 => {
+                fx.op(I::LocalGet(a));
+                fx.op(I::I64Load(ma(off, 3)));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I64Load(ma(off, 3)));
+                fx.op(I::I64Eq);
+            }
+            WitTy::F32 => {
+                fx.op(I::LocalGet(a));
+                fx.op(I::F32Load(ma(off, 2)));
+                fx.op(I::LocalGet(b));
+                fx.op(I::F32Load(ma(off, 2)));
+                fx.op(I::F32Eq);
+            }
+            WitTy::F64 => {
+                fx.op(I::LocalGet(a));
+                fx.op(I::F64Load(ma(off, 3)));
+                fx.op(I::LocalGet(b));
+                fx.op(I::F64Load(ma(off, 3)));
+                fx.op(I::F64Eq);
+            }
+            WitTy::Enum(_) => {
+                // payload-less: the 1-byte discriminant carries the whole value.
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load8U(ma(off, 0)));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load8U(ma(off, 0)));
+                fx.op(I::I32Eq);
+            }
+            WitTy::Record(_) | WitTy::Tuple(_) => {
+                let fields = record_field_offsets(ty);
+                if fields.is_empty() {
+                    fx.op(I::I32Const(1));
+                } else {
+                    for (i, (o, ft)) in fields.iter().enumerate() {
+                        self.emit_mem_eq(fx, ft, a, b, off + o)?;
+                        if i > 0 {
+                            fx.op(I::I32And);
+                        }
+                    }
+                }
+            }
+            WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
+                let cases: Vec<(String, Option<WitTy>)> = ty
+                    .variant_cases()
+                    .unwrap()
+                    .into_iter()
+                    .map(|(n, p)| (n.to_string(), p.cloned()))
+                    .collect();
+                let poff = off + variant_payload_offset(ty);
+                let da = fx.local(ValType::I32);
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load8U(ma(off, 0)));
+                fx.op(I::LocalSet(da));
+                fx.op(I::LocalGet(da));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load8U(ma(off, 0)));
+                fx.op(I::I32Eq);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                // discriminants agree: compare the active case's payload.
+                self.emit_variant_payload_eq(fx, &cases, da, a, b, poff, 0)?;
+                fx.op(I::Else);
+                fx.op(I::I32Const(0));
+                fx.op(I::End);
+            }
+            WitTy::Str => {
+                // (ptr, len) inline at `off`; equal iff same byte length and
+                // same bytes. `len` here is the byte length the canonical word
+                // stores — byte equality is string equality.
+                let pa = fx.local(ValType::I32);
+                let pb = fx.local(ValType::I32);
+                let la = fx.local(ValType::I32);
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::LocalSet(pa));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::LocalSet(pb));
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load(ma(off + 4, 2)));
+                fx.op(I::LocalTee(la));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(off + 4, 2)));
+                fx.op(I::I32Eq);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                self.emit_bytes_eq(fx, pa, pb, la);
+                fx.op(I::Else);
+                fx.op(I::I32Const(0));
+                fx.op(I::End);
+            }
+            WitTy::List(elem) => {
+                // (ptr, len) inline at `off`; `len` is the element count.
+                // Equal iff same count and every element (at its stride)
+                // compares equal.
+                let stride = elem_size(elem);
+                let elem = (**elem).clone();
+                let pa = fx.local(ValType::I32);
+                let pb = fx.local(ValType::I32);
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::LocalSet(pa));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(off, 2)));
+                fx.op(I::LocalSet(pb));
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load(ma(off + 4, 2)));
+                fx.op(I::LocalTee(n));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(off + 4, 2)));
+                fx.op(I::I32Eq);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                self.emit_list_eq(fx, &elem, pa, pb, n, stride)?;
+                fx.op(I::Else);
+                fx.op(I::I32Const(0));
+                fx.op(I::End);
+            }
+            WitTy::Flags(_) | WitTy::Handle => {
+                return Err("internal: mem eq over an ineligible type".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Chain that compares the active variant case's payload once the
+    /// discriminants are known equal (in local `d`). Mirrors
+    /// `load_variant_chain`: `d==i ? <payload eq of case i> : <recurse>`, with
+    /// the last case as the else. Payload-less cases contribute `1`.
+    fn emit_variant_payload_eq(
+        &mut self,
+        fx: &mut FnCtx,
+        cases: &[(String, Option<WitTy>)],
+        d: u32,
+        a: u32,
+        b: u32,
+        payload_off: u64,
+        i: usize,
+    ) -> Result<(), String> {
+        if i + 1 == cases.len() {
+            return match cases[i].1.as_ref() {
+                Some(pt) => self.emit_mem_eq(fx, &pt.clone(), a, b, payload_off),
+                None => {
+                    fx.op(I::I32Const(1));
+                    Ok(())
+                }
+            };
+        }
+        fx.op(I::LocalGet(d));
+        fx.op(I::I32Const(i as i32));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(ValType::I32)));
+        match cases[i].1.as_ref() {
+            Some(pt) => self.emit_mem_eq(fx, &pt.clone(), a, b, payload_off)?,
+            None => fx.op(I::I32Const(1)),
+        }
+        fx.op(I::Else);
+        self.emit_variant_payload_eq(fx, cases, d, a, b, payload_off, i + 1)?;
+        fx.op(I::End);
+        Ok(())
+    }
+
+    /// Byte-equality loop: 1 iff the `len` bytes at `pa` equal those at `pb`.
+    /// Leaves an i32 `1`/`0`. (Callers have already checked equal lengths.)
+    fn emit_bytes_eq(&mut self, fx: &mut FnCtx, pa: u32, pb: u32, len: u32) {
+        let i = fx.local(ValType::I32);
+        let res = fx.local(ValType::I32);
+        fx.op(I::I32Const(1));
+        fx.op(I::LocalSet(res));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        // done when i >= len
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(len));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        // bytes differ -> res = 0, break
+        fx.op(I::LocalGet(pa));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(0, 0)));
+        fx.op(I::LocalGet(pb));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(0, 0)));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(res));
+        fx.op(I::Br(2));
+        fx.op(I::End);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::LocalGet(res));
+    }
+
+    /// List-equality loop: 1 iff every one of the `n` elements at `pa` equals
+    /// the element at `pb` (both stride `stride`, element type `elem`). Leaves
+    /// an i32 `1`/`0`. (Callers have already checked equal element counts.)
+    fn emit_list_eq(
+        &mut self,
+        fx: &mut FnCtx,
+        elem: &WitTy,
+        pa: u32,
+        pb: u32,
+        n: u32,
+        stride: u64,
+    ) -> Result<(), String> {
+        let i = fx.local(ValType::I32);
+        let res = fx.local(ValType::I32);
+        let ea = fx.local(ValType::I32);
+        let eb = fx.local(ValType::I32);
+        fx.op(I::I32Const(1));
+        fx.op(I::LocalSet(res));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(n));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        // element base pointers pa + i*stride, pb + i*stride
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(stride as i32));
+        fx.op(I::I32Mul);
+        fx.op(I::LocalGet(pa));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(ea));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(stride as i32));
+        fx.op(I::I32Mul);
+        fx.op(I::LocalGet(pb));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(eb));
+        self.emit_mem_eq(fx, elem, ea, eb, 0)?;
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(res));
+        fx.op(I::Br(2));
+        fx.op(I::End);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::LocalGet(res));
+        Ok(())
+    }
+
     /// `form-kind`: a string box naming the form's kind by box tag (mirrors
     /// `builtins.rs:391`). A payloaded `TAG_VAR` is a quoted call ("call"), a
     /// payload-less one a symbol ("sym"). A non-form (e.g. a closure) traps,
@@ -5783,6 +6124,30 @@ impl<'a> Emitter<'a> {
         match name {
             "eq" => {
                 nargs(2)?;
+                // Type-indexed structural eq (5.6): when both operands are the
+                // SAME statically-canonical Mem layout, compare their canonical
+                // representations field-by-field instead of reboxing both and
+                // calling `eq_raw`. A reordered/renamed record literal never
+                // reaches the same MemTy (`can_mem_as` requires declaration
+                // order), so field-order-sensitive `eq` stays correct; flags
+                // and handles are ineligible (see `mem_eq_eligible`).
+                if let (Some(ta), Some(tb)) =
+                    (self.node_mem(fx, items[0]), self.node_mem(fx, items[1]))
+                    && ta == tb
+                {
+                    let ty = self.mem_tys[ta as usize].clone();
+                    if self.mem_eq_eligible(&ty) {
+                        let pa = fx.local(ValType::I32);
+                        self.expr_mem(fx, items[0], ta, false)?;
+                        fx.op(I::LocalSet(pa));
+                        let pb = fx.local(ValType::I32);
+                        self.expr_mem(fx, items[1], tb, false)?;
+                        fx.op(I::LocalSet(pb));
+                        self.emit_mem_eq(fx, &ty, pa, pb, 0)?;
+                        fx.op(I::Call(self.h.box_bool));
+                        return Ok(());
+                    }
+                }
                 self.expr(fx, items[0], false)?;
                 self.expr(fx, items[1], false)?;
                 fx.op(I::Call(self.h.eq_raw));
@@ -5855,6 +6220,32 @@ impl<'a> Emitter<'a> {
             }
             "head" => {
                 nargs(1)?;
+                // Type-indexed (5.6): a statically-canonical LIST operand's
+                // first element loads straight from its (ptr, len) area — no
+                // reboxing the whole list. Matches the oracle: `head` of an
+                // empty list traps; otherwise it yields element[0] at its
+                // natural boxed repr (exactly what `load_from_mem` produces at
+                // the reference seam).
+                if let Some(mt) = self.node_mem(fx, items[0])
+                    && let WitTy::List(elem) = self.mem_tys[mt as usize].clone()
+                {
+                    let area = fx.local(ValType::I32);
+                    self.expr_mem(fx, items[0], mt, false)?;
+                    fx.op(I::LocalSet(area));
+                    // trap on the empty list, like the boxed `head_h`
+                    fx.op(I::LocalGet(area));
+                    fx.op(I::I32Load(ma(4, 2)));
+                    fx.op(I::I32Eqz);
+                    fx.op(I::If(BlockType::Empty));
+                    fx.op(I::Unreachable);
+                    fx.op(I::End);
+                    let dataptr = fx.local(ValType::I32);
+                    fx.op(I::LocalGet(area));
+                    fx.op(I::I32Load(ma(0, 2)));
+                    fx.op(I::LocalSet(dataptr));
+                    self.load_from_mem(fx, &elem, dataptr, 0)?;
+                    return Ok(());
+                }
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.head_h));
             }

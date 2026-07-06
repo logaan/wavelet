@@ -52,6 +52,9 @@ Def wrap Fn {} pt-case({x: 3 y: 4})
 
 Export {name: pair params: {} result: wrapped}
 Def pair Fn {} two(Quote (4 9))
+
+Export {name: opt params: {n: s32} result: option(s32)}
+Def opt Fn {n: s32} some(n)
 "#;
 
     let main = r#"Package "demo:main@0.1.0"
@@ -89,6 +92,12 @@ Def same Fn {}
 
 Export {name: fwd params: {b: bool} result: option(s32)}
 Def fwd Fn {b: bool} vr/find(b)
+
+Export {name: v-eq params: {a: s32 b: s32} result: bool}
+Def v-eq Fn {a: s32 b: s32} eq(vr/opt(a) vr/opt(b))
+
+Export {name: v-eq-disc params: {b: bool} result: bool}
+Def v-eq-disc Fn {b: bool} eq(vr/find(b) vr/opt(7))
 "#;
 
     std::fs::write(src.join("vr.wlt"), dep).unwrap();
@@ -305,4 +314,22 @@ fn constructed_variant_rebuild_is_faithful() {
 fn local_binding_shadows_constructor_names() {
     let mut c = constructed();
     assert_eq!(okc(&mut c, "c-shadow", &[]), Val::S64(5));
+}
+
+#[test]
+// `eq` over two dep-born (canonical) variants takes the type-indexed
+// structural fast path (5.6): equal discriminant then equal payload compares
+// true; equal discriminant with differing payload is false; differing
+// discriminant is false — all matching the interpreter's `Value::Variant`
+// equality.
+fn eq_over_canonical_variants_is_structural() {
+    let Some(mut c) = composed() else { return };
+    // same case (some), same payload
+    assert_eq!(ok(&mut c, "v-eq", &[Val::S32(5), Val::S32(5)]), Val::Bool(true));
+    // same case (some), different payload
+    assert_eq!(ok(&mut c, "v-eq", &[Val::S32(1), Val::S32(2)]), Val::Bool(false));
+    // same discriminant path: some(7) == some(7)
+    assert_eq!(ok(&mut c, "v-eq-disc", &[Val::Bool(true)]), Val::Bool(true));
+    // differing discriminant: none vs some(7)
+    assert_eq!(ok(&mut c, "v-eq-disc", &[Val::Bool(false)]), Val::Bool(false));
 }

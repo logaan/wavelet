@@ -93,6 +93,12 @@ Def field Fn {}
 
 Export {name: count params: {} result: s64}
 Def count Fn {} len(lv/nums())
+
+Export {name: first params: {} result: s64}
+Def first Fn {} head(lv/nums())
+
+Export {name: firstpt params: {} result: s64}
+Def firstpt Fn {} Match head(lv/pts()) [({x: xx} xx) (other 0)]
 "#;
 
     std::fs::write(src.join("lst.wlt"), dep).unwrap();
@@ -195,6 +201,17 @@ fn list_field_inside_canonical_record_destructures() {
 fn len_over_canonical_list_reads_the_length_word() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "count", &[]), Val::S64(3));
+}
+
+#[test]
+// `head` over a statically-canonical dep-born list loads element[0] straight
+// from the (ptr, len) area (5.6 type-indexed builtin) — no rebox — and a
+// record element materializes at its natural boxed repr so a Match still
+// destructures it, both agreeing with the interpreter's `head`.
+fn head_over_canonical_list_loads_the_first_element() {
+    let Some(mut c) = composed() else { return };
+    assert_eq!(ok(&mut c, "first", &[]), Val::S64(1));
+    assert_eq!(ok(&mut c, "firstpt", &[]), Val::S64(1));
 }
 
 // ---- construction slice: canonical list literals (5.5, no dep needed) ----
