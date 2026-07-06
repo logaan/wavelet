@@ -75,6 +75,16 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- **Resource and functor components now free per-call memory (5.1).** Components
+  that instantiate a functor or declare a `DefResource` used to keep their bump
+  arena for the lifetime of the instance (never freeing), because resource state
+  had to survive across export calls. Resource state (a `DefResource` cell, a
+  functor `set`'s backing list) now lives in a dedicated persistent region that
+  the per-call arena reset leaves untouched, so these components reset their
+  arena at every export call like any other component — reclaiming each call's
+  temporaries instead of leaking them. Behaviour is unchanged; only the
+  memory footprint of long-lived resource/functor components improves.
+
 - **`If` and `Do` are now bundled standard-library macros, not core special
   forms.** `Match` is the sole core branching construct; `If c t e` expands to
   `Match The bool c [(true t) (false e)]` and `Do [e1 … en]` to nested
