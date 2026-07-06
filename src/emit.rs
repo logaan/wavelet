@@ -1568,6 +1568,16 @@ impl<'a> Emitter<'a> {
         self.false_addr
     }
 
+    /// Whether this component reserves a persistent region (5.1): true iff it
+    /// instantiates a functor or declares a resource, in which case resource
+    /// state (cells, functor rep lists) is allocated and written through the
+    /// persistent allocator / write barrier so it survives the per-call arena
+    /// reset. Non-resource components have a zero reserve, so `persist_alloc`
+    /// would trap — they keep using the arena.
+    fn has_persist(&self) -> bool {
+        !self.info.functors.is_empty() || !self.info.resources.is_empty()
+    }
+
     fn ty_idx(&mut self, params: Vec<ValType>, results: Vec<ValType>) -> u32 {
         if let Some(i) = self
             .types
@@ -6571,13 +6581,24 @@ impl<'a> Emitter<'a> {
             "cell-new" => {
                 // A mutable cell holding one boxed value; its heap pointer is
                 // its identity (interp: `Value::Cell(Rc<RefCell<Value>>)`).
+                // In a resource/functor component a cell is resource state (a
+                // `DefResource` `New`), so the cell AND its value live in the
+                // persistent region and survive the per-call arena reset (5.1).
                 nargs(1)?;
+                let persist = self.has_persist();
                 let v = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
+                if persist {
+                    fx.op(I::Call(self.h.persist));
+                }
                 fx.op(I::LocalSet(v));
                 let p = fx.local(ValType::I32);
                 fx.op(I::I32Const(8));
-                fx.op(I::Call(self.h.alloc));
+                fx.op(I::Call(if persist {
+                    self.h.persist_alloc
+                } else {
+                    self.h.alloc
+                }));
                 fx.op(I::LocalSet(p));
                 fx.op(I::LocalGet(p));
                 fx.op(I::I32Const(TAG_CELL));
@@ -6595,12 +6616,19 @@ impl<'a> Emitter<'a> {
             }
             "cell-set" => {
                 // Overwrite the cell's value box; return unit (interp parity).
+                // In a resource/functor component the stored value is routed
+                // through the persistent write barrier so it outlives the reset
+                // (5.1); the cell itself was already allocated persistently.
                 nargs(2)?;
+                let persist = self.has_persist();
                 let c = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(c));
                 fx.op(I::LocalGet(c));
                 self.expr(fx, items[1], false)?;
+                if persist {
+                    fx.op(I::Call(self.h.persist));
+                }
                 fx.op(I::I32Store(ma(4, 2)));
                 fx.op(I::I32Const(self.unit_addr() as i32));
             }
@@ -8227,13 +8255,15 @@ fn emit_set_resource(
     {
         let mut fx = FnCtx::new(0);
         let cell = fx.local(I32);
-        // cell = alloc(4)
+        // cell = persist_alloc(4): the set rep must survive the per-call arena
+        // reset, so it lives in the persistent region with a stable identity.
         fx.op(I::I32Const(4));
-        fx.op(I::Call(em.h.alloc));
+        fx.op(I::Call(em.h.persist_alloc));
         fx.op(I::LocalSet(cell));
-        // cell[0] = empty list box
+        // cell[0] = empty list box, deep-copied into the persistent region
         fx.op(I::LocalGet(cell));
         emit_empty_list_box(em, &mut fx);
+        fx.op(I::Call(em.h.persist));
         fx.op(I::I32Store(ma(0, 2)));
         // resource.new(cell) -> handle ; return it
         fx.op(I::LocalGet(cell));
@@ -8263,9 +8293,13 @@ fn emit_set_resource(
         fx.op(I::If(BlockType::Empty));
         fx.op(I::Return);
         fx.op(I::End);
-        // *self = old list + needle
+        // *self = persist(old list + needle): the grown list is built in the
+        // arena, then deep-copied into the persistent region so it outlives the
+        // reset (already-persistent elements are kept in place, only the new
+        // needle is copied).
         fx.op(I::LocalGet(0));
         emit_list_append(em, &mut fx, list, needle);
+        fx.op(I::Call(em.h.persist));
         fx.op(I::I32Store(ma(0, 2)));
         let _ = n_elem; // silence if elem flattens to zero (no such WitTy today)
         let t = em.ty_idx(params, vec![]);
