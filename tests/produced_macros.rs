@@ -96,9 +96,18 @@ fn expand_identity_matches_local() {
 fn expand_unless_matches_local() {
     let mut m = load();
     let args = args_tree(r#"unless(false "ran")"#);
+    // The produced component performs a SINGLE expansion step: `unless` -> its
+    // `If` form. (`If` is now itself a stdlib macro over `Match` (5.7), but the
+    // component does not run it — the consumer's expander recurses to fixpoint;
+    // see `consumer_path_uses_produced_macro`.)
     let via_component = print_tree(&m.expand("unless", &args).expect("unless expands"));
     assert_eq!(via_component, r#"(if-MACRO, false, {}, "ran")"#);
-    assert_eq!(via_component, local_expand(r#"Unless false "ran""#));
+    // Local expansion runs to fixpoint, so it carries that `If` one step further
+    // into the `Match` it expands to.
+    assert_eq!(
+        local_expand(r#"Unless false "ran""#),
+        r#"(match-MACRO, (the-MACRO, bool, false), [(true, {}), (false, "ran")])"#
+    );
 }
 
 #[test]
@@ -133,7 +142,13 @@ fn consumer_path_uses_produced_macro() {
     let (out, new_roots) =
         expand_file(arena, &roots, Some(&mut fx)).expect("expands via produced component");
     let via_consumer = print(&out, *new_roots.last().unwrap());
-    assert_eq!(via_consumer, r#"(if-MACRO, false, {}, "ran")"#);
+    // The consumer's expander recurses to fixpoint, so `unless` -> `If` ->
+    // `Match` (`If` is a stdlib macro over `Match`, 5.7) — matching the local
+    // oracle at fixpoint.
+    assert_eq!(
+        via_consumer,
+        r#"(match-MACRO, (the-MACRO, bool, false), [(true, {}), (false, "ran")])"#
+    );
     assert_eq!(via_consumer, local_expand(r#"Unless false "ran""#));
 }
 
