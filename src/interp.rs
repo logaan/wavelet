@@ -223,19 +223,6 @@ impl Interp {
                     env: env.clone(),
                 })))
             }
-            "if-MACRO" => {
-                let [c, t, e] = args3(args, "If")?;
-                match self.eval(arena, c, env)? {
-                    Value::Bool(true) => Step::Jump(arena.clone(), t, env.clone()),
-                    Value::Bool(false) => Step::Jump(arena.clone(), e, env.clone()),
-                    v => {
-                        return err(format!(
-                            "If condition must be a bool, got {}",
-                            crate::value::print_value(&v)
-                        ));
-                    }
-                }
-            }
             "let-MACRO" => {
                 let [bindings, body] = args2(args, "Let")?;
                 let child = env.child();
@@ -250,21 +237,6 @@ impl Interp {
                     _ => return err("Let expects a record of bindings"),
                 }
                 Step::Jump(arena.clone(), body, child)
-            }
-            "do-MACRO" => {
-                let [list] = args1(args, "Do")?;
-                let Node::Lst(items) = arena.node(list) else {
-                    return err("Do expects a list of expressions");
-                };
-                match items.split_last() {
-                    None => Step::Done(unit()),
-                    Some((last, init)) => {
-                        for &i in init {
-                            self.eval(arena, i, env)?;
-                        }
-                        Step::Jump(arena.clone(), *last, env.clone())
-                    }
-                }
             }
             "match-MACRO" => {
                 let [scrut, clauses] = args2(args, "Match")?;

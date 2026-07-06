@@ -210,19 +210,21 @@ DefMacro unless {cond body}\n\
     /// about, checked here with no component in the loop.
     #[test]
     fn expand_one_matches_local_expand_file() {
-        // TitleCase `Unless` so the reader recognises it as a macro use (head
-        // `unless-MACRO`) and `expand_file` actually expands it locally.
-        let src = format!("{LIB}Unless false \"ran\"");
+        // TitleCase `Identity` so the reader recognises it as a macro use
+        // (head `identity-MACRO`) and `expand_file` actually expands it
+        // locally. `identity` is chosen because its single step is already a
+        // fixpoint (`identity(x)` -> `x`, a non-macro form), so `expand_one`
+        // and `expand_file` must produce the same tree. (`unless` would not do:
+        // it expands to `If`, which is itself a stdlib macro over `Match`, so
+        // its fixpoint runs one step further than `expand_one`.)
+        let src = format!("{LIB}Identity add(1 2)");
         let (arena, roots) = crate::reader::read_file(&src).expect("read");
         let (out, new_roots) =
             crate::expand::expand_file(arena, &roots, None).expect("local expand");
         let local = print(&out, *new_roots.last().unwrap());
 
         let (a, id) = call(&src);
-        let (cout, croot) = expand_one(LIB, "unless", a, id).expect("expand_one");
-        // `expand_file` recurses to fixpoint; `expand_one` is a single step. For
-        // `unless` the single step is already a fixpoint (`If` is a core macro
-        // head, not a user macro), so the two coincide.
+        let (cout, croot) = expand_one(LIB, "identity", a, id).expect("expand_one");
         assert_eq!(print(&cout, croot), local);
     }
 }

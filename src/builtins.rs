@@ -86,6 +86,68 @@ pub fn install(env: &Env) {
     }
     env.define("none", Value::Variant("none".into(), None));
     env.define("pi", Value::Dec(std::f64::consts::PI));
+    install_stdlib_macros(env);
+}
+
+/// The bundled standard-library macros, authored in Wavelet itself (5.7):
+/// `(name, params, body-source)`.
+///
+/// `If` and `Do` are no longer core special forms — they are ordinary macros
+/// that expand to `Match`, the sole core branching construct. Because they are
+/// installed into the env like any `DefMacro`, the interpreter's lazy runtime
+/// expansion ([`crate::interp::Interp::step_call`]) and the ahead-of-time
+/// expander ([`crate::expand::expand_form`]) both rewrite them to `Match`
+/// before the checker, WIT synthesis, or the backend ever see them — so those
+/// stages agree on `If`/`Do` "by construction" (2.8, decision option 1).
+///
+/// * `If c t e` => `Match The bool c [(true t) (false e)]`. The `The bool`
+///   ascription makes a non-bool condition a checker error and types the
+///   scrutinee as `bool`, so the two-clause `true`/`false` match is exhaustive.
+/// * `Do [e1 ... en]` => nested `Match ei [(_ ...)]`, evaluating every statement
+///   in order and yielding the last. The wildcard clause is irrefutable, so the
+///   match is exhaustive over any statement type; an empty `Do` yields `{}`.
+///
+/// The bodies are read as ordinary forms and wrapped in a [`Value::Macro`]
+/// directly, rather than authored as `DefMacro` source, because the reader
+/// would parse the macro *name* (`If`/`Do`) in `DefMacro If ...` as a call to
+/// the already-registered arity head of the same name.
+const STDLIB_MACROS: &[(&str, &[&str], &str)] = &[
+    (
+        "if-MACRO",
+        &["c", "t", "e"],
+        "Quasi Match The bool Unquote(c) [(true Unquote(t)) (false Unquote(e))]",
+    ),
+    (
+        "do-MACRO",
+        &["stmts"],
+        "Match empty(stmts) [
+          (true  {})
+          (false Match empty(tail(stmts)) [
+            (true  head(stmts))
+            (false Quasi Match Unquote(head(stmts)) [(_ Do [Splice(tail(stmts))])])
+          ])
+        ]",
+    ),
+];
+
+/// Install the bundled [`STDLIB_MACROS`] into `env`, so `If`/`Do` are available
+/// to every interpreter and expander setup exactly as the primitive builtins
+/// are. Each body is a compile-time constant that must read; a failure here is
+/// a build-time bug in this file.
+fn install_stdlib_macros(env: &Env) {
+    use crate::value::{Closure, Param};
+    for (name, params, body_src) in STDLIB_MACROS {
+        let (arena, roots) =
+            crate::reader::read_file(body_src).expect("bundled stdlib macro body must read");
+        assert_eq!(roots.len(), 1, "a stdlib macro body must be a single form");
+        let closure = Closure {
+            params: params.iter().map(|p| Param { name: (*p).to_string() }).collect(),
+            body: roots[0],
+            arena: Rc::new(arena),
+            env: env.clone(),
+        };
+        env.define((*name).to_string(), Value::Macro(Rc::new(closure)));
+    }
 }
 
 /// Which built-in functor template an `Import` instantiates, identified from its

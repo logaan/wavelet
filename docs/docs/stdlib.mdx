@@ -11,10 +11,45 @@ description: Every built-in function available today, grouped, with live example
 Every function below is **implemented and runnable today**. A call bundles its arguments — `add(2 3)` passes two — so most functions read several arguments positionally; a few take a single value. Edit any example and press Run.
 
 :::note[What "function" means here]
-These are the core *builtins*. Convenience **macros** (`And`, `Or`, `TryLet`) are **not** shipped — define them yourself with [`DefMacro`](./language/macros). Two pre-bound *values* also live in core: `none` (the empty option) and `pi`.
+These are the core *builtins*. The bundled **macros** are `If` and `Do` (see [Control-flow macros](#control-flow-macros)); other conveniences (`And`, `Or`, `TryLet`) are **not** shipped — define them yourself with [`DefMacro`](./language/macros). Two pre-bound *values* also live in core: `none` (the empty option) and `pi`.
 :::
 
 <Playground id="std-pi" autoRun />
+
+## Control-flow macros
+
+`If` and `Do` are the two **bundled macros**. They are not core special forms —
+each expands to [`Match`](./language/special-forms#match), the sole core
+branching construct — but they are always in scope, exactly like the builtins.
+
+### `If`
+
+`If cond then else` — the everyday conditional. The condition must evaluate to a
+`bool` (there is no truthiness); a non-`bool` condition is a **compile-time
+error**. Only the taken branch is evaluated, and both branches are in
+[tail position](./language/tail-calls). It expands to a two-clause `Match`:
+
+```wavelet
+If c t e   ==>   Match The bool c [(true t) (false e)]
+```
+
+<Playground id="sf-if" />
+
+A non-boolean condition is a compile-time error:
+
+<Playground id="sf-if-nonbool" />
+
+### `Do`
+
+`Do [exprs]` — evaluate each expression in order; the value is the last one.
+Useful for side effects. Takes a single **list**. It expands to nested `Match`
+clauses over a wildcard, so every statement runs and the last is the result:
+
+```wavelet
+Do [a b c]   ==>   Match a [(_ Match b [(_ c)])]
+```
+
+<Playground id="sf-do" />
 
 ## Predicates
 

@@ -696,6 +696,7 @@ world shout {
                        ([w] str-cat(\"got \" w))\n\
                        (other \"usage\")]";
         let (arena, roots) = read_file(src).unwrap();
+        let (arena, roots) = crate::expand::expand_file(arena, &roots, None).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
             emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
@@ -719,6 +720,7 @@ world shout {
                        to-string(twice(add5 10))\n\
                        to-string(twice(inc neg(1)))]";
         let (arena, roots) = read_file(src).unwrap();
+        let (arena, roots) = crate::expand::expand_file(arena, &roots, None).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
             emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
@@ -737,6 +739,7 @@ world shout {
                          ([\"a\" x] str-cat(x))\n\
                          (other \"no\")]]";
         let (arena, roots) = read_file(src).unwrap();
+        let (arena, roots) = crate::expand::expand_file(arena, &roots, None).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
             emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
@@ -755,6 +758,7 @@ world shout {
                          ({x: a label: l} str-cat(l to-string(a)))\n\
                          (other \"no\")]";
         let (arena, roots) = read_file(src).unwrap();
+        let (arena, roots) = crate::expand::expand_file(arena, &roots, None).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
             emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
@@ -773,6 +777,7 @@ world shout {
                    Def eq Fn {a: point b: point} true\n\
                    Export eq";
         let (arena, roots) = read_file(src).unwrap();
+        let (arena, roots) = crate::expand::expand_file(arena, &roots, None).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
             emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
@@ -792,6 +797,7 @@ world shout {
                    Def eq Fn {a: string b: string} true\n\
                    Export eq";
         let (arena, roots) = read_file(src).unwrap();
+        let (arena, roots) = crate::expand::expand_file(arena, &roots, None).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         // Both members are mangled into the export list.
         assert!(info.exports.iter().any(|s| s.name == "eq-point"));
@@ -832,6 +838,7 @@ world shout {
                        describe(none)\n\
                        to-string(some(1 2))]";
         let (arena, roots) = read_file(src).unwrap();
+        let (arena, roots) = crate::expand::expand_file(arena, &roots, None).unwrap();
         let info = wit::collect(&arena, &roots).unwrap();
         let bytes =
             emit::emit_component(&arena, &roots, &info, &std::collections::HashMap::new()).unwrap();
@@ -927,6 +934,7 @@ world shout {
     fn emit_components_for_spec_demo() {
         // shout.wlt: no deps, exports api#shout
         let (sa, sr) = read_file(include_str!("../examples/shout.wlt")).unwrap();
+        let (sa, sr) = crate::expand::expand_file(sa, &sr, None).unwrap();
         let sinfo = wit::collect(&sa, &sr).unwrap();
         let bytes = emit::emit_component(&sa, &sr, &sinfo, &Default::default())
             .expect("shout componentizes");
@@ -934,6 +942,7 @@ world shout {
 
         // main.wlt: imports demo:shout/api, exports run
         let (ma, mr) = read_file(include_str!("../examples/main.wlt")).unwrap();
+        let (ma, mr) = crate::expand::expand_file(ma, &mr, None).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
         deps.insert(
@@ -965,6 +974,7 @@ world shout {
                     Def sum3 Fn {ns}\n\
                       Match ns [([a b c] add(a add(b c))) (other 0)]";
         let (pa, pr) = read_file(psrc).unwrap();
+        let (pa, pr) = crate::expand::expand_file(pa, &pr, None).unwrap();
         let pinfo = wit::collect(&pa, &pr).unwrap();
         let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
             .expect("list provider componentizes");
@@ -979,6 +989,7 @@ world shout {
                         head(lst/echo({words: [\"a\" \"b\"]}))\n\
                         to-string(lst/sum3({ns: [10 20 12]}))]";
         let (ma, mr) = read_file(msrc).unwrap();
+        let (ma, mr) = crate::expand::expand_file(ma, &mr, None).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
         deps.insert(
@@ -1010,6 +1021,7 @@ world shout {
                     Def sum-coords Fn {p}\n\
                       Match p [({x: a y: b} add(a b)) (other 0)]";
         let (pa, pr) = read_file(psrc).unwrap();
+        let (pa, pr) = crate::expand::expand_file(pa, &pr, None).unwrap();
         let pinfo = wit::collect(&pa, &pr).unwrap();
         // the synthesized WIT (record decl, no trailing `;`) must parse + encode
         let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
@@ -1023,6 +1035,7 @@ world shout {
                       Let {p: g/make-point({x: 3 y: 39})}\n\
                         to-string(g/sum-coords({p: p}))";
         let (ma, mr) = read_file(msrc).unwrap();
+        let (ma, mr) = crate::expand::expand_file(ma, &mr, None).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
         deps.insert(
@@ -1052,6 +1065,7 @@ world shout {
                     Export {name: checked params: {k: s64} result: result(s64 string)}\n\
                     Def checked Fn {k} If gt(k 0) ok(k) err(\"nonpositive\")";
         let (pa, pr) = read_file(psrc).unwrap();
+        let (pa, pr) = crate::expand::expand_file(pa, &pr, None).unwrap();
         let pinfo = wit::collect(&pa, &pr).unwrap();
         let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
             .expect("option/result provider componentizes");
@@ -1065,6 +1079,7 @@ world shout {
                         Match o/lookup({k: 4}) [(some(v) to-string(v)) (none \"none\")]\n\
                         Match o/checked({k: 0}) [(ok(v) to-string(v)) (err(e) str-cat(e))]]";
         let (ma, mr) = read_file(msrc).unwrap();
+        let (ma, mr) = crate::expand::expand_file(ma, &mr, None).unwrap();
         let minfo = wit::collect(&ma, &mr).unwrap();
         let mut deps = std::collections::HashMap::new();
         deps.insert(
@@ -1093,6 +1108,7 @@ world shout {
                     Export {name: pts params: {n: s64} result: list(pt)}\n\
                     Def pts Fn {n} [{x: n y: mul(n 2)} {x: add(n 1) y: 0}]";
         let (pa, pr) = read_file(psrc).unwrap();
+        let (pa, pr) = crate::expand::expand_file(pa, &pr, None).unwrap();
         let pinfo = wit::collect(&pa, &pr).unwrap();
         let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
             .expect("list<record> provider componentizes");
@@ -1110,6 +1126,7 @@ world shout {
                     Export {name: maybe params: {k: s64} result: option(list(s64))}\n\
                     Def maybe Fn {k} If gt(k 0) some([k mul(k 2)]) none";
         let (pa, pr) = read_file(psrc).unwrap();
+        let (pa, pr) = crate::expand::expand_file(pa, &pr, None).unwrap();
         let pinfo = wit::collect(&pa, &pr).unwrap();
         let bytes = emit::emit_component(&pa, &pr, &pinfo, &Default::default())
             .expect("list-aggregate provider componentizes");
@@ -1182,9 +1199,8 @@ world shout {
         // `unless(c body)` -> `(if-MACRO c {} body)`. The args (`gt(n 0)`, `42`)
         // are spliced into the expansion, and the loop recurses *into* the
         // result — proving the foreign path keeps expanding exactly like a local
-        // macro. `if-MACRO` is a core special form (not a user macro), so it is
-        // the correct terminal form and survives; were it a user macro it would
-        // expand too.
+        // macro. `If` is itself a stdlib macro over `Match` (5.7), so the loop
+        // keeps going: the terminal form is the `Match The bool …` expansion.
         let src = src_using_fixture(
             "Export run\n\
              Def run Fn {n: s64} Unless gt(n 0) 42",
@@ -1196,10 +1212,9 @@ world shout {
             "unless should be expanded away: {printed:?}"
         );
         assert!(
-            printed
-                .iter()
-                .any(|s| s.contains("(if-MACRO, (gt, n, 0), {}, 42)")),
-            "unless must expand into its If form, args spliced in: {printed:?}"
+            printed.iter().any(|s| s
+                .contains("(match-MACRO, (the-MACRO, bool, (gt, n, 0)), [(true, {}), (false, 42)])")),
+            "unless must expand through If to its Match form, args spliced in: {printed:?}"
         );
     }
 
@@ -1221,11 +1236,12 @@ world shout {
                 .all(|s| !s.contains("unless-MACRO") && !s.contains("identity-MACRO")),
             "no foreign macro head may survive the fixpoint: {printed:?}"
         );
-        // The nested `identity(add(n 1))` collapsed to `(add, n, 1)` inside the If.
+        // The nested `identity(add(n 1))` collapsed to `(add, n, 1)` inside the
+        // Match that `If` expands to.
         assert!(
-            printed
-                .iter()
-                .any(|s| s.contains("(if-MACRO, (gt, n, 0), {}, (add, n, 1))")),
+            printed.iter().any(|s| s.contains(
+                "(match-MACRO, (the-MACRO, bool, (gt, n, 0)), [(true, {}), (false, (add, n, 1))])"
+            )),
             "nested foreign macro in unless's body must be expanded too: {printed:?}"
         );
     }

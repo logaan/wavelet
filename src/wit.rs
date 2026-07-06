@@ -1545,17 +1545,6 @@ fn infer(
                     Inferred::Known(if any_dec { "f64" } else { "s64" }.into())
                 }
                 "drop" | "cell-set" => Inferred::Unit,
-                "if-MACRO" if args.len() == 3 => unify(
-                    infer(arena, args[1], params, defs, functor_ops, visiting),
-                    infer(arena, args[2], params, defs, functor_ops, visiting),
-                ),
-                "do-MACRO" if args.len() == 1 => match arena.node(args[0]) {
-                    Node::Lst(items) => match items.last() {
-                        Some(&last) => infer(arena, last, params, defs, functor_ops, visiting),
-                        None => Inferred::Unit,
-                    },
-                    _ => Inferred::Unknown,
-                },
                 "let-MACRO" if args.len() == 2 => {
                     let mut scope = params.clone();
                     if let Node::Rec(fields) = arena.node(args[0]) {

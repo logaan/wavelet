@@ -11,7 +11,7 @@ description: A small homoiconic language for the WebAssembly Component Model.
 
 1. **One file is one component.** The unit you edit, compile, link, version, and deploy is the same thing. Nothing distinguishes a component written in Wavelet from one written in Rust, Go, or JavaScript — composition happens at the WIT level.
 2. **The syntax is [WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave).** Source code is WAVE text (the Component Model's human-readable value encoding) plus a thin layer of reader sugar. Wavelet is homoiconic the way Lisp is over s-expressions — except its "s-expressions" are exactly the values that cross component boundaries.
-3. **The core is minimal.** Sixteen special forms, closures, guaranteed tail-call elimination, and a macro system. Everything else — including the standard library and macros — is delivered as components.
+3. **The core is minimal.** Fourteen special forms, closures, guaranteed tail-call elimination, and a macro system. Everything else — including the standard library and macros — is delivered as components.
 
 The consequence that ties these together: **there is no FFI.** Wavelet has no native data types of its own. Its booleans, strings, lists, records, variants, options, results, and flags *are* WIT types, so calling a Rust component looks identical to calling a function defined two lines up.
 

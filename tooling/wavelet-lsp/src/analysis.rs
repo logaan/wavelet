@@ -19,8 +19,11 @@ use wavelet::form::{Arena, Node, NodeId};
 
 use crate::line_index::LineIndex;
 
-/// User-facing TitleCase special forms (the core macro table, §2.4) with a
-/// one-line summary. The reader stores these heads as `name-MACRO` symbols.
+/// User-facing TitleCase heads offered by completion/hover: the core special
+/// forms plus the two bundled stdlib macros (`If`, `Do`), each with a one-line
+/// summary. The reader stores these heads as `name-MACRO` symbols. `If`/`Do`
+/// are no longer core special forms (5.7) — they expand to `Match` — but are
+/// always in scope, so they are surfaced here alongside the core forms.
 const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("Package", "Package \"ns:name@ver\" — declare the component's package id"),
     ("Import", "Import {pkg: \"…\" as: alias} — import another component's interface"),
@@ -32,9 +35,9 @@ const SPECIAL_FORMS: &[(&str, &str)] = &[
     ("DefType", "DefType Name type — define a named WIT type"),
     ("Def", "Def name value — bind a top-level name"),
     ("Fn", "Fn {params} body — a closure"),
-    ("If", "If cond then else — conditional"),
+    ("If", "If cond then else — conditional (stdlib macro; expands to `Match The bool cond …`)"),
     ("Let", "Let {bindings} body — local bindings"),
-    ("Do", "Do (a b …) — evaluate forms in sequence"),
+    ("Do", "Do [a b …] — evaluate expressions in sequence; value is the last (stdlib macro over `Match`)"),
     ("Match", "Match value (pattern → result …) — pattern match"),
     ("Quote", "Quote form — the form as data"),
     ("Quasi", "Quasi form — quasiquote (template with Unquote/Splice)"),

@@ -6,8 +6,7 @@
   "files": [
     "wavelet_bg.wasm",
     "wavelet.js",
-    "wavelet.d.ts",
-    "LICENSE.txt"
+    "wavelet.d.ts"
   ],
   "main": "wavelet.js",
   "types": "wavelet.d.ts",
