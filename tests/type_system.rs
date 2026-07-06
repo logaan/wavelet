@@ -1059,3 +1059,46 @@ fn untyped_closure_stays_gradual() {
     assert!(r.ok, "gradual higher-order program rejected: {}", r.error);
     assert_eq!(r.value, "12");
 }
+
+
+/// Boundary rule (5.8, first cut): an exported def whose result is a function
+/// value is a deliberate compile error with the function-boundary diagnostic —
+/// via WIT synthesis…
+#[test]
+fn exported_function_result_rejected_at_synthesis() {
+    let err = synth(
+        "Package \"test:esc@0.1.0\"\n\nExport make-adder\nDef make-adder Fn {by: s32}\n  Fn {n: s32} add(n by)",
+    )
+    .expect_err("a function-valued export must be rejected");
+    assert!(
+        err.contains("function types cannot cross component boundaries"),
+        "{err}"
+    );
+}
+
+/// …and identically via the checker the runner/interpreter path uses (oracle
+/// parity: both engines reject exactly the same programs).
+#[test]
+fn exported_function_result_rejected_by_the_checker() {
+    let src = "Package \"test:esc@0.1.0\"\n\nExport make-adder\nDef make-adder Fn {by: s32}\n  Fn {n: s32} add(n by)";
+    let (arena, roots) = read_file(src).expect("reads");
+    let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expands");
+    let err = wavelet::check::resolve_overloads(arena, &roots)
+        .err()
+        .expect("the checker must reject a function-valued export");
+    assert!(
+        err.contains("function types cannot cross component boundaries"),
+        "{err}"
+    );
+}
+
+/// A def returning a closure is fine as long as it is NOT exported — the
+/// boundary rule governs only cross-component signatures.
+#[test]
+fn internal_function_result_still_accepted() {
+    let wit = synth(
+        "Package \"test:ok@0.1.0\"\n\nExport shout\nDef make Fn {by: s32}\n  Fn {n: s32} add(n by)\nDef shout Fn {phrase: string} upper(phrase)",
+    )
+    .expect("non-exported closures must not trip the boundary rule");
+    assert!(wit.contains("shout: func(phrase: string) -> string"), "{wit}");
+}

@@ -444,6 +444,22 @@ fn fully_concrete(t: &Type) -> bool {
     }
 }
 
+/// Whether a type contains a function (arrow) type anywhere (5.8). Function
+/// types cannot cross component boundaries in the first defunctionalization
+/// cut, so an exported signature carrying one is rejected with an explicit
+/// diagnostic (in [`Checker::check_roots`] for the run path and via
+/// [`InferredWit::Func`] for WIT synthesis).
+pub(crate) fn contains_fn(t: &Type) -> bool {
+    match t {
+        Type::Fn(..) => true,
+        Type::List(e) | Type::Option(e) => contains_fn(e),
+        Type::Result(o, e) => contains_fn(o) || contains_fn(e),
+        Type::Tuple(ts) => ts.iter().any(contains_fn),
+        Type::Record(fs) => fs.iter().any(|(_, t)| contains_fn(t)),
+        _ => false,
+    }
+}
+
 /// The static signature of a module-level `Def name Fn {params} body`.
 struct Sig {
     /// Parameters in order: their name and declared type (`Unknown` if untyped).
@@ -595,6 +611,11 @@ pub enum InferredWit {
     Known(String),
     Unit,
     Unknown,
+    /// The result is (or contains) a function value (5.8): statically known,
+    /// but unspellable at a component boundary — WIT has no function type.
+    /// Synthesis reports the deliberate boundary diagnostic, not the generic
+    /// cannot-infer one.
+    Func,
 }
 
 /// Phase B bridge (3.8): infer a def's *result* WIT type using the full Phase
@@ -617,6 +638,7 @@ pub fn infer_wit_result(
     };
     match ty {
         Type::Unit => InferredWit::Unit,
+        other if contains_fn(&other) => InferredWit::Func,
         other => match type_to_wit(&other) {
             Some(text) => InferredWit::Known(text),
             None => InferredWit::Unknown,
@@ -805,6 +827,8 @@ impl<'a> Checker<'a> {
         // structural checks over the declarations, independent of expression
         // typing (4.5).
         validate_defresources(arena, roots)?;
+        // Exported names, for the 5.8 boundary rule below.
+        let exported = crate::wit::export_names(arena, roots);
         for &root in roots {
             if let Some((name, expr)) = as_def(arena, root) {
                 // Check the bound expression. For an `Fn`, check its body with
@@ -815,13 +839,26 @@ impl<'a> Checker<'a> {
                 // field order and flags bit positions) and Option-A int widening
                 // at the boundary is admitted.
                 let expected = self.export_results.get(name).cloned();
-                if let Some(params) = fn_params(arena, expr) {
+                let ret = if let Some(params) = fn_params(arena, expr) {
                     let mut scope: Scope = params.clone();
                     let body = fn_body(arena, expr).expect("fn with params has a body");
-                    self.check(body, expected.as_ref(), &mut scope)?;
+                    self.check(body, expected.as_ref(), &mut scope)?
                 } else {
                     let mut scope: Scope = Vec::new();
-                    self.check(expr, expected.as_ref(), &mut scope)?;
+                    self.check(expr, expected.as_ref(), &mut scope)?
+                };
+                // Boundary rule (5.8, first cut): a function value cannot cross
+                // a component boundary — an exported def whose (inferred) result
+                // carries a function type is a deliberate compile error, in the
+                // interpreter/runner exactly as in the wasm build (oracle
+                // parity). Gradual (`Unknown`) results are untouched: they
+                // already fail WIT synthesis with the cannot-infer diagnostic.
+                if contains_fn(&ret) && exported.contains(name) {
+                    return Err(format!(
+                        "eval error: export `{name}`: function types cannot cross \
+                         component boundaries yet; import the combinator as a macro \
+                         so it expands into this component instead"
+                    ));
                 }
             } else {
                 // A bare top-level expression (the playground evaluates these).

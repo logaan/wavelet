@@ -901,6 +901,16 @@ fn infer_sig(
         Inferred::Unknown => match crate::check::infer_wit_result(arena, roots, &params, body) {
             crate::check::InferredWit::Known(t) => Some(t),
             crate::check::InferredWit::Unit => None,
+            // Boundary rule (5.8, first cut): the result is a function value —
+            // deliberately unspellable at a component boundary (WIT has no
+            // function type), so say so rather than "cannot infer".
+            crate::check::InferredWit::Func => {
+                return Err(format!(
+                    "`{name}`: function types cannot cross component boundaries yet; \
+                     import the combinator as a macro so it expands into this \
+                     component instead"
+                ));
+            }
             crate::check::InferredWit::Unknown => {
                 return Err(format!(
                     "cannot infer result type of `{name}` (use the Export record form)"
