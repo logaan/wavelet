@@ -51,16 +51,35 @@ transforms, and harness). The suite's WIT is vendored under
 - **`src/roundtrip-values.wlt` — the callee role for `values`. Types fully,
   does not yet compile.** The parallel to the resources callee: exports the
   whole `values` interface, every function signature-annotated so WIT synthesis
-  derives the interface's exact shape (which it now does, for all 35 functions),
-  with real char next-scalar arithmetic (the old char-identity gap is closed via
-  `to-u32`/`to-char`). The remaining blocker is the wasm backend: it does not
-  yet implement the higher-order list builtins `map`/`filter`/`fold`, the
-  list-building primitives `push`/`concat`, or `flg`/`contains` — used only by
-  the list and flags functions (`list-*-rt`, `tuple-nested-rt`, `points-rt`,
-  `permissions-rt`). Since a `values` export is all-or-nothing, the file builds
-  no farther until those land; then a `test-values-callee.sh` (parallel to
-  `test-resources-callee.sh`) will drive it under a rust caller via
-  `run-values()`.
+  derives the interface's exact shape (for all 35 functions), with real char
+  next-scalar arithmetic. On the wasm backend, every scalar / char / string /
+  record / variant / enum / option / result / **flags** transform and every
+  list function (`map`/`filter`/`fold`) now compiles. In particular
+  `permissions-rt` (the flags complement `v ^ all()`) is expressed with **zero
+  new language surface** — a `Match` over the 16 declaration-order flags
+  literals, each result ascribed `The permissions` so the arms unify to the
+  imported flags type (verified in the interpreter oracle and confirmed to lower
+  on the backend). The `none` side of the option round-trips uses the bare
+  `none` symbol (parenthesized `none()` is not lowered; bare `none` is).
+
+  The file is still blocked by **two gaps that need new language surface**, not
+  a conformance rewrite (this corrects the earlier note, and the flags decision
+  Thing's premise, which listed `permissions-rt`/flags as the sole blocker):
+    1. **Tuple construction.** `tup(...)` has no oracle semantics at all — the
+       interpreter reports `unbound name tup in call position` — and the backend
+       has no tuple constructor; bare `(a b)` reads as a call form. There is no
+       way to *build* a tuple value in Wavelet source today (tuple *patterns*
+       already work). Blocks `tuple-rt`, `tuple-nested-rt`, and the `ok` side of
+       `result-tuple-direction-rt`.
+    2. **`drop` / no-result bodies.** `drop` is an interpreter builtin (returns
+       unit) but is absent from the backend's builtin set, and a no-result
+       function needs a unit-producing body the backend can lower. Blocks
+       `no-result` and `no-params-no-result`.
+
+  Because a `values` export is all-or-nothing, these keep the file un-buildable,
+  so `test-values-callee.sh` (parallel to `test-resources-callee.sh`) is
+  deferred until a tuple constructor and backend `drop` land; everything else
+  already compiles.
 
 - **`src/roundtrip.wlt` — the full symmetric callee role. Does not build; kept
   as the target.** Exporting the whole world at once is all-or-nothing, and a
