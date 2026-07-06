@@ -99,6 +99,18 @@ Def first Fn {} head(lv/nums())
 
 Export {name: firstpt params: {} result: s64}
 Def firstpt Fn {} Match head(lv/pts()) [({x: xx} xx) (other 0)]
+
+Export {name: count2 params: {} result: s64}
+Def count2 Fn {} len(tail(lv/nums()))
+
+Export {name: firsttail params: {} result: s64}
+Def firsttail Fn {} head(tail(lv/nums()))
+
+Export {name: rest params: {} result: list(s32)}
+Def rest Fn {} tail(lv/nums())
+
+Export {name: mtail params: {} result: s64}
+Def mtail Fn {} Match tail(lv/nums()) [([a b] add(a b)) (other -1)]
 "#;
 
     std::fs::write(src.join("lst.wlt"), dep).unwrap();
@@ -326,4 +338,21 @@ fn string_elements_store_and_rebox() {
 fn list_field_inside_record_literal_constructs() {
     let mut c = constructed();
     assert_eq!(okc(&mut c, "c-rec-field", &[]), Val::Bool(true));
+}
+
+#[test]
+// `tail` of a canonical list is itself canonical (5.6, zero-copy): a fresh
+// (ptr, len) sharing the operand's element buffer from element[1]. It feeds
+// the canonical `len`/`head` slices directly and a list Match destructures it
+// — every answer equal to the interpreter's `tail`.
+fn tail_over_canonical_list_is_zero_copy() {
+    let Some(mut c) = composed() else { return };
+    // tail([1 2 3]) = [2 3]
+    assert_eq!(ok(&mut c, "count2", &[]), Val::S64(2));
+    assert_eq!(ok(&mut c, "firsttail", &[]), Val::S64(2));
+    assert_eq!(ok(&mut c, "mtail", &[]), Val::S64(5));
+    assert_eq!(
+        ok(&mut c, "rest", &[]),
+        Val::List(vec![Val::S32(2), Val::S32(3)])
+    );
 }
