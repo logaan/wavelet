@@ -15,14 +15,15 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
-- **`map` and `fold` are now compiled by the wasm backend (5.12).** `map(f,
-  list)` applies a function value to each element and collects the results in a
-  length-preserving list; `fold(f, acc, list)` left-folds, applying `f` to the
-  `(acc, elem)` tuple at each step. Both work in compiled components as well as
-  the interpreter, `f` may be a named function or an inline `Fn` literal, and
-  they nest. Previously these ran only under the interpreter; the documented
-  `map-square` and `std-fold` examples now agree between the interpreter and the
-  compiled artifact.
+- **The higher-order list builtins `map`, `filter`, and `fold` are now compiled
+  by the wasm backend (5.12).** `map(f, list)` applies a function value to each
+  element (length-preserving); `filter(f, list)` keeps the elements for which
+  the predicate returns true; `fold(f, acc, list)` left-folds, applying `f` to
+  the `(acc, elem)` tuple at each step. All three work in compiled components as
+  well as the interpreter, `f` may be a named function or an inline `Fn` literal,
+  and they nest. Previously these ran only under the interpreter; the documented
+  `map-square`, `std-fold`, and `std-filter` examples now agree between the
+  interpreter and the compiled artifact.
 
 - **Function (arrow) types in the checker (5.8, Phase D).** A `Fn` literal whose
   parameter types and inferred result are all concrete now carries a static

@@ -40,6 +40,12 @@ Def sumf Fn {} fold(Fn {acc x} add(acc x) 0 [1 2 3 4 5])
 
 Export {name: foldempty params: {} result: s64}
 Def foldempty Fn {} fold(Fn {acc x} add(acc x) 7 [])
+
+Export {name: filt params: {} result: list(s32)}
+Def filt Fn {} The list(s32) filter(Fn {x: s32} gt(x 2) [1 2 3 4 1])
+
+Export {name: filtnone params: {} result: list(s32)}
+Def filtnone Fn {} The list(s32) filter(Fn {x: s32} gt(x 99) [1 2 3])
 "#;
     let app_path = src.join("app.wlt");
     std::fs::write(&app_path, app).unwrap();
@@ -90,6 +96,11 @@ fn map_over_component_exports() {
     );
     assert_eq!(ok(&mut c, "sumf"), Val::S64(15));
     assert_eq!(ok(&mut c, "foldempty"), Val::S64(7));
+    assert_eq!(
+        ok(&mut c, "filt"),
+        Val::List(vec![Val::S32(3), Val::S32(4)])
+    );
+    assert_eq!(ok(&mut c, "filtnone"), Val::List(vec![]));
 }
 
 /// Oracle cross-check: the same bodies as interpreter snippets.
@@ -110,6 +121,8 @@ fn oracle_agrees() {
         ("fold(Fn {acc x} add(acc x) 0 [1 2 3 4 5])", "15"),
         ("fold(Fn {acc x} mul(acc x) 1 [1 2 3 4])", "24"),
         ("fold(Fn {acc x} add(acc x) 7 [])", "7"),
+        ("filter(Fn {x} gt(x 2) [1 2 3 4 1])", "[3, 4]"),
+        ("filter(Fn {x} gt(x 99) [1 2 3])", "[]"),
     ] {
         let r = wavelet::eval_snippet(src);
         assert!(r.ok, "{src}: {}", r.error);
