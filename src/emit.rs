@@ -5833,6 +5833,21 @@ impl<'a> Emitter<'a> {
             }
             "len" => {
                 nargs(1)?;
+                // Type-indexed (5.6): a statically-canonical LIST operand's
+                // length IS the len word of its (ptr, len) area — read it
+                // directly instead of reboxing and walking `len_raw`. Only
+                // lists qualify: a string's `len` is its CHAR count (not the
+                // byte length the word stores), and a tuple's canonical layout
+                // is inline fields (no len word) — both keep the boxed path.
+                if let Some(mt) = self.node_mem(fx, items[0])
+                    && matches!(self.mem_tys[mt as usize], WitTy::List(_))
+                {
+                    self.expr_mem(fx, items[0], mt, false)?;
+                    fx.op(I::I32Load(ma(4, 2)));
+                    fx.op(I::I64ExtendI32U);
+                    fx.op(I::Call(self.h.box_int));
+                    return Ok(());
+                }
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.len_raw));
                 fx.op(I::I64ExtendI32U);
