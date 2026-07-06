@@ -30,10 +30,12 @@ use wavelet::host::{HostComponent, Val};
 use wavelet::printer::print;
 use wavelet::reader::read_file;
 
-/// The backend's `to-string` helper only covers int/bool/string; floats,
-/// chars, lists, records, tuples, variants, and symbols hit `unreachable`.
-/// Fixed by 6.2 F2: port `print_value` over the box layout.
-const TOSTR_TRAP: &str = "backend `to-string` traps on anything but int/bool/string (6.2 F2)";
+/// The backend's `to-string` now ports `print_value` over the box layout for
+/// int/bool/string and every compound; only `float` and `char` values still
+/// hit `unreachable` (Rust's `{f:?}` shortest round-trip and `{c:?}` UTF-8
+/// escaping are not yet reimplemented in wasm). A float/char *anywhere* in the
+/// value keeps the example on this SKIP.
+const TOSTR_TRAP: &str = "backend `to-string` still traps on float/char values (5.6)";
 /// A stdlib builtin the wasm backend does not implement yet (5.6/5.7).
 const BUILTIN: &str = "stdlib builtin missing from the wasm backend (5.6/5.7)";
 /// The stdlib constant `pi` has no module-level binding in the backend (5.7).
