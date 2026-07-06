@@ -5244,6 +5244,18 @@ impl<'a> Emitter<'a> {
                     Node::Qsym(alias, fname) => self
                         .dep_result_mem_ty(alias, fname)
                         .is_some_and(|t| t == *ty),
+                    // `tail` of a canonical list is itself canonical: the
+                    // result is a fresh (ptr, len) pair sharing the operand's
+                    // element buffer from element[1] (zero-copy — 5.6). tail
+                    // preserves the list type, so the operand's Mem layout must
+                    // equal this result's.
+                    Node::Sym(name)
+                        if name.as_str() == "tail"
+                            && matches!(ty, WitTy::List(_))
+                            && items.len() == 2 =>
+                    {
+                        self.node_mem_ty(look, items[1]).as_ref() == Some(ty)
+                    }
                     // a variant-case constructor call builds in place (5.4)
                     Node::Sym(_) => self.ctor_admissible(look, id, ty),
                     _ => false,
@@ -5532,6 +5544,54 @@ impl<'a> Emitter<'a> {
                             if let [_ty, expr] = *args {
                                 return self.expr_mem(fx, expr, t, tail);
                             }
+                        }
+                        // `tail` of a canonical list, zero-copy (5.6): a fresh
+                        // (ptr, len) pair whose data pointer is the operand's
+                        // advanced one element and whose length is one less —
+                        // it shares the operand's packed element buffer (values
+                        // are immutable and the arena is not reset mid-call, so
+                        // sharing is unobservable). Empty operand traps, like
+                        // the boxed `tail_h` / the oracle's `tail` of empty.
+                        "tail" if matches!(ty, WitTy::List(_)) => {
+                            let WitTy::List(elem) = ty.clone() else {
+                                unreachable!()
+                            };
+                            let [operand] = args else {
+                                return Err("malformed tail".into());
+                            };
+                            let ot = self.node_mem(fx, *operand).ok_or(
+                                "internal: canonical tail over a non-canonical operand",
+                            )?;
+                            let area = fx.local(ValType::I32);
+                            self.expr_mem(fx, *operand, ot, false)?;
+                            fx.op(I::LocalSet(area));
+                            // trap on the empty list
+                            fx.op(I::LocalGet(area));
+                            fx.op(I::I32Load(ma(4, 2)));
+                            fx.op(I::I32Eqz);
+                            fx.op(I::If(BlockType::Empty));
+                            fx.op(I::Unreachable);
+                            fx.op(I::End);
+                            let p = fx.local(ValType::I32);
+                            fx.op(I::I32Const(8));
+                            fx.op(I::Call(self.h.alloc));
+                            fx.op(I::LocalSet(p));
+                            // new.ptr = operand.ptr + elem_size
+                            fx.op(I::LocalGet(p));
+                            fx.op(I::LocalGet(area));
+                            fx.op(I::I32Load(ma(0, 2)));
+                            fx.op(I::I32Const(elem_size(&elem) as i32));
+                            fx.op(I::I32Add);
+                            fx.op(I::I32Store(ma(0, 2)));
+                            // new.len = operand.len - 1
+                            fx.op(I::LocalGet(p));
+                            fx.op(I::LocalGet(area));
+                            fx.op(I::I32Load(ma(4, 2)));
+                            fx.op(I::I32Const(1));
+                            fx.op(I::I32Sub);
+                            fx.op(I::I32Store(ma(4, 2)));
+                            fx.op(I::LocalGet(p));
+                            return Ok(());
                         }
                         _ if ty.variant_cases().is_some() => {
                             // a case-constructor call builds disc+payload in
