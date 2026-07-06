@@ -60,7 +60,6 @@ const SKIP: &[(&str, &str)] = &[
     ("std-pi", PI),
     ("std-read", BUILTIN),           // read
     ("std-seq-basics", BUILTIN),     // reverse
-    ("std-seq-mutate", BUILTIN),     // get
     ("std-strings", BUILTIN),     // split
     ("std-zip", BUILTIN),         // zip
     ("values-atoms", FLAGS),

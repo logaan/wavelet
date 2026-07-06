@@ -6910,6 +6910,238 @@ impl<'a> Emitter<'a> {
                     }
                 }
             }
+            "get" => {
+                // Index a list OR tuple; out-of-range (idx >= len, unsigned so a
+                // negative index also) traps, like the oracle's range error. A
+                // record or other tag traps (the oracle errors on those too).
+                nargs(2)?;
+                let lst = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(lst));
+                let idx = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::I32WrapI64);
+                fx.op(I::LocalSet(idx));
+                let tg = fx.local(ValType::I32);
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::LocalTee(tg));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Eq);
+                fx.op(I::LocalGet(tg));
+                fx.op(I::I32Const(TAG_TUP));
+                fx.op(I::I32Eq);
+                fx.op(I::I32Or);
+                fx.op(I::I32Eqz);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(idx));
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::I32GeU);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(idx));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+            }
+            "put" => {
+                // Copy the list and overwrite element `idx` with `v`, returning
+                // the new list; idx >= len traps (oracle range error). `put`
+                // requires a list (not a tuple), matching the oracle's want_list.
+                nargs(3)?;
+                let lst = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(lst));
+                let idx = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::I32WrapI64);
+                fx.op(I::LocalSet(idx));
+                let v = fx.local(ValType::I32);
+                self.expr(fx, items[2], false)?;
+                fx.op(I::LocalSet(v));
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n));
+                fx.op(I::LocalGet(idx));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32GeU);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                let sz = fx.local(ValType::I32);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(sz));
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(sz));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(lst));
+                fx.op(I::LocalGet(sz));
+                fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(idx));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(out));
+            }
+            "push" => {
+                // Copy the list and append `v` at the end, returning the new list.
+                nargs(2)?;
+                let lst = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(lst));
+                let v = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::LocalSet(v));
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n));
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(lst));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(out));
+            }
+            "concat" => {
+                // Concatenate two lists into a fresh list (oracle: want_list ++
+                // want_list). A non-list operand traps.
+                nargs(2)?;
+                let a = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(a));
+                let b = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::LocalSet(b));
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                let n1 = fx.local(ValType::I32);
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n1));
+                let n2 = fx.local(ValType::I32);
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n2));
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(n1));
+                fx.op(I::LocalGet(n2));
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(n1));
+                fx.op(I::LocalGet(n2));
+                fx.op(I::I32Add);
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(n1));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(n1));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(n2));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+                fx.op(I::LocalGet(out));
+            }
             "abs" => {
                 // |n| over an int (branch: n<0 ? -n : n) or a dec (F64Abs);
                 // any other tag traps, matching the oracle's `want_num`.
@@ -7041,6 +7273,10 @@ const BUILTINS: &[&str] = &[
     "abs",
     "len",
     "empty",
+    "get",
+    "put",
+    "push",
+    "concat",
     "head",
     "tail",
     "map",
