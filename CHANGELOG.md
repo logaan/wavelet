@@ -15,6 +15,18 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **The remaining value builtins now compile to wasm components.** The backend
+  gained `abs`, `min`, `max`, `empty`, `get`, `put`, `push`, `concat`, `reverse`,
+  `range`, `zip`, `split`, `join`, `contains`, `apply`, and `drop`, plus the
+  `pi` constant — previously each traded on the interpreter only, so a compiled
+  component using any of them failed to build. Each follows the interpreter's
+  reference semantics exactly (out-of-range `get`/`put` traps, `range`/`reverse`
+  over empty lists, `zip` stopping at the shorter list, Rust's empty-separator
+  `split`, `min`/`max` over the shared total order, and so on). This drains the
+  differential harness's SKIP list down to the entries gated on open decisions
+  (float/char `to-string`, flags construction, a computed-function record-payload
+  ABI, and a wasm-side reader for `read`).
+
 - **The higher-order list builtins `map`, `filter`, and `fold` are now compiled
   by the wasm backend (5.12).** `map(f, list)` applies a function value to each
   element (length-preserving); `filter(f, list)` keeps the elements for which
