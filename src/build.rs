@@ -87,9 +87,9 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
             // A pure macro import (§6.3) is resolved to a macro component and
             // run during expand ([`crate::macrodep`]); it is *not* a runtime
             // dependency of this component, so it contributes no `Dep` and is
-            // skipped here. (The common case is macro-only; an import that is
-            // both a runtime dep and a macro library is an unsupported edge
-            // case — see `wit::is_macro_only`.)
+            // skipped here. (A single import cannot be both a macro library and
+            // a runtime dep — goal-7 chore 7.4; a package that is both is
+            // imported twice. See `wit::is_macro_only`.)
             if wit::is_macro_only(imp) {
                 continue;
             }

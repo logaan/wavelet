@@ -1144,11 +1144,14 @@ pub fn synthesize_fetch_world(arena: &Arena, roots: &[NodeId]) -> Result<String,
 /// the consumer component, so it is excluded from world synthesis and from
 /// sibling-edge composition.
 ///
-/// The common case is that `macros: true` means macro-only. An import that is
-/// *both* a runtime dependency and a macro library is an unsupported edge case
-/// for now: it would need two surfaces (a runtime import in the world plus a
-/// compile-time macro instance). That is noted as a follow-up; until then
-/// `macros: true` is treated as macro-only here.
+/// The common case is that `macros: true` means macro-only. A *single* import
+/// cannot currently be both a runtime dependency and a macro library — that
+/// would need one import form to project two surfaces (a runtime import in the
+/// world plus a compile-time macro instance), an explicit import-surface
+/// addition tracked as goal-7 chore 7.4. A package that provides both is used
+/// today by importing it twice: once `macros: true` (compile-time) and once as
+/// an ordinary runtime import (see docs/docs/language/macros.mdx). Until the
+/// single-import form lands, `macros: true` is treated as macro-only here.
 pub fn is_macro_only(imp: &ImportInfo) -> bool {
     imp.macros
 }
