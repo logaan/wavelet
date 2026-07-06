@@ -13,6 +13,15 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- **Shebang support for `.wlt` scripts.** A source file may begin with a
+  `#!/usr/bin/env wavelet` line so it can be marked executable and run directly
+  (`./script.wlt`). The reader skips a leading shebang line — recognised only at
+  the very start of the file; `#` is not a comment anywhere else — and a bare
+  `wavelet <file.wlt> [args...]` invocation runs the script through the same
+  compiled path (with interpreter fallback) as `wavelet run`.
+
 ### Changed
 
 - **`wavelet run` and `wavelet repl` now execute on the compiled wasm path**

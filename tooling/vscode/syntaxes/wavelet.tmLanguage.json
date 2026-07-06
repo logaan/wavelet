@@ -5,6 +5,7 @@
   "fileTypes": ["wlt"],
   "comment": "Token classes mirror the Wavelet lexer (src/lexer.rs) and the shared Prism grammar (docs/src/prism/wavelet.js). Keep the two in sync.",
   "patterns": [
+    { "include": "#shebang" },
     { "include": "#comment" },
     { "include": "#string" },
     { "include": "#char" },
@@ -19,6 +20,11 @@
     { "include": "#punctuation" }
   ],
   "repository": {
+    "shebang": {
+      "comment": "A leading `#!/usr/bin/env wavelet` shebang lets a .wlt file run as a script (only the first line is a shebang in the lexer; # is not a comment elsewhere).",
+      "name": "comment.line.number-sign.shebang.wavelet",
+      "match": "^#!.*$"
+    },
     "comment": {
       "name": "comment.line.double-slash.wavelet",
       "match": "//.*$"

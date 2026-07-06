@@ -55,6 +55,16 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
     let b = src.as_bytes();
     let mut i = 0usize;
     let mut out = Vec::new();
+    // A leading shebang line (`#!/usr/bin/env wavelet`) lets a `.wlt` file be
+    // executed directly as a script (7.2). It is recognised only at byte 0 —
+    // `#` is not a comment anywhere else (`//` is the only comment form) — and
+    // is skipped up to, but not including, the newline that ends it, so the
+    // rest of the file lexes normally.
+    if b.starts_with(b"#!") {
+        while i < b.len() && b[i] != b'\n' {
+            i += 1;
+        }
+    }
     while i < b.len() {
         let c = b[i] as char;
         match c {
