@@ -80,6 +80,9 @@ Def mk2 Fn {} tp/mk(1 2)
 
 Export {name: use-internal params: {} result: bool}
 Def use-internal Fn {} eq(mk2() Quote (1 2))
+
+Export {name: t-eq params: {a: s32 b: s32 c: s32 d: s32} result: bool}
+Def t-eq Fn {a: s32 b: s32 c: s32 d: s32} eq(tp/mk(a b) tp/mk(c d))
 "#;
 
     std::fs::write(src.join("tup.wlt"), dep).unwrap();
@@ -159,4 +162,20 @@ fn tuple_export_takes_the_retptr_fast_path() {
         panic!("fwd should return a tuple, got {got:?}");
     };
     assert_eq!(items, vec![Val::S32(2), Val::S32(3)]);
+}
+
+#[test]
+// `eq` over two dep-born (canonical) tuples takes the type-indexed
+// structural fast path (5.6): elements compare at their offsets with no
+// rebox, agreeing with the interpreter's positional `Value::Tup` equality.
+fn eq_over_canonical_tuples_is_structural() {
+    let Some(mut c) = composed() else { return };
+    assert_eq!(
+        ok(&mut c, "t-eq", &[Val::S32(1), Val::S32(2), Val::S32(1), Val::S32(2)]),
+        Val::Bool(true)
+    );
+    assert_eq!(
+        ok(&mut c, "t-eq", &[Val::S32(1), Val::S32(2), Val::S32(1), Val::S32(3)]),
+        Val::Bool(false)
+    );
 }
