@@ -13,6 +13,22 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Changed
+
+- **`wavelet run` and `wavelet repl` now execute on the compiled wasm path**
+  instead of the tree-walking interpreter (goal 6, Steps 2 and 6.5). `run`
+  builds the program through the real emitter, composes its runtime `Import`s
+  into one component, instantiates it in the capability-free `wasmtime` host,
+  and calls the exported `run`. The REPL evaluates each expression by compiling
+  the accumulated session (its definitions plus a synthetic `repl-eval` entry)
+  and printing the value the guest's `to-string` renders. For the covered
+  language subset the output is identical to before — the interpreter remains
+  the reference oracle the backend is validated against. A program (or REPL
+  line) that hits a decision-gated backend hole (float/char `to-string`, runtime
+  flag literals, a record-payload `apply`, or `read`) transparently falls back
+  to the interpreter for that entry, announced on stderr, so nothing that ran
+  before regresses. Macro expansion had already moved to the compiled path.
+
 ### Added
 
 - **The remaining value builtins now compile to wasm components.** The backend

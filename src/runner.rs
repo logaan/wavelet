@@ -371,3 +371,136 @@ fn parse_import(arena: &Arena, payload: NodeId) -> Option<ImportSpec> {
         open,
     })
 }
+
+// ---------------------------------------------------------------------------
+// Compiled `wavelet run` (goal 6.5)
+// ---------------------------------------------------------------------------
+
+/// Run a program on the **compiled** path: build every file through the real
+/// emitter (`build::build_files`), compose the runtime imports into one
+/// self-contained artifact (build does this via `wac` for a multi-file
+/// program), instantiate it in the capability-free `wasmtime` host, and call the
+/// exported `run` entry — the wasm analogue of the interpreter's "look up `run`,
+/// apply it". The result is discarded, exactly as the interpreter path does; a
+/// program's only observable is its exit status and any error text.
+///
+/// Everything is staged into a private temp project so the build's side effects
+/// (synthesised `wit/`, `.wasm` artifacts) never touch the user's tree, and is
+/// removed afterwards. `Err` carries the failing stage; the CLI's [`run`]
+/// wrapper falls back to the interpreter on any such failure (an unbuildable
+/// program, a program with no exported `run`, or a runtime trap on a
+/// decision-gated backend hole).
+pub fn run_files_compiled(paths: &[String]) -> Result<(), String> {
+    use std::path::Path;
+
+    let Some(entry) = paths.first() else {
+        return Err("no input files".to_string());
+    };
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("wavelet-run-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src_dir = dir.join("src");
+    std::fs::create_dir_all(&src_dir).map_err(|e| format!("setup: {e}"))?;
+
+    let run = (|| {
+        // Stage each input beside the others under a fresh `src/`, so imports
+        // resolve against the build set and the synthesised `wit/` lands in the
+        // temp project rather than the user's.
+        let mut staged = Vec::with_capacity(paths.len());
+        for p in paths {
+            let name = Path::new(p)
+                .file_name()
+                .ok_or_else(|| format!("{p}: bad file name"))?;
+            let dest = src_dir.join(name);
+            std::fs::copy(p, &dest).map_err(|e| format!("{p}: {e}"))?;
+            staged.push(dest.to_string_lossy().into_owned());
+        }
+
+        let out_dir = dir.join("out");
+        let _outputs = crate::build::build_files(&staged, out_dir.to_str().unwrap())
+            .map_err(|e| format!("build: {e}"))?;
+
+        // The entry's package fixes both the runnable artifact's name and the
+        // exported interface `run` lives in.
+        let entry_src = std::fs::read_to_string(&staged[0]).map_err(|e| format!("read: {e}"))?;
+        let (arena, roots) = crate::read_file(&entry_src).map_err(|e| format!("read: {e}"))?;
+        let pkg = find_package_full(&arena, &roots)
+            .ok_or_else(|| format!("{entry}: no `Package` declaration"))?;
+        let (pkg_path, version) = match pkg.split_once('@') {
+            Some((p, v)) => (p.to_string(), Some(v.to_string())),
+            None => (pkg.clone(), None),
+        };
+        let iface = match &version {
+            Some(v) => format!("{pkg_path}/api@{v}"),
+            None => format!("{pkg_path}/api"),
+        };
+
+        // A multi-file program with a runtime import is composed into
+        // `app.wasm`; a self-contained one is its own single component named for
+        // its package. Prefer the composed artifact when present.
+        let app = out_dir.join("app.wasm");
+        let entry_component = out_dir.join(format!("{}.wasm", pkg_path.replace(':', "-")));
+        let artifact = if app.exists() {
+            app
+        } else if entry_component.exists() {
+            entry_component
+        } else {
+            return Err(format!(
+                "no runnable artifact for `{pkg_path}` (a multi-component program \
+                 needs composition, which requires `wac`)"
+            ));
+        };
+
+        let mut component =
+            crate::host::HostComponent::from_file(&artifact).map_err(|e| format!("load: {e}"))?;
+        // Call `run` for its effects/exit status; the returned value is
+        // discarded, mirroring the interpreter path.
+        component
+            .call_instance(&iface, "run", &[])
+            .map_err(|e| format!("{entry}: {e}"))?;
+        Ok(())
+    })();
+
+    let _ = std::fs::remove_dir_all(&dir);
+    run
+}
+
+/// `wavelet run`: execute on the compiled path, falling back to the interpreter
+/// for a program the backend cannot yet run (an unbuildable feature, a `run`
+/// that is defined but not exported, or a runtime trap on a decision-gated hole
+/// such as float/char `to-string`, runtime flags, record-payload `apply`, or
+/// `read`). The fallback preserves today's behaviour with no regression and is
+/// announced on stderr; when the interpreter also errors, its message (clearer
+/// than a wasm trap — F5) is what the user sees. The interpreter therefore
+/// remains the fallback executor on this surface until those decisions land
+/// (6.6 not yet fully reachable for `run`).
+pub fn run(paths: &[String]) -> Result<(), String> {
+    match run_files_compiled(paths) {
+        Ok(()) => Ok(()),
+        Err(compiled_err) => match run_files(paths) {
+            Ok(()) => {
+                eprintln!("(interpreter fallback: compiled path unavailable: {compiled_err})");
+                Ok(())
+            }
+            Err(interp_err) => Err(interp_err),
+        },
+    }
+}
+
+/// The entry's full package string including version, e.g. `demo:main@0.1.0`
+/// (unlike [`find_package`], which strips the version).
+fn find_package_full(arena: &Arena, roots: &[NodeId]) -> Option<String> {
+    for &root in roots {
+        if let Node::Tup(items) = arena.node(root)
+            && items.len() >= 2
+            && matches!(arena.node(items[0]), Node::Sym(s) if s == "package-MACRO")
+            && let Node::Str(s) = arena.node(items[1])
+        {
+            return Some(s.clone());
+        }
+    }
+    None
+}

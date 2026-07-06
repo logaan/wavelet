@@ -238,7 +238,7 @@ fn run_cmd(rest: &[String]) -> ExitCode {
         Some(i) => rest[..i].to_vec(),
         None => rest.to_vec(),
     };
-    match wavelet::runner::run_files(&files) {
+    match wavelet::runner::run(&files) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{e}");
