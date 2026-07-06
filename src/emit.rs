@@ -1405,6 +1405,13 @@ struct Binding {
     /// binding compile to a direct call instead of the TAG_FN indirect path;
     /// every other use of the binding still reads the boxed closure value.
     known_fn: Option<u32>,
+    /// 5.8 devirtualization: when this binding is initialised with an inline
+    /// `Fn` literal (with captures) whose checked type is a concrete arrow,
+    /// the lambda has been lambda-lifted to a top-level core function at a
+    /// pre-reserved index; this indexes [`Emitter::known_lambdas`], which
+    /// carries that index and the ordered capture slots to push at each direct
+    /// apply. Non-apply uses still read the boxed closure value `fn_form` built.
+    known_lambda: Option<u32>,
 }
 
 impl Binding {
@@ -1413,12 +1420,28 @@ impl Binding {
             local,
             repr,
             known_fn: None,
+            known_lambda: None,
         }
     }
     /// A boxed (i32 box-pointer) binding — the pre-goal-5 default.
     fn boxed(local: u32) -> Binding {
         Binding::new(local, Repr::Boxed)
     }
+}
+
+/// 5.8 Fn-literal capture devirtualization: a lambda-lifted `Fn` literal.
+/// Its body is emitted once as a top-level core function taking its captures
+/// (in `captures` order) as leading typed parameters followed by its boxed
+/// value parameters; a direct apply pushes the capture locals and the boxed
+/// arguments and `call`s `reserved_idx` instead of allocating a closure box
+/// and dispatching through the funcref table.
+#[derive(Clone)]
+struct KnownLambda {
+    reserved_idx: u32,
+    /// `(repr, local)` of each capture, in the lifted function's leading-param
+    /// order — pushed verbatim (each `local` is live at every apply site because
+    /// locals are single-assignment and this binding is lexically scoped).
+    captures: Vec<(Repr, u32)>,
 }
 
 /// The unboxed representation of a *scalar-kinded* value on the wasm stack
@@ -1475,6 +1498,18 @@ struct Emitter<'a> {
     closure_bodies: Vec<(u32, Function)>,
     /// Interned def names for [`Binding::known_fn`] (5.8 devirtualization).
     known_fn_names: Vec<String>,
+    /// 5.8 Fn-literal capture devirtualization. `known_lambdas` backs
+    /// [`Binding::known_lambda`]. `lambda_reserved` maps each qualifying
+    /// `Fn`-literal node (an inline Let init with a concrete arrow type) to the
+    /// core-function index reserved for its lifted body — reserved right after
+    /// the overload block and before the export wrappers, so `lambda_order`
+    /// (reservation order) drives where the stashed bodies in `lambda_stash`
+    /// are pushed into `bodies`. Empty on the macro-component path (no
+    /// reservations there), so `let_form` there falls back to the boxed closure.
+    known_lambdas: Vec<KnownLambda>,
+    lambda_reserved: HashMap<NodeId, u32>,
+    lambda_order: Vec<NodeId>,
+    lambda_stash: HashMap<NodeId, (u32, Function)>,
     fn_wrappers: HashMap<String, u32>, // def name → table slot of its wrapper
     fn_box_cache: HashMap<String, u32>, // def name → static closure box addr
     var_box_cache: HashMap<String, u32>, // payload-less variant case → static box addr
@@ -2385,6 +2420,72 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// 5.8 capture devirtualization: lambda-lift a qualifying `Fn` literal
+    /// (an inline Let init with a pre-reserved index) to a top-level core
+    /// function and record it on the binding.
+    ///
+    /// The lifted function takes the lambda's captures — every currently-visible
+    /// local, in the same name-sorted order `fn_form` uses — as leading typed
+    /// parameters, followed by its value parameters (boxed, first cut), and
+    /// returns a boxed result. Its body is compiled here (captures and params
+    /// bound as direct wasm parameters, not env-unpacked) and stashed for the
+    /// assembly step to push at `reserved_idx`. Returns the `known_lambdas`
+    /// index, or `None` when the node was not pre-reserved (e.g. the macro
+    /// component path, or a lambda in an un-scanned body).
+    fn compile_known_lambda(
+        &mut self,
+        fx: &FnCtx,
+        fn_node: NodeId,
+    ) -> Result<Option<u32>, String> {
+        let Some(&reserved_idx) = self.lambda_reserved.get(&fn_node) else {
+            return Ok(None);
+        };
+        let Node::Tup(items) = self.arena.node(fn_node).clone() else {
+            return Ok(None);
+        };
+        if items.len() != 3 {
+            return Ok(None);
+        }
+        let (params_id, body) = (items[1], items[2]);
+        let params = param_names(self.arena, params_id)?;
+
+        // captures: every visible local by name (later scopes shadow earlier),
+        // sorted so the layout is deterministic — identical to `fn_form`.
+        let mut cap_map: HashMap<String, Binding> = HashMap::new();
+        for scope in &fx.scopes {
+            for (k, &v) in scope {
+                cap_map.insert(k.clone(), v);
+            }
+        }
+        let mut caps: Vec<(String, Binding)> = cap_map.into_iter().collect();
+        caps.sort_by(|a, b| a.0.cmp(&b.0));
+        let ncap = caps.len() as u32;
+
+        let mut cf = FnCtx::new(ncap + params.len() as u32);
+        let mut scope = HashMap::new();
+        for (i, (cname, cb)) in caps.iter().enumerate() {
+            // a capture becomes a direct typed parameter at its current repr
+            scope.insert(cname.clone(), Binding::new(i as u32, cb.repr));
+        }
+        for (j, p) in params.iter().enumerate() {
+            scope.insert(p.clone(), Binding::boxed(ncap + j as u32));
+        }
+        cf.scopes.push(scope);
+        self.expr(&mut cf, body, true)?;
+
+        let mut pvts: Vec<ValType> = caps.iter().map(|(_, b)| repr_vt(b.repr)).collect();
+        pvts.extend(std::iter::repeat(ValType::I32).take(params.len()));
+        let t = self.ty_idx(pvts, vec![ValType::I32]);
+        self.lambda_stash.insert(fn_node, (t, cf.finish()));
+
+        let captures: Vec<(Repr, u32)> = caps.iter().map(|(_, b)| (b.repr, b.local)).collect();
+        self.known_lambdas.push(KnownLambda {
+            reserved_idx,
+            captures,
+        });
+        Ok(Some(self.known_lambdas.len() as u32 - 1))
+    }
+
     /// Indirect call through a closure box: `(box, payload-box)` via the
     /// funcref table slot stored in the box at offset 4.
     fn closure_call(
@@ -2483,6 +2584,28 @@ impl<'a> Emitter<'a> {
                         let dname = self.known_fn_names[k as usize].clone();
                         return self.internal_call(fx, &dname, args, Repr::Boxed, tail);
                     }
+                    // 5.8 capture devirtualization: an apply through a binding
+                    // holding a lambda-lifted `Fn` literal pushes the captured
+                    // locals (verbatim, at their reprs) and the boxed arguments,
+                    // then calls the lifted function directly — no closure box,
+                    // no funcref dispatch. Arity is guaranteed by the checker
+                    // (`check_indirect_apply`); the lifted body binds each value
+                    // parameter boxed, exactly as the boxed closure would.
+                    if let Some(kl_idx) = fx.lookup(&name).and_then(|b| b.known_lambda) {
+                        let kl = self.known_lambdas[kl_idx as usize].clone();
+                        for (_repr, local) in &kl.captures {
+                            fx.op(I::LocalGet(*local));
+                        }
+                        for a in args {
+                            self.expr(fx, *a, false)?;
+                        }
+                        fx.op(if tail {
+                            I::ReturnCall(kl.reserved_idx)
+                        } else {
+                            I::Call(kl.reserved_idx)
+                        });
+                        return Ok(());
+                    }
                     self.closure_call(fx, head, args, tail)
                 }
                 _ if BUILTINS.contains(&name.as_str()) => self.builtin(fx, &name, args),
@@ -2570,6 +2693,14 @@ impl<'a> Emitter<'a> {
                             self.known_fn_names.len() - 1
                         });
                     b.known_fn = Some(idx as u32);
+                }
+                // 5.8 capture devirtualization: an inline `Fn` literal init
+                // with a concrete arrow type is lambda-lifted to a direct-call
+                // core function; the boxed closure built above still serves any
+                // non-apply use of the binding. (`compile_known_lambda` returns
+                // `None` for a non-reserved node, so the two cases are disjoint.)
+                if let Some(kl) = self.compile_known_lambda(fx, *v)? {
+                    b.known_lambda = Some(kl);
                 }
                 b
             };
@@ -6529,6 +6660,54 @@ const BUILTINS: &[&str] = &[
 
 // --------------------------------------------------------- helper bodies
 
+/// 5.8 pre-scan: collect the `Fn`-literal nodes that qualify for capture
+/// devirtualization — an inline `Fn` bound directly as a `Let` binding init
+/// whose checked type is a fully-concrete arrow (`Type::Fn`). Walks a def body
+/// in deterministic pre-order; the caller reserves one core-function index per
+/// returned node (in this order) so the lifted bodies land at known indices.
+///
+/// Only nodes whose enclosing def is actually emitted are scanned (the caller
+/// passes internal-def bodies), so every reserved index gets exactly one body —
+/// no dangling function declarations. A qualifying lambda the scan misses (in
+/// an overload/value/resource body) simply falls back to the boxed closure.
+fn scan_let_lambdas(
+    arena: &Arena,
+    id: NodeId,
+    node_types: &crate::check::NodeTypes,
+    out: &mut Vec<NodeId>,
+) {
+    let is_fn_arrow = |n: NodeId| -> bool {
+        matches!(arena.node(n), Node::Tup(items)
+            if !items.is_empty()
+                && matches!(arena.node(items[0]), Node::Sym(s) if s == "fn-MACRO"))
+            && matches!(node_types.get(&n), Some(crate::check::Type::Fn(..)))
+    };
+    if let Node::Tup(items) = arena.node(id)
+        && items.len() >= 3
+        && matches!(arena.node(items[0]), Node::Sym(s) if s == "let-MACRO")
+        && let Node::Rec(fields) = arena.node(items[1])
+    {
+        for (_, v) in fields {
+            if is_fn_arrow(*v) {
+                out.push(*v);
+            }
+        }
+    }
+    match arena.node(id) {
+        Node::Tup(items) | Node::Lst(items) => {
+            for &c in items {
+                scan_let_lambdas(arena, c, node_types, out);
+            }
+        }
+        Node::Rec(fields) => {
+            for (_, c) in fields {
+                scan_let_lambdas(arena, *c, node_types, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn emit_core_module(
     arena: &Arena,
     roots: &[NodeId],
@@ -6670,6 +6849,10 @@ fn emit_core_module(
         bodies: Vec::new(),
         closure_bodies: Vec::new(),
         known_fn_names: Vec::new(),
+        known_lambdas: Vec::new(),
+        lambda_reserved: HashMap::new(),
+        lambda_order: Vec::new(),
+        lambda_stash: HashMap::new(),
         fn_wrappers: HashMap::new(),
         fn_box_cache: HashMap::new(),
         var_box_cache: HashMap::new(),
@@ -6985,6 +7168,23 @@ fn emit_core_module(
         em.funcs.insert(mangled.clone(), (take(), params, sig));
     }
 
+    // ---- reserve lifted-lambda indices (5.8 Fn-literal capture devirt)
+    //
+    // Scan every internal def body for `Fn`-literal Let inits with a concrete
+    // arrow type and reserve one core-function index per hit, HERE — right after
+    // the overload block and before the export wrappers (which `take()` their
+    // own indices later). The lifted bodies are pushed into `em.bodies` between
+    // the overload bodies and the export wrappers, in this same reservation
+    // order, so positions match indices (asserted at the push site).
+    for name in &internal_order {
+        let (_, body) = info.defs[name];
+        scan_let_lambdas(arena, body, &em.node_types, &mut em.lambda_order);
+    }
+    for &node in &em.lambda_order.clone() {
+        let idx = take();
+        em.lambda_reserved.insert(node, idx);
+    }
+
     // ---- helper bodies (order must match index assignment above)
     emit_helpers(&mut em)?;
 
@@ -7097,6 +7297,26 @@ fn emit_core_module(
             .map_err(|e| format!("in `{mangled}`: {e}"))?;
         let t = em.ty_idx(sig.param_vts(), vec![repr_vt(sig.result)]);
         em.bodies.push((t, fx.finish()));
+    }
+
+    // ---- lifted lambda bodies (5.8 Fn-literal capture devirtualization)
+    //
+    // Pushed here — after the overload bodies, before the export wrappers — so
+    // each body's position matches the index reserved for it right after the
+    // overload block (asserted below). Every reserved node was compiled during
+    // its enclosing internal def body (`compile_known_lambda` stashed it), so
+    // the stash is complete.
+    for node in em.lambda_order.clone() {
+        let (t, f) = em
+            .lambda_stash
+            .remove(&node)
+            .ok_or_else(|| format!("internal: lifted lambda body for node {node} missing"))?;
+        debug_assert_eq!(
+            n_imports + em.bodies.len() as u32,
+            em.lambda_reserved[&node],
+            "lifted lambda body position must match its reserved index"
+        );
+        em.bodies.push((t, f));
     }
 
     // ---- export wrappers
@@ -8131,6 +8351,10 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
         bodies: Vec::new(),
         closure_bodies: Vec::new(),
         known_fn_names: Vec::new(),
+        known_lambdas: Vec::new(),
+        lambda_reserved: HashMap::new(),
+        lambda_order: Vec::new(),
+        lambda_stash: HashMap::new(),
         fn_wrappers: HashMap::new(),
         fn_box_cache: HashMap::new(),
         var_box_cache: HashMap::new(),
@@ -12226,6 +12450,10 @@ world app {
             bodies: Vec::new(),
             closure_bodies: Vec::new(),
         known_fn_names: Vec::new(),
+        known_lambdas: Vec::new(),
+        lambda_reserved: HashMap::new(),
+        lambda_order: Vec::new(),
+        lambda_stash: HashMap::new(),
             fn_wrappers: HashMap::new(),
             fn_box_cache: HashMap::new(),
             var_box_cache: HashMap::new(),
