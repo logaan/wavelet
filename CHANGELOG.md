@@ -48,11 +48,15 @@ you work, and rename it to the new version when you cut a release.
 
 ### Fixed
 
-- **The compiled backend's `to-string` now quotes and escapes strings**, matching
-  the interpreter's `print_value` (the semantics oracle). Previously the wasm
-  backend printed a string value verbatim while the interpreter surrounded it
-  with `"` and escaped `"` `\\` `\n` `\t` `\r`; the two now agree, closing a
-  batch of differential-test divergences.
+- **The compiled backend's `to-string` now matches the interpreter's
+  `print_value` for strings and compound values.** Strings are quoted and
+  escaped (`"` `\\` `\n` `\t` `\r`); lists print as `[a, b]`, tuples as
+  `(a, b)`, records as `{k: v}`, variants as `name` / `name(payload)`, flags as
+  `{a, b}`, and cells as `cell(v)`, each recursing through `to-string` with the
+  same nested quoting the oracle uses. Previously the backend printed strings
+  verbatim and trapped on every compound. Floats and chars remain the only
+  `to-string` cases still unimplemented (they trap). Closes a large batch of
+  differential-test divergences.
 
 ### Changed
 

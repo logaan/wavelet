@@ -47,46 +47,25 @@ const EXPAND: &str = "`expand` is only available inside a macro library when bui
 /// reason. Removing a fixed entry is part of fixing the backend gap.
 const SKIP: &[(&str, &str)] = &[
     ("eval-apply-list", BUILTIN),     // apply
-    ("eval-fn-by-name", TOSTR_TRAP),  // list result
-    ("eval-fn-by-order", TOSTR_TRAP), // list result
     ("macro-expand", EXPAND),
-    ("macro-gensym-three", TOSTR_TRAP),         // list of symbols
-    ("sf-deftype-cases", TOSTR_TRAP),           // list result
-    ("values-payloadless-results", TOSTR_TRAP), // variant result
-    ("macro-swap", TOSTR_TRAP),
-    ("macro-trylet", TOSTR_TRAP),
     ("map-square", BUILTIN), // map
     ("sf-def", TOSTR_TRAP), // float result
     ("sf-let", PI),
-    ("sf-quasi", TOSTR_TRAP),         // form result
-    ("sf-quote", TOSTR_TRAP),         // form result
-    ("sf-splice", TOSTR_TRAP),        // form result
-    ("sf-unquote", TOSTR_TRAP),       // form result
     ("std-apply", BUILTIN),           // apply
     ("std-arith", BUILTIN),           // abs
     ("std-char-conv", BUILTIN),       // to-u32
-    ("std-constructors", TOSTR_TRAP), // list of variants
     ("std-conv", BUILTIN),            // to-u8
     ("std-div-float", TOSTR_TRAP),    // float result
     ("std-filter", BUILTIN),          // filter
     ("std-fold", BUILTIN),            // fold
-    ("std-form-kind", TOSTR_TRAP),    // list result
     ("std-map", BUILTIN),             // map
     ("std-pi", PI),
-    ("std-predicates", TOSTR_TRAP),  // list of bools
     ("std-read", BUILTIN),           // read
-    ("std-rec-key-val", TOSTR_TRAP), // list result
     ("std-seq-basics", BUILTIN),     // reverse
     ("std-seq-mutate", BUILTIN),     // get
     ("std-strings", BUILTIN),     // split
-    ("std-tostring", TOSTR_TRAP), // string result of to-string, then list
     ("std-zip", BUILTIN),         // zip
-    ("syntax-commas", TOSTR_TRAP), // list result
-    ("syntax-quote-call", TOSTR_TRAP), // form result
     ("values-atoms", FLAGS),
-    ("values-options-results", TOSTR_TRAP),
-    ("values-quote-days", TOSTR_TRAP), // form result
-    ("values-record", TOSTR_TRAP),     // record result
 ];
 
 const PACKAGE: &str = "docs:snippet@0.1.0";
