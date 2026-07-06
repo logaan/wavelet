@@ -36,10 +36,16 @@ use wavelet::reader::read_file;
 /// escaping are not yet reimplemented in wasm). A float/char *anywhere* in the
 /// value keeps the example on this SKIP.
 const TOSTR_TRAP: &str = "backend `to-string` still traps on float/char values (5.6)";
-/// A stdlib builtin the wasm backend does not implement yet (5.6/5.7).
-const BUILTIN: &str = "stdlib builtin missing from the wasm backend (5.6/5.7)";
-/// The stdlib constant `pi` has no module-level binding in the backend (5.7).
-const PI: &str = "stdlib constant `pi` is not bound in the wasm backend (5.7)";
+/// The `read` builtin needs a wasm-side reader (lexer + parser) that does not
+/// exist yet; the value builtins otherwise all compile now. Decision-gated: no
+/// recorded design for a reader-in-wasm (or a host-provided read).
+const READER: &str = "`read` needs a wasm-side reader, not implemented (5.7)";
+/// `apply` compiles, but here a RECORD payload is applied to a multi-parameter
+/// closure. The interpreter's `bind_params` binds record fields to parameters by
+/// name; the backend's closure wrapper requires a TAG_TUP bundle and traps on a
+/// record. Closing this is a closure-ABI change (bind records by name), not a
+/// builtin — a separate decision.
+const APPLY_REC: &str = "record payload applied to a multi-param closure (closure-ABI gap)";
 /// Flag literals are rejected on this emit path (5.4).
 const FLAGS: &str = "flag literals rejected on this emit path (5.4)";
 /// On the build path `expand` is confined to macro libraries (6.1.8).
@@ -49,14 +55,14 @@ const EXPAND: &str = "`expand` is only available inside a macro library when bui
 /// reason. Removing a fixed entry is part of fixing the backend gap.
 const SKIP: &[(&str, &str)] = &[
     ("macro-expand", EXPAND),
-    ("sf-def", TOSTR_TRAP), // float result
-    ("sf-let", PI),
-    ("std-apply", BUILTIN),           // apply
-    ("std-char-conv", BUILTIN),       // to-u32
-    ("std-conv", BUILTIN),            // to-u8
-    ("std-div-float", TOSTR_TRAP),    // float result
-    ("std-pi", PI),
-    ("std-read", BUILTIN),           // read
+    ("sf-def", TOSTR_TRAP),        // float result
+    ("sf-let", TOSTR_TRAP),        // to-string of a float area (`pi` now binds)
+    ("std-apply", APPLY_REC),      // record payload -> 2-param closure
+    ("std-char-conv", TOSTR_TRAP), // char in the result record
+    ("std-conv", TOSTR_TRAP),      // float in the result record
+    ("std-div-float", TOSTR_TRAP), // float result
+    ("std-pi", TOSTR_TRAP),        // float result (`pi` now binds)
+    ("std-read", READER),          // read
     ("values-atoms", FLAGS),
 ];
 
