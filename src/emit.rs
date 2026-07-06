@@ -7834,6 +7834,31 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Store(ma(4, 2)));
                 fx.op(I::LocalGet(out));
             }
+            "apply" => {
+                // apply(f, payload): call the closure value `f` with `payload` as
+                // its argument bundle, via the boxed-closure convention
+                // (call_indirect(env=f, payload, slot=f[4])) — the same seam
+                // `map`/`fold`/`filter` use. The interpreter's `apply` binds the
+                // payload per the function's arity (a single value to a 1-param
+                // fn, a TAG_TUP bundle to an n-param fn), which is exactly what
+                // the closure wrapper unpacks.
+                nargs(2)?;
+                let fp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(fp));
+                let pay = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::LocalSet(pay));
+                let apply_ty = self.ty_idx(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+                fx.op(I::LocalGet(fp));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::LocalGet(fp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::CallIndirect {
+                    type_index: apply_ty,
+                    table_index: 0,
+                });
+            }
             "abs" => {
                 // |n| over an int (branch: n<0 ? -n : n) or a dec (F64Abs);
                 // any other tag traps, matching the oracle's `want_num`.
@@ -7975,6 +8000,7 @@ const BUILTINS: &[&str] = &[
     "split",
     "join",
     "contains",
+    "apply",
     "head",
     "tail",
     "map",

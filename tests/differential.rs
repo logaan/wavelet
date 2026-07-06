@@ -48,7 +48,6 @@ const EXPAND: &str = "`expand` is only available inside a macro library when bui
 /// Examples the compiled artifact is known to disagree on, with the current
 /// reason. Removing a fixed entry is part of fixing the backend gap.
 const SKIP: &[(&str, &str)] = &[
-    ("eval-apply-list", BUILTIN),     // apply
     ("macro-expand", EXPAND),
     ("sf-def", TOSTR_TRAP), // float result
     ("sf-let", PI),
