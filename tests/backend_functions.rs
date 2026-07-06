@@ -39,6 +39,17 @@ Def reborrow Fn {}
 Export {name: lam params: {} result: s64}
 Def lam Fn {}
   Let {g: Fn {n: s32} add(n 100)} g(1)
+
+Export {name: capture params: {} result: s64}
+Def capture Fn {}
+  Let {by: 5}
+    Let {g: Fn {n: s32} add(n by)} g(1)
+
+Export {name: capture2 params: {} result: s64}
+Def capture2 Fn {}
+  Let {a: 10}
+    Let {b: 20}
+      Let {g: Fn {n: s32} add(add(n a) b)} g(1)
 "#;
     let app_path = src.join("app.wlt");
     std::fs::write(&app_path, app).unwrap();
@@ -71,6 +82,8 @@ fn known_def_bindings_apply_like_the_oracle() {
     assert_eq!(ok(&mut c, "shadow"), Val::S64(20));
     assert_eq!(ok(&mut c, "reborrow"), Val::S64(7));
     assert_eq!(ok(&mut c, "lam"), Val::S64(101));
+    assert_eq!(ok(&mut c, "capture"), Val::S64(6));
+    assert_eq!(ok(&mut c, "capture2"), Val::S64(31));
 }
 
 /// Oracle cross-check: the same bodies as snippets in the interpreter.
@@ -87,6 +100,8 @@ fn oracle_agrees() {
             "7",
         ),
         ("Let {g: Fn {n: s32} add(n 100)} g(1)", "101"),
+        ("Let {by: 5} Let {g: Fn {n: s32} add(n by)} g(1)", "6"),
+        ("Let {a: 10} Let {b: 20} Let {g: Fn {n: s32} add(add(n a) b)} g(1)", "31"),
     ] {
         let r = wavelet::eval_snippet(src);
         assert!(r.ok, "{src}: {}", r.error);

@@ -48,6 +48,20 @@ transforms, and harness). The suite's WIT is vendored under
   `run-resources()`. Both rust-a and rust-b callers pass, so the counter is
   decomposed and rebuilt correctly (not hard-coded).
 
+- **`src/roundtrip-values.wlt` — the callee role for `values`. Types fully,
+  does not yet compile.** The parallel to the resources callee: exports the
+  whole `values` interface, every function signature-annotated so WIT synthesis
+  derives the interface's exact shape (which it now does, for all 35 functions),
+  with real char next-scalar arithmetic (the old char-identity gap is closed via
+  `to-u32`/`to-char`). The remaining blocker is the wasm backend: it does not
+  yet implement the higher-order list builtins `map`/`filter`/`fold`, the
+  list-building primitives `push`/`concat`, or `flg`/`contains` — used only by
+  the list and flags functions (`list-*-rt`, `tuple-nested-rt`, `points-rt`,
+  `permissions-rt`). Since a `values` export is all-or-nothing, the file builds
+  no farther until those land; then a `test-values-callee.sh` (parallel to
+  `test-resources-callee.sh`) will drive it under a rust caller via
+  `run-values()`.
+
 - **`src/roundtrip.wlt` — the full symmetric callee role. Does not build; kept
   as the target.** Exporting the whole world at once is all-or-nothing, and a
   few of `values`'s types are still not expressible in Wavelet source (f32,
