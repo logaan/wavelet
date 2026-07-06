@@ -9,15 +9,30 @@
   "engines": {
     "vscode": "^1.82.0"
   },
-  "categories": ["Programming Languages"],
-  "keywords": ["wavelet", "wave", "webassembly", "component-model", "wasm"],
-  "activationEvents": ["onLanguage:wavelet"],
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "wavelet",
+    "wave",
+    "webassembly",
+    "component-model",
+    "wasm"
+  ],
+  "activationEvents": [
+    "onLanguage:wavelet"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "wavelet",
-        "aliases": ["Wavelet", "wavelet"],
-        "extensions": [".wlt"],
+        "aliases": [
+          "Wavelet",
+          "wavelet"
+        ],
+        "extensions": [
+          ".wlt"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -46,5 +61,12 @@
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
+  },
+  "scripts": {
+    "check": "node scripts/check-grammar.mjs"
+  },
+  "devDependencies": {
+    "vscode-textmate": "^9.0.0",
+    "vscode-oniguruma": "^2.0.1"
   }
 }

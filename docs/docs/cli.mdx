@@ -17,6 +17,7 @@ wavelet repl                                                 # interactive read-
 wavelet run <file.wlt>... [-- <args>...]                     # interpret directly (no codegen)
 wavelet build <file.wlt>... [-o <dir>]                       # compile each file to a .wasm component
 wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
+wavelet <file.wlt> [args...]                                 # run a script directly (also via a #! shebang)
 ```
 
 ---
@@ -112,6 +113,8 @@ world shout {
 
 An interactive read-eval-print loop. Enter forms; multi-line input continues until a form is complete; `Ctrl-D` exits. Because values print as WAVE and code *is* WAVE, the REPL's output is always valid input.
 
+On a terminal the REPL supports arrow-key line editing and a persistent input history (stored under `$XDG_STATE_HOME/wavelet/history`, or `~/.local/state/wavelet/history`); `Ctrl-C` abandons the line you are typing and `Ctrl-D` exits. Piped input (a here-doc or a pipeline) is read plainly, unchanged.
+
 ```console
 $ wavelet repl
 wavelet repl — enter forms, Ctrl-D to exit
@@ -134,6 +137,25 @@ $ wavelet run main.wlt shout.wlt
 ```
 
 The interpreter evaluates **pure** programs: it has no host interfaces, so a `run` that calls into `wasi:*` only works in a built component on a wasm runtime. Use `run` to validate cross-component logic; build the component for anything that touches the world. The first file listed is the entry component. (Anything after `--` is still accepted and ignored, for compatibility with the build flow.)
+
+## Running a script directly
+
+A `.wlt` file may begin with a shebang line so it can be marked executable and run as a script:
+
+```text
+#!/usr/bin/env wavelet
+Package "demo:hi@0.1.0"
+Export run
+Def run Fn {}
+  add(1 2)
+```
+
+```console
+$ chmod +x hi.wlt
+$ ./hi.wlt
+```
+
+The shebang line is recognised only on the first line of the file (a `#` is not a comment anywhere else — `//` is). Passing a `.wlt` path as the sole leading argument, `wavelet hi.wlt`, is equivalent to `wavelet run hi.wlt`: the script still needs an exported `run` entry and runs on the same compiled path (with interpreter fallback).
 
 ## `build`
 

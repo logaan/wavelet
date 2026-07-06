@@ -88,6 +88,13 @@ Def page Fn {title: string}
 
 A `macros: true` import is **compile-time-only**: the library is instantiated and run during the build, then discarded. It is *not* a runtime dependency of your component and contributes nothing to the synthesized world — your shipped component never imports `wavelet:meta/macros`.
 
+A single import is **either** a macro library (`macros: true`) **or** a runtime dependency, not both at once. If one package provides *both* compile-time macros and runtime functions, import it twice — once `macros: true` for the macros, and once as an ordinary runtime import for the functions:
+
+```wavelet
+Import {pkg: "acme:html/dsl" macros: true}   // compile-time: the macros
+Import {pkg: "acme:html/api" as: html}       // runtime: the functions
+```
+
 Wavelet resolves the library's `.wasm` two ways. Give an explicit path with `from:`, or drop the built component at the conventional location `wit/macros/<ns>-<name>.wasm` and let resolution find it:
 
 ```wavelet

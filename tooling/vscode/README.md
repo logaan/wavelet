@@ -5,7 +5,7 @@ Editor support for [Wavelet](../../README.md) source files (`.wlt`):
 - **Syntax highlighting** — the grammar in `syntaxes/wavelet.tmLanguage.json`
   mirrors the language's lexer (`src/lexer.rs`) and the shared Prism grammar used
   by the docs (`docs/src/prism/wavelet.js`). It highlights:
-  - `//` line comments
+  - `#!` leading shebang line and `//` line comments
   - `"..."` strings and `'.'` chars, with `\n` / `\u{...}` escapes
   - `int` / `float` / `inf` / `nan` numbers
   - `true` / `false` booleans and `some` / `none` / `ok` / `err` constructors
@@ -15,6 +15,41 @@ Editor support for [Wavelet](../../README.md) source files (`.wlt`):
 - **Language features** — when the [`wavelet-lsp`](../wavelet-lsp/) server is
   available, the extension also provides live diagnostics, completion, hover, and
   document symbols. Highlighting works with or without the server.
+
+## Verifying the tooling
+
+The grammar is checked headlessly against VS Code's own tokenizer
+(`vscode-textmate` + `vscode-oniguruma`), so highlighting regressions are caught
+without opening the editor:
+
+```console
+$ cd tooling/vscode
+$ npm install        # dev-only: vscode-textmate, vscode-oniguruma
+$ npm run check
+```
+
+`scripts/check-grammar.mjs` asserts that representative snippets tokenize to the
+expected scopes (comments incl. the shebang, strings/chars, numbers, booleans
+and `some`/`none`/`ok`/`err`, macro heads, call heads, qualified references, and
+record keys) and that `package.json`, `language-configuration.json`, and the
+grammar agree on the language id, `.wlt` extension, and `source.wavelet` scope.
+Keep it in step with `src/lexer.rs` when token classes change.
+
+A few things only a real editor exercises; smoke-test them once after a grammar
+or config change by opening a `.wlt` file (from source per below, or the
+released extension):
+
+1. **Highlighting** — colours match the token classes above; a leading
+   `#!/usr/bin/env wavelet` line reads as a comment.
+2. **Comments** — `Ctrl-/` toggles a `//` line comment.
+3. **Brackets** — matching `()`/`[]`/`{}` highlight, and typing an opener
+   auto-closes it; typing `"` or `'` auto-closes and wraps a selection.
+4. **Word selection** — double-clicking selects a whole `alias/name` reference
+   (the `wordPattern`).
+5. **Language server** — with `wavelet-lsp` on the `PATH` (or
+   `wavelet.lsp.serverPath` set), diagnostics/hover/completion appear; with the
+   server disabled (`wavelet.lsp.enable: false`) highlighting still works and a
+   single dismissable warning is shown.
 
 ## Install
 

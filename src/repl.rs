@@ -26,7 +26,6 @@
 //! REPL as the fallback until those decisions land; it is not yet fully retired
 //! from this surface (goal 6.6).
 
-use std::io::{BufRead, Write};
 use std::rc::Rc;
 
 use crate::form::{Arena, Node, NodeId};
@@ -119,13 +118,152 @@ fn compiled_eval(program: &str) -> Result<String, String> {
     result
 }
 
+/// Evaluate every form read from one accepted input buffer. A declaration
+/// accumulates into `defs` (and is evaluated in the interpreter to keep the
+/// fallback env consistent, validate the form, and yield the unit echo); an
+/// expression is compiled — the accumulated session plus a synthetic
+/// `repl-eval` entry — and its `to-string` value printed, falling back to the
+/// interpreter for that entry on any compiled-path failure. Shared by the
+/// interactive and piped front-ends so both behave identically.
+fn eval_forms(
+    arena: &Rc<Arena>,
+    roots: &[NodeId],
+    defs: &mut Vec<String>,
+    interp: &Interp,
+    env: &Env,
+) {
+    for &root in roots {
+        if is_decl(arena, root) {
+            match interp.eval(arena, root, env) {
+                Ok(v) => {
+                    defs.push(print(arena, root));
+                    println!("{}", print_value(&v));
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    break;
+                }
+            }
+        } else {
+            let expr_src = print(arena, root);
+            let program = synth_program(defs, &expr_src);
+            match compiled_eval(&program) {
+                Ok(s) => println!("{s}"),
+                Err(compiled_err) => match interp.eval(arena, root, env) {
+                    Ok(v) => {
+                        eprintln!(
+                            "(interpreter fallback: compiled path unavailable: {compiled_err})"
+                        );
+                        println!("{}", print_value(&v));
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        break;
+                    }
+                },
+            }
+        }
+    }
+}
+
+/// Where the interactive REPL persists its input history. Follows the XDG state
+/// convention (`$XDG_STATE_HOME/wavelet/history`, else `~/.local/state/wavelet/
+/// history`); `None` when neither `XDG_STATE_HOME` nor `HOME` is set, in which
+/// case history is kept in memory for the session only.
+fn history_path() -> Option<std::path::PathBuf> {
+    if let Some(x) = std::env::var_os("XDG_STATE_HOME").filter(|s| !s.is_empty()) {
+        return Some(std::path::PathBuf::from(x).join("wavelet").join("history"));
+    }
+    let home = std::env::var_os("HOME").filter(|s| !s.is_empty())?;
+    Some(std::path::PathBuf::from(home).join(".local/state/wavelet/history"))
+}
+
+/// `wavelet repl`: interactive line-editing + history when stdin is a terminal
+/// (7.1), and a plain line-reader when it is not (a pipe or here-doc), so
+/// scripted/piped sessions stay byte-for-byte what they were before readline was
+/// added. Both front-ends share [`eval_forms`].
 pub fn repl() -> Result<(), String> {
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        repl_interactive()
+    } else {
+        repl_piped()
+    }
+}
+
+/// Interactive front-end: `rustyline` provides arrow-key line editing, a
+/// persistent history file, Ctrl-C to abandon the current (possibly multi-line)
+/// entry, and Ctrl-D to exit.
+fn repl_interactive() -> Result<(), String> {
+    use rustyline::error::ReadlineError;
+
     let interp = Interp::new();
     let env = Env::root();
     crate::builtins::install(&env);
     let mut macros = MacroTable::core();
-    // Canonical source of every accepted definition, in entry order; the
-    // recompile input for each expression line.
+    let mut defs: Vec<String> = Vec::new();
+
+    let mut rl = rustyline::DefaultEditor::new().map_err(|e| e.to_string())?;
+    let hist = history_path();
+    if let Some(p) = &hist {
+        let _ = rl.load_history(p);
+    }
+
+    eprintln!("wavelet repl — enter forms, Ctrl-D to exit");
+    let mut buf = String::new();
+    loop {
+        let prompt = if buf.is_empty() { "> " } else { ". " };
+        match rl.readline(prompt) {
+            Ok(line) => {
+                buf.push_str(&line);
+                buf.push('\n');
+                if buf.trim().is_empty() {
+                    buf.clear();
+                    continue;
+                }
+                match crate::reader::read_with(&buf, &mut macros) {
+                    Err(e) if e.msg == "unexpected end of input" => continue, // more lines
+                    Err(e) => {
+                        eprintln!("read error: {e}");
+                        buf.clear();
+                    }
+                    Ok((arena, roots)) => {
+                        let _ = rl.add_history_entry(buf.trim_end());
+                        buf.clear();
+                        let arena = Rc::new(arena);
+                        eval_forms(&arena, &roots, &mut defs, &interp, &env);
+                    }
+                }
+            }
+            // Ctrl-C abandons the current entry but keeps the session going;
+            // Ctrl-D (EOF) exits.
+            Err(ReadlineError::Interrupted) => {
+                buf.clear();
+            }
+            Err(ReadlineError::Eof) => break,
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+
+    if let Some(p) = &hist {
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = rl.save_history(p);
+    }
+    Ok(())
+}
+
+/// Piped/non-terminal front-end: read stdin line by line with no editing (the
+/// original REPL loop). Prompts go to stderr; results to stdout. Used for
+/// here-docs, pipelines, and the behaviour tests.
+fn repl_piped() -> Result<(), String> {
+    use std::io::{BufRead, Write};
+
+    let interp = Interp::new();
+    let env = Env::root();
+    crate::builtins::install(&env);
+    let mut macros = MacroTable::core();
     let mut defs: Vec<String> = Vec::new();
 
     let stdin = std::io::stdin();
@@ -153,49 +291,7 @@ pub fn repl() -> Result<(), String> {
             Ok((arena, roots)) => {
                 buf.clear();
                 let arena = Rc::new(arena);
-                for root in roots {
-                    if is_decl(&arena, root) {
-                        // A declaration accumulates into the session. Evaluate it
-                        // in the interpreter too, which keeps the fallback env
-                        // consistent, validates the form, and yields the unit
-                        // echo the REPL has always printed for a definition.
-                        match interp.eval(&arena, root, &env) {
-                            Ok(v) => {
-                                defs.push(print(&arena, root));
-                                println!("{}", print_value(&v));
-                            }
-                            Err(e) => {
-                                eprintln!("error: {e}");
-                                break;
-                            }
-                        }
-                    } else {
-                        // An expression is the evaluation target: compile the
-                        // accumulated session with it as the `repl-eval` entry
-                        // and print the guest's `to-string` result. On any
-                        // compiled-path failure fall back to the interpreter for
-                        // this entry (the decision-gated holes: float/char
-                        // to-string, runtime flags, record apply, read).
-                        let expr_src = print(&arena, root);
-                        let program = synth_program(&defs, &expr_src);
-                        match compiled_eval(&program) {
-                            Ok(s) => println!("{s}"),
-                            Err(compiled_err) => match interp.eval(&arena, root, &env) {
-                                Ok(v) => {
-                                    eprintln!(
-                                        "(interpreter fallback: compiled path unavailable: \
-                                         {compiled_err})"
-                                    );
-                                    println!("{}", print_value(&v));
-                                }
-                                Err(e) => {
-                                    eprintln!("error: {e}");
-                                    break;
-                                }
-                            },
-                        }
-                    }
-                }
+                eval_forms(&arena, &roots, &mut defs, &interp, &env);
             }
         }
     }

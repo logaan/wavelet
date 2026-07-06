@@ -5,7 +5,7 @@
 //   - the live <Playground> editor (src/components/Playground)
 //
 // Token classes mirror the lexer (src/lexer.rs):
-//   - `//` line comments
+//   - `#!` leading shebang line, then `//` line comments
 //   - "..." strings and '.' chars, both with \u{...}/\n/... escapes
 //   - int / float / inf / nan numbers
 //   - true / false booleans; some / none / ok / err WAVE constructors
@@ -18,6 +18,14 @@
 //   - the chain `.` joining a receiver to a call (`recv.name(...)`)
 
 export const waveletGrammar = {
+  // A leading `#!/usr/bin/env wavelet` shebang (only at the very start of the
+  // file — `^` here anchors to the start of the whole code block, not each
+  // line) lets a `.wlt` file run as a script. Style it like a comment.
+  'shebang': {
+    pattern: /^#!.*/,
+    alias: 'comment',
+    greedy: true,
+  },
   'comment': {
     pattern: /\/\/.*/,
     greedy: true,

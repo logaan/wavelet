@@ -147,12 +147,33 @@ wavelet new <name> [--type=cli|http]                 # scaffold a new project (c
 wavelet read [file.wlt]                              # parse and print the canonical WAVE form tree (reads stdin if no file)
 wavelet expand <file.wlt>                            # run macros to fixpoint and print the result
 wavelet wit <file.wlt>                               # show the synthesized WIT world
-wavelet repl                                         # interactive read-eval-print loop
+wavelet repl                                         # interactive read-eval-print loop (line editing + history)
 wavelet run <file.wlt>... [-- <args>...]             # compile to a component and run it (interpreter fallback)
 wavelet build <file.wlt>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
 wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
+wavelet <file.wlt> [args...]                         # run a script directly (also via a #! shebang)
 wavelet --version                                    # print the wavelet version
 ```
+
+A `.wlt` file may start with a shebang line so it can be marked executable and
+run as a script:
+
+``` bash
+#!/usr/bin/env wavelet
+Package "demo:hi@0.1.0"
+Export run
+Def run Fn {}
+  add(1 2)
+```
+
+``` bash
+$ chmod +x hi.wlt
+$ ./hi.wlt
+```
+
+The shebang line is only recognised on the first line; the script still needs
+an exported `run` entry, and runs on the same compiled path (with interpreter
+fallback) as `wavelet run`.
 
 `run` compiles a set of files together — building each through the emitter,
 composing their runtime `Import`s into one component, and calling the exported

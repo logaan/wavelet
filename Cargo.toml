@@ -35,6 +35,12 @@ wit-parser = "0.251.0"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wasmtime = { version = "45", default-features = false, features = ["runtime", "cranelift", "component-model"] }
 
+# Native-only: line editing + input history for the interactive `wavelet repl`
+# (7.1). Used only when stdin is a terminal; piped input keeps the plain
+# line-reader. Kept off the `wasm32` playground build with the rest of the
+# native table.
+rustyline = "14"
+
 # wasm-only: the browser playground bindings (see `src/wasm.rs`). Optional and
 # gated behind the `playground` feature, so a `default-features = false` `wasm32`
 # build omits `wasm-bindgen` entirely.
