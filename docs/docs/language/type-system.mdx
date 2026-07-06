@@ -58,6 +58,22 @@ the result you want:
 A literal that cannot fit the ascribed type is a compile error (`The u8 300`,
 `The u8 -1`, `The s32 1.5` are all rejected).
 
+## Declared result types
+
+The `result:` type in an `Export {…}` form flows into the exported function's
+body as its expected type, exactly as an enclosing `The` would: construction
+sites build at the declared shape, and the body is checked against the declared
+result. A body whose type genuinely conflicts with what the export promises is a
+compile error rather than a silent coercion.
+
+Two coercions the component boundary genuinely performs stay legal. A narrower
+integer result may **widen** into a wider declared result of the *same*
+signedness — an `s32`-typed body satisfies an `s64` result — but mixed
+signedness (`s32` into `u32`) and *narrowing* (`s32` into `s16`) are rejected. A
+value carrying a `result` payload may also flow into a declared payload-less
+`result`, since the ABI drops the payload: the `wasi:cli/run` entry point
+`run: func() -> result` is satisfied by an `ok(0)` body.
+
 ## Overloading
 
 Several `Def`s sharing a name form an **overload set**. Each call site is
