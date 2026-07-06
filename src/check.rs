@@ -341,8 +341,69 @@ fn unify_fields(
 /// Whether a value of type `actual` is acceptable where `expected` is required.
 /// Gradual: `Unknown` on either side always passes; numeric literals are
 /// class-compatible; otherwise it is unifiability.
+///
+/// This is the *strict* relation used for overload argument filtering
+/// ([`args_match`]), where admitting integer width-widening would spuriously
+/// enlarge candidate sets into ambiguity. The boundary check in
+/// [`Checker::check`] and return-type-directed result filtering use
+/// [`compatible_widening`] instead, which additionally admits Option-A int
+/// widening.
 fn compatible(tbl: &TypeTable, expected: &Type, actual: &Type) -> bool {
     unify(tbl, expected, actual).is_some()
+}
+
+/// [`compatible`] plus the boundary coercions a declared *result*/ascription
+/// type legitimately performs on the value flowing into it — the relation used
+/// where such a type validates an expression (not for overload argument
+/// filtering, which stays strict):
+///
+/// - **Option-A integer widening**: a narrower integer value may flow into a
+///   wider declared type of the **same** signedness (`s32` body -> `s64`
+///   result). Mixed signedness and any narrowing stay rejected.
+/// - **Payload-less result-arm dropping**: a value carrying a result payload
+///   (`ok(0)`) may flow into a declared `result` whose arm is *absent* (WIT
+///   `_`), because the ABI drops the payload at the boundary — the idiomatic
+///   `wasi:cli/run` shape (`run: func() -> result` with an `ok(0)` body). A
+///   *present* declared arm still requires the actual arm be compatible; a
+///   value missing a payload a present arm needs is still rejected.
+fn compatible_widening(tbl: &TypeTable, expected: &Type, actual: &Type) -> bool {
+    if int_widens(actual, expected) {
+        return true;
+    }
+    if let (Type::Result(eo, ee), Type::Result(ao, ae)) = (expected, actual) {
+        let arm_ok = |e: &Type, a: &Type| matches!(e, Type::Unit) || compatible(tbl, e, a);
+        if arm_ok(eo, ao) && arm_ok(ee, ae) {
+            return true;
+        }
+    }
+    compatible(tbl, expected, actual)
+}
+
+/// The `(signed, width-rank)` of a concrete integer type; `None` for anything
+/// that is not one of the eight concrete int types. Rank orders widths within a
+/// signedness class (`8 < 16 < 32 < 64`).
+fn int_class(t: &Type) -> Option<(bool, u8)> {
+    match t {
+        Type::U8 => Some((false, 0)),
+        Type::U16 => Some((false, 1)),
+        Type::U32 => Some((false, 2)),
+        Type::U64 => Some((false, 3)),
+        Type::S8 => Some((true, 0)),
+        Type::S16 => Some((true, 1)),
+        Type::S32 => Some((true, 2)),
+        Type::S64 => Some((true, 3)),
+        _ => None,
+    }
+}
+
+/// Whether an integer value of type `from` may safely widen into a declared
+/// `to` (Option A): both are concrete ints of the same signedness and `from` is
+/// no wider than `to`. Rejects signed<->unsigned mixing and any narrowing.
+fn int_widens(from: &Type, to: &Type) -> bool {
+    match (int_class(from), int_class(to)) {
+        (Some((fs, fr)), Some((ts, tr))) => fs == ts && fr <= tr,
+        _ => false,
+    }
 }
 
 /// Whether an overload candidate with parameters `params` is applicable to a
@@ -419,6 +480,12 @@ struct Checker<'a> {
     /// body's settled types. A node absent from the table simply keeps the
     /// boxed fallback in the backend, so coverage is best-effort by design.
     node_types: RefCell<NodeTypes>,
+    /// Declared result type of each exported def, keyed by export `name` (which
+    /// is the def name). Threaded as the `expected` type when checking that
+    /// def's body so canonical records/variants/flags/lists are built at their
+    /// declared shape and Option-A int widening at the boundary is admitted
+    /// (5-threading). Only concrete (non-`Unknown`) results are recorded.
+    export_results: HashMap<String, Type>,
 }
 
 /// A per-node static-type table: expression `NodeId` -> inferred [`Type`],
@@ -662,6 +729,7 @@ impl<'a> Checker<'a> {
         let mut types: TypeTable = HashMap::new();
         let mut variant_cases: HashMap<String, (String, Vec<Type>)> = HashMap::new();
         let mut value_defs: HashMap<String, NodeId> = HashMap::new();
+        let mut export_results: HashMap<String, Type> = HashMap::new();
         for &root in roots {
             if let Some((name, expr)) = as_def(arena, root) {
                 defs.insert(name.to_string());
@@ -682,6 +750,11 @@ impl<'a> Checker<'a> {
                 }
                 types.insert(name.to_string(), def);
             }
+            if let Some((name, result)) = as_export_result(arena, root)
+                && !matches!(result, Type::Unknown)
+            {
+                export_results.insert(name, result);
+            }
         }
         Checker {
             arena,
@@ -697,6 +770,7 @@ impl<'a> Checker<'a> {
             sig_result_cache: RefCell::new(HashMap::new()),
             sig_in_progress: RefCell::new(std::collections::HashSet::new()),
             node_types: RefCell::new(HashMap::new()),
+            export_results,
         }
     }
 
@@ -708,16 +782,22 @@ impl<'a> Checker<'a> {
         // typing (4.5).
         validate_defresources(arena, roots)?;
         for &root in roots {
-            if let Some((_name, expr)) = as_def(arena, root) {
+            if let Some((name, expr)) = as_def(arena, root) {
                 // Check the bound expression. For an `Fn`, check its body with
                 // the parameters in scope; otherwise check the value expression.
+                // An exported def's declared result type is threaded down as the
+                // body's `expected` type (5-threading): construction sites build
+                // at their declared shape (canonical record/variant/flags/list
+                // field order and flags bit positions) and Option-A int widening
+                // at the boundary is admitted.
+                let expected = self.export_results.get(name).cloned();
                 if let Some(params) = fn_params(arena, expr) {
                     let mut scope: Scope = params.clone();
                     let body = fn_body(arena, expr).expect("fn with params has a body");
-                    self.check(body, None, &mut scope)?;
+                    self.check(body, expected.as_ref(), &mut scope)?;
                 } else {
                     let mut scope: Scope = Vec::new();
-                    self.check(expr, None, &mut scope)?;
+                    self.check(expr, expected.as_ref(), &mut scope)?;
                 }
             } else {
                 // A bare top-level expression (the playground evaluates these).
@@ -902,6 +982,42 @@ fn as_def(arena: &Arena, id: NodeId) -> Option<(&str, NodeId)> {
         return None;
     };
     Some((name, *expr))
+}
+
+/// If `id` is `Export {name: <sym> params: {..} result: <type>}`, return the
+/// export name and its declared result [`Type`]. Used to thread a def's
+/// declared result type into its body during checking (5-threading). An export
+/// without a `result` field (a unit-returning export) yields no entry.
+fn as_export_result(arena: &Arena, id: NodeId) -> Option<(String, Type)> {
+    let Node::Tup(items) = arena.node(id) else {
+        return None;
+    };
+    let [head, rec] = items.as_slice() else {
+        return None;
+    };
+    let Node::Sym(h) = arena.node(*head) else {
+        return None;
+    };
+    if h != "export-MACRO" {
+        return None;
+    }
+    let Node::Rec(fields) = arena.node(*rec) else {
+        return None;
+    };
+    let mut name: Option<String> = None;
+    let mut result: Option<Type> = None;
+    for (k, v) in fields {
+        match k.as_str() {
+            "name" => {
+                if let Node::Sym(n) = arena.node(*v) {
+                    name = Some(n.clone());
+                }
+            }
+            "result" => result = Some(Type::from_form(arena, *v)),
+            _ => {}
+        }
+    }
+    Some((name?, result?))
 }
 
 /// If `id` is `DefType name decl`, parse the declaration into a [`TypeDef`].
@@ -1210,7 +1326,7 @@ impl<'a> Checker<'a> {
     ) -> Result<Type, String> {
         let ty = self.infer(id, expected, scope)?;
         if let Some(exp) = expected
-            && !compatible(&self.types, exp, &ty)
+            && !compatible_widening(&self.types, exp, &ty)
         {
             return Err(self.type_error(id, exp, &ty));
         }
@@ -1826,7 +1942,7 @@ impl<'a> Checker<'a> {
             let by_result: Vec<usize> = candidates
                 .iter()
                 .copied()
-                .filter(|&i| compatible(&self.types, exp, &self.infer_sig_result(&sigs[i])))
+                .filter(|&i| compatible_widening(&self.types, exp, &self.infer_sig_result(&sigs[i])))
                 .collect();
             if !by_result.is_empty() {
                 candidates = by_result;

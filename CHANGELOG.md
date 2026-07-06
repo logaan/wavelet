@@ -48,6 +48,19 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- **An exported function's body is checked against its declared result type.**
+  The `result:` type declared in an `Export {…}` form is now threaded into the
+  matching def's body as its expected type, so a body whose type genuinely
+  conflicts with the declared result is a compile error rather than being
+  accepted and coerced silently. Two boundary coercions stay legal: a narrower
+  integer result may **widen** into a wider declared result of the *same*
+  signedness (an `s32` body into an `s64` result), and a value carrying a
+  `result` payload may flow into a declared payload-less `result` (the ABI drops
+  the payload — the `wasi:cli/run` `run: func() -> result` shape with an `ok(0)`
+  body). Mixed-signedness widening, integer *narrowing*, and shape mismatches
+  are rejected. Threading also lets an overloaded call in an export body resolve
+  by the declared return type.
+
 - **A list argument no longer spreads across parameters.** A single list value
   passed to a function is one value bound to one parameter, like any other
   value; positional multi-binding across parameters is the tuple's job, by-name
