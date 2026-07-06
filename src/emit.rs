@@ -2434,8 +2434,6 @@ impl<'a> Emitter<'a> {
                 self.dep_call(fx, &alias, &fname, args, None)
             }
             Node::Sym(name) => match name.as_str() {
-                "if-MACRO" => self.if_form(fx, args, Repr::Boxed, tail),
-                "do-MACRO" => self.do_form(fx, args, Repr::Boxed, tail),
                 "let-MACRO" => self.let_form(fx, args, Repr::Boxed, tail),
                 "the-MACRO" => {
                     // args = [ty, expr]
@@ -2491,67 +2489,6 @@ impl<'a> Emitter<'a> {
             // any other head evaluates to a closure box
             _ => self.closure_call(fx, head, args, tail),
         }
-    }
-
-    fn if_form(
-        &mut self,
-        fx: &mut FnCtx,
-        args: &[NodeId],
-        want: Repr,
-        tail: bool,
-    ) -> Result<(), String> {
-        let [c, t, e] = *args else {
-            return Err("malformed If".into());
-        };
-        // Goal 5: a statically-bool condition evaluates unboxed — a typed
-        // comparison as an If condition allocates nothing at all.
-        if self.node_scalar(c) == Some(Scalar::Bool) {
-            self.expr_scalar(fx, c, Scalar::Bool)?;
-        } else {
-            self.expr(fx, c, false)?;
-            fx.op(I::Call(self.h.truthy));
-        }
-        fx.op(I::If(BlockType::Result(repr_vt(want))));
-        self.expr_repr(fx, t, want, tail)?;
-        fx.op(I::Else);
-        self.expr_repr(fx, e, want, tail)?;
-        fx.op(I::End);
-        Ok(())
-    }
-
-    fn do_form(
-        &mut self,
-        fx: &mut FnCtx,
-        args: &[NodeId],
-        want: Repr,
-        tail: bool,
-    ) -> Result<(), String> {
-        let [list] = *args else {
-            return Err("malformed Do".into());
-        };
-        let Node::Lst(items) = self.arena.node(list).clone() else {
-            return Err("Do expects a list of expressions".into());
-        };
-        if items.is_empty() {
-            // the unit value; a scalar `want` unboxes it and traps, exactly
-            // like the interpreter erroring on a unit in a numeric context
-            fx.op(I::I32Const(self.unit_addr() as i32));
-            match want {
-                Repr::Boxed => {}
-                // a scalar want unboxes the unit and traps, exactly like the
-                // interpreter erroring on a unit in a numeric context
-                Repr::Scalar(k) => self.unbox_scalar(fx, k),
-                Repr::Mem(_) => {
-                    return Err("internal: Mem repr requested for an empty Do".into());
-                }
-            }
-            return Ok(());
-        }
-        for &x in &items[..items.len() - 1] {
-            self.expr(fx, x, false)?;
-            fx.op(I::Drop);
-        }
-        self.expr_repr(fx, items[items.len() - 1], want, tail)
     }
 
     fn let_form(
@@ -5422,17 +5359,33 @@ impl<'a> Emitter<'a> {
                 };
                 let args = &items[1..];
                 match (head.as_str(), args) {
-                    ("if-MACRO", [_c, t, e]) => {
-                        let a = self.predict_body_mem(*t, env)?;
-                        let b = self.predict_body_mem(*e, env)?;
-                        (a == b).then_some(a)
-                    }
-                    ("do-MACRO", [list]) => match self.arena.node(*list).clone() {
-                        Node::Lst(items) if !items.is_empty() => {
-                            self.predict_body_mem(*items.last().unwrap(), env)
+                    // `If`/`Do` are stdlib macros that expand to `Match`
+                    // (5.7); their Mem prediction is `Match`'s: every clause
+                    // result must predict the same Mem layout. Pattern-bound
+                    // names are not modelled here (best effort), so a clause
+                    // body that depends on one predicts boxed — exactly as an
+                    // unpredicted body did before.
+                    ("match-MACRO", [_scrut, clauses]) => {
+                        let Node::Lst(items) = self.arena.node(*clauses).clone() else {
+                            return None;
+                        };
+                        let mut acc: Option<WitTy> = None;
+                        for clause in items {
+                            let Node::Tup(pair) = self.arena.node(clause).clone() else {
+                                return None;
+                            };
+                            if pair.len() != 2 {
+                                return None;
+                            }
+                            let r = self.predict_body_mem(pair[1], env)?;
+                            match &acc {
+                                None => acc = Some(r),
+                                Some(prev) if *prev == r => {}
+                                Some(_) => return None,
+                            }
                         }
-                        _ => None,
-                    },
+                        acc
+                    }
                     ("let-MACRO", [bindings, body]) => {
                         let Node::Rec(fields) = self.arena.node(*bindings).clone() else {
                             return None;
@@ -5536,8 +5489,6 @@ impl<'a> Emitter<'a> {
                 if let Node::Sym(head) = self.arena.node(items[0]).clone() {
                     let args = &items[1..];
                     match head.as_str() {
-                        "if-MACRO" => return self.if_form(fx, args, Repr::Mem(t), tail),
-                        "do-MACRO" => return self.do_form(fx, args, Repr::Mem(t), tail),
                         "let-MACRO" => return self.let_form(fx, args, Repr::Mem(t), tail),
                         "match-MACRO" => return self.match_form(fx, args, Repr::Mem(t), tail),
                         "the-MACRO" => {
@@ -5869,8 +5820,6 @@ impl<'a> Emitter<'a> {
                     // `call`: special forms, then locals, then builtins,
                     // then internal defs.
                     match name.as_str() {
-                        "if-MACRO" => return self.if_form(fx, args, Repr::Scalar(want), tail),
-                        "do-MACRO" => return self.do_form(fx, args, Repr::Scalar(want), tail),
                         "let-MACRO" => return self.let_form(fx, args, Repr::Scalar(want), tail),
                         "match-MACRO" => {
                             return self.match_form(fx, args, Repr::Scalar(want), tail);

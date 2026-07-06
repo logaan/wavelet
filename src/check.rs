@@ -1389,9 +1389,7 @@ impl<'a> Checker<'a> {
             && !matches!(
                 h.as_str(),
                 "fn-MACRO"
-                    | "if-MACRO"
                     | "let-MACRO"
-                    | "do-MACRO"
                     | "match-MACRO"
                     | "the-MACRO"
                     | "quote-MACRO"
@@ -1612,21 +1610,6 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Type::Unknown)
             }
-            "if-MACRO" => {
-                let [c, t, e] = expect3(args)?;
-                // The condition must be a bool, statically (2.2 drop: no
-                // truthiness, no runtime bool check).
-                let ct = self.check(c, None, scope)?;
-                if !matches!(ct, Type::Bool | Type::Unknown) {
-                    return Err("eval error: If condition must be a bool".to_string());
-                }
-                let tt = self.check(t, expected, scope)?;
-                let et = self.check(e, expected, scope)?;
-                match unify(&self.types, &tt, &et) {
-                    Some(u) => Ok(u),
-                    None => Err("eval error: If branches have incompatible types".to_string()),
-                }
-            }
             "let-MACRO" => {
                 let [bindings, body] = expect2(args)?;
                 let mark = scope.len();
@@ -1639,20 +1622,6 @@ impl<'a> Checker<'a> {
                 let r = self.check(body, expected, scope);
                 scope.truncate(mark);
                 r
-            }
-            "do-MACRO" => {
-                let [list] = args else {
-                    return Ok(Type::Unknown);
-                };
-                let Node::Lst(stmts) = self.arena.node(*list) else {
-                    return Ok(Type::Unknown);
-                };
-                let mut last = Type::Unit;
-                for (i, &s) in stmts.iter().enumerate() {
-                    let exp = if i + 1 == stmts.len() { expected } else { None };
-                    last = self.check(s, exp, scope)?;
-                }
-                Ok(last)
             }
             "match-MACRO" => {
                 let [scrut, clauses] = expect2(args)?;
@@ -1816,7 +1785,20 @@ impl<'a> Checker<'a> {
         let ty_text = type_name(self.arena, ty_form);
         match self.arena.node(expr) {
             Node::Int(n) => {
-                if !int_in_range(*n, ty) {
+                // An int literal ascribed to a concrete non-numeric type is a
+                // static error (`The bool 1`). This is what `If`'s desugaring
+                // (`Match The bool c [(true t) (false e)]`, 5.7) relies on to
+                // keep a non-bool condition a compile-time error. Gradual,
+                // aliased-but-unresolved, `tree`, and numeric targets keep
+                // their existing range-only treatment.
+                let rt = self.resolve_alias(ty);
+                let numeric_or_gradual = rt.is_int()
+                    || rt.is_float()
+                    || matches!(
+                        rt,
+                        Type::IntLit(_) | Type::FloatLit | Type::Unknown | Type::Named(_) | Type::Tree
+                    );
+                if !numeric_or_gradual || !int_in_range(*n, ty) {
                     return Err(format!(
                         "eval error: The: {n} does not conform to type `{ty_text}`"
                     ));
@@ -1824,7 +1806,13 @@ impl<'a> Checker<'a> {
                 Ok(ty.clone())
             }
             Node::Dec(_) => {
-                if ty.is_int() {
+                // A float literal only conforms to a float type (or a gradual /
+                // aliased / `tree` target); anything else — an int type, or a
+                // concrete non-numeric type like `bool` — is a static error.
+                let rt = self.resolve_alias(ty);
+                let ok = rt.is_float()
+                    || matches!(rt, Type::FloatLit | Type::Unknown | Type::Named(_) | Type::Tree);
+                if !ok {
                     return Err(format!(
                         "eval error: The: {} does not conform to type `{ty_text}`",
                         print_dec(self.arena, expr)
@@ -2806,9 +2794,3 @@ fn expect2(args: &[NodeId]) -> Result<[NodeId; 2], String> {
     }
 }
 
-fn expect3(args: &[NodeId]) -> Result<[NodeId; 3], String> {
-    match args {
-        [a, b, c] => Ok([*a, *b, *c]),
-        _ => Err("eval error: malformed form".to_string()),
-    }
-}
