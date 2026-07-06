@@ -46,6 +46,14 @@ you work, and rename it to the new version when you cut a release.
   pointer identity), so cells — and the resource reps built on them — work in
   compiled components, not just the interpreter.
 
+### Fixed
+
+- **The compiled backend's `to-string` now quotes and escapes strings**, matching
+  the interpreter's `print_value` (the semantics oracle). Previously the wasm
+  backend printed a string value verbatim while the interpreter surrounded it
+  with `"` and escaped `"` `\\` `\n` `\t` `\r`; the two now agree, closing a
+  batch of differential-test divergences.
+
 ### Changed
 
 - **An exported function's body is checked against its declared result type.**

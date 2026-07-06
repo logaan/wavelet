@@ -30,11 +30,6 @@ use wavelet::host::{HostComponent, Val};
 use wavelet::printer::print;
 use wavelet::reader::read_file;
 
-/// The backend's `to-string` helper prints a string *unquoted* where the
-/// interpreter's `print_value` (which `to-string` is defined as) quotes and
-/// escapes it. Fixed by 6.2 F2: port `print_value` over the box layout.
-const TOSTR_STRING: &str =
-    "backend `to-string` prints strings unquoted; print_value quotes them (6.2 F2)";
 /// The backend's `to-string` helper only covers int/bool/string; floats,
 /// chars, lists, records, tuples, variants, and symbols hit `unreachable`.
 /// Fixed by 6.2 F2: port `print_value` over the box layout.
@@ -54,8 +49,6 @@ const SKIP: &[(&str, &str)] = &[
     ("eval-apply-list", BUILTIN),     // apply
     ("eval-fn-by-name", TOSTR_TRAP),  // list result
     ("eval-fn-by-order", TOSTR_TRAP), // list result
-    ("gs-hello", TOSTR_STRING),
-    ("hello-shout", TOSTR_STRING),
     ("macro-expand", EXPAND),
     ("macro-gensym-three", TOSTR_TRAP),         // list of symbols
     ("sf-deftype-cases", TOSTR_TRAP),           // list result
@@ -63,17 +56,8 @@ const SKIP: &[(&str, &str)] = &[
     ("macro-swap", TOSTR_TRAP),
     ("macro-trylet", TOSTR_TRAP),
     ("map-square", BUILTIN), // map
-    ("noffi-shout", TOSTR_STRING),
-    ("pm-catch-all", TOSTR_STRING),
-    ("pm-describe", TOSTR_STRING),
-    ("pm-none", TOSTR_STRING),
-    ("pm-record", TOSTR_STRING),
     ("sf-def", TOSTR_TRAP), // float result
-    ("sf-defmacro", FLAGS), // `{}` in the expansion
-    ("sf-fn-shout", TOSTR_STRING),
-    ("sf-if", TOSTR_STRING),
     ("sf-let", PI),
-    ("sf-match", TOSTR_STRING),
     ("sf-quasi", TOSTR_TRAP),         // form result
     ("sf-quote", TOSTR_TRAP),         // form result
     ("sf-splice", TOSTR_TRAP),        // form result
@@ -94,18 +78,11 @@ const SKIP: &[(&str, &str)] = &[
     ("std-rec-key-val", TOSTR_TRAP), // list result
     ("std-seq-basics", BUILTIN),     // reverse
     ("std-seq-mutate", BUILTIN),     // get
-    ("std-strcat", TOSTR_STRING),
-    ("std-strcat-tostring", TOSTR_STRING),
     ("std-strings", BUILTIN),     // split
     ("std-tostring", TOSTR_TRAP), // string result of to-string, then list
     ("std-zip", BUILTIN),         // zip
-    ("syntax-chain", TOSTR_STRING),
     ("syntax-commas", TOSTR_TRAP), // list result
-    ("syntax-if-arity", TOSTR_STRING),
     ("syntax-quote-call", TOSTR_TRAP), // form result
-    ("tail-count-down", TOSTR_STRING),
-    ("ty-overload-int", TOSTR_STRING),
-    ("ty-overload-str", TOSTR_STRING),
     ("values-atoms", FLAGS),
     ("values-options-results", TOSTR_TRAP),
     ("values-quote-days", TOSTR_TRAP), // form result

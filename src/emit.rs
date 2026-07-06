@@ -10311,15 +10311,138 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         let neg = fx.local(I32);
         let buf = fx.local(I32);
         let i = fx.local(I32);
+        // extra locals for the string-quoting branch
+        let s_src = fx.local(I32);
+        let s_len = fx.local(I32);
+        let s_out = fx.local(I32);
+        let s_oi = fx.local(I32);
+        let s_ci = fx.local(I32);
+        let s_byte = fx.local(I32);
         fx.op(I::LocalGet(0));
         fx.op(I::I32Load(ma(0, 2)));
         fx.op(I::LocalSet(tag));
-        // string: identity
+        // out[s_oi] = <const byte>; s_oi += 1
+        let put_c = |fx: &mut FnCtx, out: u32, oi: u32, b: i32| {
+            fx.op(I::LocalGet(out));
+            fx.op(I::LocalGet(oi));
+            fx.op(I::I32Add);
+            fx.op(I::I32Const(b));
+            fx.op(I::I32Store8(ma(0, 0)));
+            fx.op(I::LocalGet(oi));
+            fx.op(I::I32Const(1));
+            fx.op(I::I32Add);
+            fx.op(I::LocalSet(oi));
+        };
+        // string: quote + escape to match print_value's `{s:?}`. Escapes
+        // `"` `\` `\n` `\t` `\r`; other bytes (incl. UTF-8 continuation) pass
+        // through. Rust escapes other control/non-printable codepoints too, so
+        // strings containing them still diverge from the oracle (kept SKIP);
+        // the common printable cases now agree.
         fx.op(I::LocalGet(tag));
         fx.op(I::I32Const(TAG_STR));
         fx.op(I::I32Eq);
         fx.op(I::If(BlockType::Empty));
+        // s_len = box@4 ; s_src = box+8
         fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(s_len));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(s_src));
+        // s_out = alloc(s_len*2 + 2)  (worst case: every byte -> 2 bytes, + 2 quotes)
+        fx.op(I::LocalGet(s_len));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Add);
+        fx.op(I::Call(em.h.alloc));
+        fx.op(I::LocalSet(s_out));
+        // out[0] = '"' ; s_oi = 1 ; s_ci = 0
+        fx.op(I::LocalGet(s_out));
+        fx.op(I::I32Const(b'"' as i32));
+        fx.op(I::I32Store8(ma(0, 0)));
+        fx.op(I::I32Const(1));
+        fx.op(I::LocalSet(s_oi));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(s_ci));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        // if s_ci >= s_len break
+        fx.op(I::LocalGet(s_ci));
+        fx.op(I::LocalGet(s_len));
+        fx.op(I::I32GeS);
+        fx.op(I::BrIf(1));
+        // s_byte = load8(s_src + s_ci)
+        fx.op(I::LocalGet(s_src));
+        fx.op(I::LocalGet(s_ci));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(0, 0)));
+        fx.op(I::LocalSet(s_byte));
+        // escape ladder
+        fx.op(I::LocalGet(s_byte));
+        fx.op(I::I32Const(b'"' as i32));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        put_c(&mut fx, s_out, s_oi, b'\\' as i32);
+        put_c(&mut fx, s_out, s_oi, b'"' as i32);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(s_byte));
+        fx.op(I::I32Const(b'\\' as i32));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        put_c(&mut fx, s_out, s_oi, b'\\' as i32);
+        put_c(&mut fx, s_out, s_oi, b'\\' as i32);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(s_byte));
+        fx.op(I::I32Const(b'\n' as i32));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        put_c(&mut fx, s_out, s_oi, b'\\' as i32);
+        put_c(&mut fx, s_out, s_oi, b'n' as i32);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(s_byte));
+        fx.op(I::I32Const(b'\t' as i32));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        put_c(&mut fx, s_out, s_oi, b'\\' as i32);
+        put_c(&mut fx, s_out, s_oi, b't' as i32);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(s_byte));
+        fx.op(I::I32Const(b'\r' as i32));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        put_c(&mut fx, s_out, s_oi, b'\\' as i32);
+        put_c(&mut fx, s_out, s_oi, b'r' as i32);
+        fx.op(I::Else);
+        // default: copy the byte verbatim
+        fx.op(I::LocalGet(s_out));
+        fx.op(I::LocalGet(s_oi));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(s_byte));
+        fx.op(I::I32Store8(ma(0, 0)));
+        fx.op(I::LocalGet(s_oi));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(s_oi));
+        fx.op(I::End); // \r
+        fx.op(I::End); // \t
+        fx.op(I::End); // \n
+        fx.op(I::End); // backslash
+        fx.op(I::End); // quote
+        // s_ci += 1 ; continue
+        fx.op(I::LocalGet(s_ci));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(s_ci));
+        fx.op(I::Br(0));
+        fx.op(I::End); // loop
+        fx.op(I::End); // block
+        // closing quote, then box
+        put_c(&mut fx, s_out, s_oi, b'"' as i32);
+        fx.op(I::LocalGet(s_out));
+        fx.op(I::LocalGet(s_oi));
+        fx.op(I::Call(em.h.box_str));
         fx.op(I::Return);
         fx.op(I::End);
         // bool: static "true"/"false"
