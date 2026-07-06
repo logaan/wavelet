@@ -14,20 +14,24 @@ Package "conformance:wavelet@0.1.0"
 // STATUS (5.12): WIT synthesis + type checking succeed for ALL 35 exported
 // functions, and every scalar / char / string / record / tuple / variant /
 // option / result transform COMPILES on the wasm backend (char uses real
-// next-scalar arithmetic via to-u32/to-char, so the old char-identity gap is
-// closed). The remaining blocker is the wasm backend, which does not yet
-// implement the higher-order list builtins `map`/`filter`/`fold`, the
-// list-building primitives `push`/`concat` (so a manual recursive rebuild is
-// not possible either), or `flg`/`contains`. Those are used only by the list
-// and flags functions:
-//   map      -> list-u8-rt, list-string-rt, list-list-u8-rt, tuple-nested-rt,
-//               points-rt
-//   filter, contains, flg -> permissions-rt
-// Because a `values` export is all-or-nothing (the whole interface or nothing),
-// this file does not build until the backend gains those list operations. Once
-// it does, `test-values-callee.sh` (to be added, parallel to
-// test-resources-callee.sh) plugs it under a rust caller driven by
-// `run-values()`.
+// next-scalar arithmetic via to-u32/to-char). The higher-order list builtins
+// `map` / `filter` / `fold` now compile on the backend too, so all the list
+// functions build:
+//   map    -> list-u8-rt, list-string-rt, list-list-u8-rt, tuple-nested-rt,
+//             points-rt
+//   filter -> permissions-rt (the list-filtering half)
+//
+// The ONE remaining blocker is `permissions-rt`, which needs to build a flags
+// value FROM DATA and test flags membership — `flg(list<string>) -> flags` and
+// a flags `contains`. Neither exists in the interpreter/oracle: `flg` is not a
+// builtin, and `contains` is string-substring only (there is no way in the
+// language today to construct a flags value from a runtime list, nor to test
+// membership of a runtime flags value). The suite's transform is a flags
+// complement (`v ^ all()`), which is data-dependent, so it cannot be expressed
+// as a compile-time flags literal. Closing this needs a LANGUAGE decision (add
+// oracle+backend flags builtins), not just backend codegen. Until then, because
+// a `values` export is all-or-nothing, this whole file does not build, and
+// `test-values-callee.sh` (parallel to test-resources-callee.sh) is deferred.
 
 Import {pkg: "roundtrip:suite/types" as: t}
 

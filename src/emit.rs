@@ -64,6 +64,14 @@ const TAG_FLG: i32 = 9; // a flags *form* (Node::Flg): n i32 @4, name str boxes 
 const TAG_CHAR: i32 = 10; // a char value/form: i64 Unicode scalar @8 (TAG_INT layout)
 const TAG_CELL: i32 = 11; // a mutable cell: current value box @4 (identity = ptr)
 
+/// 5.1 persistent region reserve (bytes). Resource/functor components carve
+/// this out below the arena floor for resource state that must survive the
+/// per-call arena reset; the arena starts above it and is reset each call. A
+/// fixed reserve keeps the persistent bump allocator from colliding with the
+/// growable arena; `persist_alloc` traps if it is exhausted. Non-resource
+/// components reserve zero.
+const PERSIST_RESERVE: u32 = 1 << 20; // 1 MiB
+
 fn ma(offset: u64, align: u32) -> MemArg {
     MemArg {
         offset,
@@ -790,6 +798,19 @@ struct Helpers {
     /// `cmp_f64(x: f64, y: f64) -> i32` in {-1,0,1}; traps on NaN. The
     /// numeric tail of `cmp_raw`, shared with the typed scalar path.
     cmp_f64: u32,
+    /// `persist_alloc(n: i32) -> ptr` — bump-allocate `n` bytes in the
+    /// PERSISTENT region (below the arena floor). Resource/functor components
+    /// hold resource state here so it survives the per-call arena reset (5.1
+    /// evacuation). Traps if the fixed reserve is exhausted. A non-resource
+    /// component has a zero reserve and never calls this.
+    persist_alloc: u32,
+    /// `persist(box) -> box` — deep-copy a boxed value graph out of the arena
+    /// into the persistent region (the 5.1 "write barrier": resource-state
+    /// stores route their value through this so it outlives the reset).
+    /// Interned/already-persistent nodes (`box < arena_floor`) are returned
+    /// unchanged; arena nodes are copied and their children persisted
+    /// recursively. Traps on `TAG_FN` (closures in resource state unsupported).
+    persist: u32,
 }
 
 // ---------------------------------------------------------------- emitter
@@ -1545,6 +1566,16 @@ impl<'a> Emitter<'a> {
     /// v0 has no record boxes; the unit value `{}` shares the static false box.
     fn unit_addr(&self) -> u32 {
         self.false_addr
+    }
+
+    /// Whether this component reserves a persistent region (5.1): true iff it
+    /// instantiates a functor or declares a resource, in which case resource
+    /// state (cells, functor rep lists) is allocated and written through the
+    /// persistent allocator / write barrier so it survives the per-call arena
+    /// reset. Non-resource components have a zero reserve, so `persist_alloc`
+    /// would trap — they keep using the arena.
+    fn has_persist(&self) -> bool {
+        !self.info.functors.is_empty() || !self.info.resources.is_empty()
     }
 
     fn ty_idx(&mut self, params: Vec<ValType>, results: Vec<ValType>) -> u32 {
@@ -6434,6 +6465,264 @@ impl<'a> Emitter<'a> {
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.tail_h));
             }
+            "map" => {
+                // map(f, list) -> list: apply the function value `f` to each
+                // element, collecting results in source order (oracle:
+                // `for v in lst { out.push(interp.apply(&f, v)) }`). Length is
+                // preserved, so the result TAG_LIST box is pre-sized and filled.
+                // `f` is applied through the boxed-closure convention
+                // (`closure_call`): call_indirect(env=closure, payload=elem,
+                // slot=closure[4]) — a single argument passes the value itself as
+                // the payload, exactly as `payload_box`'s one-arg case does.
+                nargs(2)?;
+                let fp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?; // closure box for f
+                fx.op(I::LocalSet(fp));
+                let lp = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?; // TAG_LIST box
+                fx.op(I::LocalSet(lp));
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(lp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n));
+                // out = alloc(8 + 4*n); [TAG_LIST, n, _ …]
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Store(ma(4, 2)));
+                // for i in 0..n: out[8+4i] = apply(f, lp[8+4i])
+                let i = fx.local(ValType::I32);
+                let apply_ty = self.ty_idx(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                // dst = out + 8 + 4*i
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                // env = f
+                fx.op(I::LocalGet(fp));
+                // payload = lp[8+4*i]
+                fx.op(I::LocalGet(lp));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+                // slot = f[4]
+                fx.op(I::LocalGet(fp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::CallIndirect {
+                    type_index: apply_ty,
+                    table_index: 0,
+                });
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End); // loop
+                fx.op(I::End); // block
+                fx.op(I::LocalGet(out));
+            }
+            "fold" => {
+                // fold(f, acc, list) -> acc: left fold. Each step applies `f`
+                // to the two-element tuple (acc, elem) — the bundle shape the
+                // interpreter uses (`apply(f, Tup([acc, elem]))`) — via the
+                // boxed-closure convention; the closure wrapper unpacks the
+                // TAG_TUP payload into the function's two params.
+                nargs(3)?;
+                let fp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?; // closure box for f
+                fx.op(I::LocalSet(fp));
+                let acc = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?; // initial accumulator box
+                fx.op(I::LocalSet(acc));
+                let lp = fx.local(ValType::I32);
+                self.expr(fx, items[2], false)?; // TAG_LIST box
+                fx.op(I::LocalSet(lp));
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(lp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n));
+                let i = fx.local(ValType::I32);
+                let pay = fx.local(ValType::I32);
+                let apply_ty = self.ty_idx(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                // pay = [TAG_TUP, 2, acc, lp[8+4*i]]
+                fx.op(I::I32Const(16));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(pay));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::I32Const(TAG_TUP));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::I32Const(2));
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::LocalGet(acc));
+                fx.op(I::I32Store(ma(8, 2)));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::LocalGet(lp));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Store(ma(12, 2)));
+                // acc = apply(f, pay)
+                fx.op(I::LocalGet(fp));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::LocalGet(fp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::CallIndirect {
+                    type_index: apply_ty,
+                    table_index: 0,
+                });
+                fx.op(I::LocalSet(acc));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End); // loop
+                fx.op(I::End); // block
+                fx.op(I::LocalGet(acc));
+            }
+            "filter" => {
+                // filter(f, list) -> list: keep the elements for which the
+                // predicate `f` returns true, in order (oracle: a non-bool
+                // result is an error). The result is at most as long as the
+                // input, so a full-size TAG_LIST is over-allocated, the kept
+                // elements packed in, and the length set to the kept count.
+                nargs(2)?;
+                let fp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?; // closure box
+                fx.op(I::LocalSet(fp));
+                let lp = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?; // TAG_LIST box
+                fx.op(I::LocalSet(lp));
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(lp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n));
+                // out = alloc(8 + 4*n); [TAG_LIST, <k set at end>, …]
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                let i = fx.local(ValType::I32);
+                let k = fx.local(ValType::I32);
+                let elem = fx.local(ValType::I32);
+                let r = fx.local(ValType::I32);
+                let apply_ty = self.ty_idx(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(k));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                // elem = lp[8+4*i]
+                fx.op(I::LocalGet(lp));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::LocalSet(elem));
+                // r = apply(f, elem)
+                fx.op(I::LocalGet(fp));
+                fx.op(I::LocalGet(elem));
+                fx.op(I::LocalGet(fp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::CallIndirect {
+                    type_index: apply_ty,
+                    table_index: 0,
+                });
+                fx.op(I::LocalSet(r));
+                // predicate must be a bool box, else trap (oracle: error)
+                fx.op(I::LocalGet(r));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_BOOL));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                // if r's value != 0: out[8+4*k] = elem; k += 1
+                fx.op(I::LocalGet(r));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(k));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(elem));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(k));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(k));
+                fx.op(I::End);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End); // loop
+                fx.op(I::End); // block
+                // out[4] = k
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(k));
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(out));
+            }
             "str-cat" => {
                 if items.is_empty() {
                     let a = self.intern_str("");
@@ -6550,13 +6839,24 @@ impl<'a> Emitter<'a> {
             "cell-new" => {
                 // A mutable cell holding one boxed value; its heap pointer is
                 // its identity (interp: `Value::Cell(Rc<RefCell<Value>>)`).
+                // In a resource/functor component a cell is resource state (a
+                // `DefResource` `New`), so the cell AND its value live in the
+                // persistent region and survive the per-call arena reset (5.1).
                 nargs(1)?;
+                let persist = self.has_persist();
                 let v = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
+                if persist {
+                    fx.op(I::Call(self.h.persist));
+                }
                 fx.op(I::LocalSet(v));
                 let p = fx.local(ValType::I32);
                 fx.op(I::I32Const(8));
-                fx.op(I::Call(self.h.alloc));
+                fx.op(I::Call(if persist {
+                    self.h.persist_alloc
+                } else {
+                    self.h.alloc
+                }));
                 fx.op(I::LocalSet(p));
                 fx.op(I::LocalGet(p));
                 fx.op(I::I32Const(TAG_CELL));
@@ -6574,12 +6874,19 @@ impl<'a> Emitter<'a> {
             }
             "cell-set" => {
                 // Overwrite the cell's value box; return unit (interp parity).
+                // In a resource/functor component the stored value is routed
+                // through the persistent write barrier so it outlives the reset
+                // (5.1); the cell itself was already allocated persistently.
                 nargs(2)?;
+                let persist = self.has_persist();
                 let c = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(c));
                 fx.op(I::LocalGet(c));
                 self.expr(fx, items[1], false)?;
+                if persist {
+                    fx.op(I::Call(self.h.persist));
+                }
                 fx.op(I::I32Store(ma(4, 2)));
                 fx.op(I::I32Const(self.unit_addr() as i32));
             }
@@ -6629,6 +6936,9 @@ const BUILTINS: &[&str] = &[
     "len",
     "head",
     "tail",
+    "map",
+    "fold",
+    "filter",
     "str-cat",
     "upper",
     "lower",
@@ -7035,6 +7345,8 @@ fn emit_core_module(
     em.h.neg_raw = take();
     em.h.arith_int = take();
     em.h.cmp_f64 = take();
+    em.h.persist_alloc = take();
+    em.h.persist = take();
 
     // ---- reserve the functor `set` resource core-func indices (step 04)
     //
@@ -7561,31 +7873,29 @@ fn emit_core_module(
     // heap base and are untouched.
     //
     // Components with functor instantiations OR user-declared resources (4.5)
-    // OPT OUT for now and keep the never-free behaviour: a resource's rep — the
-    // `set` cell and its stored list, or a user `counter`'s `New` cell — lives on
-    // this same heap and MUST survive across export calls (a later `next`/`value`
-    // dereferences the rep the constructor allocated). Resetting the arena in the
-    // post-return would free it, so a resource-bearing component keeps its arena.
-    // They move to an explicit persistent region when the ABI-native layout work
-    // rebuilds value construction (see the 5.1 decision record).
+    // used to OPT OUT of the reset and keep never-free behaviour, because a
+    // resource's rep — the `set` cell and its stored list, or a user `counter`'s
+    // `New` cell — must survive across export calls. As of the 5.1 evacuation
+    // that state now lives in the PERSISTENT region below the arena floor
+    // (`persist_alloc` + the `persist` write barrier, wired into cell-new/set and
+    // the functor `set` ctor/add), which the reset does not touch — so every
+    // component, resource-bearing or not, resets its arena at post-return.
     //
-    // Global indices: 0 = heap ptr, 1..=n value defs, 1+n gensym counter,
-    // 2+n = the immutable arena floor (initialized to the heap base in the
-    // globals section below).
+    // Global indices: 0 = arena bump ptr, 1..=n value defs, 1+n gensym counter,
+    // 2+n = the arena floor (heap_base + persistent reserve for resource
+    // components, heap_base otherwise), 3+n = the persistent bump ptr.
     let arena_floor_g = 2 + info.value_defs.len() as u32;
-    if info.functors.is_empty() && info.resources.is_empty() {
-        for (name, fresults) in post_returns {
-            let mut fx = FnCtx::new(fresults.len() as u32);
-            fx.op(I::GlobalGet(arena_floor_g));
-            fx.op(I::GlobalSet(0));
-            for i in 0..info.value_defs.len() {
-                fx.op(I::I32Const(0));
-                fx.op(I::GlobalSet(1 + i as u32));
-            }
-            let t = em.ty_idx(fresults, vec![]);
-            em.bodies.push((t, fx.finish()));
-            exports.push((format!("cabi_post_{name}"), take()));
+    for (name, fresults) in post_returns {
+        let mut fx = FnCtx::new(fresults.len() as u32);
+        fx.op(I::GlobalGet(arena_floor_g));
+        fx.op(I::GlobalSet(0));
+        for i in 0..info.value_defs.len() {
+            fx.op(I::I32Const(0));
+            fx.op(I::GlobalSet(1 + i as u32));
         }
+        let t = em.ty_idx(fresults, vec![]);
+        em.bodies.push((t, fx.finish()));
+        exports.push((format!("cabi_post_{name}"), take()));
     }
 
     // ---- user-resource boundary exports (4.5)
@@ -7738,7 +8048,14 @@ fn emit_core_module(
         em.align8();
         DATA_BASE + em.data.len() as u32
     };
-    let pages = (heap_base as u64 >> 16) + 1;
+    // 5.1: resource/functor components reserve a persistent region [heap_base,
+    // arena_floor) for resource state that outlives the per-call arena reset;
+    // the arena bump pointer starts at (and resets to) `arena_floor`. Other
+    // components reserve nothing, so arena_floor == heap_base as before.
+    let has_persist = !info.functors.is_empty() || !info.resources.is_empty();
+    let persist_reserve = if has_persist { PERSIST_RESERVE } else { 0 };
+    let arena_floor = heap_base + persist_reserve;
+    let pages = (arena_floor as u64 >> 16) + 1;
 
     let mut module = Module::new();
     let mut ts = TypeSection::new();
@@ -7789,13 +8106,15 @@ fn emit_core_module(
     module.section(&ms);
 
     let mut gs = GlobalSection::new();
+    // global 0: the arena bump pointer. Starts at the arena floor (above the
+    // persistent reserve for resource components; == heap_base otherwise).
     gs.global(
         GlobalType {
             val_type: I32,
             mutable: true,
             shared: false,
         },
-        &ConstExpr::i32_const(heap_base as i32),
+        &ConstExpr::i32_const(arena_floor as i32),
     );
     for _ in &info.value_defs {
         gs.global(
@@ -7819,13 +8138,25 @@ fn emit_core_module(
         },
         &ConstExpr::i64_const(0),
     );
-    // The arena floor (5.1 arena-per-call): the heap base, as an immutable
-    // global the per-export post-return bodies reset the heap pointer to.
+    // The arena floor (5.1 arena-per-call): the base the per-export post-return
+    // bodies reset the arena bump pointer to. For a resource/functor component
+    // it sits above the persistent reserve; otherwise it is the heap base.
     // Index = 2 + value_defs.len() (see the post-return emission above).
     gs.global(
         GlobalType {
             val_type: I32,
             mutable: false,
+            shared: false,
+        },
+        &ConstExpr::i32_const(arena_floor as i32),
+    );
+    // 5.1 persistent bump pointer (index 3 + value_defs.len()). Grows up from
+    // heap_base within the reserve; never reset. Left at heap_base and unused
+    // by non-resource components.
+    gs.global(
+        GlobalType {
+            val_type: I32,
+            mutable: true,
             shared: false,
         },
         &ConstExpr::i32_const(heap_base as i32),
@@ -8183,13 +8514,15 @@ fn emit_set_resource(
     {
         let mut fx = FnCtx::new(0);
         let cell = fx.local(I32);
-        // cell = alloc(4)
+        // cell = persist_alloc(4): the set rep must survive the per-call arena
+        // reset, so it lives in the persistent region with a stable identity.
         fx.op(I::I32Const(4));
-        fx.op(I::Call(em.h.alloc));
+        fx.op(I::Call(em.h.persist_alloc));
         fx.op(I::LocalSet(cell));
-        // cell[0] = empty list box
+        // cell[0] = empty list box, deep-copied into the persistent region
         fx.op(I::LocalGet(cell));
         emit_empty_list_box(em, &mut fx);
+        fx.op(I::Call(em.h.persist));
         fx.op(I::I32Store(ma(0, 2)));
         // resource.new(cell) -> handle ; return it
         fx.op(I::LocalGet(cell));
@@ -8219,9 +8552,13 @@ fn emit_set_resource(
         fx.op(I::If(BlockType::Empty));
         fx.op(I::Return);
         fx.op(I::End);
-        // *self = old list + needle
+        // *self = persist(old list + needle): the grown list is built in the
+        // arena, then deep-copied into the persistent region so it outlives the
+        // reset (already-persistent elements are kept in place, only the new
+        // needle is copied).
         fx.op(I::LocalGet(0));
         emit_list_append(em, &mut fx, list, needle);
+        fx.op(I::Call(em.h.persist));
         fx.op(I::I32Store(ma(0, 2)));
         let _ = n_elem; // silence if elem flattens to zero (no such WitTy today)
         let t = em.ty_idx(params, vec![]);
@@ -8406,6 +8743,8 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
     em.h.neg_raw = take();
     em.h.arith_int = take();
     em.h.cmp_f64 = take();
+    em.h.persist_alloc = take();
+    em.h.persist = take();
     emit_helpers(&mut em)?;
 
     // macro body functions (each compiles like a Fn over its param forms)
@@ -8520,6 +8859,25 @@ fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, St
             shared: false,
         },
         &ConstExpr::i64_const(0),
+    );
+    // arena floor (index 2) + persistent bump pointer (index 3): a macro library
+    // has no resources, so both are the heap base and the persist helpers (which
+    // reference them) are dead code.
+    gs.global(
+        GlobalType {
+            val_type: I32,
+            mutable: false,
+            shared: false,
+        },
+        &ConstExpr::i32_const(heap_base as i32),
+    );
+    gs.global(
+        GlobalType {
+            val_type: I32,
+            mutable: true,
+            shared: false,
+        },
+        &ConstExpr::i32_const(heap_base as i32),
     );
     module.section(&gs);
 
@@ -11992,6 +12350,212 @@ fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         em.bodies.push((t, fx.finish()));
     }
 
+    // ---- 5.1 persistent region: allocator + deep-copy write barrier
+    //
+    // Resource/functor components hold resource state that must survive the
+    // per-call arena reset. That state lives in a PERSISTENT region below the
+    // arena floor: global `persist_g` bumps up from `heap_base`, capped at the
+    // arena floor (global `floor_g`); the arena grows above the floor and is
+    // reset each post-return. A non-resource component has floor == heap_base
+    // (zero reserve), so these helpers are emitted but never called.
+    let floor_g = 2 + em.info.value_defs.len() as u32;
+    let persist_g = 3 + em.info.value_defs.len() as u32;
+
+    // persist_alloc(n) -> ptr  [param0=n, r=1, end=2]
+    {
+        let mut fx = FnCtx::new(1);
+        let r = fx.local(I32);
+        let end = fx.local(I32);
+        fx.op(I::GlobalGet(persist_g));
+        fx.op(I::LocalSet(r));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Const(7));
+        fx.op(I::I32Add);
+        fx.op(I::I32Const(-8));
+        fx.op(I::I32And);
+        fx.op(I::LocalSet(0));
+        fx.op(I::LocalGet(r));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(end));
+        // trap if the fixed persistent reserve is exhausted
+        fx.op(I::LocalGet(end));
+        fx.op(I::GlobalGet(floor_g));
+        fx.op(I::I32GtU);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        fx.op(I::LocalGet(end));
+        fx.op(I::GlobalSet(persist_g));
+        fx.op(I::LocalGet(r));
+        let t = em.ty_idx(vec![I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
+    // persist(box) -> box  [param0=box, tg=1, sz=2, pbase=3, pcount=4, new=5, i=6, off=7]
+    //
+    // Interned/already-persistent nodes (box < arena_floor) are returned as-is.
+    // An arena box is copied whole into the persistent region, then each of its
+    // child pointer words is re-persisted recursively (a null child persists to
+    // null, since 0 < arena_floor). `persist` is self-recursive via em.h.persist.
+    {
+        let mut fx = FnCtx::new(1);
+        let tg = fx.local(I32);
+        let sz = fx.local(I32);
+        let pbase = fx.local(I32);
+        let pcount = fx.local(I32);
+        let new = fx.local(I32);
+        let i = fx.local(I32);
+        let off = fx.local(I32);
+        fx.op(I::LocalGet(0));
+        fx.op(I::GlobalGet(floor_g));
+        fx.op(I::I32LtU);
+        fx.op(I::If(BlockType::Result(I32)));
+        fx.op(I::LocalGet(0)); // interned / already persistent
+        fx.op(I::Else);
+        // defaults: flat 16-byte box, no children (INT/DEC/CHAR)
+        fx.op(I::I32Const(16));
+        fx.op(I::LocalSet(sz));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(pbase));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(pcount));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::LocalSet(tg));
+        // TAG_FN: closures in resource state unsupported
+        fx.op(I::LocalGet(tg));
+        fx.op(I::I32Const(TAG_FN));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::Unreachable);
+        fx.op(I::End);
+        // TAG_STR: sz = 8 + len; no children (bytes inline)
+        fx.op(I::LocalGet(tg));
+        fx.op(I::I32Const(TAG_STR));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(sz));
+        fx.op(I::End);
+        // TAG_LIST / TAG_TUP / TAG_FLG: pbase=8, pcount=n, sz=8+4n
+        fx.op(I::LocalGet(tg));
+        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Eq);
+        fx.op(I::LocalGet(tg));
+        fx.op(I::I32Const(TAG_TUP));
+        fx.op(I::I32Eq);
+        fx.op(I::I32Or);
+        fx.op(I::LocalGet(tg));
+        fx.op(I::I32Const(TAG_FLG));
+        fx.op(I::I32Eq);
+        fx.op(I::I32Or);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(pcount));
+        fx.op(I::I32Const(8));
+        fx.op(I::LocalSet(pbase));
+        fx.op(I::LocalGet(pcount));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(sz));
+        fx.op(I::End);
+        // TAG_REC: pbase=8, pcount=2n, sz=8+8n
+        fx.op(I::LocalGet(tg));
+        fx.op(I::I32Const(TAG_REC));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Mul);
+        fx.op(I::LocalSet(pcount));
+        fx.op(I::I32Const(8));
+        fx.op(I::LocalSet(pbase));
+        fx.op(I::LocalGet(pcount));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(sz));
+        fx.op(I::End);
+        // TAG_VAR: pbase=4, pcount=2 (case ptr + payload; null payload persists to null), sz=12
+        fx.op(I::LocalGet(tg));
+        fx.op(I::I32Const(TAG_VAR));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(4));
+        fx.op(I::LocalSet(pbase));
+        fx.op(I::I32Const(2));
+        fx.op(I::LocalSet(pcount));
+        fx.op(I::I32Const(12));
+        fx.op(I::LocalSet(sz));
+        fx.op(I::End);
+        // TAG_CELL: pbase=4, pcount=1, sz=8
+        fx.op(I::LocalGet(tg));
+        fx.op(I::I32Const(TAG_CELL));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(4));
+        fx.op(I::LocalSet(pbase));
+        fx.op(I::I32Const(1));
+        fx.op(I::LocalSet(pcount));
+        fx.op(I::I32Const(8));
+        fx.op(I::LocalSet(sz));
+        fx.op(I::End);
+        // new = persist_alloc(sz); memory.copy(new, box, sz)
+        fx.op(I::LocalGet(sz));
+        fx.op(I::Call(em.h.persist_alloc));
+        fx.op(I::LocalSet(new));
+        fx.op(I::LocalGet(new));
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(sz));
+        fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+        // for i in 0..pcount: new[pbase+4i] = persist(box[pbase+4i])
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(pcount));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        fx.op(I::LocalGet(pbase));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(off));
+        // dst = new + off
+        fx.op(I::LocalGet(new));
+        fx.op(I::LocalGet(off));
+        fx.op(I::I32Add);
+        // val = persist(box[off])
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(off));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load(ma(0, 2)));
+        fx.op(I::Call(em.h.persist));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End); // loop
+        fx.op(I::End); // block
+        fx.op(I::LocalGet(new));
+        fx.op(I::End); // if box<floor
+        let t = em.ty_idx(vec![I32], vec![I32]);
+        em.bodies.push((t, fx.finish()));
+    }
+
     Ok(())
 }
 
@@ -12523,6 +13087,8 @@ world app {
         em.h.neg_raw = take();
         em.h.arith_int = take();
         em.h.cmp_f64 = take();
+        em.h.persist_alloc = take();
+        em.h.persist = take();
 
         // helper bodies (must precede our set bodies, matching index order).
         emit_helpers(&mut em)?;
@@ -12541,7 +13107,10 @@ world app {
             em.align8();
             DATA_BASE + em.data.len() as u32
         };
-        let pages = (heap_base as u64 >> 16) + 1;
+        // A set is a resource, so mirror emit_core_module's resource layout: a
+        // persistent reserve below the arena floor, the arena above it.
+        let arena_floor = heap_base + PERSIST_RESERVE;
+        let pages = (arena_floor as u64 >> 16) + 1;
 
         let mut module = Module::new();
         let mut ts = TypeSection::new();
@@ -12572,8 +13141,34 @@ world app {
         });
         module.section(&ms);
 
-        // heap pointer global (global 0), same as the real assembly.
+        // Globals, mirroring emit_core_module's resource layout: global 0 = the
+        // arena bump pointer (starts above the reserve), 1 = gensym counter,
+        // 2 = arena floor, 3 = persistent bump pointer (starts at heap_base).
         let mut gs = GlobalSection::new();
+        gs.global(
+            GlobalType {
+                val_type: I32,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i32_const(arena_floor as i32),
+        );
+        gs.global(
+            GlobalType {
+                val_type: ValType::I64,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i64_const(0),
+        );
+        gs.global(
+            GlobalType {
+                val_type: I32,
+                mutable: false,
+                shared: false,
+            },
+            &ConstExpr::i32_const(arena_floor as i32),
+        );
         gs.global(
             GlobalType {
                 val_type: I32,
