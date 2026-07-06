@@ -1,10 +1,10 @@
 ---
 sidebar_position: 5
-title: The sixteen special forms
+title: The fourteen special forms
 description: The entire core language, form by form, with live examples.
 ---
 
-# The sixteen special forms
+# The fourteen special forms
 
 This is the **entire core language**. Everything else is the [standard library](../stdlib) or [macros](./macros).
 
@@ -17,9 +17,7 @@ This is the **entire core language**. Everything else is the [standard library](
 | [`DefType`](#deftype) | 2 | name, type form | declare a WIT type for this component |
 | [`Def`](#def) | 2 | name, expression | immutable module-level binding |
 | [`Fn`](#fn) | 2 | parameter braces, body | closure |
-| [`If`](#if) | 3 | condition, then, else | conditional |
 | [`Let`](#let) | 2 | binding record, body | sequential local bindings |
-| [`Do`](#do) | 1 | list of expressions | sequencing; value of the last |
 | [`Match`](#match) | 2 | scrutinee, clause list | pattern matching |
 | [`Quote`](#quote) | 1 | form | the form itself, as data |
 | [`Quasi`](#quasi) | 1 | form | template with holes |
@@ -63,27 +61,17 @@ Typed parameters are checked when the function is called:
 
 ## Control flow
 
-### `If`
-
-`If cond then else` — the condition must evaluate to a `bool`. Both branches are in [tail position](./tail-calls).
-
-<Playground id="sf-if" />
-
-A non-boolean condition is a compile-time error (there is no truthiness):
-
-<Playground id="sf-if-nonbool" />
+`Match` is the **only** core branching construct. The everyday conditional `If`
+and the sequencing form `Do` are not special forms — they are bundled
+[standard-library macros](../stdlib#control-flow-macros) that expand to `Match`,
+so the checker, WIT synthesis, and the backend only ever have `Match` to agree
+on.
 
 ### `Let`
 
 `Let {bindings} body` — sequential local bindings, like `let*`: each binding sees the previous ones. The bindings are a *record form* — homoiconicity doing the work of syntax. The body is in tail position.
 
 <Playground id="sf-let" />
-
-### `Do`
-
-`Do [exprs]` — evaluate each expression in order; the value is the last one. Useful for side effects. Takes a single **list**.
-
-<Playground id="sf-do" />
 
 ### `Match`
 

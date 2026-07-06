@@ -13,9 +13,9 @@ Wavelet **guarantees** tail-call elimination. There is no loop construct: iterat
 A call in tail position reuses the current stack frame instead of growing the stack. The tail positions are:
 
 - the body of a [`Fn`](./special-forms#fn);
-- both branches of an [`If`](./special-forms#if);
+- both branches of an [`If`](../stdlib#if) (via the `Match` it expands to);
 - every clause result of a [`Match`](./special-forms#match);
-- the last expression of a [`Do`](./special-forms#do);
+- the last expression of a [`Do`](../stdlib#do) (via the `Match` it expands to);
 - the body of a [`Let`](./special-forms#let).
 
 So a self-recursive function whose recursive call sits in tail position runs in constant stack, for any input:

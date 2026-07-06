@@ -60,6 +60,18 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- **`If` and `Do` are now bundled standard-library macros, not core special
+  forms.** `Match` is the sole core branching construct; `If c t e` expands to
+  `Match The bool c [(true t) (false e)]` and `Do [e1 … en]` to nested
+  `Match ei [(_ …)]`. They remain always in scope and behave exactly as before —
+  the same laziness, tail positions, and single-list argument for `Do`. Because
+  they lower to `Match` before the checker, WIT synthesis, and the backend run,
+  those stages agree on them by construction. The core is now **fourteen**
+  special forms. Diagnostics are preserved: a non-`bool` `If` condition is still
+  a compile-time error (`The bool c` also makes `The <non-numeric> <int-literal>`
+  — e.g. `The bool 1` — a static "does not conform" error, which previously
+  slipped through the range-only check).
+
 - **An exported function's body is checked against its declared result type.**
   The `result:` type declared in an `Export {…}` form is now threaded into the
   matching def's body as its expected type, so a body whose type genuinely
