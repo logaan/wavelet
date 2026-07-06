@@ -2894,6 +2894,18 @@ impl<'a> Emitter<'a> {
             {
                 self.pattern_mem_var(fx, &pats, tf, v, off, fail)
             }
+            // A bare nullary-case Sym (`none` or a DefType case registered
+            // payload-less) as a NESTED field pattern over a canonical variant
+            // field: route it to the discriminant matcher as a one-element
+            // pattern slice instead of reboxing the field and running the boxed
+            // string-compare matcher. Mirrors pattern_top_mem's arm (5.4 residue
+            // / TAG_VAR consumer shrink); behavior-preserving.
+            Node::Sym(name)
+                if (name == "none" || self.local_cases.get(&name) == Some(&false))
+                    && tf.variant_cases().is_some() =>
+            {
+                self.pattern_mem_var(fx, &[pat], tf, v, off, fail)
+            }
             Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
                 let l = fx.local(ValType::I32);

@@ -55,6 +55,11 @@ Def pair Fn {} two(Quote (4 9))
 
 Export {name: opt params: {n: s32} result: option(s32)}
 Def opt Fn {n: s32} some(n)
+
+DefType boxed {tag: s32 val: option(s32)}
+
+Export {name: mkbox params: {b: bool} result: boxed}
+Def mkbox Fn {b: bool} If b {tag: 1 val: some(5)} {tag: 0 val: none}
 "#;
 
     let main = r#"Package "demo:main@0.1.0"
@@ -98,6 +103,10 @@ Def v-eq Fn {a: s32 b: s32} eq(vr/opt(a) vr/opt(b))
 
 Export {name: v-eq-disc params: {b: bool} result: bool}
 Def v-eq-disc Fn {b: bool} eq(vr/find(b) vr/opt(7))
+
+Export {name: unbox params: {b: bool} result: s64}
+Def unbox Fn {b: bool}
+  Match vr/mkbox(b) [({val: none} -1) ({val: (some x)} x)]
 "#;
 
     std::fs::write(src.join("vr.wlt"), dep).unwrap();
@@ -190,6 +199,17 @@ fn option_export_takes_the_retptr_fast_path() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "fwd", &[Val::Bool(true)]), Val::Option(Some(Box::new(Val::S32(7)))));
     assert_eq!(ok(&mut c, "fwd", &[Val::Bool(false)]), Val::Option(None));
+}
+
+#[test]
+// A bare nullary-case (`none`) pattern in a NESTED field position over a
+// canonical record scrutinee takes the discriminant matcher (pattern_mem_field
+// nested-nullary arm), not the reboxed string-compare matcher. Both answers
+// equal the interpreter's (5.4 residue / TAG_VAR consumer shrink).
+fn nested_nullary_field_pattern_matches_like_the_oracle() {
+    let Some(mut c) = composed() else { return };
+    assert_eq!(ok(&mut c, "unbox", &[Val::Bool(true)]), Val::S64(5));
+    assert_eq!(ok(&mut c, "unbox", &[Val::Bool(false)]), Val::S64(-1));
 }
 
 // ---- construction slice: canonical case constructors (5.4, no dep) ----
