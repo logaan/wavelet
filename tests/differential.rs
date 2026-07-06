@@ -56,10 +56,8 @@ const SKIP: &[(&str, &str)] = &[
     ("std-char-conv", BUILTIN),       // to-u32
     ("std-conv", BUILTIN),            // to-u8
     ("std-div-float", TOSTR_TRAP),    // float result
-    ("std-map", BUILTIN),             // map
     ("std-pi", PI),
     ("std-read", BUILTIN),           // read
-    ("std-seq-basics", BUILTIN),     // reverse
     ("std-strings", BUILTIN),     // split
     ("std-zip", BUILTIN),         // zip
     ("values-atoms", FLAGS),

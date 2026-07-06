@@ -7142,6 +7142,146 @@ impl<'a> Emitter<'a> {
                 fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
                 fx.op(I::LocalGet(out));
             }
+            "reverse" => {
+                // Fresh list with the elements in reverse order (oracle: want_list
+                // then reverse). A non-list operand traps.
+                nargs(1)?;
+                let lst = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(lst));
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n));
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Store(ma(4, 2)));
+                let i = fx.local(ValType::I32);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Sub);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Sub);
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+                fx.op(I::LocalGet(out));
+            }
+            "range" => {
+                // The half-open list [lo, hi) of ints (oracle: (lo..hi).map(Int)).
+                // Empty when hi <= lo.
+                nargs(2)?;
+                let lo = fx.local(ValType::I64);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::LocalSet(lo));
+                let hi = fx.local(ValType::I64);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::LocalSet(hi));
+                let cnt = fx.local(ValType::I32);
+                fx.op(I::LocalGet(hi));
+                fx.op(I::LocalGet(lo));
+                fx.op(I::I64GtS);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                fx.op(I::LocalGet(hi));
+                fx.op(I::LocalGet(lo));
+                fx.op(I::I64Sub);
+                fx.op(I::I32WrapI64);
+                fx.op(I::Else);
+                fx.op(I::I32Const(0));
+                fx.op(I::End);
+                fx.op(I::LocalSet(cnt));
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(cnt));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(cnt));
+                fx.op(I::I32Store(ma(4, 2)));
+                let i = fx.local(ValType::I32);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(cnt));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(lo));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I64ExtendI32S);
+                fx.op(I::I64Add);
+                fx.op(I::Call(self.h.box_int));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+                fx.op(I::LocalGet(out));
+            }
             "abs" => {
                 // |n| over an int (branch: n<0 ? -n : n) or a dec (F64Abs);
                 // any other tag traps, matching the oracle's `want_num`.
@@ -7277,6 +7417,8 @@ const BUILTINS: &[&str] = &[
     "put",
     "push",
     "concat",
+    "reverse",
+    "range",
     "head",
     "tail",
     "map",
