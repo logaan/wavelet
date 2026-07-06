@@ -53,7 +53,6 @@ const SKIP: &[(&str, &str)] = &[
     ("sf-def", TOSTR_TRAP), // float result
     ("sf-let", PI),
     ("std-apply", BUILTIN),           // apply
-    ("std-arith", BUILTIN),           // abs
     ("std-char-conv", BUILTIN),       // to-u32
     ("std-conv", BUILTIN),            // to-u8
     ("std-div-float", TOSTR_TRAP),    // float result

@@ -6910,6 +6910,109 @@ impl<'a> Emitter<'a> {
                     }
                 }
             }
+            "abs" => {
+                // |n| over an int (branch: n<0 ? -n : n) or a dec (F64Abs);
+                // any other tag traps, matching the oracle's `want_num`.
+                nargs(1)?;
+                let b = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(b));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_INT));
+                fx.op(I::I32Eq);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                let n = fx.local(ValType::I64);
+                fx.op(I::LocalGet(b));
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::LocalTee(n));
+                fx.op(I::I64Const(0));
+                fx.op(I::I64LtS);
+                fx.op(I::If(BlockType::Result(ValType::I64)));
+                fx.op(I::I64Const(0));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I64Sub);
+                fx.op(I::Else);
+                fx.op(I::LocalGet(n));
+                fx.op(I::End);
+                fx.op(I::Call(self.h.box_int));
+                fx.op(I::Else);
+                // must be a dec, else trap (want_num)
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_DEC));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(b));
+                fx.op(I::F64Load(ma(8, 3)));
+                fx.op(I::F64Abs);
+                fx.op(I::Call(self.h.box_dec));
+                fx.op(I::End);
+            }
+            "min" | "max" => {
+                // The oracle: `min` returns a[1] when compare(a,b)==Greater else
+                // a[0]; `max` returns a[1] when compare(a,b)==Less else a[0].
+                // `cmp_raw` yields 1 for Greater, -1 for Less over the same total
+                // order (ints, decs, strings, chars).
+                nargs(2)?;
+                let av = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(av));
+                let bv = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::LocalSet(bv));
+                fx.op(I::LocalGet(av));
+                fx.op(I::LocalGet(bv));
+                fx.op(I::Call(self.h.cmp_raw));
+                fx.op(I::I32Const(if name == "min" { 1 } else { -1 }));
+                fx.op(I::I32Eq);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                fx.op(I::LocalGet(bv));
+                fx.op(I::Else);
+                fx.op(I::LocalGet(av));
+                fx.op(I::End);
+            }
+            "empty" => {
+                // true iff a string/list/tuple has length 0 (the len word @4);
+                // any other tag traps, like the oracle's non-sequence error.
+                nargs(1)?;
+                let b = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(b));
+                let tg = fx.local(ValType::I32);
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::LocalTee(tg));
+                fx.op(I::I32Const(TAG_STR));
+                fx.op(I::I32Eq);
+                fx.op(I::LocalGet(tg));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Eq);
+                fx.op(I::I32Or);
+                fx.op(I::LocalGet(tg));
+                fx.op(I::I32Const(TAG_TUP));
+                fx.op(I::I32Eq);
+                fx.op(I::I32Or);
+                fx.op(I::I32Eqz);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::I32Eqz);
+                fx.op(I::Call(self.h.box_bool));
+            }
+            "drop" => {
+                // Evaluates its operand(s) for effect and yields unit — the
+                // interpreter's `drop` (a no-result function body's value).
+                for &x in items {
+                    self.expr(fx, x, false)?;
+                    fx.op(I::Drop);
+                }
+                fx.op(I::I32Const(self.unit_addr() as i32));
+            }
             other => {
                 return Err(format!(
                     "builtin `{other}` not supported by the wasm backend yet"
@@ -6933,7 +7036,11 @@ const BUILTINS: &[&str] = &[
     "div",
     "rem",
     "neg",
+    "min",
+    "max",
+    "abs",
     "len",
+    "empty",
     "head",
     "tail",
     "map",
