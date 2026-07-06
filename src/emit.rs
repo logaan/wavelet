@@ -2694,6 +2694,18 @@ impl<'a> Emitter<'a> {
             {
                 self.pattern_mem_var(fx, &pats, &ty, v, 0, 0)
             }
+            // A bare nullary-case Sym (`none` or a DefType case registered
+            // payload-less) over a canonical variant scrutinee: route it to
+            // the discriminant matcher as a one-element pattern slice instead
+            // of reboxing. `pattern_mem_var`'s `(0, None)` arm matches on the
+            // disc alone — equivalent to the boxed matcher's "TAG_VAR + name
+            // eq + payload absent" for a payload-less case (5.4 residue).
+            Node::Sym(name)
+                if (name == "none" || self.local_cases.get(&name) == Some(&false))
+                    && ty.variant_cases().is_some() =>
+            {
+                self.pattern_mem_var(fx, &[pat], &ty, v, 0, 0)
+            }
             Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
                 let l = fx.local(ValType::I32);
