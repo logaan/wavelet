@@ -140,7 +140,7 @@ The interpreter evaluates **pure** programs: it has no host interfaces, so a `ru
 
 ## Running a script directly
 
-A `.wlt` file may begin with a shebang line so it can be marked executable and run as a script:
+A Wavelet source file may begin with a shebang line so it can be marked executable and run as a script:
 
 ```text
 #!/usr/bin/env wavelet
@@ -151,11 +151,11 @@ Def run Fn {}
 ```
 
 ```console
-$ chmod +x hi.wlt
-$ ./hi.wlt
+$ chmod +x hi
+$ ./hi
 ```
 
-The shebang line is recognised only on the first line of the file (a `#` is not a comment anywhere else — `//` is). Passing a `.wlt` path as the sole leading argument, `wavelet hi.wlt`, is equivalent to `wavelet run hi.wlt`: the script still needs an exported `run` entry and runs on the same compiled path (with interpreter fallback).
+The file does not need a `.wlt` extension — an executable script is commonly extensionless (e.g. `hi` above). The shebang line is recognised only on the first line of the file (a `#` is not a comment anywhere else — `//` is). Passing a file path as the sole leading argument, `wavelet hi`, is equivalent to `wavelet run hi`: any first argument that names an existing file and is not a subcommand runs as a script (with `.wlt` kept as a fast-path). The script still needs an exported `run` entry and runs on the same compiled path (with interpreter fallback).
 
 ## `build`
 

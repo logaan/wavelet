@@ -59,3 +59,54 @@ fn bare_wlt_argument_runs_the_script() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// An *extensionless* executable script runs too: the kernel invokes `wavelet
+/// /path/to/deploy` for a `#!`-marked file with no `.wlt` suffix, which is the
+/// common Unix shape. It must dispatch to the run path, not the usage error.
+#[test]
+fn bare_extensionless_argument_runs_the_script() {
+    let (_dir, path) = stage(
+        "deploy",
+        "#!/usr/bin/env wavelet\nPackage \"demo:hi@0.1.0\"\nExport run\n\
+         Def run Fn {}\n  add(1 2)\n",
+    );
+    let out = Command::new(env!("CARGO_BIN_EXE_wavelet"))
+        .arg(&path)
+        .output()
+        .expect("spawn wavelet");
+    assert!(
+        out.status.success(),
+        "extensionless script run failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A bare-word subcommand still wins over a like-named file in the working
+/// directory: `is_script_path` must never steal `repl` (or any subcommand) just
+/// because a file called `repl` exists next to it.
+#[test]
+fn subcommand_wins_over_like_named_file() {
+    // Create a file literally named `repl`, then invoke `wavelet repl` from
+    // that directory. It must reach the REPL (which, with no TTY on stdin,
+    // exits cleanly at EOF) rather than trying to run the file as a script.
+    let dir = std::env::temp_dir().join(format!(
+        "wavelet-shebang-sub-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("repl"), "not a real script\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_wavelet"))
+        .arg("repl")
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("spawn wavelet");
+    // The REPL path succeeds at empty stdin; the script path would fail to parse
+    // "not a real script". Either way it must not be treated as a script.
+    assert!(
+        out.status.success(),
+        "`wavelet repl` should reach the REPL, not run the `repl` file: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

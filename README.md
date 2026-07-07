@@ -151,12 +151,13 @@ wavelet repl                                         # interactive read-eval-pri
 wavelet run <file.wlt>... [-- <args>...]             # compile to a component and run it (interpreter fallback)
 wavelet build <file.wlt>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
 wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
-wavelet <file.wlt> [args...]                         # run a script directly (also via a #! shebang)
+wavelet <file> [args...]                             # run a script directly (also via a #! shebang)
 wavelet --version                                    # print the wavelet version
 ```
 
-A `.wlt` file may start with a shebang line so it can be marked executable and
-run as a script:
+A Wavelet source file may start with a shebang line so it can be marked
+executable and run as a script — including an extensionless file, the common
+Unix shape:
 
 ``` bash
 #!/usr/bin/env wavelet
@@ -167,13 +168,14 @@ Def run Fn {}
 ```
 
 ``` bash
-$ chmod +x hi.wlt
-$ ./hi.wlt
+$ chmod +x hi
+$ ./hi
 ```
 
-The shebang line is only recognised on the first line; the script still needs
-an exported `run` entry, and runs on the same compiled path (with interpreter
-fallback) as `wavelet run`.
+The shebang line is only recognised on the first line. A first argument that
+names an existing file and is not a subcommand runs as a script (`.wlt` is kept
+as a fast-path); the script still needs an exported `run` entry, and runs on the
+same compiled path (with interpreter fallback) as `wavelet run`.
 
 `run` compiles a set of files together — building each through the emitter,
 composing their runtime `Import`s into one component, and calling the exported

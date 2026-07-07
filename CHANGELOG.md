@@ -22,12 +22,16 @@ you work, and rename it to the new version when you cut a release.
   Ctrl-D to exit. Piped/scripted input keeps the plain line-reader, so
   non-interactive sessions are unchanged.
 
-- **Shebang support for `.wlt` scripts.** A source file may begin with a
+- **Shebang support for executable scripts.** A source file may begin with a
   `#!/usr/bin/env wavelet` line so it can be marked executable and run directly
-  (`./script.wlt`). The reader skips a leading shebang line — recognised only at
+  (`./script`). The reader skips a leading shebang line — recognised only at
   the very start of the file; `#` is not a comment anywhere else — and a bare
-  `wavelet <file.wlt> [args...]` invocation runs the script through the same
-  compiled path (with interpreter fallback) as `wavelet run`.
+  `wavelet <file> [args...]` invocation runs the script through the same
+  compiled path (with interpreter fallback) as `wavelet run`. The script may be
+  **extensionless** (the common Unix shape, e.g. an executable named `deploy`
+  with no suffix): a first argument that names an existing file and is not one
+  of the bare-word subcommands is run as a script, with `.wlt` kept as a
+  fast-path.
 
 ### Changed
 
