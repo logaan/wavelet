@@ -30,12 +30,12 @@ fn main() -> ExitCode {
         [cmd, rest @ ..] if cmd == "run" && !rest.is_empty() => run_cmd(rest),
         [cmd, rest @ ..] if cmd == "build" && !rest.is_empty() => build_cmd(rest),
         [cmd, rest @ ..] if cmd == "compose" && !rest.is_empty() => compose_cmd(rest),
-        // Bare `wavelet <file.wlt> [args...]` runs the script directly — the
+        // Bare `wavelet <file> [args...]` runs the script directly — the
         // invocation a `#!/usr/bin/env wavelet` shebang produces for an
-        // executable `.wlt` file (7.2). Any trailing arguments are the script's
-        // own; `run` ignores them today, exactly as `wavelet run` does. The
-        // guard (a `.wlt` first argument) keeps this from shadowing the
-        // subcommands above, which are all bare words.
+        // executable script (7.2), which is commonly extensionless. Any trailing
+        // arguments are the script's own; `run` ignores them today, exactly as
+        // `wavelet run` does. `is_script_path` requires an existing, non-
+        // subcommand file, so this can't shadow the bare-word subcommands above.
         [first, ..] if is_script_path(first) => run_cmd(&args[..1]),
         _ => {
             eprintln!("usage: wavelet read [file.wlt]");
@@ -46,7 +46,7 @@ fn main() -> ExitCode {
             eprintln!("       wavelet run <file.wlt>... [-- <args>...]");
             eprintln!("       wavelet build <file.wlt>... [-o <dir>]");
             eprintln!("       wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]");
-            eprintln!("       wavelet <file.wlt> [args...]   (run a script; also via #! shebang)");
+            eprintln!("       wavelet <file> [args...]       (run a script; also via #! shebang)");
             eprintln!("       wavelet --version");
             eprintln!("options: --strict   (typecheck with Unknown as an error)");
             ExitCode::from(2)
@@ -57,13 +57,28 @@ fn main() -> ExitCode {
 /// Project root for a source file: the parent of the `src/` dir it lives in
 /// (so foreign macro imports resolve their `.wasm` the same way `wavelet
 /// build` does); `.` when there is no parent.
+/// The bare-word subcommands `wavelet` dispatches on. A first CLI argument that
+/// is one of these is a command, never a script to run — this keeps
+/// `is_script_path` from stealing e.g. `wavelet repl` even if a file named
+/// `repl` happens to sit in the working directory.
+const KNOWN_SUBCOMMANDS: &[&str] = &[
+    "version", "read", "expand", "repl", "wit", "new", "run", "build", "compose",
+];
+
 /// Whether a first CLI argument should be taken as a script path to run rather
-/// than a subcommand — i.e. it names a Wavelet source file (`.wlt`). This is
-/// what backs shebang execution (`#!/usr/bin/env wavelet`): the kernel invokes
-/// `wavelet /path/to/script.wlt [script-args...]`, and a `.wlt` first token can
-/// never collide with the bare-word subcommands (`run`, `build`, ...).
+/// than a subcommand. This is what backs shebang execution (`#!/usr/bin/env
+/// wavelet`): for an *executable* script the kernel invokes `wavelet
+/// /path/to/script [script-args...]`, and Unix scripts are commonly
+/// extensionless (an executable named `deploy`, no suffix), so matching only
+/// `.wlt` would silently drop them.
+///
+/// An argument is a script when it names an existing file *and* is not one of
+/// the bare-word subcommands. `.wlt` stays a fast-path so a `wavelet
+/// missing.wlt` still reaches `run` (and its "cannot read" error) rather than
+/// the usage message.
 fn is_script_path(arg: &str) -> bool {
     arg.ends_with(".wlt")
+        || (!KNOWN_SUBCOMMANDS.contains(&arg) && std::path::Path::new(arg).is_file())
 }
 
 fn project_root_of(path: &str) -> std::path::PathBuf {
