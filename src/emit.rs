@@ -6354,6 +6354,32 @@ impl<'a> Emitter<'a> {
             return Ok(());
         }
         let items = args;
+        // Boxed-path dispatch: route each builtin to the helper that owns its
+        // group. Every arm below emits the polymorphic, box-once code for its
+        // family; the helpers share the `nargs` arity check and operate on the
+        // `items` operand slice. Adding a builtin means extending both this
+        // classifier and the relevant `builtin_*` method (plus `BUILTINS`).
+        match name {
+            "eq" | "not" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem" | "neg" | "abs" | "min" | "max" => self.builtin_numeric(fx, name, items),
+            "len" | "head" | "tail" | "reverse" | "range" | "empty" | "drop" => self.builtin_seq(fx, name, items),
+            "map" | "fold" | "filter" | "zip" | "apply" => self.builtin_higher_order(fx, name, items),
+            "get" | "put" | "push" | "concat" => self.builtin_index(fx, name, items),
+            "contains" | "join" | "split" => self.builtin_search(fx, name, items),
+            "str-cat" | "to-string" | "to-char" | "upper" | "lower" => self.builtin_string(fx, name, items),
+            "some" | "ok" | "err" => self.builtin_variant(fx, name, items),
+            "cell-new" | "cell-get" | "cell-set" => self.builtin_cell(fx, name, items),
+            "form-kind" | "rec-key" | "rec-val" | "gensym" | "expand" => self.builtin_form(fx, name, items),
+            other => Err(format!(
+                "builtin `{other}` not supported by the wasm backend yet"
+            )),
+        }
+    }
+
+    /// Comparison and arithmetic builtins: `eq`/`not`, the ordering
+    /// comparisons, the binary arithmetic ops, `neg`/`abs`, and `min`/`max`.
+    /// These are the boxed fallbacks for calls the unboxed scalar fast path
+    /// in `builtin` did not claim (unknown/compound operands, arity errors).
+    fn builtin_numeric(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
                 Ok(())
@@ -6439,6 +6465,90 @@ impl<'a> Emitter<'a> {
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.neg_raw));
             }
+            "abs" => {
+                // |n| over an int (branch: n<0 ? -n : n) or a dec (F64Abs);
+                // any other tag traps, matching the oracle's `want_num`.
+                nargs(1)?;
+                let b = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(b));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_INT));
+                fx.op(I::I32Eq);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                let n = fx.local(ValType::I64);
+                fx.op(I::LocalGet(b));
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::LocalTee(n));
+                fx.op(I::I64Const(0));
+                fx.op(I::I64LtS);
+                fx.op(I::If(BlockType::Result(ValType::I64)));
+                fx.op(I::I64Const(0));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I64Sub);
+                fx.op(I::Else);
+                fx.op(I::LocalGet(n));
+                fx.op(I::End);
+                fx.op(I::Call(self.h.box_int));
+                fx.op(I::Else);
+                // must be a dec, else trap (want_num)
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_DEC));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(b));
+                fx.op(I::F64Load(ma(8, 3)));
+                fx.op(I::F64Abs);
+                fx.op(I::Call(self.h.box_dec));
+                fx.op(I::End);
+            }
+            "min" | "max" => {
+                // The oracle: `min` returns a[1] when compare(a,b)==Greater else
+                // a[0]; `max` returns a[1] when compare(a,b)==Less else a[0].
+                // `cmp_raw` yields 1 for Greater, -1 for Less over the same total
+                // order (ints, decs, strings, chars).
+                nargs(2)?;
+                let av = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(av));
+                let bv = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::LocalSet(bv));
+                fx.op(I::LocalGet(av));
+                fx.op(I::LocalGet(bv));
+                fx.op(I::Call(self.h.cmp_raw));
+                fx.op(I::I32Const(if name == "min" { 1 } else { -1 }));
+                fx.op(I::I32Eq);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                fx.op(I::LocalGet(bv));
+                fx.op(I::Else);
+                fx.op(I::LocalGet(av));
+                fx.op(I::End);
+            }
+            _ => unreachable!("builtin_numeric routed unexpected name `{name}`"),
+        }
+        Ok(())
+    }
+
+    /// Sequence access and construction: `len`/`head`/`tail`, `reverse`,
+    /// `range`, the `empty` predicate, and `drop` (evaluate for effect →
+    /// unit).
+    fn builtin_seq(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+        let nargs = |want: usize| -> Result<(), String> {
+            if items.len() == want {
+                Ok(())
+            } else {
+                Err(format!(
+                    "`{name}` expects {want} argument(s), got {}",
+                    items.len()
+                ))
+            }
+        };
+        match name {
             "len" => {
                 nargs(1)?;
                 // Type-indexed (5.6): a statically-canonical LIST operand's
@@ -6497,6 +6607,208 @@ impl<'a> Emitter<'a> {
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.tail_h));
             }
+            "reverse" => {
+                // Fresh list with the elements in reverse order (oracle: want_list
+                // then reverse). A non-list operand traps.
+                nargs(1)?;
+                let lst = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(lst));
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n));
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Store(ma(4, 2)));
+                let i = fx.local(ValType::I32);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(lst));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Sub);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Sub);
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+                fx.op(I::LocalGet(out));
+            }
+            "range" => {
+                // The half-open list [lo, hi) of ints (oracle: (lo..hi).map(Int)).
+                // Empty when hi <= lo.
+                nargs(2)?;
+                let lo = fx.local(ValType::I64);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::LocalSet(lo));
+                let hi = fx.local(ValType::I64);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::Call(self.h.unbox_int));
+                fx.op(I::LocalSet(hi));
+                let cnt = fx.local(ValType::I32);
+                fx.op(I::LocalGet(hi));
+                fx.op(I::LocalGet(lo));
+                fx.op(I::I64GtS);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                fx.op(I::LocalGet(hi));
+                fx.op(I::LocalGet(lo));
+                fx.op(I::I64Sub);
+                fx.op(I::I32WrapI64);
+                fx.op(I::Else);
+                fx.op(I::I32Const(0));
+                fx.op(I::End);
+                fx.op(I::LocalSet(cnt));
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(cnt));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(cnt));
+                fx.op(I::I32Store(ma(4, 2)));
+                let i = fx.local(ValType::I32);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(cnt));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(lo));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I64ExtendI32S);
+                fx.op(I::I64Add);
+                fx.op(I::Call(self.h.box_int));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+                fx.op(I::LocalGet(out));
+            }
+            "empty" => {
+                // true iff a string/list/tuple has length 0 (the len word @4);
+                // any other tag traps, like the oracle's non-sequence error.
+                nargs(1)?;
+                let b = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(b));
+                let tg = fx.local(ValType::I32);
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::LocalTee(tg));
+                fx.op(I::I32Const(TAG_STR));
+                fx.op(I::I32Eq);
+                fx.op(I::LocalGet(tg));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Eq);
+                fx.op(I::I32Or);
+                fx.op(I::LocalGet(tg));
+                fx.op(I::I32Const(TAG_TUP));
+                fx.op(I::I32Eq);
+                fx.op(I::I32Or);
+                fx.op(I::I32Eqz);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::I32Eqz);
+                fx.op(I::Call(self.h.box_bool));
+            }
+            "drop" => {
+                // Evaluates its operand(s) for effect and yields unit — the
+                // interpreter's `drop`. Unit is `Value::Rec(vec![])` (prints as
+                // "{}"), so return a static empty-record box rather than the
+                // `unit_addr()` false-box (which `to-string` would render
+                // "false"); at a no-result WIT boundary the box is discarded.
+                for &x in items {
+                    self.expr(fx, x, false)?;
+                    fx.op(I::Drop);
+                }
+                let addr = self.intern_unit_rec();
+                fx.op(I::I32Const(addr as i32));
+            }
+            _ => unreachable!("builtin_seq routed unexpected name `{name}`"),
+        }
+        Ok(())
+    }
+
+    /// Builtins that take a callable or combine whole sequences: `map`,
+    /// `fold`, `filter`, `zip`, and `apply`.
+    fn builtin_higher_order(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+        let nargs = |want: usize| -> Result<(), String> {
+            if items.len() == want {
+                Ok(())
+            } else {
+                Err(format!(
+                    "`{name}` expects {want} argument(s), got {}",
+                    items.len()
+                ))
+            }
+        };
+        match name {
             "map" => {
                 // map(f, list) -> list: apply the function value `f` to each
                 // element, collecting results in source order (oracle:
@@ -6755,193 +7067,165 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Store(ma(4, 2)));
                 fx.op(I::LocalGet(out));
             }
-            "str-cat" => {
-                if items.is_empty() {
-                    let a = self.intern_str("");
-                    fx.op(I::I32Const(a as i32));
-                    return Ok(());
-                }
+            "zip" => {
+                // Pair two lists element-wise into a list of 2-tuples, stopping at
+                // the shorter (oracle: x.into_iter().zip(b)). Non-list traps.
+                nargs(2)?;
+                let a = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
-                for &x in &items[1..] {
-                    self.expr(fx, x, false)?;
-                    fx.op(I::Call(self.h.strcat2));
-                }
-            }
-            "to-string" => {
-                nargs(1)?;
-                self.expr(fx, items[0], false)?;
-                fx.op(I::Call(self.h.to_str));
-            }
-            "to-char" => {
-                // A char passes through; an int must be a Unicode scalar value
-                // (traps otherwise, like the interpreter's range error). Anything
-                // else traps in unbox_int, matching `to-char expects an int`.
-                nargs(1)?;
-                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(a));
                 let b = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
                 fx.op(I::LocalSet(b));
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
                 fx.op(I::LocalGet(b));
                 fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Const(TAG_CHAR));
-                fx.op(I::I32Eq);
-                fx.op(I::If(BlockType::Result(ValType::I32)));
-                fx.op(I::LocalGet(b));
-                fx.op(I::Else);
-                let n = fx.local(ValType::I64);
-                fx.op(I::LocalGet(b));
-                fx.op(I::Call(self.h.unbox_int));
-                fx.op(I::LocalSet(n));
-                // invalid if n > 0x10FFFF (unsigned, catches negatives) or a
-                // surrogate (0xD800..=0xDFFF)
-                fx.op(I::LocalGet(n));
-                fx.op(I::I64Const(0x10FFFF));
-                fx.op(I::I64GtU);
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Ne);
                 fx.op(I::If(BlockType::Empty));
                 fx.op(I::Unreachable);
                 fx.op(I::End);
-                fx.op(I::LocalGet(n));
-                fx.op(I::I64Const(0xD800));
-                fx.op(I::I64GeU);
-                fx.op(I::LocalGet(n));
-                fx.op(I::I64Const(0xDFFF));
-                fx.op(I::I64LeU);
-                fx.op(I::I32And);
-                fx.op(I::If(BlockType::Empty));
-                fx.op(I::Unreachable);
-                fx.op(I::End);
-                fx.op(I::LocalGet(n));
-                self.box_char(fx);
-                fx.op(I::End);
-            }
-            "upper" | "lower" => {
-                nargs(1)?;
-                self.expr(fx, items[0], false)?;
-                fx.op(I::I32Const(if name == "upper" { 1 } else { 0 }));
-                fx.op(I::Call(self.h.case_h));
-            }
-            "some" | "ok" | "err" => {
-                // the argument(s) bundle into the variant payload, exactly as
-                // the interpreter binds it. `ok()`/`err()` with no arguments
-                // construct the payload-less case (4.2), like the interpreter.
-                if args.is_empty() && name != "some" {
-                    let addr = self.none_like_box(name);
-                    fx.op(I::I32Const(addr as i32));
-                    return Ok(());
-                }
-                return self.var_box(fx, name, args);
-            }
-            "form-kind" => {
-                nargs(1)?;
-                return self.form_kind(fx, items[0]);
-            }
-            "rec-key" => {
-                // First field's key as a payload-less variant: build
-                // `[TAG_VAR, key-str-box, 0]` over the key box at rec offset 8.
-                nargs(1)?;
-                let rp = fx.local(ValType::I32);
-                self.expr(fx, items[0], false)?;
-                fx.op(I::LocalSet(rp));
-                self.rec_guard(fx, rp);
-                let p = fx.local(ValType::I32);
-                fx.op(I::I32Const(12));
-                fx.op(I::Call(self.h.alloc));
-                fx.op(I::LocalSet(p));
-                fx.op(I::LocalGet(p));
-                fx.op(I::I32Const(TAG_VAR));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(p));
-                fx.op(I::LocalGet(rp));
-                fx.op(I::I32Load(ma(8, 2)));
-                fx.op(I::I32Store(ma(4, 2)));
-                fx.op(I::LocalGet(p));
-                fx.op(I::I32Const(0));
-                fx.op(I::I32Store(ma(8, 2)));
-                fx.op(I::LocalGet(p));
-            }
-            "rec-val" => {
-                // First field's value box, at rec offset 12.
-                nargs(1)?;
-                let rp = fx.local(ValType::I32);
-                self.expr(fx, items[0], false)?;
-                fx.op(I::LocalSet(rp));
-                self.rec_guard(fx, rp);
-                fx.op(I::LocalGet(rp));
-                fx.op(I::I32Load(ma(12, 2)));
-            }
-            "cell-new" => {
-                // A mutable cell holding one boxed value; its heap pointer is
-                // its identity (interp: `Value::Cell(Rc<RefCell<Value>>)`).
-                // In a resource/functor component a cell is resource state (a
-                // `DefResource` `New`), so the cell AND its value live in the
-                // persistent region and survive the per-call arena reset (5.1).
-                nargs(1)?;
-                let persist = self.has_persist();
-                let v = fx.local(ValType::I32);
-                self.expr(fx, items[0], false)?;
-                if persist {
-                    fx.op(I::Call(self.h.persist));
-                }
-                fx.op(I::LocalSet(v));
-                let p = fx.local(ValType::I32);
-                fx.op(I::I32Const(8));
-                fx.op(I::Call(if persist {
-                    self.h.persist_alloc
-                } else {
-                    self.h.alloc
-                }));
-                fx.op(I::LocalSet(p));
-                fx.op(I::LocalGet(p));
-                fx.op(I::I32Const(TAG_CELL));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(p));
-                fx.op(I::LocalGet(v));
-                fx.op(I::I32Store(ma(4, 2)));
-                fx.op(I::LocalGet(p));
-            }
-            "cell-get" => {
-                // Current value box, at cell offset 4.
-                nargs(1)?;
-                self.expr(fx, items[0], false)?;
+                let n1 = fx.local(ValType::I32);
+                fx.op(I::LocalGet(a));
                 fx.op(I::I32Load(ma(4, 2)));
-            }
-            "cell-set" => {
-                // Overwrite the cell's value box; return unit (interp parity).
-                // In a resource/functor component the stored value is routed
-                // through the persistent write barrier so it outlives the reset
-                // (5.1); the cell itself was already allocated persistently.
-                nargs(2)?;
-                let persist = self.has_persist();
-                let c = fx.local(ValType::I32);
-                self.expr(fx, items[0], false)?;
-                fx.op(I::LocalSet(c));
-                fx.op(I::LocalGet(c));
-                self.expr(fx, items[1], false)?;
-                if persist {
-                    fx.op(I::Call(self.h.persist));
-                }
+                fx.op(I::LocalSet(n1));
+                let n2 = fx.local(ValType::I32);
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::LocalSet(n2));
+                let n = fx.local(ValType::I32);
+                fx.op(I::LocalGet(n1));
+                fx.op(I::LocalGet(n2));
+                fx.op(I::I32LtU);
+                fx.op(I::If(BlockType::Result(ValType::I32)));
+                fx.op(I::LocalGet(n1));
+                fx.op(I::Else);
+                fx.op(I::LocalGet(n2));
+                fx.op(I::End);
+                fx.op(I::LocalSet(n));
+                let out = fx.local(ValType::I32);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(out));
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(TAG_LIST));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(out));
+                fx.op(I::LocalGet(n));
                 fx.op(I::I32Store(ma(4, 2)));
-                fx.op(I::I32Const(self.unit_addr() as i32));
+                let i = fx.local(ValType::I32);
+                let tup = fx.local(ValType::I32);
+                fx.op(I::I32Const(0));
+                fx.op(I::LocalSet(i));
+                fx.op(I::Block(BlockType::Empty));
+                fx.op(I::Loop(BlockType::Empty));
+                fx.op(I::LocalGet(i));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I32GeU);
+                fx.op(I::BrIf(1));
+                // tup = [TAG_TUP, 2, a[8+4i], b[8+4i]]
+                fx.op(I::I32Const(16));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(tup));
+                fx.op(I::LocalGet(tup));
+                fx.op(I::I32Const(TAG_TUP));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(tup));
+                fx.op(I::I32Const(2));
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(tup));
+                fx.op(I::LocalGet(a));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Store(ma(8, 2)));
+                fx.op(I::LocalGet(tup));
+                fx.op(I::LocalGet(b));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::I32Load(ma(0, 2)));
+                fx.op(I::I32Store(ma(12, 2)));
+                // out[8+4i] = tup
+                fx.op(I::LocalGet(out));
+                fx.op(I::I32Const(8));
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(4));
+                fx.op(I::I32Mul);
+                fx.op(I::I32Add);
+                fx.op(I::LocalGet(tup));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(i));
+                fx.op(I::I32Const(1));
+                fx.op(I::I32Add);
+                fx.op(I::LocalSet(i));
+                fx.op(I::Br(0));
+                fx.op(I::End);
+                fx.op(I::End);
+                fx.op(I::LocalGet(out));
             }
-            "gensym" => {
-                nargs(0)?;
-                return self.gensym(fx);
+            "apply" => {
+                // apply(f, payload): call the closure value `f` with `payload` as
+                // its argument bundle, via the boxed-closure convention
+                // (call_indirect(env=f, payload, slot=f[4])) — the same seam
+                // `map`/`fold`/`filter` use. The interpreter's `apply` binds the
+                // payload per the function's arity (a single value to a 1-param
+                // fn, a TAG_TUP bundle to an n-param fn), which is exactly what
+                // the closure wrapper unpacks.
+                nargs(2)?;
+                let fp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(fp));
+                let pay = fx.local(ValType::I32);
+                self.expr(fx, items[1], false)?;
+                fx.op(I::LocalSet(pay));
+                let apply_ty = self.ty_idx(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+                fx.op(I::LocalGet(fp));
+                fx.op(I::LocalGet(pay));
+                fx.op(I::LocalGet(fp));
+                fx.op(I::I32Load(ma(4, 2)));
+                fx.op(I::CallIndirect {
+                    type_index: apply_ty,
+                    table_index: 0,
+                });
             }
-            "expand" => {
-                nargs(1)?;
-                match self.macro_expand_idx {
-                    // Inside a macro component: one expansion step over the
-                    // library's own macros (mirrors `builtins.rs` `expand`).
-                    Some(idx) => {
-                        self.expr(fx, items[0], false)?;
-                        fx.op(I::Call(idx));
-                    }
-                    None => {
-                        return Err("`expand` is only available inside a macro library \
-                             (a file whose top level is DefMacros)"
-                            .into());
-                    }
-                }
+            _ => unreachable!("builtin_higher_order routed unexpected name `{name}`"),
+        }
+        Ok(())
+    }
+
+    /// Element access and growth: `get`/`put` (indexed read/replace),
+    /// `push`, and `concat`.
+    fn builtin_index(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+        let nargs = |want: usize| -> Result<(), String> {
+            if items.len() == want {
+                Ok(())
+            } else {
+                Err(format!(
+                    "`{name}` expects {want} argument(s), got {}",
+                    items.len()
+                ))
             }
+        };
+        match name {
             "get" => {
                 // Index a list OR tuple; out-of-range (idx >= len, unsigned so a
                 // negative index also) traps, like the oracle's range error. A
@@ -7174,261 +7458,25 @@ impl<'a> Emitter<'a> {
                 fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
                 fx.op(I::LocalGet(out));
             }
-            "reverse" => {
-                // Fresh list with the elements in reverse order (oracle: want_list
-                // then reverse). A non-list operand traps.
-                nargs(1)?;
-                let lst = fx.local(ValType::I32);
-                self.expr(fx, items[0], false)?;
-                fx.op(I::LocalSet(lst));
-                fx.op(I::LocalGet(lst));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Ne);
-                fx.op(I::If(BlockType::Empty));
-                fx.op(I::Unreachable);
-                fx.op(I::End);
-                let n = fx.local(ValType::I32);
-                fx.op(I::LocalGet(lst));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::LocalSet(n));
-                let out = fx.local(ValType::I32);
-                fx.op(I::LocalGet(n));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::Call(self.h.alloc));
-                fx.op(I::LocalSet(out));
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(out));
-                fx.op(I::LocalGet(n));
-                fx.op(I::I32Store(ma(4, 2)));
-                let i = fx.local(ValType::I32);
-                fx.op(I::I32Const(0));
-                fx.op(I::LocalSet(i));
-                fx.op(I::Block(BlockType::Empty));
-                fx.op(I::Loop(BlockType::Empty));
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalGet(n));
-                fx.op(I::I32GeU);
-                fx.op(I::BrIf(1));
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(lst));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(n));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Sub);
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Sub);
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Add);
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(i));
-                fx.op(I::Br(0));
-                fx.op(I::End);
-                fx.op(I::End);
-                fx.op(I::LocalGet(out));
+            _ => unreachable!("builtin_index routed unexpected name `{name}`"),
+        }
+        Ok(())
+    }
+
+    /// Search and partition over strings/lists: `contains`, `join`, and
+    /// `split` (which delegates to `builtin_split`).
+    fn builtin_search(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+        let nargs = |want: usize| -> Result<(), String> {
+            if items.len() == want {
+                Ok(())
+            } else {
+                Err(format!(
+                    "`{name}` expects {want} argument(s), got {}",
+                    items.len()
+                ))
             }
-            "range" => {
-                // The half-open list [lo, hi) of ints (oracle: (lo..hi).map(Int)).
-                // Empty when hi <= lo.
-                nargs(2)?;
-                let lo = fx.local(ValType::I64);
-                self.expr(fx, items[0], false)?;
-                fx.op(I::Call(self.h.unbox_int));
-                fx.op(I::LocalSet(lo));
-                let hi = fx.local(ValType::I64);
-                self.expr(fx, items[1], false)?;
-                fx.op(I::Call(self.h.unbox_int));
-                fx.op(I::LocalSet(hi));
-                let cnt = fx.local(ValType::I32);
-                fx.op(I::LocalGet(hi));
-                fx.op(I::LocalGet(lo));
-                fx.op(I::I64GtS);
-                fx.op(I::If(BlockType::Result(ValType::I32)));
-                fx.op(I::LocalGet(hi));
-                fx.op(I::LocalGet(lo));
-                fx.op(I::I64Sub);
-                fx.op(I::I32WrapI64);
-                fx.op(I::Else);
-                fx.op(I::I32Const(0));
-                fx.op(I::End);
-                fx.op(I::LocalSet(cnt));
-                let out = fx.local(ValType::I32);
-                fx.op(I::LocalGet(cnt));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::Call(self.h.alloc));
-                fx.op(I::LocalSet(out));
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(out));
-                fx.op(I::LocalGet(cnt));
-                fx.op(I::I32Store(ma(4, 2)));
-                let i = fx.local(ValType::I32);
-                fx.op(I::I32Const(0));
-                fx.op(I::LocalSet(i));
-                fx.op(I::Block(BlockType::Empty));
-                fx.op(I::Loop(BlockType::Empty));
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalGet(cnt));
-                fx.op(I::I32GeU);
-                fx.op(I::BrIf(1));
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(lo));
-                fx.op(I::LocalGet(i));
-                fx.op(I::I64ExtendI32S);
-                fx.op(I::I64Add);
-                fx.op(I::Call(self.h.box_int));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(i));
-                fx.op(I::Br(0));
-                fx.op(I::End);
-                fx.op(I::End);
-                fx.op(I::LocalGet(out));
-            }
-            "zip" => {
-                // Pair two lists element-wise into a list of 2-tuples, stopping at
-                // the shorter (oracle: x.into_iter().zip(b)). Non-list traps.
-                nargs(2)?;
-                let a = fx.local(ValType::I32);
-                self.expr(fx, items[0], false)?;
-                fx.op(I::LocalSet(a));
-                let b = fx.local(ValType::I32);
-                self.expr(fx, items[1], false)?;
-                fx.op(I::LocalSet(b));
-                fx.op(I::LocalGet(a));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Ne);
-                fx.op(I::If(BlockType::Empty));
-                fx.op(I::Unreachable);
-                fx.op(I::End);
-                fx.op(I::LocalGet(b));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Ne);
-                fx.op(I::If(BlockType::Empty));
-                fx.op(I::Unreachable);
-                fx.op(I::End);
-                let n1 = fx.local(ValType::I32);
-                fx.op(I::LocalGet(a));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::LocalSet(n1));
-                let n2 = fx.local(ValType::I32);
-                fx.op(I::LocalGet(b));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::LocalSet(n2));
-                let n = fx.local(ValType::I32);
-                fx.op(I::LocalGet(n1));
-                fx.op(I::LocalGet(n2));
-                fx.op(I::I32LtU);
-                fx.op(I::If(BlockType::Result(ValType::I32)));
-                fx.op(I::LocalGet(n1));
-                fx.op(I::Else);
-                fx.op(I::LocalGet(n2));
-                fx.op(I::End);
-                fx.op(I::LocalSet(n));
-                let out = fx.local(ValType::I32);
-                fx.op(I::LocalGet(n));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::Call(self.h.alloc));
-                fx.op(I::LocalSet(out));
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(out));
-                fx.op(I::LocalGet(n));
-                fx.op(I::I32Store(ma(4, 2)));
-                let i = fx.local(ValType::I32);
-                let tup = fx.local(ValType::I32);
-                fx.op(I::I32Const(0));
-                fx.op(I::LocalSet(i));
-                fx.op(I::Block(BlockType::Empty));
-                fx.op(I::Loop(BlockType::Empty));
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalGet(n));
-                fx.op(I::I32GeU);
-                fx.op(I::BrIf(1));
-                // tup = [TAG_TUP, 2, a[8+4i], b[8+4i]]
-                fx.op(I::I32Const(16));
-                fx.op(I::Call(self.h.alloc));
-                fx.op(I::LocalSet(tup));
-                fx.op(I::LocalGet(tup));
-                fx.op(I::I32Const(TAG_TUP));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(tup));
-                fx.op(I::I32Const(2));
-                fx.op(I::I32Store(ma(4, 2)));
-                fx.op(I::LocalGet(tup));
-                fx.op(I::LocalGet(a));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Add);
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Store(ma(8, 2)));
-                fx.op(I::LocalGet(tup));
-                fx.op(I::LocalGet(b));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Add);
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Store(ma(12, 2)));
-                // out[8+4i] = tup
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(tup));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(i));
-                fx.op(I::Br(0));
-                fx.op(I::End);
-                fx.op(I::End);
-                fx.op(I::LocalGet(out));
-            }
+        };
+        match name {
             "join" => {
                 // Concatenate the list's string elements with `sep` between them
                 // (oracle: want_list of parts, want_str each, want_str sep).
@@ -7599,410 +7647,531 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(found));
                 fx.op(I::Call(self.h.box_bool));
             }
-            "split" => {
-                // s.split(sep) over UTF-8 bytes (oracle: want_str s, want_str
-                // sep). Non-empty sep: scan left-to-right for non-overlapping
-                // byte matches, emitting the run before each match and the final
-                // tail (at most slen+1 pieces, so the list is over-allocated and
-                // its length fixed at the end). Empty sep replicates Rust's
-                // char-boundary split: a leading "", one piece per char, a
-                // trailing "".
-                nargs(2)?;
-                let s = fx.local(ValType::I32);
-                self.expr(fx, items[0], false)?;
-                fx.op(I::LocalSet(s));
-                let sep = fx.local(ValType::I32);
-                self.expr(fx, items[1], false)?;
-                fx.op(I::LocalSet(sep));
-                for str_box in [s, sep] {
-                    fx.op(I::LocalGet(str_box));
-                    fx.op(I::I32Load(ma(0, 2)));
-                    fx.op(I::I32Const(TAG_STR));
-                    fx.op(I::I32Ne);
-                    fx.op(I::If(BlockType::Empty));
-                    fx.op(I::Unreachable);
-                    fx.op(I::End);
+            "split" => return self.builtin_split(fx, items),
+            _ => unreachable!("builtin_search routed unexpected name `{name}`"),
+        }
+        Ok(())
+    }
+
+    /// `s.split(sep)` — factored out of `builtin_search` because its byte
+    /// scanner is by far the largest single builtin body.
+    fn builtin_split(&mut self, fx: &mut FnCtx, items: &[NodeId]) -> Result<(), String> {
+        // s.split(sep) over UTF-8 bytes (oracle: want_str s, want_str
+        // sep). Non-empty sep: scan left-to-right for non-overlapping
+        // byte matches, emitting the run before each match and the final
+        // tail (at most slen+1 pieces, so the list is over-allocated and
+        // its length fixed at the end). Empty sep replicates Rust's
+        // char-boundary split: a leading "", one piece per char, a
+        // trailing "".
+        if items.len() != 2 {
+            return Err(format!("`split` expects 2 argument(s), got {}", items.len()));
+        }
+        let s = fx.local(ValType::I32);
+        self.expr(fx, items[0], false)?;
+        fx.op(I::LocalSet(s));
+        let sep = fx.local(ValType::I32);
+        self.expr(fx, items[1], false)?;
+        fx.op(I::LocalSet(sep));
+        for str_box in [s, sep] {
+            fx.op(I::LocalGet(str_box));
+            fx.op(I::I32Load(ma(0, 2)));
+            fx.op(I::I32Const(TAG_STR));
+            fx.op(I::I32Ne);
+            fx.op(I::If(BlockType::Empty));
+            fx.op(I::Unreachable);
+            fx.op(I::End);
+        }
+        let slen = fx.local(ValType::I32);
+        fx.op(I::LocalGet(s));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(slen));
+        let seplen = fx.local(ValType::I32);
+        fx.op(I::LocalGet(sep));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(seplen));
+        let out = fx.local(ValType::I32);
+        let oi = fx.local(ValType::I32);
+        let start = fx.local(ValType::I32);
+        let i = fx.local(ValType::I32);
+        let k = fx.local(ValType::I32);
+        let matched = fx.local(ValType::I32);
+        let plen = fx.local(ValType::I32);
+        let pbox = fx.local(ValType::I32);
+        let j = fx.local(ValType::I32);
+        let empty = self.intern_str("") as i32;
+        fx.op(I::LocalGet(seplen));
+        fx.op(I::I32Eqz);
+        fx.op(I::If(BlockType::Empty));
+        // ---- empty-sep path (Rust char-boundary split) ----
+        // out over-allocated to slen+2 pieces; length fixed at the end.
+        fx.op(I::LocalGet(slen));
+        fx.op(I::I32Const(2));
+        fx.op(I::I32Add);
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(out));
+        fx.op(I::LocalGet(out));
+        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Store(ma(0, 2)));
+        // out[8] = ""  (leading empty piece)
+        fx.op(I::LocalGet(out));
+        fx.op(I::I32Const(empty));
+        fx.op(I::I32Store(ma(8, 2)));
+        fx.op(I::I32Const(1));
+        fx.op(I::LocalSet(oi));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i)); // byte cursor
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(slen));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalSet(start)); // char start
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i)); // consume lead byte
+        // advance over continuation bytes (b & 0xC0 == 0x80)
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(slen));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        fx.op(I::LocalGet(s));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(0, 0)));
+        fx.op(I::I32Const(0xC0));
+        fx.op(I::I32And);
+        fx.op(I::I32Const(0x80));
+        fx.op(I::I32Ne);
+        fx.op(I::BrIf(1));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        // plen = i - start ; piece = substr(s, start, plen)
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(start));
+        fx.op(I::I32Sub);
+        fx.op(I::LocalSet(plen));
+        emit_substr(self, fx, s, start, plen, pbox, j);
+        fx.op(I::LocalGet(out));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(pbox));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(oi));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        // trailing empty piece
+        fx.op(I::LocalGet(out));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::I32Const(empty));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(oi));
+        fx.op(I::Else);
+        // ---- non-empty-sep path ----
+        fx.op(I::LocalGet(slen));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::Call(self.h.alloc));
+        fx.op(I::LocalSet(out));
+        fx.op(I::LocalGet(out));
+        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(oi));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(start));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(seplen));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(slen));
+        fx.op(I::I32GtU);
+        fx.op(I::BrIf(1));
+        fx.op(I::I32Const(1));
+        fx.op(I::LocalSet(matched));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(k));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(k));
+        fx.op(I::LocalGet(seplen));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        fx.op(I::LocalGet(s));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(k));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(0, 0)));
+        fx.op(I::LocalGet(sep));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(k));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(0, 0)));
+        fx.op(I::I32Ne);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(matched));
+        fx.op(I::Br(2));
+        fx.op(I::End);
+        fx.op(I::LocalGet(k));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(k));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::LocalGet(matched));
+        fx.op(I::If(BlockType::Empty));
+        // emit piece s[start..i]
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(start));
+        fx.op(I::I32Sub);
+        fx.op(I::LocalSet(plen));
+        emit_substr(self, fx, s, start, plen, pbox, j);
+        fx.op(I::LocalGet(out));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(pbox));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(oi));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(seplen));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalSet(start));
+        fx.op(I::Else);
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::End);
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        // final tail piece s[start..slen]
+        fx.op(I::LocalGet(slen));
+        fx.op(I::LocalGet(start));
+        fx.op(I::I32Sub);
+        fx.op(I::LocalSet(plen));
+        emit_substr(self, fx, s, start, plen, pbox, j);
+        fx.op(I::LocalGet(out));
+        fx.op(I::I32Const(8));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(4));
+        fx.op(I::I32Mul);
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(pbox));
+        fx.op(I::I32Store(ma(0, 2)));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(oi));
+        fx.op(I::End);
+        // fix the list length to the actual piece count
+        fx.op(I::LocalGet(out));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Store(ma(4, 2)));
+        fx.op(I::LocalGet(out));
+        Ok(())
+    }
+
+    /// String builtins: `str-cat`, `to-string`, `to-char`, and
+    /// `upper`/`lower`.
+    fn builtin_string(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+        let nargs = |want: usize| -> Result<(), String> {
+            if items.len() == want {
+                Ok(())
+            } else {
+                Err(format!(
+                    "`{name}` expects {want} argument(s), got {}",
+                    items.len()
+                ))
+            }
+        };
+        match name {
+            "str-cat" => {
+                if items.is_empty() {
+                    let a = self.intern_str("");
+                    fx.op(I::I32Const(a as i32));
+                    return Ok(());
                 }
-                let slen = fx.local(ValType::I32);
-                fx.op(I::LocalGet(s));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::LocalSet(slen));
-                let seplen = fx.local(ValType::I32);
-                fx.op(I::LocalGet(sep));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::LocalSet(seplen));
-                let out = fx.local(ValType::I32);
-                let oi = fx.local(ValType::I32);
-                let start = fx.local(ValType::I32);
-                let i = fx.local(ValType::I32);
-                let k = fx.local(ValType::I32);
-                let matched = fx.local(ValType::I32);
-                let plen = fx.local(ValType::I32);
-                let pbox = fx.local(ValType::I32);
-                let j = fx.local(ValType::I32);
-                let empty = self.intern_str("") as i32;
-                fx.op(I::LocalGet(seplen));
-                fx.op(I::I32Eqz);
-                fx.op(I::If(BlockType::Empty));
-                // ---- empty-sep path (Rust char-boundary split) ----
-                // out over-allocated to slen+2 pieces; length fixed at the end.
-                fx.op(I::LocalGet(slen));
-                fx.op(I::I32Const(2));
-                fx.op(I::I32Add);
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::Call(self.h.alloc));
-                fx.op(I::LocalSet(out));
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Store(ma(0, 2)));
-                // out[8] = ""  (leading empty piece)
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(empty));
-                fx.op(I::I32Store(ma(8, 2)));
-                fx.op(I::I32Const(1));
-                fx.op(I::LocalSet(oi));
-                fx.op(I::I32Const(0));
-                fx.op(I::LocalSet(i)); // byte cursor
-                fx.op(I::Block(BlockType::Empty));
-                fx.op(I::Loop(BlockType::Empty));
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalGet(slen));
-                fx.op(I::I32GeU);
-                fx.op(I::BrIf(1));
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalSet(start)); // char start
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(i)); // consume lead byte
-                // advance over continuation bytes (b & 0xC0 == 0x80)
-                fx.op(I::Block(BlockType::Empty));
-                fx.op(I::Loop(BlockType::Empty));
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalGet(slen));
-                fx.op(I::I32GeU);
-                fx.op(I::BrIf(1));
-                fx.op(I::LocalGet(s));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Add);
-                fx.op(I::I32Load8U(ma(0, 0)));
-                fx.op(I::I32Const(0xC0));
-                fx.op(I::I32And);
-                fx.op(I::I32Const(0x80));
-                fx.op(I::I32Ne);
-                fx.op(I::BrIf(1));
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(i));
-                fx.op(I::Br(0));
-                fx.op(I::End);
-                fx.op(I::End);
-                // plen = i - start ; piece = substr(s, start, plen)
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalGet(start));
-                fx.op(I::I32Sub);
-                fx.op(I::LocalSet(plen));
-                emit_substr(self, fx, s, start, plen, pbox, j);
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(oi));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(pbox));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(oi));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(oi));
-                fx.op(I::Br(0));
-                fx.op(I::End);
-                fx.op(I::End);
-                // trailing empty piece
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(oi));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Add);
-                fx.op(I::I32Const(empty));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(oi));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(oi));
-                fx.op(I::Else);
-                // ---- non-empty-sep path ----
-                fx.op(I::LocalGet(slen));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::Call(self.h.alloc));
-                fx.op(I::LocalSet(out));
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::I32Const(0));
-                fx.op(I::LocalSet(oi));
-                fx.op(I::I32Const(0));
-                fx.op(I::LocalSet(start));
-                fx.op(I::I32Const(0));
-                fx.op(I::LocalSet(i));
-                fx.op(I::Block(BlockType::Empty));
-                fx.op(I::Loop(BlockType::Empty));
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalGet(seplen));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(slen));
-                fx.op(I::I32GtU);
-                fx.op(I::BrIf(1));
-                fx.op(I::I32Const(1));
-                fx.op(I::LocalSet(matched));
-                fx.op(I::I32Const(0));
-                fx.op(I::LocalSet(k));
-                fx.op(I::Block(BlockType::Empty));
-                fx.op(I::Loop(BlockType::Empty));
-                fx.op(I::LocalGet(k));
-                fx.op(I::LocalGet(seplen));
-                fx.op(I::I32GeU);
-                fx.op(I::BrIf(1));
-                fx.op(I::LocalGet(s));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(k));
-                fx.op(I::I32Add);
-                fx.op(I::I32Load8U(ma(0, 0)));
-                fx.op(I::LocalGet(sep));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(k));
-                fx.op(I::I32Add);
-                fx.op(I::I32Load8U(ma(0, 0)));
-                fx.op(I::I32Ne);
-                fx.op(I::If(BlockType::Empty));
-                fx.op(I::I32Const(0));
-                fx.op(I::LocalSet(matched));
-                fx.op(I::Br(2));
-                fx.op(I::End);
-                fx.op(I::LocalGet(k));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(k));
-                fx.op(I::Br(0));
-                fx.op(I::End);
-                fx.op(I::End);
-                fx.op(I::LocalGet(matched));
-                fx.op(I::If(BlockType::Empty));
-                // emit piece s[start..i]
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalGet(start));
-                fx.op(I::I32Sub);
-                fx.op(I::LocalSet(plen));
-                emit_substr(self, fx, s, start, plen, pbox, j);
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(oi));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(pbox));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(oi));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(oi));
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalGet(seplen));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(i));
-                fx.op(I::LocalGet(i));
-                fx.op(I::LocalSet(start));
-                fx.op(I::Else);
-                fx.op(I::LocalGet(i));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(i));
-                fx.op(I::End);
-                fx.op(I::Br(0));
-                fx.op(I::End);
-                fx.op(I::End);
-                // final tail piece s[start..slen]
-                fx.op(I::LocalGet(slen));
-                fx.op(I::LocalGet(start));
-                fx.op(I::I32Sub);
-                fx.op(I::LocalSet(plen));
-                emit_substr(self, fx, s, start, plen, pbox, j);
-                fx.op(I::LocalGet(out));
-                fx.op(I::I32Const(8));
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(oi));
-                fx.op(I::I32Const(4));
-                fx.op(I::I32Mul);
-                fx.op(I::I32Add);
-                fx.op(I::LocalGet(pbox));
-                fx.op(I::I32Store(ma(0, 2)));
-                fx.op(I::LocalGet(oi));
-                fx.op(I::I32Const(1));
-                fx.op(I::I32Add);
-                fx.op(I::LocalSet(oi));
-                fx.op(I::End);
-                // fix the list length to the actual piece count
-                fx.op(I::LocalGet(out));
-                fx.op(I::LocalGet(oi));
-                fx.op(I::I32Store(ma(4, 2)));
-                fx.op(I::LocalGet(out));
-            }
-            "apply" => {
-                // apply(f, payload): call the closure value `f` with `payload` as
-                // its argument bundle, via the boxed-closure convention
-                // (call_indirect(env=f, payload, slot=f[4])) — the same seam
-                // `map`/`fold`/`filter` use. The interpreter's `apply` binds the
-                // payload per the function's arity (a single value to a 1-param
-                // fn, a TAG_TUP bundle to an n-param fn), which is exactly what
-                // the closure wrapper unpacks.
-                nargs(2)?;
-                let fp = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
-                fx.op(I::LocalSet(fp));
-                let pay = fx.local(ValType::I32);
-                self.expr(fx, items[1], false)?;
-                fx.op(I::LocalSet(pay));
-                let apply_ty = self.ty_idx(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
-                fx.op(I::LocalGet(fp));
-                fx.op(I::LocalGet(pay));
-                fx.op(I::LocalGet(fp));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::CallIndirect {
-                    type_index: apply_ty,
-                    table_index: 0,
-                });
+                for &x in &items[1..] {
+                    self.expr(fx, x, false)?;
+                    fx.op(I::Call(self.h.strcat2));
+                }
             }
-            "abs" => {
-                // |n| over an int (branch: n<0 ? -n : n) or a dec (F64Abs);
-                // any other tag traps, matching the oracle's `want_num`.
+            "to-string" => {
                 nargs(1)?;
-                let b = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
+                fx.op(I::Call(self.h.to_str));
+            }
+            "to-char" => {
+                // A char passes through; an int must be a Unicode scalar value
+                // (traps otherwise, like the interpreter's range error). Anything
+                // else traps in unbox_int, matching `to-char expects an int`.
+                nargs(1)?;
+                self.expr(fx, items[0], false)?;
+                let b = fx.local(ValType::I32);
                 fx.op(I::LocalSet(b));
                 fx.op(I::LocalGet(b));
                 fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Const(TAG_INT));
+                fx.op(I::I32Const(TAG_CHAR));
                 fx.op(I::I32Eq);
                 fx.op(I::If(BlockType::Result(ValType::I32)));
+                fx.op(I::LocalGet(b));
+                fx.op(I::Else);
                 let n = fx.local(ValType::I64);
                 fx.op(I::LocalGet(b));
                 fx.op(I::Call(self.h.unbox_int));
-                fx.op(I::LocalTee(n));
-                fx.op(I::I64Const(0));
-                fx.op(I::I64LtS);
-                fx.op(I::If(BlockType::Result(ValType::I64)));
-                fx.op(I::I64Const(0));
+                fx.op(I::LocalSet(n));
+                // invalid if n > 0x10FFFF (unsigned, catches negatives) or a
+                // surrogate (0xD800..=0xDFFF)
                 fx.op(I::LocalGet(n));
-                fx.op(I::I64Sub);
-                fx.op(I::Else);
-                fx.op(I::LocalGet(n));
-                fx.op(I::End);
-                fx.op(I::Call(self.h.box_int));
-                fx.op(I::Else);
-                // must be a dec, else trap (want_num)
-                fx.op(I::LocalGet(b));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Const(TAG_DEC));
-                fx.op(I::I32Ne);
+                fx.op(I::I64Const(0x10FFFF));
+                fx.op(I::I64GtU);
                 fx.op(I::If(BlockType::Empty));
                 fx.op(I::Unreachable);
                 fx.op(I::End);
-                fx.op(I::LocalGet(b));
-                fx.op(I::F64Load(ma(8, 3)));
-                fx.op(I::F64Abs);
-                fx.op(I::Call(self.h.box_dec));
+                fx.op(I::LocalGet(n));
+                fx.op(I::I64Const(0xD800));
+                fx.op(I::I64GeU);
+                fx.op(I::LocalGet(n));
+                fx.op(I::I64Const(0xDFFF));
+                fx.op(I::I64LeU);
+                fx.op(I::I32And);
+                fx.op(I::If(BlockType::Empty));
+                fx.op(I::Unreachable);
+                fx.op(I::End);
+                fx.op(I::LocalGet(n));
+                self.box_char(fx);
                 fx.op(I::End);
             }
-            "min" | "max" => {
-                // The oracle: `min` returns a[1] when compare(a,b)==Greater else
-                // a[0]; `max` returns a[1] when compare(a,b)==Less else a[0].
-                // `cmp_raw` yields 1 for Greater, -1 for Less over the same total
-                // order (ints, decs, strings, chars).
-                nargs(2)?;
-                let av = fx.local(ValType::I32);
-                self.expr(fx, items[0], false)?;
-                fx.op(I::LocalSet(av));
-                let bv = fx.local(ValType::I32);
-                self.expr(fx, items[1], false)?;
-                fx.op(I::LocalSet(bv));
-                fx.op(I::LocalGet(av));
-                fx.op(I::LocalGet(bv));
-                fx.op(I::Call(self.h.cmp_raw));
-                fx.op(I::I32Const(if name == "min" { 1 } else { -1 }));
-                fx.op(I::I32Eq);
-                fx.op(I::If(BlockType::Result(ValType::I32)));
-                fx.op(I::LocalGet(bv));
-                fx.op(I::Else);
-                fx.op(I::LocalGet(av));
-                fx.op(I::End);
-            }
-            "empty" => {
-                // true iff a string/list/tuple has length 0 (the len word @4);
-                // any other tag traps, like the oracle's non-sequence error.
+            "upper" | "lower" => {
                 nargs(1)?;
-                let b = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
-                fx.op(I::LocalSet(b));
-                let tg = fx.local(ValType::I32);
-                fx.op(I::LocalGet(b));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::LocalTee(tg));
-                fx.op(I::I32Const(TAG_STR));
-                fx.op(I::I32Eq);
-                fx.op(I::LocalGet(tg));
-                fx.op(I::I32Const(TAG_LIST));
-                fx.op(I::I32Eq);
-                fx.op(I::I32Or);
-                fx.op(I::LocalGet(tg));
-                fx.op(I::I32Const(TAG_TUP));
-                fx.op(I::I32Eq);
-                fx.op(I::I32Or);
-                fx.op(I::I32Eqz);
-                fx.op(I::If(BlockType::Empty));
-                fx.op(I::Unreachable);
-                fx.op(I::End);
-                fx.op(I::LocalGet(b));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::I32Eqz);
-                fx.op(I::Call(self.h.box_bool));
+                fx.op(I::I32Const(if name == "upper" { 1 } else { 0 }));
+                fx.op(I::Call(self.h.case_h));
             }
-            "drop" => {
-                // Evaluates its operand(s) for effect and yields unit — the
-                // interpreter's `drop`. Unit is `Value::Rec(vec![])` (prints as
-                // "{}"), so return a static empty-record box rather than the
-                // `unit_addr()` false-box (which `to-string` would render
-                // "false"); at a no-result WIT boundary the box is discarded.
-                for &x in items {
-                    self.expr(fx, x, false)?;
-                    fx.op(I::Drop);
+            _ => unreachable!("builtin_string routed unexpected name `{name}`"),
+        }
+        Ok(())
+    }
+
+    /// Variant constructors: `some`, `ok`, and `err`.
+    fn builtin_variant(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+        match name {
+            "some" | "ok" | "err" => {
+                // the argument(s) bundle into the variant payload, exactly as
+                // the interpreter binds it. `ok()`/`err()` with no arguments
+                // construct the payload-less case (4.2), like the interpreter.
+                if items.is_empty() && name != "some" {
+                    let addr = self.none_like_box(name);
+                    fx.op(I::I32Const(addr as i32));
+                    return Ok(());
                 }
-                let addr = self.intern_unit_rec();
-                fx.op(I::I32Const(addr as i32));
+                self.var_box(fx, name, items)
             }
-            other => {
-                return Err(format!(
-                    "builtin `{other}` not supported by the wasm backend yet"
-                ));
+            _ => unreachable!("builtin_variant routed unexpected name `{name}`"),
+        }
+    }
+
+    /// Mutable cell builtins: `cell-new`, `cell-get`, and `cell-set`.
+    fn builtin_cell(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+        let nargs = |want: usize| -> Result<(), String> {
+            if items.len() == want {
+                Ok(())
+            } else {
+                Err(format!(
+                    "`{name}` expects {want} argument(s), got {}",
+                    items.len()
+                ))
             }
+        };
+        match name {
+            "cell-new" => {
+                // A mutable cell holding one boxed value; its heap pointer is
+                // its identity (interp: `Value::Cell(Rc<RefCell<Value>>)`).
+                // In a resource/functor component a cell is resource state (a
+                // `DefResource` `New`), so the cell AND its value live in the
+                // persistent region and survive the per-call arena reset (5.1).
+                nargs(1)?;
+                let persist = self.has_persist();
+                let v = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                if persist {
+                    fx.op(I::Call(self.h.persist));
+                }
+                fx.op(I::LocalSet(v));
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(8));
+                fx.op(I::Call(if persist {
+                    self.h.persist_alloc
+                } else {
+                    self.h.alloc
+                }));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_CELL));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::LocalGet(v));
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(p));
+            }
+            "cell-get" => {
+                // Current value box, at cell offset 4.
+                nargs(1)?;
+                self.expr(fx, items[0], false)?;
+                fx.op(I::I32Load(ma(4, 2)));
+            }
+            "cell-set" => {
+                // Overwrite the cell's value box; return unit (interp parity).
+                // In a resource/functor component the stored value is routed
+                // through the persistent write barrier so it outlives the reset
+                // (5.1); the cell itself was already allocated persistently.
+                nargs(2)?;
+                let persist = self.has_persist();
+                let c = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(c));
+                fx.op(I::LocalGet(c));
+                self.expr(fx, items[1], false)?;
+                if persist {
+                    fx.op(I::Call(self.h.persist));
+                }
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::I32Const(self.unit_addr() as i32));
+            }
+            _ => unreachable!("builtin_cell routed unexpected name `{name}`"),
+        }
+        Ok(())
+    }
+
+    /// Compile-time form machinery used by macro bodies: `form-kind`,
+    /// `rec-key`, `rec-val`, `gensym`, and `expand`.
+    fn builtin_form(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+        let nargs = |want: usize| -> Result<(), String> {
+            if items.len() == want {
+                Ok(())
+            } else {
+                Err(format!(
+                    "`{name}` expects {want} argument(s), got {}",
+                    items.len()
+                ))
+            }
+        };
+        match name {
+            "form-kind" => {
+                nargs(1)?;
+                return self.form_kind(fx, items[0]);
+            }
+            "rec-key" => {
+                // First field's key as a payload-less variant: build
+                // `[TAG_VAR, key-str-box, 0]` over the key box at rec offset 8.
+                nargs(1)?;
+                let rp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(rp));
+                self.rec_guard(fx, rp);
+                let p = fx.local(ValType::I32);
+                fx.op(I::I32Const(12));
+                fx.op(I::Call(self.h.alloc));
+                fx.op(I::LocalSet(p));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(TAG_VAR));
+                fx.op(I::I32Store(ma(0, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::LocalGet(rp));
+                fx.op(I::I32Load(ma(8, 2)));
+                fx.op(I::I32Store(ma(4, 2)));
+                fx.op(I::LocalGet(p));
+                fx.op(I::I32Const(0));
+                fx.op(I::I32Store(ma(8, 2)));
+                fx.op(I::LocalGet(p));
+            }
+            "rec-val" => {
+                // First field's value box, at rec offset 12.
+                nargs(1)?;
+                let rp = fx.local(ValType::I32);
+                self.expr(fx, items[0], false)?;
+                fx.op(I::LocalSet(rp));
+                self.rec_guard(fx, rp);
+                fx.op(I::LocalGet(rp));
+                fx.op(I::I32Load(ma(12, 2)));
+            }
+            "gensym" => {
+                nargs(0)?;
+                return self.gensym(fx);
+            }
+            "expand" => {
+                nargs(1)?;
+                match self.macro_expand_idx {
+                    // Inside a macro component: one expansion step over the
+                    // library's own macros (mirrors `builtins.rs` `expand`).
+                    Some(idx) => {
+                        self.expr(fx, items[0], false)?;
+                        fx.op(I::Call(idx));
+                    }
+                    None => {
+                        return Err("`expand` is only available inside a macro library \
+                             (a file whose top level is DefMacros)"
+                            .into());
+                    }
+                }
+            }
+            _ => unreachable!("builtin_form routed unexpected name `{name}`"),
         }
         Ok(())
     }
