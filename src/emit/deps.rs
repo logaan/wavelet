@@ -1,3 +1,7 @@
+//! Dependency and interface resolution: collecting record/alias/type
+//! definitions from deps and the local file, interface naming/versioning,
+//! and dep-function lookup for cross-component calls.
+
 use super::*;
 
 /// Record types from a file's `DefType` forms: name → field (name, type-string).

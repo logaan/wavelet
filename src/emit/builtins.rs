@@ -1,3 +1,6 @@
+//! `Emitter` builtin dispatch and the per-group builtin emitters, plus the
+//! [`BUILTINS`] name list the call path routes through.
+
 use super::*;
 
 impl<'a> Emitter<'a> {

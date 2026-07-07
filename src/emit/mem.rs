@@ -1,3 +1,7 @@
+//! `Emitter` methods for the canonical-memory expression path (goal 5):
+//! eligibility analysis, mem-typed expression emission, the structural-eq
+//! fast path, and unboxed scalar operations.
+
 use super::*;
 
 impl<'a> Emitter<'a> {

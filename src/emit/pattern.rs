@@ -1,3 +1,6 @@
+//! `Emitter` methods for `Match`: pattern compilation on both the boxed and
+//! the canonical-memory paths.
+
 use super::*;
 
 impl<'a> Emitter<'a> {

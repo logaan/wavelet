@@ -1,3 +1,7 @@
+//! Per-file core wasm module assembly: `emit_core_module` wires imports,
+//! functions, exports, and data into a `wasm_encoder::Module`; plus the 5.8
+//! let-lambda devirtualization pre-scan.
+
 use super::*;
 
 // --------------------------------------------------------- helper bodies

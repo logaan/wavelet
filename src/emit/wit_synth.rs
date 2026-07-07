@@ -1,3 +1,6 @@
+//! WIT synthesis for emitted components: render a dep's nested-package WIT
+//! and synthesize the component's world from its parsed surface.
+
 use super::*;
 
 // ----------------------------------------------------------- WIT synthesis

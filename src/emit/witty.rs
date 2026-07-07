@@ -1,3 +1,7 @@
+//! WIT-type modelling for the boundary ABI: [`WitTy`], type-string parsing
+//! (`wit_ty`), flat-type computation, and the canonical-ABI sizing, alignment,
+//! and field-offset math.
+
 use super::*;
 
 // ---------------------------------------------------------------- WIT types

@@ -1,3 +1,6 @@
+//! `Emitter` methods for calls and binding forms: `Fn` literals, closure and
+//! internal calls, argument binding, cross-component dep calls, and `Let`.
+
 use super::*;
 
 impl<'a> Emitter<'a> {

@@ -1,3 +1,6 @@
+//! Pre-emission feature scan over a file's form trees: collects the
+//! cross-component dep calls whose imports the core module must declare.
+
 use super::*;
 
 // ------------------------------------------------------------ feature scan

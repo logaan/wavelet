@@ -1,3 +1,7 @@
+//! The strategy-B macro component (design.md §6.3): `emit_macro_component`
+//! compiles a macro library's bodies to wasm, with the `mc_*` tree⇄form
+//! adapters the `wavelet:meta/macros` boundary needs.
+
 use super::*;
 
 /// A macro definition collected from a macro-library file: the unsuffixed name,

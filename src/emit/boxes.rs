@@ -1,3 +1,6 @@
+//! `Emitter` methods that build value boxes: sequences, records, variants,
+//! flags, quote/quasiquote forms, and closure/def-wrapper slots.
+
 use super::*;
 
 impl<'a> Emitter<'a> {

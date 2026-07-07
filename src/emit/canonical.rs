@@ -1,3 +1,6 @@
+//! `Emitter` methods for the canonical ABI: lower/lift between boxes and flat
+//! core values, and store/load against linear memory, incl. variant chains.
+
 use super::*;
 
 impl<'a> Emitter<'a> {

@@ -1,3 +1,6 @@
+//! Resource bodies: user `DefResource` classification and the functor `set`
+//! resource implementation (ctor/add/contains/size/dtor), with their tests.
+
 use super::*;
 
 // ------------------------------------------------- functor `set` resource bodies

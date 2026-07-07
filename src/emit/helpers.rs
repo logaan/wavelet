@@ -1,3 +1,7 @@
+//! Shared runtime helper-function bodies (`emit_helpers`: alloc, eq_raw,
+//! to_str, persist, arithmetic/comparison, …) and the inline substring and
+//! sequence-join emitters they and the builtins share.
+
 use super::*;
 
 /// Copy `sublen` bytes from `src[8 + start ..]` into a fresh `[TAG_STR, sublen,
