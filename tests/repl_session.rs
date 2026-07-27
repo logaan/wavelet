@@ -68,16 +68,16 @@ fn a_macro_defined_earlier_expands_later() {
     assert_eq!(stdout, "{}\ntrue\n", "stdout");
 }
 
-/// A float result hits the backend's `to-string` hole: the compiled path traps,
-/// the REPL falls back to the interpreter for that entry, and the printed value
-/// is still correct. The fallback is announced on stderr, not silent.
+/// A float result stays on the compiled path: the backend's `to-string` now
+/// has a float arm (0.2), so what used to trap — and announce an interpreter
+/// fallback — just prints.
 #[test]
-fn a_float_result_falls_back_to_the_interpreter() {
+fn a_float_result_stays_on_the_compiled_path() {
     let (stdout, stderr) = repl("div(10.0 4.0)\n");
     assert_eq!(stdout, "2.5\n", "stdout");
     assert!(
-        stderr.contains("interpreter fallback"),
-        "a float result should announce the interpreter fallback; stderr:\n{stderr}"
+        !stderr.contains("fallback"),
+        "a float result must not fall back; stderr:\n{stderr}"
     );
 }
 
