@@ -11,41 +11,21 @@ Package "conformance:wavelet@0.1.0"
 // Every exported function is signature-annotated (typed params + `The` result)
 // so WIT synthesis derives exactly the interface's declared shape.
 //
-// STATUS (5.12): WIT synthesis + type checking succeed for ALL 35 exported
-// functions. On the wasm backend, every scalar / char / string / record /
-// variant / enum / option / result / FLAGS transform and every list function
-// (map/filter/fold) COMPILES — including `permissions-rt`, whose flags
-// complement (`v ^ all()`) is expressed with ZERO new language surface as a
-// Match over the 16 declaration-order flags literals (each result ascribed
-// `The permissions` so the arms unify to the imported flags type; verified in
-// the interpreter oracle and confirmed to lower on the backend). The `none`
-// side of the option round-trips uses the BARE `none` symbol — the
+// STATUS (0.1): BUILDS AND PASSES. All 35 exported functions type-check,
+// WIT-synthesize, and compile on the wasm backend; `test-values-callee.sh`
+// composes this callee with both rust seeds and `run-values()` → `ok` for
+// each. The last blocker — tuple CONSTRUCTION — closed with the fixed-arity
+// constructors `tuple0`..`tuple16` (decision lot:033lMg3lFvO9LLepj3efMs):
+// `tuple-rt`, `tuple-nested-rt`, and the `ok` side of
+// `result-tuple-direction-rt` rebuild their tuples with `tuple2`/`tuple3`
+// below, constructed in place on the backend's canonical path.
+//
+// Residual spelling notes, kept from earlier revisions: `permissions-rt`
+// expresses the flags complement (`v ^ all()`) with zero language surface as
+// a Match over the 16 declaration-order flags literals (each result ascribed
+// `The permissions` so the arms unify to the imported flags type); the
+// `none` side of the option round-trips uses the BARE `none` symbol — the
 // parenthesized `none()` is not lowered by the backend, bare `none` is.
-//
-// The file still does NOT build, blocked by a SINGLE remaining gap that needs
-// new language surface (out of scope for a conformance rewrite — see the goal-5
-// Thing lot:033iWOnrwIwk9KIjngGGD1 and the flags decision
-// lot:033ky5FRo5Up9Id5G6cTmr, whose premise that permissions-rt was the sole
-// blocker is corrected here):
-//   TUPLE CONSTRUCTION. `tup(...)` has NO oracle semantics at all — the
-//   interpreter reports `unbound name tup in call position` — and the backend
-//   has no tuple constructor; bare `(a b)` reads as a call form, not a tuple.
-//   There is no way to BUILD a tuple value in Wavelet source today (tuple
-//   PATTERNS already work). Blocks `tuple-rt`, `tuple-nested-rt`, and the `ok`
-//   side of `result-tuple-direction-rt` — the only three exports that call
-//   `tup`.
-//
-// RESOLVED since the last revision: `drop` / no-result bodies. `drop` is now a
-// wasm-backend builtin (returns the unit empty-record box; discarded at a
-// no-result WIT boundary), so `no-result` and `no-params-no-result` compile.
-// Verified by building this file with the three `tup` exports removed: the core
-// module — including the two `drop` bodies — emits cleanly, and the only
-// residual failure is world-completeness for the intentionally-removed exports.
-//
-// Because a `values` export is all-or-nothing, the tuple gap keeps the whole
-// file un-buildable and `test-values-callee.sh` (parallel to
-// test-resources-callee.sh) is deferred until a tuple constructor lands.
-// Everything else compiles.
 
 Import {pkg: "roundtrip:suite/types" as: t}
 

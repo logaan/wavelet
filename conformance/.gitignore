@@ -2,3 +2,4 @@ target/
 dist/
 */src/bindings.rs
 out-res/
+out-values/
