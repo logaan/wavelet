@@ -261,6 +261,10 @@ fn write_value(v: &Value, out: &mut String) {
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Int(n) => out.push_str(&n.to_string()),
         Value::Dec(f) => out.push_str(&format_dec(*f)),
+        // `{c:?}` emits WAVE-valid escapes except for NUL, which Rust spells
+        // `\0` — not an escape in WAVE (or in our own reader); spell it
+        // `\u{0}` so every printed char reads back.
+        Value::Char('\0') => out.push_str("'\\u{0}'"),
         Value::Char(c) => out.push_str(&format!("{c:?}")),
         Value::Str(s) => out.push_str(&format!("{s:?}")),
         Value::Variant(name, None) => out.push_str(name),
@@ -496,6 +500,16 @@ mod tests {
     fn format_dec_rounding_carries_across_a_magnitude() {
         assert_eq!(format_dec(999999.9), "1e6");
         assert_eq!(format_dec(9.9999999), "10.0");
+    }
+
+    #[test]
+    fn char_nul_prints_the_wave_escape_not_rusts() {
+        // WAVE (and our reader) has no `\0` escape, so NUL must not follow
+        // Rust's `{c:?}` spelling. Everything else `{c:?}` emits is WAVE.
+        assert_eq!(super::print_value(&super::Value::Char('\0')), r"'\u{0}'");
+        assert_eq!(super::print_value(&super::Value::Char('\n')), r"'\n'");
+        assert_eq!(super::print_value(&super::Value::Char('\'')), r"'\''");
+        assert_eq!(super::print_value(&super::Value::Char('\u{7f}')), r"'\u{7f}'");
     }
 
     #[test]

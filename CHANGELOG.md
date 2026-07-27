@@ -169,7 +169,9 @@ you work, and rename it to the new version when you cut a release.
   `wavelet run`/`wavelet repl` no longer fall back to the interpreter for
   them. Chars match the interpreter exactly for every Latin-1 codepoint
   (named escapes, `\u{..}` for non-printables) and pass other printable
-  Unicode through as UTF-8.
+  Unicode through as UTF-8. Char output is valid WAVE text: NUL prints as
+  `'\u{0}'` (WAVE and the Wavelet reader have no `\0` escape, so Rust's
+  `{c:?}` spelling would not read back).
 
 ### Changed
 

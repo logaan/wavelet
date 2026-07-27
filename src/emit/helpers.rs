@@ -550,10 +550,11 @@ fn to_str_dec(
 
 /// Emit the char arm of `to_str`: single quotes plus Rust's `{c:?}` escapes.
 ///
-/// Exact for `\'` `\\` `\n` `\r` `\t` `\0`, `\u{..}` for the remaining
-/// non-printables through Latin-1 (C0/C1 controls, DEL, NBSP, soft hyphen —
-/// `0x00..=0x1f`, `0x7f..=0xa0`, `0xad`), and raw UTF-8 for everything
-/// else. Rust additionally `\u{..}`-escapes non-printable and
+/// Exact for `\'` `\\` `\n` `\r` `\t`, `\u{..}` for the remaining
+/// non-printables through Latin-1 (C0/C1 controls incl. NUL, DEL, NBSP,
+/// soft hyphen — `0x00..=0x1f`, `0x7f..=0xa0`, `0xad`), and raw UTF-8 for
+/// everything else. This is `print_value`'s escape set: `{c:?}` plus the
+/// NUL carve-out (`\u{0}`, since WAVE and our reader have no `\0` escape). Rust additionally `\u{..}`-escapes non-printable and
 /// grapheme-extending codepoints above Latin-1 (`'\u{200b}'`, combining
 /// marks); such chars diverge from the oracle — the same policy as the
 /// string branch above, where only the common escapes agree and exotic
@@ -614,14 +615,14 @@ fn to_str_char(fx: &mut FnCtx, alloc: u32, box_str: u32, cp: u32, t: u32, buf: u
     fx.op(I::I32Const(0));
     fx.op(I::LocalSet(oi));
     put_c(fx, b'\'' as i32);
-    // the named escapes, then \u{..} for remaining C0/C1/DEL, then raw UTF-8
-    let named: [(u32, u8); 6] = [
+    // the named escapes, then \u{..} for the remaining non-printables
+    // (incl. NUL: WAVE has no \0 escape), then raw UTF-8
+    let named: [(u32, u8); 5] = [
         (0x27, b'\''),
         (0x5c, b'\\'),
         (0x0a, b'n'),
         (0x0d, b'r'),
         (0x09, b't'),
-        (0x00, b'0'),
     ];
     for &(code, ch) in &named {
         fx.op(I::LocalGet(cp));
