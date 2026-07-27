@@ -69,7 +69,35 @@ pub const NAMES: &[&str] = &[
     "cell-get",
     "cell-set",
     "drop",
+    "tuple0",
+    "tuple1",
+    "tuple2",
+    "tuple3",
+    "tuple4",
+    "tuple5",
+    "tuple6",
+    "tuple7",
+    "tuple8",
+    "tuple9",
+    "tuple10",
+    "tuple11",
+    "tuple12",
+    "tuple13",
+    "tuple14",
+    "tuple15",
+    "tuple16",
 ];
+
+/// The fixed arity of a tuple-constructor builtin (`tuple0` .. `tuple16`), or
+/// `None` for any other name. One constructor per size — not one variadic
+/// `tup` — so every constructor has a WIT-expressible fixed-arity signature
+/// and works as a first-class function value (0.1 decision). Membership in
+/// [`NAMES`] is the source of truth, so a non-canonical spelling (`tuple07`)
+/// is rejected even though it parses.
+pub fn tuple_ctor_arity(name: &str) -> Option<usize> {
+    let n: usize = name.strip_prefix("tuple")?.parse().ok()?;
+    (NAMES.contains(&name)).then_some(n)
+}
 
 /// The functor `Set` operation builtins, kept out of [`NAMES`] so they are *not*
 /// installed under bare names: only a functor `Import` reaches them, via the
@@ -744,6 +772,17 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             }
         }
         "drop" => Ok(unit()),
+        // Tuple constructors (0.1): `tupleN` builds the N-tuple of its
+        // arguments. The §4.2 bundle is the constructed value for every arity
+        // except 1 — zero args bundle to the empty tuple, N≥2 args to an
+        // N-tuple — and `tuple1` wraps its single bundled value, so a genuine
+        // 1-tuple is spellable. `args_n` enforces the arity the checker
+        // guarantees at direct calls, keeping a first-class `apply` honest.
+        _ if tuple_ctor_arity(name) == Some(1) => Ok(Value::Tup(vec![arg])),
+        _ if tuple_ctor_arity(name).is_some() => {
+            let n = tuple_ctor_arity(name).unwrap();
+            Ok(Value::Tup(args_n(arg, n, name)?))
+        }
         // ---- functor `Set` operations (see `SET_OPS`) -----------------------
         // A set is backed by a `Value::Cell` holding a `Value::Lst` of its
         // distinct elements: the `Cell`'s `Rc` gives the handle its shared,

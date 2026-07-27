@@ -2449,6 +2449,19 @@ impl<'a> Checker<'a> {
             }
             // Unit-returning effects.
             "cell-set" | "drop" => Ok(Type::Unit),
+            // Tuple constructors (0.1): `tupleN` takes exactly N arguments and
+            // its result is the tuple of the argument types — no ascription
+            // needed. Arity is static and exact; there is no variadic form.
+            _ if crate::builtins::tuple_ctor_arity(name).is_some() => {
+                let n = crate::builtins::tuple_ctor_arity(name).unwrap();
+                if arg_tys.len() != n {
+                    return Err(format!(
+                        "eval error: `{name}` expects {n} argument(s), got {}",
+                        arg_tys.len()
+                    ));
+                }
+                Ok(Type::Tuple(arg_tys))
+            }
             // Everything else (apply/gensym/expand/rec-key/rec-val/cell-new/
             // cell-get, form accessors): result Unknown, args unconstrained
             // (already checked above). 3.7 types the form accessors as tree.
