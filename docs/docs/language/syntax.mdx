@@ -50,7 +50,7 @@ Every surface form desugars to a canonical WAVE value. A call is a tuple whose f
 | `{read write}` | `{read, write}` | flags |
 | `If c t e` | `(if-MACRO, c, t, e)` | macro use (see below) |
 
-Function calls are **tuples** whose first element is the head. `log("hi")` is, as data, the WAVE tuple `(log, "hi")`; `delete-file({...})` is `(delete-file, {…})`. A bare identifier is a payload-less variant case (a symbol), which Wavelet reads as a variable reference. In evaluation position a parenthesized form is always a call; a literal tuple **value** comes from `Quote` (or a builtin). The old `f[…]` / `f{…}` sugar is gone — write `f([…])` and `f({…})`.
+Function calls are **tuples** whose first element is the head. `log("hi")` is, as data, the WAVE tuple `(log, "hi")`; `delete-file({...})` is `(delete-file, {…})`. A bare identifier is a payload-less variant case (a symbol), which Wavelet reads as a variable reference. In evaluation position a parenthesized form is always a call; a tuple **value** comes from the fixed-arity constructors [`tuple0` … `tuple16`](../stdlib#tuples), from `Quote`, or from another builtin like `zip`. The old `f[…]` / `f{…}` sugar is gone — write `f([…])` and `f({…})`.
 
 You can see the desugaring directly with `wavelet read`, which prints the canonical WAVE tree:
 

@@ -81,6 +81,9 @@ fn builtin_doc(name: &str) -> &'static str {
         "some" | "ok" | "err" => "Construct an option / result variant.",
         "cell-new" | "cell-get" | "cell-set" => "Mutable cell operations.",
         "drop" => "Drop a resource handle.",
+        _ if wavelet::builtins::tuple_ctor_arity(name).is_some() => {
+            "Construct a tuple of this fixed arity."
+        }
         _ => "Builtin function.",
     }
 }

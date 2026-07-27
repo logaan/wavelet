@@ -59,6 +59,10 @@ E['values-record'] = `{name: "Ada" born: 1815 fields: ["maths" "computing"]}`;
 E['values-heterogeneous'] = `// A list has exactly one element type; mixing shapes is a compile error.
 // Reach for a record, a variant, or quoted data (a tree) instead.
 [1 "two" true 'x']`;
+E['values-tuple'] = `// In evaluation position parens are calls, so tuples are built with the
+// fixed-arity constructors tuple0..tuple16 (and destructured by pattern).
+Let {p: tuple2("abc" 123)}
+  Match p [((s n) tuple3(s n true))]`;
 E['values-options-results'] = `{options: [some(1) none] results: [ok("yes") err("nope")]}`;
 // Payload-less results (goal 4.2): ok()/err() construct genuinely payload-less
 // cases; the sub-pattern-less call shapes (ok)/(err) match them.
@@ -209,6 +213,7 @@ E['std-map'] = `map(Fn {x} mul(x x) range(1 6))`;
 E['std-filter'] = `filter(Fn {x} gt(x 2) [1 2 3 4 1])`;
 E['std-fold'] = `fold(Fn {acc x} add(acc x) 0 [1 2 3 4 5])`;
 E['std-zip'] = `zip(["a" "b" "c"] [1 2 3])`;
+E['std-tuple'] = `{empty: tuple0() single: tuple1("only") pair: tuple2(1 "a") nested: tuple2(true tuple2(2 3))}`;
 E['std-strcat'] = `str-cat(upper("ada") " " "Lovelace")`;
 E['std-strings'] = `{split: split("a,b,c" ",") join: join(["x" "y" "z"] "-") contains: contains("hello" "ell")}`;
 E['std-strcat-tostring'] = `str-cat("count = " to-string(42))`;

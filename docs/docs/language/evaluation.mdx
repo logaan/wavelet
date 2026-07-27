@@ -10,7 +10,7 @@ There are four evaluation rules. That's the whole model.
 
 1. **Atoms** — booleans, numbers, chars, strings, flags — evaluate to themselves.
 2. **A bare name** evaluates to its binding in the current lexical environment. Wavelet is a **Lisp-1**: one namespace for everything. Unbound names are errors. Enum cases, imported functions, and constructors are all just bindings.
-3. **A call form** — a tuple `(head arg…)` in evaluation position — evaluates its arguments, **bundles** them (0 ⇒ the empty tuple, 1 ⇒ that value, ≥2 ⇒ a tuple), and applies the value bound to `head`. Heads are names or qualified names; a literal tuple **value** comes from `Quote` or a builtin. To call a *computed* function value, use [`apply`](../stdlib#meta--reflection).
+3. **A call form** — a tuple `(head arg…)` in evaluation position — evaluates its arguments, **bundles** them (0 ⇒ the empty tuple, 1 ⇒ that value, ≥2 ⇒ a tuple), and applies the value bound to `head`. Heads are names or qualified names; a tuple **value** comes from the fixed-arity constructors [`tuple0` … `tuple16`](../stdlib#tuples), from `Quote`, or from another builtin like `zip`. To call a *computed* function value, use [`apply`](../stdlib#meta--reflection).
 4. **Special forms and macros** are recognised before evaluation and follow their own rules — see [Special forms](./special-forms) and [Macros](./macros).
 
 ## Functions take exactly one value
