@@ -1,0 +1,22 @@
+# This vault's update types, used as `lot update <name>`. Each type has a
+# name plus two flags: takes-body (does it accept a body; default true) and
+# terminal (does it retire the Thing; default false). Edit, remove, or add
+# entries freely — this list *is* the vault's set of types.
+
+[[update-types]]
+name = "note"
+
+[[update-types]]
+name = "work"
+
+[[update-types]]
+name = "info"
+
+[[update-types]]
+name = "done"
+takes-body = false
+terminal = true
+
+# The type `lot thing new` writes as a Thing's first update.
+[thing]
+default-update-type = "note"

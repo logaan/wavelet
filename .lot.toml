@@ -1,3 +1,43 @@
+# LoT (Lists of Things) — project-local configuration for wavelet.
+#
+# A project-local `.lot.toml`. When any `lot` command runs from this directory
+# (or a subdirectory), this file is *overlaid* on top of the user config
+# (~/.config/lot/config.toml), field-by-field — the keys it sets win, the keys
+# it omits fall through to the user config. So setting only `[vault]` here
+# points `lot` at this project's vault while leaving your user-level theme,
+# keybindings, and vault-switcher list intact. (The one thing that still wins
+# over this file is the $LOT_VAULT_PATH environment variable, which bypasses
+# config files altogether.)
+#
+# It has the same shape as the user config — see that file for the full
+# annotated reference of every option. Only the keys this project needs are set
+# below.
+
+# ── Vault ─────────────────────────────────────────────────────────────────────
 [vault]
-path=".lot-vault"
-auto-commit=false
+
+# Path to the vault, relative to this file (the project root). Keeping the vault
+# inside the project (`.lot-vault`) means the Things live alongside the code
+# they describe.
+path = ".lot-vault"
+
+# Keep `lot` out of git: no repo init, no automatic commits. Because the vault
+# sits inside this project's own git repo, `lot` staying out of git lets vault
+# changes be committed together with the code changes they relate to, in this
+# repo's history, rather than `lot` making its own commits. (Defaults to true
+# when omitted.)
+auto-commit = false
+
+# ── Optional overlays (unset here) ─────────────────────────────────────────────
+#
+# Any key valid in the user config is valid here and wins over it while you work
+# in this project. Common ones:
+#
+#   [[update-types]]   define extra `lot update <name>` types for this project
+#                      (name, plus optional takes-body / terminal flags).
+#   [thing]            default-update-type for `lot thing new`.
+#   [tui]              theme, [tui.keybindings], and the [[tui.vaults]] switcher
+#                      list — overriding the user-level TUI settings here.
+#
+# See ~/.config/lot/config.toml for the full option reference and accepted
+# values.
