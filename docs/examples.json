@@ -76,6 +76,11 @@
     "code": "// A list has exactly one element type; mixing shapes is a compile error.\n// Reach for a record, a variant, or quoted data (a tree) instead.\n[1 \"two\" true 'x']",
     "error": "eval error: heterogeneous list: elements must share one type, got IntLit(Some(1)) and String"
   },
+  "values-tuple": {
+    "code": "// In evaluation position parens are calls, so tuples are built with the\n// fixed-arity constructors tuple0..tuple16 (and destructured by pattern).\nLet {p: tuple2(\"abc\" 123)}\n  Match p [((s n) tuple3(s n true))]",
+    "value": "(\"abc\", 123, true)",
+    "output": ""
+  },
   "values-options-results": {
     "code": "{options: [some(1) none] results: [ok(\"yes\") err(\"nope\")]}",
     "value": "{options: [some(1), none], results: [ok(\"yes\"), err(\"nope\")]}",
@@ -325,6 +330,11 @@
   "std-zip": {
     "code": "zip([\"a\" \"b\" \"c\"] [1 2 3])",
     "value": "[(\"a\", 1), (\"b\", 2), (\"c\", 3)]",
+    "output": ""
+  },
+  "std-tuple": {
+    "code": "{empty: tuple0() single: tuple1(\"only\") pair: tuple2(1 \"a\") nested: tuple2(true tuple2(2 3))}",
+    "value": "{empty: (), single: (\"only\"), pair: (1, \"a\"), nested: (true, (2, 3))}",
     "output": ""
   },
   "std-strcat": {
