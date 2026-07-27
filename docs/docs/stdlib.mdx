@@ -161,6 +161,11 @@ One constructor per size, from `tuple0()` (the empty tuple) through `tuple16(…
 
 <Playground id="std-tostring" />
 
+Floats print *indicatively*, to six significant digits — `3.14159`, `0.666667`,
+`2.5e-7` — not with every digit of the underlying double, so `to-string` of a
+float is not guaranteed to read back to the identical bits. Use a formatting
+library when you need exact or styled float text.
+
 `read` is the inverse of `to-string` for code — it parses WAVE/Wavelet text into a form value:
 
 <Playground id="std-read" />

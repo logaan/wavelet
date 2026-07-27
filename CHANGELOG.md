@@ -66,10 +66,21 @@ you work, and rename it to the new version when you cut a release.
   and printing the value the guest's `to-string` renders. For the covered
   language subset the output is identical to before — the interpreter remains
   the reference oracle the backend is validated against. A program (or REPL
-  line) that hits a decision-gated backend hole (float/char `to-string`, runtime
-  flag literals, a record-payload `apply`, or `read`) transparently falls back
+  line) that hits a decision-gated backend hole (a record-payload `apply`, or
+  `read`) transparently falls back
   to the interpreter for that entry, announced on stderr, so nothing that ran
   before regresses. Macro expansion had already moved to the compiled path.
+
+- **Floats print to six significant digits.** `to-string` (and every value
+  printed by `run`, the REPL, and the playground) now renders floats
+  *indicatively* — six significant digits, fixed notation for magnitudes
+  between `0.0001` and `999999`, scientific (`2.5e-7`) outside, `nan`/`inf`/
+  `-inf` unchanged — instead of Rust's shortest-round-trip digits
+  (`3.14159` rather than `3.141592653589793`). The printed text still lexes
+  as a Wavelet float but is no longer guaranteed to read back bit-identical
+  (0.2: keeps compiled components small — the interpreter and the emitted
+  runtime share one tiny fixed-order f64 algorithm, so both pipelines agree
+  exactly). Float *literals* in source are untouched.
 
 ### Added
 
@@ -149,9 +160,18 @@ you work, and rename it to the new version when you cut a release.
   `(a, b)`, records as `{k: v}`, variants as `name` / `name(payload)`, flags as
   `{a, b}`, and cells as `cell(v)`, each recursing through `to-string` with the
   same nested quoting the oracle uses. Previously the backend printed strings
-  verbatim and trapped on every compound. Floats and chars remain the only
-  `to-string` cases still unimplemented (they trap). Closes a large batch of
+  verbatim and trapped on every compound. Closes a large batch of
   differential-test divergences.
+
+- **`to-string` of floats and chars no longer traps in compiled components.**
+  The emitted runtime gained the two missing `to_str` arms, so float and char
+  values — bare or inside compounds — print on the compiled path, and
+  `wavelet run`/`wavelet repl` no longer fall back to the interpreter for
+  them. Chars match the interpreter exactly for every Latin-1 codepoint
+  (named escapes, `\u{..}` for non-printables) and pass other printable
+  Unicode through as UTF-8. Char output is valid WAVE text: NUL prints as
+  `'\u{0}'` (WAVE and the Wavelet reader have no `\0` escape, so Rust's
+  `{c:?}` spelling would not read back).
 
 ### Changed
 

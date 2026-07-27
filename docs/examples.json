@@ -162,7 +162,7 @@
   },
   "sf-let": {
     "code": "Let {radius: 10\n     area: mul(pi mul(radius radius))}\n  str-cat(\"area = \" to-string(area))",
-    "value": "\"area = 314.1592653589793\"",
+    "value": "\"area = 314.159\"",
     "output": ""
   },
   "sf-do": {
@@ -280,7 +280,7 @@
   },
   "std-pi": {
     "code": "mul(pi 2)",
-    "value": "6.283185307179586",
+    "value": "6.28319",
     "output": ""
   },
   "std-predicates": {

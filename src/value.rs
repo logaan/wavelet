@@ -260,17 +260,11 @@ fn write_value(v: &Value, out: &mut String) {
     match v {
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Int(n) => out.push_str(&n.to_string()),
-        Value::Dec(f) => {
-            if f.is_nan() {
-                out.push_str("nan");
-            } else if *f == f64::INFINITY {
-                out.push_str("inf");
-            } else if *f == f64::NEG_INFINITY {
-                out.push_str("-inf");
-            } else {
-                out.push_str(&format!("{f:?}"));
-            }
-        }
+        Value::Dec(f) => out.push_str(&format_dec(*f)),
+        // `{c:?}` emits WAVE-valid escapes except for NUL, which Rust spells
+        // `\0` — not an escape in WAVE (or in our own reader); spell it
+        // `\u{0}` so every printed char reads back.
+        Value::Char('\0') => out.push_str("'\\u{0}'"),
         Value::Char(c) => out.push_str(&format!("{c:?}")),
         Value::Str(s) => out.push_str(&format!("{s:?}")),
         Value::Variant(name, None) => out.push_str(name),
@@ -344,6 +338,115 @@ fn write_value(v: &Value, out: &mut String) {
     }
 }
 
+/// Indicative float text: six significant decimal digits, not
+/// shortest-round-trip.
+///
+/// Values print in fixed notation when the decimal exponent is in `-4..=5`
+/// (`0.0001`, `3.14159`, `123457.0`) and as `d.de±x` scientific outside it
+/// (`1e6`, `2.5e-7`), with `nan`/`inf`/`-inf` spelled out and a fractional
+/// part always present in fixed notation so a float never reads as an int.
+/// Exact digits are traded away deliberately (5.6/0.2): the emitted `to_str`
+/// helper in `src/emit/helpers.rs` hand-implements this same algorithm over
+/// the same IEEE-754 double ops in the same order, so both pipelines produce
+/// identical text without shipping a shortest-round-trip formatter in every
+/// component. Any change here must be mirrored there.
+pub fn format_dec(f: f64) -> String {
+    if f.is_nan() {
+        return "nan".into();
+    }
+    if f == f64::INFINITY {
+        return "inf".into();
+    }
+    if f == f64::NEG_INFINITY {
+        return "-inf".into();
+    }
+    let mut out = String::new();
+    if f.is_sign_negative() {
+        out.push('-');
+    }
+    let mut x = f.abs();
+    if x == 0.0 {
+        out.push_str("0.0");
+        return out;
+    }
+    // Normalize into [1, 10), tracking the decimal exponent. Loop count is
+    // bounded by the f64 exponent range (~640 for the deepest subnormal).
+    let mut e: i32 = 0;
+    while x >= 10.0 {
+        x /= 10.0;
+        e += 1;
+    }
+    while x < 1.0 {
+        x *= 10.0;
+        e -= 1;
+    }
+    // Seven digits: six significant plus one to round by. The subtraction of
+    // the integer part is exact, so each step stays in [0, 10).
+    let mut d = [0u8; 7];
+    for digit in d.iter_mut() {
+        let t = x as u8;
+        *digit = t;
+        x = (x - t as f64) * 10.0;
+    }
+    if d[6] >= 5 {
+        let mut k = 5i32;
+        loop {
+            if k < 0 {
+                // 9.99999x rounds up a magnitude: 1.00000 with e + 1.
+                d[0] = 1;
+                e += 1;
+                break;
+            }
+            if d[k as usize] == 9 {
+                d[k as usize] = 0;
+                k -= 1;
+            } else {
+                d[k as usize] += 1;
+                break;
+            }
+        }
+    }
+    let mut last = 5usize;
+    while last > 0 && d[last] == 0 {
+        last -= 1;
+    }
+    let push_digit = |out: &mut String, d: u8| out.push((b'0' + d) as char);
+    if (-4..=5).contains(&e) {
+        if e >= 0 {
+            for k in 0..=e as usize {
+                push_digit(&mut out, d[k]);
+            }
+            out.push('.');
+            if last > e as usize {
+                for k in (e as usize + 1)..=last {
+                    push_digit(&mut out, d[k]);
+                }
+            } else {
+                out.push('0');
+            }
+        } else {
+            out.push_str("0.");
+            for _ in 0..(-e - 1) {
+                out.push('0');
+            }
+            for k in 0..=last {
+                push_digit(&mut out, d[k]);
+            }
+        }
+    } else {
+        push_digit(&mut out, d[0]);
+        if last > 0 {
+            out.push('.');
+            for k in 1..=last {
+                push_digit(&mut out, d[k]);
+            }
+        }
+        out.push('e');
+        out.push_str(&e.to_string());
+    }
+    out
+}
+
 fn write_value_seq(items: &[Value], open: char, close: char, out: &mut String) {
     out.push(open);
     for (i, v) in items.iter().enumerate() {
@@ -353,4 +456,75 @@ fn write_value_seq(items: &[Value], open: char, close: char, out: &mut String) {
         write_value(v, out);
     }
     out.push(close);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_dec;
+
+    #[test]
+    fn format_dec_specials() {
+        assert_eq!(format_dec(f64::NAN), "nan");
+        assert_eq!(format_dec(f64::INFINITY), "inf");
+        assert_eq!(format_dec(f64::NEG_INFINITY), "-inf");
+        assert_eq!(format_dec(0.0), "0.0");
+        assert_eq!(format_dec(-0.0), "-0.0");
+    }
+
+    #[test]
+    fn format_dec_fixed() {
+        assert_eq!(format_dec(1.0), "1.0");
+        assert_eq!(format_dec(-1.0), "-1.0");
+        assert_eq!(format_dec(0.1), "0.1");
+        assert_eq!(format_dec(2.5), "2.5");
+        assert_eq!(format_dec(std::f64::consts::PI), "3.14159");
+        assert_eq!(format_dec(2.0 / 3.0), "0.666667");
+        assert_eq!(format_dec(100.0), "100.0");
+        assert_eq!(format_dec(999999.0), "999999.0");
+        assert_eq!(format_dec(123456.7), "123457.0");
+        assert_eq!(format_dec(0.0001), "0.0001");
+        assert_eq!(format_dec(-12.25), "-12.25");
+    }
+
+    #[test]
+    fn format_dec_scientific() {
+        assert_eq!(format_dec(1000000.0), "1e6");
+        assert_eq!(format_dec(0.00001), "1e-5");
+        assert_eq!(format_dec(1e300), "1e300");
+        assert_eq!(format_dec(1.5e300), "1.5e300");
+        assert_eq!(format_dec(-2.5e-7), "-2.5e-7");
+        assert_eq!(format_dec(123456789.0), "1.23457e8");
+    }
+
+    #[test]
+    fn format_dec_rounding_carries_across_a_magnitude() {
+        assert_eq!(format_dec(999999.9), "1e6");
+        assert_eq!(format_dec(9.9999999), "10.0");
+    }
+
+    #[test]
+    fn char_nul_prints_the_wave_escape_not_rusts() {
+        // WAVE (and our reader) has no `\0` escape, so NUL must not follow
+        // Rust's `{c:?}` spelling. Everything else `{c:?}` emits is WAVE.
+        assert_eq!(super::print_value(&super::Value::Char('\0')), r"'\u{0}'");
+        assert_eq!(super::print_value(&super::Value::Char('\n')), r"'\n'");
+        assert_eq!(super::print_value(&super::Value::Char('\'')), r"'\''");
+        assert_eq!(super::print_value(&super::Value::Char('\u{7f}')), r"'\u{7f}'");
+    }
+
+    #[test]
+    fn format_dec_reads_back_close() {
+        // Not round-trip, but the printed text must lex as a Wavelet float
+        // and stay within 6-significant-digit relative error.
+        for &x in &[
+            0.1, 2.5, 1234.5678, 1e-8, 7.25e120, -3.9e-200, 123456.7, 0.00001,
+        ] {
+            let s = format_dec(x);
+            let back: f64 = s.parse().unwrap();
+            assert!(
+                ((back - x) / x).abs() < 1e-5,
+                "{x} printed {s} which reads back {back}"
+            );
+        }
+    }
 }

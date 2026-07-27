@@ -30,12 +30,6 @@ use wavelet::host::{HostComponent, Val};
 use wavelet::printer::print;
 use wavelet::reader::read_file;
 
-/// The backend's `to-string` now ports `print_value` over the box layout for
-/// int/bool/string and every compound; only `float` and `char` values still
-/// hit `unreachable` (Rust's `{f:?}` shortest round-trip and `{c:?}` UTF-8
-/// escaping are not yet reimplemented in wasm). A float/char *anywhere* in the
-/// value keeps the example on this SKIP.
-const TOSTR_TRAP: &str = "backend `to-string` still traps on float/char values (5.6)";
 /// The `read` builtin needs a wasm-side reader (lexer + parser) that does not
 /// exist yet; the value builtins otherwise all compile now. Decision-gated: no
 /// recorded design for a reader-in-wasm (or a host-provided read).
@@ -46,8 +40,6 @@ const READER: &str = "`read` needs a wasm-side reader, not implemented (5.7)";
 /// record. Closing this is a closure-ABI change (bind records by name), not a
 /// builtin — a separate decision.
 const APPLY_REC: &str = "record payload applied to a multi-param closure (closure-ABI gap)";
-/// Flag literals are rejected on this emit path (5.4).
-const FLAGS: &str = "flag literals rejected on this emit path (5.4)";
 /// On the build path `expand` is confined to macro libraries (6.1.8).
 const EXPAND: &str = "`expand` is only available inside a macro library when building (6.1.8)";
 
@@ -55,15 +47,8 @@ const EXPAND: &str = "`expand` is only available inside a macro library when bui
 /// reason. Removing a fixed entry is part of fixing the backend gap.
 const SKIP: &[(&str, &str)] = &[
     ("macro-expand", EXPAND),
-    ("sf-def", TOSTR_TRAP),        // float result
-    ("sf-let", TOSTR_TRAP),        // to-string of a float area (`pi` now binds)
-    ("std-apply", APPLY_REC),      // record payload -> 2-param closure
-    ("std-char-conv", TOSTR_TRAP), // char in the result record
-    ("std-conv", TOSTR_TRAP),      // float in the result record
-    ("std-div-float", TOSTR_TRAP), // float result
-    ("std-pi", TOSTR_TRAP),        // float result (`pi` now binds)
-    ("std-read", READER),          // read
-    ("values-atoms", FLAGS),
+    ("std-apply", APPLY_REC), // record payload -> 2-param closure
+    ("std-read", READER),     // read
 ];
 
 const PACKAGE: &str = "docs:snippet@0.1.0";
