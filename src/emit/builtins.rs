@@ -55,10 +55,27 @@ impl<'a> Emitter<'a> {
             "some" | "ok" | "err" => self.builtin_variant(fx, name, items),
             "cell-new" | "cell-get" | "cell-set" => self.builtin_cell(fx, name, items),
             "form-kind" | "rec-key" | "rec-val" | "gensym" | "expand" => self.builtin_form(fx, name, items),
+            _ if crate::builtins::tuple_ctor_arity(name).is_some() => self.builtin_tuple(fx, name, items),
             other => Err(format!(
                 "builtin `{other}` not supported by the wasm backend yet"
             )),
         }
+    }
+
+    /// Tuple constructors (0.1): `tupleN` builds the N-tuple of its evaluated
+    /// arguments as a TAG_TUP box — the boxed fallback for constructions the
+    /// canonical path (`mem.rs`) did not claim. The arity is fixed per name;
+    /// the checker enforces it statically and this check keeps the emitter
+    /// honest if it is reached unchecked.
+    pub(crate) fn builtin_tuple(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+        let n = crate::builtins::tuple_ctor_arity(name).expect("routed by tuple_ctor_arity");
+        if items.len() != n {
+            return Err(format!(
+                "`{name}` expects {n} argument(s), got {}",
+                items.len()
+            ));
+        }
+        self.seq_box(fx, items, TAG_TUP)
     }
 
     /// Comparison and arithmetic builtins: `eq`/`not`, the ordering
@@ -1926,4 +1943,22 @@ pub(crate) const BUILTINS: &[&str] = &[
     "rec-val",
     "gensym",
     "expand",
+    // tuple constructors (0.1): one fixed-arity builtin per size
+    "tuple0",
+    "tuple1",
+    "tuple2",
+    "tuple3",
+    "tuple4",
+    "tuple5",
+    "tuple6",
+    "tuple7",
+    "tuple8",
+    "tuple9",
+    "tuple10",
+    "tuple11",
+    "tuple12",
+    "tuple13",
+    "tuple14",
+    "tuple15",
+    "tuple16",
 ];

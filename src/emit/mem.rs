@@ -628,6 +628,61 @@ impl<'a> Emitter<'a> {
         }
     }
 
+    /// When `id` is a `tupleN` constructor call (0.1) that resolves to the
+    /// builtin — not shadowed by a local binding, a module-level def or
+    /// value, or a variant case — and whose fixed arity matches canonical
+    /// tuple type `ty`, the element forms. Like [`Self::ctor_parts`], a
+    /// prediction walk (`MemLookup::Sim`) cannot see local shadowing and
+    /// answers optimistically; [`Self::mem_tuple_into`] falls back to the
+    /// boxed store when emission-time resolution differs. `tuple0` never
+    /// qualifies: `node_mem_ty` admits only non-empty tuples, and as a
+    /// payload the empty tuple has no bytes to write.
+    pub(crate) fn tuple_ctor_args(
+        &self,
+        look: &MemLookup,
+        id: NodeId,
+        ty: &WitTy,
+    ) -> Option<Vec<NodeId>> {
+        let WitTy::Tuple(es) = ty else { return None };
+        let Node::Tup(items) = self.arena.node(id) else {
+            return None;
+        };
+        let Node::Sym(head) = self.arena.node(*items.first()?) else {
+            return None;
+        };
+        let n = crate::builtins::tuple_ctor_arity(head)?;
+        if n == 0 || n != es.len() || items.len() - 1 != n {
+            return None;
+        }
+        if let MemLookup::Fx(fx) = look
+            && fx.lookup(head).is_some()
+        {
+            return None;
+        }
+        if self.funcs.contains_key(head.as_str())
+            || self.value_globals.contains_key(head.as_str())
+            || self.local_cases.contains_key(head.as_str())
+        {
+            return None;
+        }
+        Some(items[1..].to_vec())
+    }
+
+    /// 5.3/0.1 construction gating for tuples: is `id` a `tupleN` constructor
+    /// call whose value can be BUILT natively in the canonical layout of
+    /// `ty` — every element losslessly storable at its canonical element
+    /// type? Element order is construction order (tuples are positional), so
+    /// unlike records there is no field-order hazard.
+    pub(crate) fn tuple_ctor_admissible(&self, look: &MemLookup, id: NodeId, ty: &WitTy) -> bool {
+        let Some(args) = self.tuple_ctor_args(look, id, ty) else {
+            return false;
+        };
+        let WitTy::Tuple(es) = ty else { return false };
+        args.iter()
+            .zip(es)
+            .all(|(&a, et)| self.mem_field_ok(look, a, et))
+    }
+
     /// 5.3 gating: may expression `id` be emitted NATIVELY in the canonical
     /// layout of `ty`, yielding exactly the value the interpreter would
     /// build? Field order is observable (`eq`/`to-string` compare records
@@ -680,6 +735,13 @@ impl<'a> Emitter<'a> {
                             && items.len() == 2 =>
                     {
                         self.node_mem_ty(look, items[1]).as_ref() == Some(ty)
+                    }
+                    // a tuple-constructor call builds in place (0.1)
+                    Node::Sym(head)
+                        if crate::builtins::tuple_ctor_arity(head).is_some()
+                            && matches!(ty, WitTy::Tuple(_)) =>
+                    {
+                        self.tuple_ctor_admissible(look, id, ty)
                     }
                     // a variant-case constructor call builds in place (5.4)
                     Node::Sym(_) => self.ctor_admissible(look, id, ty),
@@ -756,6 +818,10 @@ impl<'a> Emitter<'a> {
             WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
                 self.can_mem_as(look, v, tf)
             }
+            // A tuple field goes canonical only as a `tupleN` constructor
+            // call whose elements are themselves storable (0.1); anything
+            // else (a bound name, a dep call) keeps the parent boxed.
+            WitTy::Tuple(_) => self.tuple_ctor_admissible(look, v, tf),
             // A flags literal goes canonical only when its members are a
             // duplicate-free subsequence of the declared members in
             // declaration order. The canonical bitset is order-free, but
@@ -1032,6 +1098,20 @@ impl<'a> Emitter<'a> {
                             fx.op(I::LocalGet(p));
                             return Ok(());
                         }
+                        // a tuple-constructor call builds its elements in
+                        // place (0.1); mem_tuple_into falls back to the boxed
+                        // store when resolution differs from the gate's view
+                        _ if crate::builtins::tuple_ctor_arity(&head).is_some()
+                            && matches!(ty, WitTy::Tuple(_)) =>
+                        {
+                            let a = fx.local(ValType::I32);
+                            fx.op(I::I32Const(size_of(&ty) as i32));
+                            fx.op(I::Call(self.h.alloc));
+                            fx.op(I::LocalSet(a));
+                            self.mem_tuple_into(fx, id, &ty, a, 0)?;
+                            fx.op(I::LocalGet(a));
+                            return Ok(());
+                        }
                         _ if ty.variant_cases().is_some() => {
                             // a case-constructor call builds disc+payload in
                             // place (5.4); mem_var_into falls back to the
@@ -1118,6 +1198,38 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
+    /// Store a tuple-shaped value at `dst + off` (0.1): a `tupleN`
+    /// constructor call constructs each element in place at its canonical
+    /// element offset — construction order IS element order, so there is no
+    /// field-order hazard. Anything else — a resolution the prediction walk
+    /// could not see (the head turned out shadowed by a local binding) —
+    /// evaluates boxed and stores through the canonical seam, exactly like
+    /// [`Self::mem_var_into`]'s fallback.
+    pub(crate) fn mem_tuple_into(
+        &mut self,
+        fx: &mut FnCtx,
+        id: NodeId,
+        ty: &WitTy,
+        dst: u32,
+        off: u64,
+    ) -> Result<(), String> {
+        let args = {
+            let look = MemLookup::Fx(fx);
+            self.tuple_ctor_args(&look, id, ty)
+                .filter(|_| self.tuple_ctor_admissible(&look, id, ty))
+        };
+        let Some(args) = args else {
+            let l = fx.local(ValType::I32);
+            self.expr(fx, id, false)?;
+            fx.op(I::LocalSet(l));
+            return self.store_to_mem(fx, ty, l, dst, off);
+        };
+        for ((o, et), &a) in record_field_offsets(ty).into_iter().zip(&args) {
+            self.mem_field_into(fx, a, &et, dst, off + o)?;
+        }
+        Ok(())
+    }
+
     /// Store field expression `v` at canonical field type `tf`, `dst + off`.
     /// Scalar fields evaluate unboxed and store at WIT width (lossless — the
     /// gate verified the static range); strings evaluate boxed and store
@@ -1169,6 +1281,7 @@ impl<'a> Emitter<'a> {
                 self.store_to_mem(fx, tf, l, dst, off)?;
             }
             WitTy::Record(_) => self.expr_mem_into(fx, v, tf, dst, off)?,
+            WitTy::Tuple(_) => self.mem_tuple_into(fx, v, tf, dst, off)?,
             WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
                 self.mem_var_into(fx, v, tf, dst, off)?;
             }
