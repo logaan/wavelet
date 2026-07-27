@@ -135,6 +135,620 @@ pub(crate) fn to_str_seq(
     fx.op(I::Return);
 }
 
+/// Emit the float arm of `to_str`: `value::format_dec` transcribed
+/// op-for-op.
+///
+/// Six significant digits, fixed notation for decimal exponents `-4..=5`,
+/// `d.de±x` scientific outside, `nan`/`inf`/`-inf` interned. Every f64
+/// operation (and its order) matches the Rust reference exactly — IEEE-754
+/// doubles are deterministic, so the two pipelines produce identical text.
+/// Change `format_dec` and this together or the differential suite catches
+/// the drift.
+///
+/// `buf` holds the output bytes; the seven extracted digits live at
+/// `buf + 40..47` (output never exceeds 14 bytes). `xf` is an F64 local;
+/// the rest are I32 scratch. Leaves nothing on the stack: every path
+/// returns the built str box.
+#[allow(clippy::too_many_arguments)]
+fn to_str_dec(
+    fx: &mut FnCtx,
+    alloc: u32,
+    box_str: u32,
+    nan_s: u32,
+    inf_s: u32,
+    ninf_s: u32,
+    xf: u32,
+    e: u32,
+    k: u32,
+    lastd: u32,
+    t: u32,
+    buf: u32,
+    oi: u32,
+) {
+    // out[oi] = <const byte>; oi += 1
+    let put_c = |fx: &mut FnCtx, b: i32| {
+        fx.op(I::LocalGet(buf));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Add);
+        fx.op(I::I32Const(b));
+        fx.op(I::I32Store8(ma(0, 0)));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(oi));
+    };
+    // out[oi] = '0' + digits[k]; oi += 1
+    let put_digit = |fx: &mut FnCtx| {
+        fx.op(I::LocalGet(buf));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(buf));
+        fx.op(I::LocalGet(k));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(40, 0)));
+        fx.op(I::I32Const(b'0' as i32));
+        fx.op(I::I32Add);
+        fx.op(I::I32Store8(ma(0, 0)));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(oi));
+    };
+    let inc = |fx: &mut FnCtx, l: u32, by: i32| {
+        fx.op(I::LocalGet(l));
+        fx.op(I::I32Const(by));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(l));
+    };
+    fx.op(I::LocalGet(0));
+    fx.op(I::F64Load(ma(8, 3)));
+    fx.op(I::LocalSet(xf));
+    // nan / inf / -inf: interned, exactly the interpreter's spellings
+    fx.op(I::LocalGet(xf));
+    fx.op(I::LocalGet(xf));
+    fx.op(I::F64Ne);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::I32Const(nan_s as i32));
+    fx.op(I::Return);
+    fx.op(I::End);
+    fx.op(I::LocalGet(xf));
+    fx.op(I::F64Const(f64::INFINITY.into()));
+    fx.op(I::F64Eq);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::I32Const(inf_s as i32));
+    fx.op(I::Return);
+    fx.op(I::End);
+    fx.op(I::LocalGet(xf));
+    fx.op(I::F64Const(f64::NEG_INFINITY.into()));
+    fx.op(I::F64Eq);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::I32Const(ninf_s as i32));
+    fx.op(I::Return);
+    fx.op(I::End);
+    fx.op(I::I32Const(48));
+    fx.op(I::Call(alloc));
+    fx.op(I::LocalSet(buf));
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(oi));
+    // sign bit (not `< 0.0`) so `-0.0` prints "-0.0" like the interpreter
+    fx.op(I::LocalGet(xf));
+    fx.op(I::I64ReinterpretF64);
+    fx.op(I::I64Const(0));
+    fx.op(I::I64LtS);
+    fx.op(I::If(BlockType::Empty));
+    put_c(fx, b'-' as i32);
+    fx.op(I::LocalGet(xf));
+    fx.op(I::F64Neg);
+    fx.op(I::LocalSet(xf));
+    fx.op(I::End);
+    fx.op(I::LocalGet(xf));
+    fx.op(I::F64Const(0.0.into()));
+    fx.op(I::F64Eq);
+    fx.op(I::If(BlockType::Empty));
+    put_c(fx, b'0' as i32);
+    put_c(fx, b'.' as i32);
+    put_c(fx, b'0' as i32);
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(oi));
+    fx.op(I::Call(box_str));
+    fx.op(I::Return);
+    fx.op(I::End);
+    // normalize into [1, 10): e tracks the decimal exponent
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(e));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(xf));
+    fx.op(I::F64Const(10.0.into()));
+    fx.op(I::F64Lt);
+    fx.op(I::BrIf(1));
+    fx.op(I::LocalGet(xf));
+    fx.op(I::F64Const(10.0.into()));
+    fx.op(I::F64Div);
+    fx.op(I::LocalSet(xf));
+    inc(fx, e, 1);
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(xf));
+    fx.op(I::F64Const(1.0.into()));
+    fx.op(I::F64Ge);
+    fx.op(I::BrIf(1));
+    fx.op(I::LocalGet(xf));
+    fx.op(I::F64Const(10.0.into()));
+    fx.op(I::F64Mul);
+    fx.op(I::LocalSet(xf));
+    inc(fx, e, -1);
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+    // seven digits (six significant + one to round by) at buf+40..46;
+    // subtracting the integer part is exact, so xf stays in [0, 10)
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(k));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(k));
+    fx.op(I::I32Const(7));
+    fx.op(I::I32GeS);
+    fx.op(I::BrIf(1));
+    fx.op(I::LocalGet(xf));
+    fx.op(I::I32TruncF64U);
+    fx.op(I::LocalSet(t));
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(k));
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(t));
+    fx.op(I::I32Store8(ma(40, 0)));
+    fx.op(I::LocalGet(xf));
+    fx.op(I::LocalGet(t));
+    fx.op(I::F64ConvertI32U);
+    fx.op(I::F64Sub);
+    fx.op(I::F64Const(10.0.into()));
+    fx.op(I::F64Mul);
+    fx.op(I::LocalSet(xf));
+    inc(fx, k, 1);
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+    // round to six digits; a carry off the top is a magnitude step
+    // (9.99999x -> 1.00000, e + 1)
+    fx.op(I::LocalGet(buf));
+    fx.op(I::I32Load8U(ma(46, 0)));
+    fx.op(I::I32Const(5));
+    fx.op(I::I32GeU);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::I32Const(5));
+    fx.op(I::LocalSet(k));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(k));
+    fx.op(I::I32Const(0));
+    fx.op(I::I32LtS);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(buf));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Store8(ma(40, 0)));
+    inc(fx, e, 1);
+    fx.op(I::Br(2));
+    fx.op(I::End);
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(k));
+    fx.op(I::I32Add);
+    fx.op(I::I32Load8U(ma(40, 0)));
+    fx.op(I::LocalSet(t));
+    fx.op(I::LocalGet(t));
+    fx.op(I::I32Const(9));
+    fx.op(I::I32Eq);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(k));
+    fx.op(I::I32Add);
+    fx.op(I::I32Const(0));
+    fx.op(I::I32Store8(ma(40, 0)));
+    inc(fx, k, -1);
+    fx.op(I::Br(1));
+    fx.op(I::Else);
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(k));
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(t));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::I32Store8(ma(40, 0)));
+    fx.op(I::Br(2));
+    fx.op(I::End);
+    fx.op(I::End);
+    fx.op(I::End);
+    fx.op(I::End);
+    // lastd = index of the last significant digit in 0..=5
+    fx.op(I::I32Const(5));
+    fx.op(I::LocalSet(lastd));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(lastd));
+    fx.op(I::I32Const(0));
+    fx.op(I::I32LeS);
+    fx.op(I::BrIf(1));
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(lastd));
+    fx.op(I::I32Add);
+    fx.op(I::I32Load8U(ma(40, 0)));
+    fx.op(I::BrIf(1));
+    inc(fx, lastd, -1);
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+    // fixed for e in -4..=5, scientific outside
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(-4));
+    fx.op(I::I32GeS);
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(5));
+    fx.op(I::I32LeS);
+    fx.op(I::I32And);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(0));
+    fx.op(I::I32GeS);
+    fx.op(I::If(BlockType::Empty));
+    // ddd.d — integer digits 0..=e, then the trimmed fraction (or "0")
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(k));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(k));
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32GtS);
+    fx.op(I::BrIf(1));
+    put_digit(fx);
+    inc(fx, k, 1);
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+    put_c(fx, b'.' as i32);
+    fx.op(I::LocalGet(lastd));
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32GtS);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::LocalSet(k));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(k));
+    fx.op(I::LocalGet(lastd));
+    fx.op(I::I32GtS);
+    fx.op(I::BrIf(1));
+    put_digit(fx);
+    inc(fx, k, 1);
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+    fx.op(I::Else);
+    put_c(fx, b'0' as i32);
+    fx.op(I::End);
+    fx.op(I::Else);
+    // 0.000d — (-e - 1) zeros, then all significant digits
+    put_c(fx, b'0' as i32);
+    put_c(fx, b'.' as i32);
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::LocalSet(k));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(k));
+    fx.op(I::I32Const(0));
+    fx.op(I::I32GeS);
+    fx.op(I::BrIf(1));
+    put_c(fx, b'0' as i32);
+    inc(fx, k, 1);
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(k));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(k));
+    fx.op(I::LocalGet(lastd));
+    fx.op(I::I32GtS);
+    fx.op(I::BrIf(1));
+    put_digit(fx);
+    inc(fx, k, 1);
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+    fx.op(I::End);
+    fx.op(I::Else);
+    // d.de±x — exponent is at most three digits (|e| <= 324)
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(k));
+    put_digit(fx);
+    fx.op(I::LocalGet(lastd));
+    fx.op(I::I32Const(0));
+    fx.op(I::I32GtS);
+    fx.op(I::If(BlockType::Empty));
+    put_c(fx, b'.' as i32);
+    fx.op(I::I32Const(1));
+    fx.op(I::LocalSet(k));
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(k));
+    fx.op(I::LocalGet(lastd));
+    fx.op(I::I32GtS);
+    fx.op(I::BrIf(1));
+    put_digit(fx);
+    inc(fx, k, 1);
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+    fx.op(I::End);
+    put_c(fx, b'e' as i32);
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(0));
+    fx.op(I::I32LtS);
+    fx.op(I::If(BlockType::Empty));
+    put_c(fx, b'-' as i32);
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Sub);
+    fx.op(I::LocalSet(e));
+    fx.op(I::End);
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(100));
+    fx.op(I::I32GeS);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(oi));
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(100));
+    fx.op(I::I32DivS);
+    fx.op(I::I32Const(b'0' as i32));
+    fx.op(I::I32Add);
+    fx.op(I::I32Store8(ma(0, 0)));
+    inc(fx, oi, 1);
+    fx.op(I::End);
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(10));
+    fx.op(I::I32GeS);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(oi));
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(10));
+    fx.op(I::I32DivS);
+    fx.op(I::I32Const(10));
+    fx.op(I::I32RemS);
+    fx.op(I::I32Const(b'0' as i32));
+    fx.op(I::I32Add);
+    fx.op(I::I32Store8(ma(0, 0)));
+    inc(fx, oi, 1);
+    fx.op(I::End);
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(oi));
+    fx.op(I::I32Add);
+    fx.op(I::LocalGet(e));
+    fx.op(I::I32Const(10));
+    fx.op(I::I32RemS);
+    fx.op(I::I32Const(b'0' as i32));
+    fx.op(I::I32Add);
+    fx.op(I::I32Store8(ma(0, 0)));
+    inc(fx, oi, 1);
+    fx.op(I::End);
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(oi));
+    fx.op(I::Call(box_str));
+    fx.op(I::Return);
+}
+
+/// Emit the char arm of `to_str`: single quotes plus Rust's `{c:?}` escapes.
+///
+/// Exact for `\'` `\\` `\n` `\r` `\t` `\0`, `\u{..}` for the remaining
+/// non-printables through Latin-1 (C0/C1 controls, DEL, NBSP, soft hyphen —
+/// `0x00..=0x1f`, `0x7f..=0xa0`, `0xad`), and raw UTF-8 for everything
+/// else. Rust additionally `\u{..}`-escapes non-printable and
+/// grapheme-extending codepoints above Latin-1 (`'\u{200b}'`, combining
+/// marks); such chars diverge from the oracle — the same policy as the
+/// string branch above, where only the common escapes agree and exotic
+/// examples stay on SKIP.
+#[allow(clippy::too_many_arguments)]
+fn to_str_char(fx: &mut FnCtx, alloc: u32, box_str: u32, cp: u32, t: u32, buf: u32, oi: u32) {
+    let put_c = |fx: &mut FnCtx, b: i32| {
+        fx.op(I::LocalGet(buf));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Add);
+        fx.op(I::I32Const(b));
+        fx.op(I::I32Store8(ma(0, 0)));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(oi));
+    };
+    // out[oi] = t; oi += 1
+    let put_t = |fx: &mut FnCtx| {
+        fx.op(I::LocalGet(buf));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Add);
+        fx.op(I::LocalGet(t));
+        fx.op(I::I32Store8(ma(0, 0)));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(oi));
+    };
+    // out[oi] = lowercase hex digit for t in 0..=15; oi += 1
+    let put_t_hex = |fx: &mut FnCtx| {
+        fx.op(I::LocalGet(t));
+        fx.op(I::I32Const(10));
+        fx.op(I::I32GeU);
+        fx.op(I::If(BlockType::Result(ValType::I32)));
+        fx.op(I::LocalGet(t));
+        fx.op(I::I32Const(b'a' as i32 - 10));
+        fx.op(I::I32Add);
+        fx.op(I::Else);
+        fx.op(I::LocalGet(t));
+        fx.op(I::I32Const(b'0' as i32));
+        fx.op(I::I32Add);
+        fx.op(I::End);
+        fx.op(I::LocalSet(t));
+        put_t(fx);
+    };
+    let esc = |fx: &mut FnCtx, ch: u8| {
+        put_c(fx, b'\\' as i32);
+        put_c(fx, ch as i32);
+    };
+    fx.op(I::LocalGet(0));
+    fx.op(I::I64Load(ma(8, 3)));
+    fx.op(I::I32WrapI64);
+    fx.op(I::LocalSet(cp));
+    fx.op(I::I32Const(16));
+    fx.op(I::Call(alloc));
+    fx.op(I::LocalSet(buf));
+    fx.op(I::I32Const(0));
+    fx.op(I::LocalSet(oi));
+    put_c(fx, b'\'' as i32);
+    // the named escapes, then \u{..} for remaining C0/C1/DEL, then raw UTF-8
+    let named: [(u32, u8); 6] = [
+        (0x27, b'\''),
+        (0x5c, b'\\'),
+        (0x0a, b'n'),
+        (0x0d, b'r'),
+        (0x09, b't'),
+        (0x00, b'0'),
+    ];
+    for &(code, ch) in &named {
+        fx.op(I::LocalGet(cp));
+        fx.op(I::I32Const(code as i32));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        esc(fx, ch);
+        put_c(fx, b'\'' as i32);
+        fx.op(I::LocalGet(buf));
+        fx.op(I::LocalGet(oi));
+        fx.op(I::Call(box_str));
+        fx.op(I::Return);
+        fx.op(I::End);
+    }
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(0x20));
+    fx.op(I::I32LtU);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(0x7f));
+    fx.op(I::I32GeU);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(0xa0));
+    fx.op(I::I32LeU);
+    fx.op(I::I32And);
+    fx.op(I::I32Or);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(0xad));
+    fx.op(I::I32Eq);
+    fx.op(I::I32Or);
+    fx.op(I::If(BlockType::Empty));
+    // \u{..}: cp <= 0xad here, so at most two hex digits, no leading zeros
+    put_c(fx, b'\\' as i32);
+    put_c(fx, b'u' as i32);
+    put_c(fx, b'{' as i32);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(16));
+    fx.op(I::I32GeU);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(4));
+    fx.op(I::I32ShrU);
+    fx.op(I::LocalSet(t));
+    put_t_hex(fx);
+    fx.op(I::End);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(15));
+    fx.op(I::I32And);
+    fx.op(I::LocalSet(t));
+    put_t_hex(fx);
+    put_c(fx, b'}' as i32);
+    fx.op(I::Else);
+    // raw UTF-8, 1-4 bytes by codepoint range
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(0x80));
+    fx.op(I::I32LtU);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(cp));
+    fx.op(I::LocalSet(t));
+    put_t(fx);
+    fx.op(I::Else);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(0x800));
+    fx.op(I::I32LtU);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(6));
+    fx.op(I::I32ShrU);
+    fx.op(I::I32Const(0xC0));
+    fx.op(I::I32Or);
+    fx.op(I::LocalSet(t));
+    put_t(fx);
+    fx.op(I::Else);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(0x10000));
+    fx.op(I::I32LtU);
+    fx.op(I::If(BlockType::Empty));
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(12));
+    fx.op(I::I32ShrU);
+    fx.op(I::I32Const(0xE0));
+    fx.op(I::I32Or);
+    fx.op(I::LocalSet(t));
+    put_t(fx);
+    fx.op(I::Else);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(18));
+    fx.op(I::I32ShrU);
+    fx.op(I::I32Const(0xF0));
+    fx.op(I::I32Or);
+    fx.op(I::LocalSet(t));
+    put_t(fx);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(12));
+    fx.op(I::I32ShrU);
+    fx.op(I::I32Const(0x3F));
+    fx.op(I::I32And);
+    fx.op(I::I32Const(0x80));
+    fx.op(I::I32Or);
+    fx.op(I::LocalSet(t));
+    put_t(fx);
+    fx.op(I::End);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(6));
+    fx.op(I::I32ShrU);
+    fx.op(I::I32Const(0x3F));
+    fx.op(I::I32And);
+    fx.op(I::I32Const(0x80));
+    fx.op(I::I32Or);
+    fx.op(I::LocalSet(t));
+    put_t(fx);
+    fx.op(I::End);
+    fx.op(I::LocalGet(cp));
+    fx.op(I::I32Const(0x3F));
+    fx.op(I::I32And);
+    fx.op(I::I32Const(0x80));
+    fx.op(I::I32Or);
+    fx.op(I::LocalSet(t));
+    put_t(fx);
+    fx.op(I::End);
+    fx.op(I::End);
+    put_c(fx, b'\'' as i32);
+    fx.op(I::LocalGet(buf));
+    fx.op(I::LocalGet(oi));
+    fx.op(I::Call(box_str));
+    fx.op(I::Return);
+}
+
 pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
     use ValType::{F64, I32, I64};
 
@@ -948,6 +1562,9 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         let str_comma = em.intern_str(", ");
         let str_colon = em.intern_str(": ");
         let str_cell = em.intern_str("cell(");
+        let nan_s = em.intern_str("nan");
+        let inf_s = em.intern_str("inf");
+        let ninf_s = em.intern_str("-inf");
         let mut fx = FnCtx::new(1);
         let tag = fx.local(I32);
         let n = fx.local(I64);
@@ -969,6 +1586,13 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         let c_elem = fx.local(I32);
         let c_key = fx.local(I32);
         let c_val = fx.local(I32);
+        // extra locals for the float and char branches (which reuse `buf`
+        // as their output buffer and `i` as its write index)
+        let d_xf = fx.local(F64);
+        let d_e = fx.local(I32);
+        let d_k = fx.local(I32);
+        let d_last = fx.local(I32);
+        let d_t = fx.local(I32);
         fx.op(I::LocalGet(0));
         fx.op(I::I32Load(ma(0, 2)));
         fx.op(I::LocalSet(tag));
@@ -1267,6 +1891,34 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Const(str_rp as i32));
         fx.op(I::Call(seq_strcat2));
         fx.op(I::Return);
+        fx.op(I::End);
+        // float: format_dec's indicative six-significant-digit text
+        fx.op(I::LocalGet(tag));
+        fx.op(I::I32Const(TAG_DEC));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        to_str_dec(
+            &mut fx,
+            em.h.alloc,
+            em.h.box_str,
+            nan_s,
+            inf_s,
+            ninf_s,
+            d_xf,
+            d_e,
+            d_k,
+            d_last,
+            d_t,
+            buf,
+            i,
+        );
+        fx.op(I::End);
+        // char: single-quoted with the common `{c:?}` escapes
+        fx.op(I::LocalGet(tag));
+        fx.op(I::I32Const(TAG_CHAR));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        to_str_char(&mut fx, em.h.alloc, em.h.box_str, d_k, d_t, buf, i);
         fx.op(I::End);
         // anything but int from here traps
         fx.op(I::LocalGet(tag));
