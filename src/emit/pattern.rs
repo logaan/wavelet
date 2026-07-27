@@ -42,7 +42,7 @@ impl<'a> Emitter<'a> {
             fx.scopes.push(HashMap::new());
             let r = match scrut_mem {
                 Some(t) => self.pattern_top_mem(fx, pair[0], scrut, t),
-                None => self.pattern_top(fx, pair[0], scrut, scrut_kind),
+                None => self.pattern_top(fx, pair[0], scrut, scrut_kind, scrut_form),
             }
             .and_then(|()| self.expr_repr(fx, pair[1], want, tail));
             fx.scopes.pop();
@@ -399,7 +399,20 @@ impl<'a> Emitter<'a> {
         pat: NodeId,
         v: u32,
         scrut_kind: Option<Scalar>,
+        scrut_form: NodeId,
     ) -> Result<(), String> {
+        // Over a scrutinee the checker KNOWS is a tuple, a tuple pattern takes
+        // the tuple reading even with a Sym head — the oracle disambiguates by
+        // the VALUE (`interp::match_pattern`), and a tuple-typed value can
+        // never be a variant, so the boxed matcher's variant-case reading is
+        // statically dead here. This is the boxed sibling of the
+        // `pattern_top_mem` tuple arm (a boxed tuple scrutinee arrives from a
+        // typed param or a `tupleN` construction the canonical path declined).
+        if let Node::Tup(pats) = self.arena.node(pat).clone()
+            && matches!(self.node_types.get(&scrut_form), Some(crate::check::Type::Tuple(_)))
+        {
+            return self.seq_pattern(fx, &pats, v, 0, TAG_TUP);
+        }
         if let Node::Sym(name) = self.arena.node(pat).clone()
             && name != "none"
             && self.local_cases.get(&name) != Some(&false)
@@ -482,7 +495,12 @@ impl<'a> Emitter<'a> {
             // head is a variant-case pattern (`ok(x)`, `some(x)`, `none`, …);
             // anything else is a tuple destructure. (Limitation: a tuple
             // pattern whose first element is a bare name is always read as a
-            // variant case here, never as a tuple binding the first element.)
+            // variant case here, never as a tuple binding the first element —
+            // except at the top of a clause over a scrutinee the checker
+            // KNOWS is a tuple, where `pattern_top` routes to the tuple
+            // reading statically. A runtime tag dispatch cannot work here:
+            // the two readings bind different names to different locals, but
+            // the clause body is compiled once against a single scope.)
             Node::Tup(pats) => match pats.first().map(|&p| self.arena.node(p).clone()) {
                 Some(Node::Sym(case)) => {
                     let caddr = self.intern_str(&case);

@@ -188,17 +188,17 @@ Export {name: result-tuple-direction-rt iface: "roundtrip:suite/values"}
 Def result-tuple-direction-rt Fn {v: result(tuple(u8 u8) direction)}
   The result(tuple(u8 u8) direction)
   Match v [
-    (ok(p)  ok(Match p [((a b) tup(wrap-u8(a) wrap-u8(b)))]))
+    (ok(p)  ok(Match p [((a b) tuple2(wrap-u8(a) wrap-u8(b)))]))
     (err(d) err(bump-direction(d)))
   ]
 
 Export {name: tuple-rt iface: "roundtrip:suite/values"}
 Def tuple-rt Fn {v: tuple(u8 string bool)} The tuple(u8 string bool)
-  Match v [((n s b) tup(wrap-u8(n) bump-str(s) not(b)))]
+  Match v [((n s b) tuple3(wrap-u8(n) bump-str(s) not(b)))]
 
 Export {name: tuple-nested-rt iface: "roundtrip:suite/values"}
 Def tuple-nested-rt Fn {v: tuple(point list(u8))} The tuple(point list(u8))
-  Match v [((p xs) tup(bump-point(p) map(wrap-u8 xs)))]
+  Match v [((p xs) tuple2(bump-point(p) map(wrap-u8 xs)))]
 
 // --- user-defined types ---
 

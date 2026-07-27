@@ -95,6 +95,10 @@ Def destruct Fn {}
 Export {name: shadowed params: {n: s32} result: s64}
 Def shadowed Fn {n: s32}
   Let {tuple2: Fn {x: s32} add(x 1)} tuple2(n)
+
+Export {name: rebuild params: {p: tuple(u8 u8)} result: tuple(u8 u8)}
+Def rebuild Fn {p: tuple(u8 u8)} The tuple(u8 u8)
+  Match p [((a b) tuple2(to-u8(add(a 1)) to-u8(add(b 1))))]
 "#;
     let app_path = src.join("app.wlt");
     std::fs::write(&app_path, app).unwrap();
@@ -146,6 +150,13 @@ fn constructed_tuples_cross_the_boundary() {
         panic!("rt should return ok(tuple)");
     };
     assert_eq!(*inner, Val::Tuple(vec![Val::U32(3), Val::String("p".into())]));
+    // destructure a BOXED tuple scrutinee (a typed param) with a Sym-headed
+    // tuple pattern, then rebuild — the values-callee shape; the boxed
+    // matcher used to take the variant-only reading here
+    assert_eq!(
+        call(&mut c, "rebuild", &[Val::Tuple(vec![Val::U8(7), Val::U8(9)])]),
+        Val::Tuple(vec![Val::U8(8), Val::U8(10)])
+    );
 }
 
 /// The boxed path agrees with the oracle: `to-string`, Match destructuring,
