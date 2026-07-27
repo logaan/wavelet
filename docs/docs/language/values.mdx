@@ -15,7 +15,7 @@ Wavelet has **no value types beyond WIT's**. The full inventory, with WAVE liter
 | `f32`, `f64` | `3.14`, `6.022e+23`, `nan`, `-inf` | float literals are `f64` by default |
 | `char` | `'x'`, `'☃'`, `'\u{0}'` | Unicode scalar values |
 | `string` | `"abc\t123"` | |
-| `tuple<…>` | `("abc", 123)` | parens, two or more elements |
+| `tuple<…>` | `tuple2("abc" 123)`, printed `("abc", 123)` | constructed with `tuple0` … `tuple16`; parens are a tuple literal only under `Quote` |
 | `list<t>` | `[1 2 3]` | |
 | `record` | `{field-a: 1 field-b: "two"}` | |
 | `variant` | `days(30)`, `forever` | case label, parenthesized payload if any |
@@ -39,9 +39,13 @@ Integer literals are `s64` by default and float literals are `f64`. Conversions 
 
 ## Compound values
 
-Tuples use parens with two or more elements; lists use brackets; records use braces with `key: value` pairs.
+Lists use brackets; records use braces with `key: value` pairs.
 
 <Playground id="values-record" />
+
+Tuples *print* as parens (`(1, "a")`), but in evaluation position a parenthesized form is a **call**, so that spelling does not evaluate to a tuple. Build one with the fixed-arity constructors [`tuple0` … `tuple16`](../stdlib#tuples) (or write one as data under `Quote`); tuple *patterns* destructure them positionally.
+
+<Playground id="values-tuple" />
 
 A list has exactly **one element type** (`list<t>`), checked at compile time. Mixed shapes want a record, a `DefType` variant, or quoted data (a tree).
 

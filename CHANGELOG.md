@@ -15,6 +15,28 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- **Tuple constructors `tuple0` … `tuple16`.** Wavelet can now *build* a tuple
+  value from computed data: one builtin per size, each taking exactly that many
+  arguments (`tuple2(add(1 2) "x")` → `(3, "x")`). Fixed arities keep every
+  constructor's shape WIT-expressible and make each usable as an ordinary
+  first-class function value (`apply(tuple2 pair)`, `map(tuple1 xs)`). The
+  checker infers the result as the tuple of the argument types (no `The`
+  ascription needed) and rejects wrong arities statically; the wasm backend
+  constructs in place on the canonical path — including as export results,
+  nested, and as variant/result/record payloads — and `DefType` variant cases
+  shadow the names exactly like other builtins. With these, the conformance
+  values callee (`conformance/wavelet/src/roundtrip-values.wlt`) builds and
+  passes against both rust seeds (`conformance/wavelet/test-values-callee.sh`).
+
+### Fixed
+
+- **Sym-headed tuple patterns over a statically-known tuple scrutinee now
+  destructure on the wasm backend.** The boxed matcher read every Sym-headed
+  tuple pattern as a variant-case pattern, so `Match p [((a b) …)]` over a
+  tuple-typed parameter diverged from the interpreter (which disambiguates by
+  the value). When the checker knows the scrutinee is a tuple, the backend now
+  takes the element-wise tuple reading.
+
 - **Line editing and history in the interactive REPL.** When `wavelet repl` runs
   on a terminal it now uses `rustyline`: arrow-key line editing, a persistent
   history file (`$XDG_STATE_HOME/wavelet/history`, else

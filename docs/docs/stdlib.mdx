@@ -121,6 +121,16 @@ A float operand promotes the result to a float:
 `get` indexes lists and tuples; it does not look up record fields (use [pattern matching](./language/pattern-matching) or `rec-key`/`rec-val` for records).
 :::
 
+## Tuples
+
+| Function | Shape | Result |
+|---|---|---|
+| `tuple0` … `tuple16` | `tuple2(a b)` | the tuple of exactly those arguments |
+
+One constructor per size, from `tuple0()` (the empty tuple) through `tuple16(…)`, each taking **exactly** that many arguments — there is no variadic form, so every constructor has a WIT-expressible fixed-arity shape and works as an ordinary function value. The result type is the tuple of the argument types; no `The` ascription is needed. (In evaluation position parens are calls, which is why tuples get constructors rather than a paren literal — see [Values & types](./language/values#compound-values).)
+
+<Playground id="std-tuple" />
+
 ## Strings
 
 | Function | Shape | Result |
