@@ -294,7 +294,16 @@ impl<'a> Emitter<'a> {
                     }
                     self.closure_call(fx, head, args, tail)
                 }
-                _ if BUILTINS.contains(&name.as_str()) => self.builtin(fx, &name, args),
+                // A local `DefType` variant case SHADOWS a same-named builtin
+                // (`not`, `tuple2`, ...), matching the interpreter (`DefType`
+                // env-defines each case over the base env) and the checker
+                // (`variant_cases` before `check_builtin_call`); the case call
+                // falls through to the `local_cases` arm below.
+                _ if BUILTINS.contains(&name.as_str())
+                    && !self.local_cases.contains_key(name.as_str()) =>
+                {
+                    self.builtin(fx, &name, args)
+                }
                 _ => {
                     if self.funcs.contains_key(&name) {
                         self.internal_call(fx, &name, args, Repr::Boxed, tail)
