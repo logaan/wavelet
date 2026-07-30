@@ -48,7 +48,6 @@ use std::rc::Rc;
 use wavelet::form::{Arena, Node, NodeId};
 use wavelet::host::{HostComponent, Val};
 use wavelet::interp::Interp;
-use wavelet::printer::print;
 use wavelet::reader::read_file;
 use wavelet::value::{Env, Value, print_value, unit};
 use wavelet::{builtins, check, expand};
@@ -97,7 +96,10 @@ enum Stream {
     /// before the failure (so the failing position is `produced.len()`), and
     /// the engine's error text (reported, never compared — the two engines
     /// word their errors differently).
-    ErrorAt { produced: Vec<String>, error: String },
+    ErrorAt {
+        produced: Vec<String>,
+        error: String,
+    },
     /// Rejected before anything ran (read / expand / check / build).
     Static(String),
 }
@@ -207,13 +209,19 @@ fn interp_stream(id: &str, code: &str) -> Stream {
 
 /// Wrap a fixture into a self-contained component source: declarations in
 /// original order, then one exported `exprN: func() -> string` per top-level
-/// expression whose body is `to-string(<expr>)`. The reader's printed forms
-/// are canonical and re-readable, so the wrapped program is reconstructed
-/// from the parsed tree exactly as `tests/differential.rs` does.
+/// expression whose body is `to-string(<expr>)`. Each form is spliced as its
+/// original SOURCE slice (by root span), not reprinted through
+/// `printer::print`: the printed data spelling of a `Derive` form
+/// (`(derive-MACRO, {Eq, Ord, Show}, …)`) is not re-readable — Title-case
+/// flag names only read in `Derive`'s surface argument position.
 ///
 /// Returns the wrapped source and the number of expression exports.
 fn wrap_fixture(id: &str, code: &str) -> (String, usize) {
     let (arena, roots) = read_file(code).unwrap_or_else(|e| panic!("`{id}`: read: {e}"));
+    let slice = |root: NodeId| {
+        let (start, end) = arena.span(root);
+        code[start as usize..end as usize].to_string()
+    };
     let mut decls = Vec::new();
     let mut exprs = Vec::new();
     for &root in &roots {
@@ -222,9 +230,9 @@ fn wrap_fixture(id: &str, code: &str) -> (String, usize) {
             "`{id}`: generic fixtures must not declare a Package (the wrapper owns it)"
         );
         if is_decl(&arena, root) {
-            decls.push(print(&arena, root));
+            decls.push(slice(root));
         } else {
-            exprs.push(print(&arena, root));
+            exprs.push(slice(root));
         }
     }
     assert!(
