@@ -28,6 +28,17 @@ you work, and rename it to the new version when you cut a release.
   values callee (`conformance/wavelet/src/roundtrip-values.wlt`) builds and
   passes against both rust seeds (`conformance/wavelet/test-values-callee.sh`).
 
+### Changed
+
+- **`wavelet run` and the REPL stage compiled builds through a shared
+  RAII temp-project harness** (`tempfile`-backed). Staging directories now
+  have unpredictable names and are always cleaned up — including when the
+  build panics — and a non-UTF-8 staging path is reported as a `setup:` error
+  instead of crashing. Error texts for the compiled path keep their
+  stage-prefixed wording (`setup:` / `build:` / `read artifact:` /
+  `instantiate:` / `call:`); a failed copy into the staging area now carries
+  the `setup:` prefix too.
+
 ### Fixed
 
 - **Sym-headed tuple patterns over a statically-known tuple scrutinee now
