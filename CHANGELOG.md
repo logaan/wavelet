@@ -57,6 +57,17 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- **A variant case declared with several payload types is now a compile
+  error.** WIT gives a variant case at most ONE payload type, but `DefType
+  mylist [zip(list(u32) list(u32)) other]` used to be accepted (bundling the
+  payloads as a tuple at runtime) and then synthesized the invalid WIT case
+  `zip(list<u32>, list<u32>)`, rejected by `wasm-tools` at componentize. The
+  checker now rejects the declaration on every path (run, build, wit,
+  playground, LSP) with "a variant case takes at most one payload type; wrap
+  several in tuple(...)". The supported spelling is one `tuple(...)` payload:
+  `DefType mylist [zip(tuple(list(u32) list(u32))) other]`, constructed as
+  `zip(tuple2(a b))`.
+
 - **`wavelet run` and `wavelet repl` now execute on the compiled wasm path**
   instead of the tree-walking interpreter (goal 6, Steps 2 and 6.5). `run`
   builds the program through the real emitter, composes its runtime `Import`s
