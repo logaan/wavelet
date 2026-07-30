@@ -38,6 +38,8 @@ pub mod runner;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scaffold;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod stage;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tools;
 // `wit` is a pure arena walk (std + `form` only), needed on wasm32 too since
 // the checker's 5.8 boundary rule consults `wit::export_names`.

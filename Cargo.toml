@@ -41,6 +41,12 @@ wasmtime = { version = "45", default-features = false, features = ["runtime", "c
 # native table.
 rustyline = "14"
 
+# Native-only: RAII temp directories for the shared staging harness
+# (`src/stage.rs`) that the compiled `run`/REPL paths and the differential
+# tests build through. Unpredictable names + cleanup-on-drop replace the old
+# hand-rolled `$TMPDIR/wavelet-<kind>-<pid>-<seq>` staging dance.
+tempfile = "3"
+
 # wasm-only: the browser playground bindings (see `src/wasm.rs`). Optional and
 # gated behind the `playground` feature, so a `default-features = false` `wasm32`
 # build omits `wasm-bindgen` entirely.
