@@ -574,8 +574,12 @@ impl<'a> Emitter<'a> {
                     }
                     match fname {
                         "add" => {
+                            // `set-add` returns unit in the oracle
+                            // (`Value::Rec(vec![])`, printing "{}"), so yield
+                            // the interned empty-record box, not the false-box.
+                            let unit = self.intern_unit_rec();
                             fx.op(I::Call(fns.add)); // (rep, <elem>) -> ()
-                            fx.op(I::I32Const(self.unit_addr() as i32));
+                            fx.op(I::I32Const(unit as i32));
                         }
                         "contains" => {
                             fx.op(I::Call(fns.contains)); // -> i32 0/1
@@ -675,8 +679,11 @@ impl<'a> Emitter<'a> {
         }
         match flat_result(&sig, &self.type_env)? {
             FlatRes::None => {
+                // A no-result dep call yields unit (`{}`), matching the
+                // interpreter — the false-box would print "false".
+                let unit = self.intern_unit_rec();
                 fx.op(I::Call(fidx));
-                fx.op(I::I32Const(self.unit_addr() as i32));
+                fx.op(I::I32Const(unit as i32));
             }
             FlatRes::One(t) => {
                 fx.op(I::Call(fidx));
