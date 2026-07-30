@@ -192,6 +192,12 @@ DefType perms {read write exec}        // flags
 DefType points list(point)             // type alias
 ```
 
+A variant case carries **at most one payload type** — WIT's rule. To carry
+several values in one case, wrap them in a single `tuple(...)` payload
+(`DefType shape [rect(tuple(u32 u32)) dot]`, constructed as
+`rect(tuple2(3 4))`); a case declared with several payload types is a compile
+error.
+
 A variant or enum declaration also **binds its case constructors** in the value
 namespace: each payload-less case is a value (like `none`), and each payloaded
 case is a constructor function — first-class, like any other.
