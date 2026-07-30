@@ -30,6 +30,15 @@ you work, and rename it to the new version when you cut a release.
 
 ### Fixed
 
+- **A `DefType` variant case named after a builtin now shadows it on the wasm
+  backend's generic call path.** The interpreter and the checker both resolve
+  local variant cases before builtins, but the backend's boxed call path
+  consulted builtins first, so after `DefType t [not(u32) other]` a call like
+  `to-string(not(5))` silently ran the builtin `not` in the compiled component
+  (`"false"`) while the interpreter built the case value (`"not(5)"`). The
+  backend now matches the interpreter's precedence; with `tuple0` … `tuple16`
+  as builtin names, cases named `tupleN` shadow correctly too.
+
 - **Sym-headed tuple patterns over a statically-known tuple scrutinee now
   destructure on the wasm backend.** The boxed matcher read every Sym-headed
   tuple pattern as a variant-case pattern, so `Match p [((a b) …)]` over a

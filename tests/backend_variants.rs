@@ -353,3 +353,69 @@ fn eq_over_canonical_variants_is_structural() {
     // differing discriminant: none vs some(7)
     assert_eq!(ok(&mut c, "v-eq-disc", &[Val::Bool(false)]), Val::Bool(false));
 }
+
+// ---- precedence slice: local cases shadow builtin names (boxed path) ----
+
+/// A component whose `DefType` declares cases named after builtins (`not`,
+/// `tuple2`) and constructs them on the generic (boxed) path — `to-string`
+/// of a case-constructor call.
+fn shadowed() -> HostComponent {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static SEQ: AtomicU32 = AtomicU32::new(0);
+    let n = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("wavelet-memvars-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+
+    let app = r#"Package "demo:app@0.1.0"
+
+DefType t [not(u32) tuple2(u32) other]
+
+Export {name: shadow-not params: {} result: string}
+Def shadow-not Fn {} to-string(not(5))
+
+Export {name: shadow-tuple2 params: {} result: string}
+Def shadow-tuple2 Fn {} to-string(tuple2(9))
+"#;
+    let app_path = src.join("app.wlt");
+    std::fs::write(&app_path, app).unwrap();
+    let out = dir.join("out");
+    let outputs = wavelet::build::build_files(
+        &[app_path.to_str().unwrap().to_string()],
+        out.to_str().unwrap(),
+    )
+    .expect("build the shadowed-builtins app");
+    let bytes = std::fs::read(&outputs[0]).expect("read built component");
+    let _ = std::fs::remove_dir_all(&dir);
+    HostComponent::from_bytes(&bytes).expect("instantiate")
+}
+
+#[test]
+// The generic (boxed) call path resolves local `DefType` variant cases
+// BEFORE builtins — the interpreter's precedence (`DefType` env-defines each
+// case over the base env) and the checker's (`variant_cases` before
+// `check_builtin_call`). A case named `not` used to run the builtin instead
+// ("false"); one named `tuple2` used to fail the build on builtin arity.
+fn local_case_shadows_builtin_on_the_boxed_path() {
+    // The oracle: both shadowing constructors build the variant value.
+    let interp =
+        wavelet::eval_snippet("DefType t [not(u32) tuple2(u32) other]\nto-string(not(5))");
+    assert!(interp.ok, "{}", interp.error);
+    assert_eq!(interp.value, "\"not(5)\"");
+    let interp =
+        wavelet::eval_snippet("DefType t [not(u32) tuple2(u32) other]\nto-string(tuple2(9))");
+    assert!(interp.ok, "{}", interp.error);
+    assert_eq!(interp.value, "\"tuple2(9)\"");
+
+    // The compiled artifact must agree.
+    let mut c = shadowed();
+    assert_eq!(
+        okc(&mut c, "shadow-not", &[]),
+        Val::String("not(5)".into())
+    );
+    assert_eq!(
+        okc(&mut c, "shadow-tuple2", &[]),
+        Val::String("tuple2(9)".into())
+    );
+}
