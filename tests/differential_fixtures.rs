@@ -489,8 +489,9 @@ impl MultiCall {
                 A::H(i) => self.ivals[*i].clone(),
             })
             .collect();
+        // §4.2 bundling, as `interp::bundle_args`: 0 args ⇒ the empty
+        // tuple, 1 ⇒ the value itself, ≥2 ⇒ a tuple.
         match vals.len() {
-            0 => unit(),
             1 => vals.into_iter().next().unwrap(),
             _ => Value::Tup(vals),
         }
