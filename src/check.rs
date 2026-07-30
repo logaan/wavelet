@@ -823,6 +823,8 @@ impl<'a> Checker<'a> {
     /// Second pass: check every top-level form's body.
     fn check_roots(&self, roots: &[NodeId]) -> Result<(), String> {
         let arena = self.arena;
+        // DefType payload discipline: structural, before expression typing.
+        validate_deftypes(arena, roots)?;
         // DefResource member discipline and the borrow-position restriction are
         // structural checks over the declarations, independent of expression
         // typing (4.5).
@@ -1190,6 +1192,30 @@ fn first_param_is_self(params: &[(String, Type)], rname: &str) -> bool {
 /// used to reject `self` on a `Static` member (4.5).
 fn declares_self(params: &[(String, Type)]) -> bool {
     matches!(params.first(), Some((n, _)) if n == "self")
+}
+
+/// Validate every `DefType` in the module: a WIT variant case carries at most
+/// ONE payload type, so a case declared with several (`zip(list(u32)
+/// list(u32))`) is a deliberate compile error here — otherwise WIT synthesis
+/// renders `zip(list<u32>, list<u32>)`, which `wasm-tools` rejects. The
+/// checker is the shared gate, so the interpreter and the wasm backend reject
+/// identically. Wrap several payload types in one `tuple(...)` instead.
+fn validate_deftypes(arena: &Arena, roots: &[NodeId]) -> Result<(), String> {
+    for &root in roots {
+        if let Some((name, TypeDef::Variant(cases))) = as_deftype(arena, root) {
+            for (case, payload) in &cases {
+                if payload.len() > 1 {
+                    return Err(format!(
+                        "eval error: DefType `{name}`: variant case `{case}` declares {} \
+                         payload types, but a variant case takes at most one payload type; \
+                         wrap several in tuple(...)",
+                        payload.len()
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Validate every `DefResource` in the module (4.5): the `New`/`Drop`/`Static`

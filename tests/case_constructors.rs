@@ -37,10 +37,39 @@ fn payloaded_case_constructs() {
 }
 
 #[test]
-fn multi_payload_case_bundles_a_tuple() {
+// A WIT variant case carries at most ONE payload type: a multi-payload
+// declaration used to be accepted (bundling as a tuple) but synthesized
+// invalid WIT (`rect(u32, u32)`), rejected by wasm-tools. It is now a
+// deliberate check-time error on every path.
+fn multi_payload_case_declaration_is_rejected() {
+    let e = err_of("DefType shape [rect(u32 u32) dot]\nrect(3 4)");
+    assert!(
+        e.contains("a variant case takes at most one payload type"),
+        "{e}"
+    );
+    assert!(e.contains("wrap several in tuple(...)"), "{e}");
+    // Rejected even when no case is ever constructed: the declaration alone
+    // is the error.
+    let e = err_of("DefType shape [rect(u32 u32) dot]\ndot");
+    assert!(
+        e.contains("a variant case takes at most one payload type"),
+        "{e}"
+    );
+}
+
+#[test]
+// The supported spelling: ONE payload type that is a tuple.
+fn tuple_wrapped_payload_constructs() {
     assert_eq!(
-        ok_value("DefType shape [rect(u32 u32) dot]\nrect(3 4)"),
+        ok_value("DefType shape [rect(tuple(u32 u32)) dot]\nrect(tuple2(3 4))"),
         "rect((3, 4))"
+    );
+    assert_eq!(
+        ok_value(
+            "DefType shape [rect(tuple(u32 u32)) dot]\n\
+             Match rect(tuple2(3 4)) [((rect (w h)) mul(w h)) (dot 0)]"
+        ),
+        "12"
     );
 }
 
@@ -206,4 +235,74 @@ fn backend_constructs_enum_and_variant_cases() {
         out[0],
         Val::Variant("days".into(), Some(Box::new(Val::U32(7))))
     );
+}
+
+// ---------------------------------------------------------------------------
+// The one-payload rule end to end: a `tuple(...)`-wrapped payload (the
+// supported spelling for "several payload types") synthesizes VALID WIT —
+// `zipped(tuple<list<u32>, list<u32>>)` — so the build componentizes, and the
+// value round-trips across the boundary intact.
+// ---------------------------------------------------------------------------
+
+fn zip_component() -> HostComponent {
+    let dir = std::env::temp_dir().join(format!("wvl-zip-emit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let src = dir.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+
+    let app = r#"Package "demo:zipper@0.1.0"
+
+DefType mylist [zipped(tuple(list(u32) list(u32))) other]
+
+Export {name: mk params: {a: list(u32) b: list(u32)} result: mylist}
+Def mk Fn {a b}
+  zipped(tuple2(a b))
+
+Export {name: rt params: {v: mylist} result: mylist}
+Def rt Fn {v}
+  v
+"#;
+    let app_path = src.join("app.wlt");
+    std::fs::write(&app_path, app).unwrap();
+    let out = dir.join("out");
+    let outputs = wavelet::build::build_files(
+        &[app_path.to_str().unwrap().to_string()],
+        out.to_str().unwrap(),
+    )
+    .expect("build the tuple-payload component");
+    let bytes = std::fs::read(&outputs[0]).expect("read built component");
+    let _ = std::fs::remove_dir_all(&dir);
+    HostComponent::from_bytes(&bytes).expect("instantiate the tuple-payload component")
+}
+
+#[test]
+fn tuple_wrapped_payload_builds_and_round_trips() {
+    let mut c = zip_component();
+    let pair = Val::Tuple(vec![
+        Val::List(vec![Val::U32(1), Val::U32(2)]),
+        Val::List(vec![Val::U32(9)]),
+    ]);
+    let zipped = Val::Variant("zipped".into(), Some(Box::new(pair)));
+
+    let out = c
+        .call_instance("demo:zipper/api@0.1.0", "mk", &[
+            Val::List(vec![Val::U32(1), Val::U32(2)]),
+            Val::List(vec![Val::U32(9)]),
+        ])
+        .expect("mk([1 2] [9])");
+    assert_eq!(out[0], zipped);
+
+    let out = c
+        .call_instance("demo:zipper/api@0.1.0", "rt", &[zipped.clone()])
+        .expect("rt(zipped(...))");
+    assert_eq!(out[0], zipped);
+
+    let out = c
+        .call_instance(
+            "demo:zipper/api@0.1.0",
+            "rt",
+            &[Val::Variant("other".into(), None)],
+        )
+        .expect("rt(other)");
+    assert_eq!(out[0], Val::Variant("other".into(), None));
 }
