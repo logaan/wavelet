@@ -1780,12 +1780,15 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Load(ma(4, 2)));
             }
             "cell-set" => {
-                // Overwrite the cell's value box; return unit (interp parity).
+                // Overwrite the cell's value box; return unit (interp parity:
+                // `Value::Rec(vec![])`, printing as "{}" — NOT the false-box,
+                // which `to-string` would render "false").
                 // In a resource/functor component the stored value is routed
                 // through the persistent write barrier so it outlives the reset
                 // (5.1); the cell itself was already allocated persistently.
                 nargs(2)?;
                 let persist = self.has_persist();
+                let unit = self.intern_unit_rec();
                 let c = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(c));
@@ -1795,7 +1798,7 @@ impl<'a> Emitter<'a> {
                     fx.op(I::Call(self.h.persist));
                 }
                 fx.op(I::I32Store(ma(4, 2)));
-                fx.op(I::I32Const(self.unit_addr() as i32));
+                fx.op(I::I32Const(unit as i32));
             }
             _ => unreachable!("builtin_cell routed unexpected name `{name}`"),
         }

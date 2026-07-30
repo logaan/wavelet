@@ -1273,10 +1273,16 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         em.bodies.push((t, fx.finish()));
     }
 
-    // len_raw(box) -> i32 (str or list)
+    // len_raw(box) -> i32 (str or list). A list's length IS its len word; a
+    // string's len word stores the BYTE length, but the oracle's `len` is the
+    // CHAR count (`s.chars().count()`), so count UTF-8 lead bytes instead.
+    // [locals: tg, n, i, cnt (i32)]
     {
         let mut fx = FnCtx::new(1);
         let tg = fx.local(I32);
+        let n = fx.local(I32);
+        let i = fx.local(I32);
+        let cnt = fx.local(I32);
         fx.op(I::LocalGet(0));
         fx.op(I::I32Load(ma(0, 2)));
         fx.op(I::LocalTee(tg));
@@ -1290,8 +1296,47 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::If(BlockType::Empty));
         fx.op(I::Unreachable);
         fx.op(I::End);
+        fx.op(I::LocalGet(tg));
+        fx.op(I::I32Const(TAG_LIST));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(I32)));
         fx.op(I::LocalGet(0));
         fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::Else);
+        // count bytes with (b & 0xC0) != 0x80 over the inline bytes at box+8
+        fx.op(I::LocalGet(0));
+        fx.op(I::I32Load(ma(4, 2)));
+        fx.op(I::LocalSet(n));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(i));
+        fx.op(I::I32Const(0));
+        fx.op(I::LocalSet(cnt));
+        fx.op(I::Block(BlockType::Empty));
+        fx.op(I::Loop(BlockType::Empty));
+        fx.op(I::LocalGet(i));
+        fx.op(I::LocalGet(n));
+        fx.op(I::I32GeU);
+        fx.op(I::BrIf(1));
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Add);
+        fx.op(I::I32Load8U(ma(8, 0)));
+        fx.op(I::I32Const(0xC0));
+        fx.op(I::I32And);
+        fx.op(I::I32Const(0x80));
+        fx.op(I::I32Ne);
+        fx.op(I::LocalGet(cnt));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(cnt));
+        fx.op(I::LocalGet(i));
+        fx.op(I::I32Const(1));
+        fx.op(I::I32Add);
+        fx.op(I::LocalSet(i));
+        fx.op(I::Br(0));
+        fx.op(I::End);
+        fx.op(I::End);
+        fx.op(I::LocalGet(cnt));
+        fx.op(I::End);
         let t = em.ty_idx(vec![I32], vec![I32]);
         em.bodies.push((t, fx.finish()));
     }

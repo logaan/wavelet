@@ -526,11 +526,6 @@ struct Emitter<'a> {
 }
 
 impl<'a> Emitter<'a> {
-    /// v0 has no record boxes; the unit value `{}` shares the static false box.
-    fn unit_addr(&self) -> u32 {
-        self.false_addr
-    }
-
     /// Whether this component reserves a persistent region (5.1): true iff it
     /// instantiates a functor or declares a resource, in which case resource
     /// state (cells, functor rep lists) is allocated and written through the

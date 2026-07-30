@@ -30,6 +30,18 @@ you work, and rename it to the new version when you cut a release.
 
 ### Fixed
 
+- **Compiled unit results print as `{}`, not `false`.** In compiled
+  components the results of `cell-set`, the functor `set`'s `add`, and
+  no-result imported calls were the backend's static *false* box, so
+  observing one (e.g. `to-string(cell-set(c 1))`) printed `false` where the
+  interpreter prints the unit value `{}`. All three now yield the interned
+  empty-record box. Found by the new differential fixture corpus.
+
+- **Compiled `len` of a string counts characters, matching the
+  interpreter.** The wasm backend returned the string's UTF-8 byte length,
+  so `len("héllo")` compiled to `6` against the interpreter's `5`. It now
+  counts characters like the oracle's `s.chars().count()`.
+
 - **Sym-headed tuple patterns over a statically-known tuple scrutinee now
   destructure on the wasm backend.** The boxed matcher read every Sym-headed
   tuple pattern as a variant-case pattern, so `Match p [((a b) …)]` over a
