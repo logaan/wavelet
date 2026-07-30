@@ -26,7 +26,6 @@
 //! (macro *expansion*); this file is the execution half of F4.
 
 use wavelet::form::{Arena, Node, NodeId};
-use wavelet::host::{HostComponent, Val};
 use wavelet::printer::print;
 use wavelet::reader::read_file;
 
@@ -121,41 +120,16 @@ fn wrap_snippet(code: &str) -> Result<String, String> {
 }
 
 /// Build the wrapped program through the real emitter and execute its entry
-/// point, returning the printed final value. `Err` carries the failing stage.
-fn compiled_eval(id: &str, program: &str) -> Result<String, String> {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static SEQ: AtomicU32 = AtomicU32::new(0);
-    let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "wavelet-differential-{}-{n}-{id}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    let src = dir.join("src");
-    std::fs::create_dir_all(&src).map_err(|e| format!("setup: {e}"))?;
-    let path = src.join("snippet.wlt");
-    std::fs::write(&path, program).map_err(|e| format!("setup: {e}"))?;
-
-    let out_dir = dir.join("out");
-    let result = (|| {
-        let outputs = wavelet::build::build_files(
-            &[path.to_str().unwrap().to_string()],
-            out_dir.to_str().unwrap(),
-        )
-        .map_err(|e| format!("build: {e}"))?;
-        let bytes = std::fs::read(&outputs[0]).map_err(|e| format!("read artifact: {e}"))?;
-        let mut component =
-            HostComponent::from_bytes(&bytes).map_err(|e| format!("instantiate: {e}"))?;
-        let vals = component
-            .call_instance(IFACE, MAIN, &[])
-            .map_err(|e| format!("call: {e}"))?;
-        match vals.as_slice() {
-            [Val::String(s)] => Ok(s.to_string()),
-            other => Err(format!("call: unexpected result shape {other:?}")),
-        }
-    })();
-    let _ = std::fs::remove_dir_all(&dir);
-    result
+/// point, returning the printed final value. Staging goes through the shared
+/// harness (`wavelet::stage`): a tempfile-backed project with RAII cleanup.
+/// `Err` carries the failing stage.
+fn compiled_eval(program: &str) -> Result<String, String> {
+    let staged =
+        wavelet::stage::StagedProject::from_sources("differential", &[("snippet.wlt", program)])
+            .map_err(|e| e.to_string())?;
+    staged
+        .build_and_call_str(IFACE, MAIN)
+        .map_err(|e| e.to_string())
 }
 
 /// One example's differential outcome.
@@ -174,7 +148,7 @@ fn run_example(id: &str, code: &str, expect_error: bool) -> Outcome {
          tests/examples.rs should be failing too"
     );
 
-    let compiled = wrap_snippet(code).and_then(|program| compiled_eval(id, &program));
+    let compiled = wrap_snippet(code).and_then(|program| compiled_eval(&program));
 
     match (expect_error, compiled) {
         (true, Err(_)) => Outcome::Agree,
