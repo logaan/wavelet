@@ -14,6 +14,24 @@ impl Checker<'_> {
             .iter()
             .map(|&argument| self.check(argument, None, scope))
             .collect::<Result<Vec<_>, _>>()?;
+        if name == "get"
+            && arg_tys.len() == 2
+            && let Type::Tuple(elements) = self.resolve_alias(&arg_tys[0])
+        {
+            if let Node::Int(index) = self.arena.node(args[1]) {
+                return elements
+                    .get(*index as usize)
+                    .cloned()
+                    .ok_or_else(|| format!("eval error: tuple index {index} is out of range"));
+            }
+            let mut elements = elements.into_iter();
+            let first = elements.next().unwrap_or(Type::Unknown);
+            return elements.try_fold(first, |current, element| {
+                unify(&self.types, &current, &element).ok_or_else(|| {
+                    "eval error: a heterogeneous tuple requires a constant index".into()
+                })
+            });
+        }
         match name {
             "eq" | "lt" | "le" | "gt" | "ge" | "not" | "add" | "sub" | "mul" | "div" | "rem"
             | "neg" | "min" | "max" | "abs" => self.check_numeric_builtin(name, &arg_tys),
@@ -31,6 +49,25 @@ impl Checker<'_> {
                 self.check_state_builtin(name, &arg_tys)
             }
             _ => check_constructor_builtin(name, arg_tys),
+        }
+    }
+
+    pub(super) fn builtin_callback_type(
+        &self,
+        name: &str,
+        parameters: &[Type],
+    ) -> Result<Type, String> {
+        match name {
+            "eq" | "lt" | "le" | "gt" | "ge" | "not" | "add" | "sub" | "mul" | "div" | "rem"
+            | "neg" | "min" | "max" | "abs" => self.check_numeric_builtin(name, parameters),
+            "len" | "empty" | "get" | "put" | "push" | "concat" | "head" | "tail" | "reverse"
+            | "range" | "zip" => self.check_collection_builtin(name, parameters),
+            "str-cat" | "upper" | "lower" | "split" | "join" | "contains" | "to-string" => {
+                check_text_builtin(name, parameters)
+            }
+            "to-char" => Ok(Type::Char),
+            name if name.starts_with("to-") => Ok(Type::from_name(&name[3..])),
+            _ => check_constructor_builtin(name, parameters.to_vec()),
         }
     }
 
@@ -259,10 +296,16 @@ impl Checker<'_> {
 fn check_text_builtin(name: &str, arg_tys: &[Type]) -> Result<Type, String> {
     match name {
         "str-cat" => {
-            for t in arg_tys {
-                if !matches!(t, Type::String | Type::Char | Type::Unknown) {
-                    return Err(format!("eval error: `{name}` requires string operands"));
-                }
+            let operands = match arg_tys {
+                [Type::List(element)] => std::slice::from_ref(element.as_ref()),
+                [Type::Tuple(elements)] => elements,
+                _ => arg_tys,
+            };
+            if operands
+                .iter()
+                .any(|ty| !matches!(ty, Type::String | Type::Char | Type::Unknown))
+            {
+                return Err("eval error: `str-cat` requires strings or characters".into());
             }
             Ok(Type::String)
         }

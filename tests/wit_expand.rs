@@ -9,7 +9,7 @@ fn scratch(tag: &str) -> PathBuf {
 }
 
 #[test]
-fn wit_command_expands_derive_before_synthesizing() {
+fn wit_command_rejects_unimplemented_derivation() {
     let dir = scratch("derive");
     let file = dir.join("demo.wlt");
     std::fs::write(
@@ -31,14 +31,13 @@ Derive {Eq} point
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "`wavelet wit` failed (exit {:?}):\nstdout:\n{stdout}\nstderr:\n{stderr}",
-        output.status.code(),
+        !output.status.success(),
+        "unsupported Derive succeeded: {stdout}"
     );
-
+    assert!(stderr.contains("`Derive` is not implemented"), "{stderr}");
     assert!(
-        stdout.contains("eq-point"),
-        "expected synthesized WIT to contain the derived `eq-point`; got:\n{stdout}",
+        stdout.is_empty(),
+        "failed synthesis emitted partial output: {stdout}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

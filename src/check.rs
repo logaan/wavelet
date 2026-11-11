@@ -1,3 +1,6 @@
+mod rewrite;
+pub use rewrite::{resolve_overloads, resolve_overloads_excluding};
+
 mod builtins;
 mod local_ownership;
 mod parameter_inference;
@@ -401,6 +404,7 @@ struct Checker<'a> {
     import_aliases: std::collections::HashSet<String>,
 
     resolved: RefCell<HashMap<NodeId, usize>>,
+    builtin_callbacks: RefCell<HashMap<NodeId, usize>>,
 
     sig_result_cache: RefCell<HashMap<NodeId, Type>>,
 
@@ -901,6 +905,7 @@ impl<'a> Checker<'a> {
             imports_resolved: import_aliases.is_empty(),
             import_aliases,
             resolved: RefCell::new(HashMap::new()),
+            builtin_callbacks: RefCell::new(HashMap::new()),
             sig_result_cache: RefCell::new(HashMap::new()),
             sig_in_progress: RefCell::new(std::collections::HashSet::new()),
             node_types: RefCell::new(HashMap::new()),
@@ -1000,109 +1005,6 @@ impl<'a> Checker<'a> {
             .filter(|(_n, v)| v.len() > 1)
             .map(|(n, _v)| n.clone())
             .collect()
-    }
-}
-
-pub fn resolve_overloads(arena: Arena, roots: &[NodeId]) -> Result<(Arena, Vec<NodeId>), String> {
-    resolve_overloads_excluding(arena, roots, &std::collections::HashSet::new())
-}
-
-pub fn resolve_overloads_excluding(
-    arena: Arena,
-    roots: &[NodeId],
-    keep: &std::collections::HashSet<String>,
-) -> Result<(Arena, Vec<NodeId>), String> {
-    let checker = Checker::collect(&arena, roots);
-    checker.check_roots(roots)?;
-
-    let mut overloads = checker.overload_names();
-    overloads.retain(|n| !keep.contains(n));
-    if overloads.is_empty() {
-        return Ok((arena, roots.to_vec()));
-    }
-
-    let resolved = checker.resolved.into_inner();
-    let mut rw = Rewriter {
-        arena: &arena,
-        overloads: &overloads,
-        resolved: &resolved,
-        out: Arena::new(),
-        def_counts: HashMap::new(),
-    };
-    let new_roots: Vec<NodeId> = roots.iter().map(|&r| rw.rewrite_root(r)).collect();
-    Ok((rw.out, new_roots))
-}
-
-fn mangled_def_name(name: &str, k: usize) -> String {
-    format!("{name}${k}")
-}
-
-struct Rewriter<'a> {
-    arena: &'a Arena,
-    overloads: &'a std::collections::HashSet<String>,
-    resolved: &'a HashMap<NodeId, usize>,
-    out: Arena,
-
-    def_counts: HashMap<String, usize>,
-}
-
-impl<'a> Rewriter<'a> {
-    fn rewrite_root(&mut self, id: NodeId) -> NodeId {
-        if let Some((name, _expr)) = as_def(self.arena, id)
-            && self.overloads.contains(name)
-        {
-            let name = name.to_string();
-            let Node::Tup(items) = self.arena.node(id) else {
-                unreachable!("as_def matched a Tup")
-            };
-            let items = items.clone();
-            let k = self.def_counts.entry(name.clone()).or_insert(0);
-            let unique = mangled_def_name(&name, *k);
-            *k += 1;
-            let span = self.arena.span(id);
-
-            let head = self.rewrite(items[0]);
-            let new_name = self.out.add(Node::Sym(unique), self.arena.span(items[1]));
-            let expr = self.rewrite(items[2]);
-            return self.out.add(Node::Tup(vec![head, new_name, expr]), span);
-        }
-        self.rewrite(id)
-    }
-
-    fn rewrite(&mut self, id: NodeId) -> NodeId {
-        let span = self.arena.span(id);
-        match self.arena.node(id).clone() {
-            Node::Tup(items) => {
-                if let Some(&chosen) = self.resolved.get(&id)
-                    && let Some(&head) = items.first()
-                    && let Node::Sym(name) = self.arena.node(head)
-                    && self.overloads.contains(name)
-                {
-                    let unique = mangled_def_name(name, chosen);
-                    let new_head = self.out.add(Node::Sym(unique), self.arena.span(head));
-                    let mut kids = Vec::with_capacity(items.len());
-                    kids.push(new_head);
-                    for &x in &items[1..] {
-                        kids.push(self.rewrite(x));
-                    }
-                    return self.out.add(Node::Tup(kids), span);
-                }
-                let kids: Vec<NodeId> = items.iter().map(|&x| self.rewrite(x)).collect();
-                self.out.add(Node::Tup(kids), span)
-            }
-            Node::Lst(items) => {
-                let kids: Vec<NodeId> = items.iter().map(|&x| self.rewrite(x)).collect();
-                self.out.add(Node::Lst(kids), span)
-            }
-            Node::Rec(fields) => {
-                let nf: Vec<(String, NodeId)> = fields
-                    .iter()
-                    .map(|(k, v)| (k.clone(), self.rewrite(*v)))
-                    .collect();
-                self.out.add(Node::Rec(nf), span)
-            }
-            leaf => self.out.add(leaf, span),
-        }
     }
 }
 
@@ -1564,14 +1466,13 @@ impl<'a> Checker<'a> {
             Node::Sym(name) => {
                 if !self.defs.contains(name)
                     && !self.variant_cases.contains_key(name)
+                    && !scope.iter().any(|(binding, _)| binding == name)
+                    && is_builtin(name)
                     && let Some(Type::Fn(params, _)) = expected
-                    && crate::builtins::tuple_ctor_arity(name)
-                        .is_some_and(|arity| arity == params.len())
                 {
-                    return Ok(Type::Fn(
-                        params.clone(),
-                        Box::new(Type::Tuple(params.clone())),
-                    ));
+                    let result = self.builtin_callback_type(name, params)?;
+                    self.builtin_callbacks.borrow_mut().insert(id, params.len());
+                    return Ok(Type::Fn(params.clone(), Box::new(result)));
                 }
                 self.infer_name(name, scope)
             }

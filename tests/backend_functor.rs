@@ -38,7 +38,8 @@ fn one(c: &mut HostComponent, iface: &str, name: &str, args: &[Val]) -> Val {
 fn routed_record_set_size_matches_interpreter() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
+Def eq-point Fn {a: point b: point} eq(a b)
+Export eq-point
 Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export count-distinct
 Def count-distinct Fn {}
@@ -242,7 +243,8 @@ Def build-words Fn {}
 fn record_element_handle_return_hoists_the_element() {
     const SRC: &str = r#"Package "demo:app@0.1.0"
 DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
+Def eq-point Fn {a: point b: point} eq(a b)
+Export eq-point
 Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export build-points
 Def build-points Fn {}

@@ -299,22 +299,56 @@ pub(super) fn emit_equality(em: &mut Emitter) {
 
 pub(super) fn emit_length(em: &mut Emitter) {
     let mut fx = FnCtx::new(1);
-    let tg = fx.local(I32);
+    let tag = fx.local(I32);
+    let length = fx.local(I32);
     fx.op(I::LocalGet(0));
     fx.op(I::I32Load(ma(0, 2)));
-    fx.op(I::LocalTee(tg));
+    fx.op(I::LocalSet(tag));
+    fx.op(I::LocalGet(0));
+    fx.op(I::I32Load(ma(4, 2)));
+    fx.op(I::LocalSet(length));
+    for accepted in [TAG_LIST, TAG_TUP] {
+        fx.op(I::LocalGet(tag));
+        fx.op(I::I32Const(accepted));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::LocalGet(length));
+        fx.op(I::Return);
+        fx.op(I::End);
+    }
+    fx.op(I::LocalGet(tag));
     fx.op(I::I32Const(TAG_STR));
-    fx.op(I::I32Eq);
-    fx.op(I::LocalGet(tg));
-    fx.op(I::I32Const(TAG_LIST));
-    fx.op(I::I32Eq);
-    fx.op(I::I32Or);
-    fx.op(I::I32Eqz);
+    fx.op(I::I32Ne);
     fx.op(I::If(BlockType::Empty));
     fx.op(I::Unreachable);
     fx.op(I::End);
+    let index = fx.local(I32);
+    let count = fx.local(I32);
+    fx.op(I::Block(BlockType::Empty));
+    fx.op(I::Loop(BlockType::Empty));
+    fx.op(I::LocalGet(index));
+    fx.op(I::LocalGet(length));
+    fx.op(I::I32GeU);
+    fx.op(I::BrIf(1));
+    fx.op(I::LocalGet(count));
     fx.op(I::LocalGet(0));
-    fx.op(I::I32Load(ma(4, 2)));
+    fx.op(I::LocalGet(index));
+    fx.op(I::I32Add);
+    fx.op(I::I32Load8U(ma(8, 0)));
+    fx.op(I::I32Const(0xc0));
+    fx.op(I::I32And);
+    fx.op(I::I32Const(0x80));
+    fx.op(I::I32Ne);
+    fx.op(I::I32Add);
+    fx.op(I::LocalSet(count));
+    fx.op(I::LocalGet(index));
+    fx.op(I::I32Const(1));
+    fx.op(I::I32Add);
+    fx.op(I::LocalSet(index));
+    fx.op(I::Br(0));
+    fx.op(I::End);
+    fx.op(I::End);
+    fx.op(I::LocalGet(count));
     let t = em.ty_idx(vec![I32], vec![I32]);
     em.bodies.push((t, fx.finish()));
 }

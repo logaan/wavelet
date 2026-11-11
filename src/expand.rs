@@ -34,10 +34,7 @@ pub fn expand_file(
             continue;
         }
 
-        if let Some(derived) = derive_roots(&arena, root, &mut out, &resources)? {
-            new_roots.extend(derived);
-            continue;
-        }
+        reject_derive(&arena, root, &resources)?;
         new_roots.push(expand_form(
             &interp,
             &env,
@@ -74,109 +71,40 @@ fn is_def_macro(arena: &Arena, id: NodeId) -> bool {
     false
 }
 
-fn derive_roots(
+fn reject_derive(
     arena: &Arena,
     root: NodeId,
-    out: &mut Arena,
     resources: &std::collections::HashSet<String>,
-) -> Result<Option<Vec<NodeId>>, String> {
+) -> Result<(), String> {
     let Node::Tup(items) = arena.node(root) else {
-        return Ok(None);
+        return Ok(());
     };
-    let Some(&head) = items.first() else {
-        return Ok(None);
-    };
-    if !matches!(arena.node(head), Node::Sym(s) if s == "derive-MACRO") {
-        return Ok(None);
+    if !matches!(items.first().map(|id| arena.node(*id)), Some(Node::Sym(head)) if head == "derive-MACRO")
+    {
+        return Ok(());
     }
-    let (classes, type_id) = match (items.get(1), items.get(2)) {
-        (Some(&c), Some(&t)) => (c, t),
-        _ => return Err("malformed Derive: expected `Derive {classes} typename`".into()),
+    let [_, classes, type_id] = items.as_slice() else {
+        return Err("malformed Derive: expected `Derive {classes} typename`".into());
     };
-    let Node::Flg(class_names) = arena.node(classes) else {
-        return Err("malformed Derive: the classes must be a `{…}` flags form".into());
+    let Node::Flg(class_names) = arena.node(*classes) else {
+        return Err("malformed Derive: the classes must be a flags form".into());
     };
-    let Node::Sym(tname) = arena.node(type_id) else {
+    let Node::Sym(tname) = arena.node(*type_id) else {
         return Err("malformed Derive: the type must be a bare type name".into());
     };
-
     if resources.contains(tname) {
         return Err(format!(
-            "`Derive` cannot be used on the resource type `{tname}`: resources have              identity equality and are opaque (not `Eq`/`Ord`/`Hash`/`Show`)"
+            "`Derive` cannot be used on the resource type `{tname}`: resources have identity equality and are opaque"
         ));
     }
-
-    let span = arena.span(root);
-    let mut roots = Vec::new();
     for class in class_names {
-        let (op, params, body) = derived_op(out, class, tname, span)?;
-        let mangled = format!("{op}-{tname}");
-        roots.push(make_def(out, &mangled, params, body, span));
-        roots.push(make_export(out, &mangled, span));
+        if !matches!(class.as_str(), "Eq" | "Ord" | "Show" | "Hash") {
+            return Err(format!(
+                "unknown derive class `{class}` (expected Eq, Ord, Show, or Hash)"
+            ));
+        }
     }
-    Ok(Some(roots))
-}
-
-fn derived_op(
-    out: &mut Arena,
-    class: &str,
-    tname: &str,
-    span: (u32, u32),
-) -> Result<(&'static str, NodeId, NodeId), String> {
-    let ty = |out: &mut Arena| out.add(Node::Sym(tname.to_string()), span);
-    match class {
-        "Eq" => {
-            let (a, b) = (ty(out), ty(out));
-            let params = out.add(Node::Rec(vec![("a".into(), a), ("b".into(), b)]), span);
-            let body = out.add(Node::Bool(true), span);
-            Ok(("eq", params, body))
-        }
-
-        "Ord" => {
-            let (a, b) = (ty(out), ty(out));
-            let params = out.add(Node::Rec(vec![("a".into(), a), ("b".into(), b)]), span);
-            let body = the_int(out, "s32", 0, span);
-            Ok(("compare", params, body))
-        }
-
-        "Show" => {
-            let v = ty(out);
-            let params = out.add(Node::Rec(vec![("v".into(), v)]), span);
-            let body = out.add(Node::Str(String::new()), span);
-            Ok(("show", params, body))
-        }
-
-        "Hash" => {
-            let v = ty(out);
-            let params = out.add(Node::Rec(vec![("v".into(), v)]), span);
-            let body = the_int(out, "u32", 0, span);
-            Ok(("hash", params, body))
-        }
-        other => Err(format!(
-            "unknown derive class `{other}` (expected Eq, Ord, Show, or Hash)"
-        )),
-    }
-}
-
-fn the_int(out: &mut Arena, ty: &str, n: i64, span: (u32, u32)) -> NodeId {
-    let head = out.add(Node::Sym("the-MACRO".into()), span);
-    let ty_id = out.add(Node::Sym(ty.into()), span);
-    let n_id = out.add(Node::Int(n), span);
-    out.add(Node::Tup(vec![head, ty_id, n_id]), span)
-}
-
-fn make_def(out: &mut Arena, name: &str, params: NodeId, body: NodeId, span: (u32, u32)) -> NodeId {
-    let fn_head = out.add(Node::Sym("fn-MACRO".into()), span);
-    let fn_form = out.add(Node::Tup(vec![fn_head, params, body]), span);
-    let def_head = out.add(Node::Sym("def-MACRO".into()), span);
-    let name_id = out.add(Node::Sym(name.to_string()), span);
-    out.add(Node::Tup(vec![def_head, name_id, fn_form]), span)
-}
-
-fn make_export(out: &mut Arena, name: &str, span: (u32, u32)) -> NodeId {
-    let head = out.add(Node::Sym("export-MACRO".into()), span);
-    let name_id = out.add(Node::Sym(name.to_string()), span);
-    out.add(Node::Tup(vec![head, name_id]), span)
+    Err("`Derive` is not implemented; define equality, ordering, hashing, and display functions explicitly".into())
 }
 
 fn expand_form(

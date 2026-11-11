@@ -382,7 +382,12 @@ impl Parser {
                     self.pos += 1;
                     return Ok((items, end));
                 }
-                Some(_) => items.push(self.parse_form()?),
+                Some(_) => {
+                    self.allow_title_flags = items.len() == 1
+                        && matches!(self.arena.node(items[0]), Node::Sym(head) if head == "derive-MACRO");
+                    items.push(self.parse_form()?);
+                    self.allow_title_flags = false;
+                }
                 None => return Err(self.eof_err()),
             }
         }

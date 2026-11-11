@@ -320,31 +320,27 @@ Export eq"#,
 
 #[test]
 
-fn derive_eq_emits_a_monomorphic_definition() {
-    let forms = expand_forms(
+fn derive_eq_is_rejected_until_structural_derivation_is_implemented() {
+    let error = expand_forms(
         r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq} point"#,
     )
-    .expect("Derive should be a known macro that expands");
-    assert!(
-        forms.iter().any(|f| f.contains("eq-point")),
-        "Derive {{Eq}} did not emit eq-point; expansion was:\n{}",
-        forms.join("\n")
-    );
+    .expect_err("Derive must not emit a constant placeholder");
+    assert!(error.contains("`Derive` is not implemented"), "{error}");
 }
 
 #[test]
 
-fn derived_eq_is_resolvable_and_synthesizes() {
+fn explicit_record_equality_is_resolvable_and_synthesizes() {
     let wit = synth(
         r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
-Derive {Eq} point
+Def eq-point Fn {a: point b: point} eq(a b)
 Export same
 Def same Fn {a: point b: point} eq(a b)"#,
     )
-    .expect("derived eq should resolve and synthesize");
+    .expect("explicit record equality should resolve and synthesize");
     assert!(
         wit.contains("same: func(a: point, b: point) -> bool"),
         "derived eq did not resolve at the call site:\n{wit}"
@@ -353,14 +349,15 @@ Def same Fn {a: point b: point} eq(a b)"#,
 
 #[test]
 
-fn derive_auto_export_and_explicit_reexport_dedup() {
+fn repeated_explicit_exports_are_deduplicated() {
     let wit = synth(
         r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
+Def eq-point Fn {a: point b: point} eq(a b)
+Export eq-point
 Export eq-point"#,
     )
-    .expect("derive auto-export colliding with an explicit re-export should synthesize");
+    .expect("repeated exports should synthesize once");
     assert_eq!(
         wit.matches("eq-point: func(").count(),
         1,
@@ -470,7 +467,8 @@ fn worked_example_synthesizes_concrete_monomorphic_wit() {
     let wit = synth(
         r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
+Def eq-point Fn {a: point b: point} eq(a b)
+Export eq-point
 Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export nearest-set
 Def nearest-set Fn {ps: list(point)}
@@ -480,7 +478,10 @@ Def nearest-set Fn {ps: list(point)}
     )
     .expect("the worked example should compile to a WIT world");
     assert!(wit.contains("record point"), "missing record point:\n{wit}");
-    assert!(wit.contains("eq-point"), "missing derived eq-point:\n{wit}");
+    assert!(
+        wit.contains("eq-point"),
+        "missing explicit eq-point:\n{wit}"
+    );
     assert!(
         wit.contains("point-set"),
         "missing specialized Set interface:\n{wit}"

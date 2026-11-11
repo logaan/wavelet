@@ -119,7 +119,8 @@ static RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 
 const WORKED_EXAMPLE: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
+Def eq-point Fn {a: point b: point} eq(a b)
+Export eq-point
 Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Def assert Fn {cond} If cond {} head([])
 Def run Fn {}
@@ -183,7 +184,8 @@ fn build_source(src_text: &str) -> Result<Vec<u8>, String> {
 fn build_emits_a_validating_set_resource() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
+Def eq-point Fn {a: point b: point} eq(a b)
+Export eq-point
 Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export count-distinct
 Def count-distinct Fn {ps: list(point)}
@@ -215,7 +217,8 @@ Def count-distinct Fn {ps: list(point)}
 fn build_hoists_handle_returning_export_over_local_record() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
+Def eq-point Fn {a: point b: point} eq(a b)
+Export eq-point
 Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
 Export nearest-set
 Def nearest-set Fn {ps: list(point)}

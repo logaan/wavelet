@@ -1,5 +1,7 @@
 use super::*;
 
+mod text;
+
 impl<'a> Emitter<'a> {
     pub(crate) fn builtin(
         &mut self,
@@ -1547,88 +1549,6 @@ impl<'a> Emitter<'a> {
         fx.op(I::LocalGet(oi));
         fx.op(I::I32Store(ma(4, 2)));
         fx.op(I::LocalGet(out));
-        Ok(())
-    }
-
-    pub(crate) fn builtin_string(
-        &mut self,
-        fx: &mut FnCtx,
-        name: &str,
-        items: &[NodeId],
-    ) -> Result<(), String> {
-        let nargs = |want: usize| -> Result<(), String> {
-            if items.len() == want {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{name}` expects {want} argument(s), got {}",
-                    items.len()
-                ))
-            }
-        };
-        match name {
-            "str-cat" => {
-                if items.is_empty() {
-                    let a = self.intern_str("");
-                    fx.op(I::I32Const(a as i32));
-                    return Ok(());
-                }
-                self.expr(fx, items[0], false)?;
-                for &x in &items[1..] {
-                    self.expr(fx, x, false)?;
-                    fx.op(I::Call(self.h.strcat2));
-                }
-            }
-            "to-string" => {
-                nargs(1)?;
-                self.expr(fx, items[0], false)?;
-                fx.op(I::Call(self.h.to_str));
-            }
-            "to-char" => {
-                nargs(1)?;
-                self.expr(fx, items[0], false)?;
-                let b = fx.local(ValType::I32);
-                fx.op(I::LocalSet(b));
-                fx.op(I::LocalGet(b));
-                fx.op(I::I32Load(ma(0, 2)));
-                fx.op(I::I32Const(TAG_CHAR));
-                fx.op(I::I32Eq);
-                fx.op(I::If(BlockType::Result(ValType::I32)));
-                fx.op(I::LocalGet(b));
-                fx.op(I::Else);
-                let n = fx.local(ValType::I64);
-                fx.op(I::LocalGet(b));
-                fx.op(I::Call(self.h.unbox_int));
-                fx.op(I::LocalSet(n));
-
-                fx.op(I::LocalGet(n));
-                fx.op(I::I64Const(0x10FFFF));
-                fx.op(I::I64GtU);
-                fx.op(I::If(BlockType::Empty));
-                fx.op(I::Unreachable);
-                fx.op(I::End);
-                fx.op(I::LocalGet(n));
-                fx.op(I::I64Const(0xD800));
-                fx.op(I::I64GeU);
-                fx.op(I::LocalGet(n));
-                fx.op(I::I64Const(0xDFFF));
-                fx.op(I::I64LeU);
-                fx.op(I::I32And);
-                fx.op(I::If(BlockType::Empty));
-                fx.op(I::Unreachable);
-                fx.op(I::End);
-                fx.op(I::LocalGet(n));
-                self.box_char(fx);
-                fx.op(I::End);
-            }
-            "upper" | "lower" => {
-                nargs(1)?;
-                self.expr(fx, items[0], false)?;
-                fx.op(I::I32Const(if name == "upper" { 1 } else { 0 }));
-                fx.op(I::Call(self.h.case_h));
-            }
-            _ => unreachable!("builtin_string routed unexpected name `{name}`"),
-        }
         Ok(())
     }
 
