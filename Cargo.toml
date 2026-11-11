@@ -52,3 +52,4 @@ console_error_panic_hook = { version = "0.1", optional = true }
 [dev-dependencies]
 # parses docs/examples.json for the documentation-example test suite
 serde_json = "1"
+wasm-wave = "0.251.0"

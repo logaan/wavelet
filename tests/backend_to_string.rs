@@ -56,7 +56,11 @@ fn call(c: &mut HostComponent, f: &str, args: &[Val]) -> String {
         .call_instance(IFACE, f, args)
         .unwrap_or_else(|e| panic!("`{f}` should succeed: {e}"))[0]
     {
-        Val::String(s) => s.to_string(),
+        Val::String(s) => {
+            wasm_wave::untyped::UntypedValue::parse(s)
+                .unwrap_or_else(|e| panic!("invalid WAVE {s:?}: {e}"));
+            s.to_string()
+        }
         other => panic!("`{f}` returned {other:?}, expected a string"),
     }
 }

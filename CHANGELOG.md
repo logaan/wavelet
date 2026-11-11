@@ -15,6 +15,10 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- Official WAVE parser compliance checks for documented values and backend
+  float/character output, with a ratcheted empty-tuple exception.
+- Resource persistence guards reject nested/shared cell graphs before emission.
+
 - Shared, automatically cleaned build staging with explicit path errors.
 - An independent execution regression corpus covering mutation ordering,
   recursion, compound values, bounds errors, and checked integer overflow.
@@ -35,6 +39,11 @@ you work, and rename it to the new version when you cut a release.
   passes against both rust seeds (`conformance/wavelet/test-values-callee.sh`).
 
 ### Fixed
+
+- String printing now escapes ASCII control characters, including NUL, as valid
+  WAVE in both the interpreter and compiled backend.
+- Interpreter resource ownership transfers invalidate the source handle;
+  borrowed handles remain borrowed, and remaining destructors run at teardown.
 
 - Variant constructors consistently shadow builtins, including boxed calls.
   Multi-field variant payloads must use one explicit tuple type.

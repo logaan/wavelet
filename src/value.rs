@@ -185,7 +185,6 @@ pub fn form_to_value(arena: &Arena, id: NodeId) -> Value {
         Node::Char(c) => Value::Char(*c),
         Node::Str(s) => Value::Str(s.clone()),
         Node::Sym(s) => Value::Variant(s.clone(), None),
-        Node::Qsym(a, n) => Value::Variant(format!("{a}/{n}"), None),
         Node::Tup(items) => Value::Tup(items.iter().map(|&i| form_to_value(arena, i)).collect()),
         Node::Lst(items) => Value::Lst(items.iter().map(|&i| form_to_value(arena, i)).collect()),
         Node::Rec(fields) => Value::Rec(
@@ -247,10 +246,7 @@ fn values_to_forms(items: &[Value], arena: &mut Arena) -> Result<Vec<NodeId>, St
 }
 
 fn sym_node(name: &str) -> Node {
-    match name.split_once('/') {
-        Some((a, n)) => Node::Qsym(a.to_string(), n.to_string()),
-        None => Node::Sym(name.to_string()),
-    }
+    Node::Sym(name.replace('/', "-"))
 }
 
 /// Canonical WAVE text for a runtime value.
@@ -258,6 +254,25 @@ pub fn print_value(v: &Value) -> String {
     let mut out = String::new();
     write_value(v, &mut out);
     out
+}
+
+pub fn write_string(text: &str, out: &mut String) {
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if (ch as u32) < 32 || ch == '\u{7f}' => {
+                use std::fmt::Write;
+                write!(out, "\\u{{{:x}}}", ch as u32).unwrap();
+            }
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
 }
 
 fn write_value(v: &Value, out: &mut String) {
@@ -270,7 +285,7 @@ fn write_value(v: &Value, out: &mut String) {
         // `\u{0}` so every printed char reads back.
         Value::Char('\0') => out.push_str("'\\u{0}'"),
         Value::Char(c) => out.push_str(&format!("{c:?}")),
-        Value::Str(s) => out.push_str(&format!("{s:?}")),
+        Value::Str(s) => write_string(s, out),
         Value::Variant(name, None) => out.push_str(name),
         Value::Variant(name, Some(p)) => {
             out.push_str(name);
