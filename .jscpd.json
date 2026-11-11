@@ -1,0 +1,12 @@
+{
+  "path": ["src", "tooling/wavelet-lsp/src", "tooling/vscode", "docs/src", "docs/scripts"],
+  "format": ["rust", "javascript", "typescript", "jsx", "tsx"],
+  "ignore": ["**/node_modules/**", "**/target/**", "**/dist/**", "**/build/**", "docs/src/wasm/**"],
+  "gitignore": true,
+  "mode": "weak",
+  "minLines": 10,
+  "minTokens": 100,
+  "reporters": ["json"],
+  "output": "target/duplication",
+  "failOnEmpty": true
+}

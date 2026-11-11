@@ -1,0 +1,116 @@
+---
+title: Development and validation
+---
+
+Wavelet's interpreter defines the language semantics. The compiler is tested
+against it through the documented examples and an independent execution corpus
+under `tests/fixtures/execution`. The corpus covers cell aliasing and mutation
+order, recursion, compound values, bounds errors, and integer overflow.
+
+```console
+./scripts/check.sh
+```
+
+Individual checks:
+
+```console
+cargo test
+python3 scripts/check-quality.py
+python3 scripts/check-duplication.py
+cargo test --manifest-path tooling/wavelet-lsp/Cargo.toml
+npm --prefix tooling/vscode run check
+./scripts/regen-examples.sh
+npm --prefix docs run build
+```
+
+The quality gate checks formatting, Clippy diagnostics, function complexity,
+and module size. A separate Lizard analyzer measures cyclomatic complexity
+and non-comment function length; its pinned dependency installs automatically
+into a private environment under `target/quality-venv`. No function may reach
+1,000 code lines. New modules have a 1,000-line limit; existing large modules
+and lint counts have checked-in upper bounds in `quality-baseline.json`.
+Functions over 200 lines and cognitive complexity over 40 are reported.
+The coverage gate runs the native suite with LLVM instrumentation and enforces
+the minimum in `quality-coverage.json`.
+These are migration limits for existing code, with no allowance for new lint
+categories. After reducing debt, run
+`python3 scripts/check-quality.py --update-baseline` and review the reduction.
+Increasing a baseline requires an explicit reviewed change.
+
+Copy/paste detection uses [jscpd](https://github.com/kucherenko/jscpd/blob/master/docs/rust.md)
+5.4.3, pinned with its platform binaries in `tooling/quality/package-lock.json`.
+The scan covers compiler and interpreter Rust, language-server Rust, editor
+JavaScript, and the docs implementation and example generator. It supports
+TypeScript, JSX and TSX in those directories too. Generated WebAssembly
+bindings, dependencies, build outputs, and separate test/fixture trees are
+excluded; repeated test inputs do not represent duplicated implementation.
+Clones must contain at least 10 lines and 100 tokens, ignoring whitespace and
+comments. The gate rejects every new clone and every extra copy of an existing
+clone using content fingerprints in `quality-duplication.json`; unrelated
+new code cannot dilute a percentage to make a regression pass. Moving code
+without changing its content does not require new exceptions.
+
+Run `python3 scripts/check-duplication.py` locally; CI runs the same command.
+The JSON report in `target/duplication/jscpd-report.json` contains both source
+locations and the matching fragment for each clone. After consolidating shared
+behavior, inspect that report, run
+`python3 scripts/check-duplication.py --update-baseline`, and review the baseline
+diff. Existing clones remain visible as refactoring work; accepting a new clone
+requires a reviewed baseline change, not an increased percentage allowance.
+
+The compiled execution tests and round-trip tests require `wasm-tools`,
+`wasmtime`, `wac`, and `wkg` on `PATH`. The round-trip matrix also needs
+`cargo-component` and the `wasm32-wasip1` Rust target:
+
+```console
+rustup target add wasm32-wasip1 wasm32-unknown-unknown
+cargo install --locked cargo-component wac-cli wkg wasm-tools wasmtime-cli wasm-pack
+cargo build
+WAVELET="$PWD/target/debug/wavelet" conformance/wavelet/test-matrix.sh
+```
+
+The matrix checks both Rust seed implementations against Wavelet as caller and
+callee, plus Wavelet against itself. See [Web applications](./web-apps) for HTTP
+validation and deployment boundaries.
+
+Runtime `read` and `apply` are no longer builtins. Read source through the
+compiler API and call functions directly. CLI and REPL compilation errors or
+runtime traps are returned to the user without rerunning in the interpreter.
+Build staging uses private temporary directories with automatic cleanup and
+rejects unsupported paths and colliding filenames. Build preparation also rejects
+repeated package identities (including different versions) and packages whose
+names map to the same component filename. All components must compile before
+artifact writing starts, so a compile error preserves previous build artifacts.
+Package names, including macro-only packages, cannot produce output paths outside
+the requested output directory.
+
+Build orchestration separates prepared source units, dependency resolution,
+checking and byte emission, and filesystem publication. The check/emission phase
+operates on arenas and resolved dependencies without filesystem or process access.
+WIT fetching runs in a private workspace; only fetched dependencies and the lock
+file are copied back after every fetch succeeds. Authored root WIT files and macro
+artifacts are preserved. Macro caches use the package, requested version, and
+canonical artifact path, so two explicit artifacts cannot share an instance by
+accident.
+
+The REPL keeps up to 32 compiled expression instances. Repeating an expression
+executes the cached instance again; accepting a definition invalidates the
+cache. New expressions still compile with the current definitions. Value
+redefinitions replace their previous binding.
+
+## WAVE output compliance
+
+`tests/wave_compliance.rs` feeds every documented result through the official
+`wasm-wave` parser. The float and character backend vectors use that parser
+too. Strings containing ASCII controls, including NUL, use WAVE Unicode escapes
+and round-trip through both printers and the typed WAVE string parser.
+
+One explicit ratcheted syntax exception remains: `tuple0()` prints `()`, which
+WAVE does not accept. Unit still prints `{}`, the WAVE spelling of empty flags;
+this is a diagnostic representation rather than a typed empty-record encoding.
+Opaque functions and resources do not have a WAVE text serialization.
+
+Resource state currently permits plain data or one outer cell containing plain
+data. Nested/shared cells, cell cycles, and function-bearing state are rejected
+by the checker before persistence. This conservative contract avoids silent
+loss of cell identity while the persistent heap lacks a graph identity map.

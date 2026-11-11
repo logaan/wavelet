@@ -35,6 +35,8 @@ jobs:
           cache-dependency-path: |
             tooling/vscode/package-lock.json
             docs/package-lock.json
+            tooling/quality/package-lock.json
+      - run: python3 scripts/check-duplication.py
       - run: npm ci --prefix tooling/vscode
       - run: npm --prefix tooling/vscode run check
       - run: scripts/ci/build-docs.sh
