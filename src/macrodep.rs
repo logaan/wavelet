@@ -320,36 +320,8 @@ fn parse_macro_import(arena: &Arena, id: NodeId) -> Option<ImportInfo> {
         return None;
     };
 
-    let mut pkg = None;
-    let mut alias = None;
-    let (macros, runtime) = crate::wit::import_roles(arena, fields).ok()?;
-    let mut from = None;
-    for (k, v) in fields {
-        match (k.as_str(), arena.node(*v)) {
-            ("pkg", Node::Str(s)) => pkg = Some(s.clone()),
-            ("as", Node::Sym(s)) => alias = Some(s.clone()),
-            ("from", Node::Str(s)) => from = Some(s.clone()),
-            _ => {}
-        }
-    }
-    if !macros {
-        return None;
-    }
-    let pkg_str = pkg?;
-    let path = pkg_str.split('@').next().unwrap_or(&pkg_str).to_string();
-    let package = path.split('/').next().unwrap_or(&path).to_string();
-    let alias = alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
-    Some(ImportInfo {
-        path,
-        version: pkg_str
-            .split_once('@')
-            .map(|(_, version)| version.to_owned()),
-        package,
-        alias,
-        macros,
-        runtime,
-        from,
-    })
+    let import = crate::wit::import_from_record(arena, fields).ok()?;
+    import.macros.then_some(import)
 }
 
 fn read_err(msg: impl Into<String>, at: u32) -> ReadError {

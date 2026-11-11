@@ -1,3 +1,7 @@
+mod imports;
+
+pub(crate) use imports::import_from_record;
+
 use std::collections::HashMap;
 
 use crate::form::{Arena, Node, NodeId};
@@ -307,52 +311,7 @@ pub fn collect(arena: &Arena, roots: &[NodeId]) -> Result<FileInfo, String> {
             "import-MACRO" => {
                 let Some(&p) = items.get(1) else { continue };
 
-                if let Node::Rec(fields) = arena.node(p)
-                    && let Some(pkg) = record_pkg(arena, fields)
-                    && is_functor_pkg(&pkg)
-                {
-                    return Err(format!(
-                        "`{}` is a functor package: apply it with \
-                         `Instantiate {{pkg: … with: {{elem: t}} as: alias}}`, \
-                         not `Import`",
-                        strip_version(&pkg)
-                    ));
-                }
-                let spec = match arena.node(p) {
-                    Node::Str(s) => Some((s.clone(), None, false, true, None)),
-                    Node::Rec(fields) => {
-                        let mut pkg = None;
-                        let mut alias = None;
-                        let (macros, runtime) = import_roles(arena, fields)?;
-                        let mut from = None;
-                        for (k, v) in fields {
-                            match (k.as_str(), arena.node(*v)) {
-                                ("pkg", Node::Str(s)) => pkg = Some(s.clone()),
-                                ("as", Node::Sym(s)) => alias = Some(s.clone()),
-                                ("from", Node::Str(s)) => from = Some(s.clone()),
-                                _ => {}
-                            }
-                        }
-                        pkg.map(|p| (p, alias, macros, runtime, from))
-                    }
-                    _ => None,
-                };
-                let (pkg_str, alias, macros, runtime, from) = spec.ok_or("malformed Import")?;
-                let path = strip_version(&pkg_str);
-                let pkg_part = path.split('/').next().unwrap_or(&path).to_string();
-                let alias =
-                    alias.unwrap_or_else(|| path.rsplit('/').next().unwrap_or(&path).to_string());
-                imports.push(ImportInfo {
-                    path,
-                    version: pkg_str
-                        .split_once('@')
-                        .map(|(_, version)| version.to_owned()),
-                    package: pkg_part,
-                    alias,
-                    macros,
-                    runtime,
-                    from,
-                });
+                imports.push(imports::parse_import(arena, p)?);
             }
             "export-MACRO" => {
                 let Some(&p) = items.get(1) else { continue };
