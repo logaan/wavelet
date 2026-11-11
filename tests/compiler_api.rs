@@ -266,3 +266,79 @@ fn macro_tree_validation_rejects_missing_spans_and_invalid_references() {
     };
     validate_tree(&tree).unwrap();
 }
+
+#[derive(Default)]
+struct CounterMacroHost {
+    available: std::collections::HashSet<String>,
+    expansions: usize,
+}
+
+impl MacroHost for CounterMacroHost {
+    fn manifest(&mut self, key: &str) -> Option<Result<Vec<(String, u32)>, String>> {
+        self.available
+            .contains(key)
+            .then(|| Ok(vec![("tick".into(), 1)]))
+    }
+
+    fn expand(
+        &mut self,
+        _: &str,
+        _: &str,
+        _: &wavelet::meta::Tree,
+    ) -> Result<wavelet::meta::Tree, String> {
+        self.expansions += 1;
+        Ok(wavelet::meta::Tree {
+            nodes: vec![wavelet::meta::Node::IntVal(self.expansions as i64)],
+            root: 0,
+            spans: vec![(0, 0)],
+        })
+    }
+}
+
+#[test]
+fn preparation_retries_do_not_execute_or_replay_stateful_macro_expansions() {
+    let declarations = [
+        "Import {pkg: \"test:first/api@1.0.0\" macros: true}",
+        "DefMacro tick {x} x",
+        "Import {pkg: \"test:last/api@1.0.0\" macros: true}",
+    ];
+    let request = Request {
+        sources: declarations
+            .iter()
+            .enumerate()
+            .map(|(index, declaration)| SourceFile {
+                name: format!("source-{index}.wlt"),
+                contents: format!(
+                    "Package \"test:unit-{index}@1.0.0\"\n{declaration}\nExport {{name: answer result: s64}}\nDef answer Fn {{}} Tick 0"
+                ),
+            })
+            .collect(),
+        dependencies: vec![],
+        entry: None,
+        mode: Mode::Project,
+    };
+    let mut host = CounterMacroHost::default();
+    for _ in 0..3 {
+        let Step::NeedsMacros(requests) = compiler::compile(&request, &mut host).unwrap() else {
+            panic!("expected preparation")
+        };
+        assert_eq!(
+            host.expansions, 0,
+            "preparation must not execute expansions"
+        );
+        assert_eq!(requests.len(), 1);
+        assert!(host.available.insert(requests[0].key.clone()));
+    }
+    let Step::Complete(output) = compiler::compile(&request, &mut host).unwrap() else {
+        panic!("all capabilities were supplied")
+    };
+    assert_eq!(host.expansions, 3);
+    assert_eq!(output.artifacts.len(), 3);
+    for (index, artifact) in output.artifacts.iter().enumerate() {
+        let mut component = HostComponent::from_bytes(&artifact.bytes).unwrap();
+        let values = component
+            .call_instance(&format!("test:unit-{index}/api@1.0.0"), "answer", &[])
+            .unwrap();
+        assert!(matches!(values.as_slice(), [Val::S64(value)] if *value == index as i64 + 1));
+    }
+}
