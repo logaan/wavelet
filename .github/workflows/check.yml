@@ -9,16 +9,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - run: rustup component add rustfmt clippy llvm-tools-preview
+        with:
+          submodules: recursive
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy, llvm-tools-preview
+          targets: wasm32-wasip1
       - run: python3 scripts/check-quality.py
-      - run: cargo install --locked wasm-tools wasmtime-cli wac-cli wkg cargo-llvm-cov
+      - run: cargo install --locked wasm-tools wasmtime-cli wac-cli wkg cargo-llvm-cov cargo-component
       - run: WAVELET_REQUIRE_HOST_TOOLS=1 scripts/coverage.sh --check
+      - run: cargo build
+      - run: WAVELET="$PWD/target/debug/wavelet" conformance/wavelet/test-matrix.sh
       - run: cargo clippy --manifest-path tooling/wavelet-lsp/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path tooling/wavelet-lsp/Cargo.toml
   editor-and-docs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          submodules: recursive
       - uses: actions/setup-node@v5
         with:
           node-version: 22
