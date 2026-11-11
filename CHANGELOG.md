@@ -13,12 +13,52 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- A pure in-memory compiler API and a compiler component with a WIT interface.
+  Callers supply source files, WIT dependencies, and macro capabilities explicitly.
+  GitHub releases include the standalone `wavelet-compiler.wasm` component.
+- Compiled browser playgrounds and a dedicated REPL, with worker isolation,
+  cancellation, timeouts, and recovery after compiler or runtime errors.
+- A code-led “Learn Wavelet in Y minutes” tour and rewritten documentation
+  describing the current language, component interfaces, and embedding APIs.
+- Pinned Code Maat history analysis with revision, churn, and coupling reports,
+  available through the local check suite and as downloadable CI artifacts.
+
+### Changed
+
+- Native builds, the native REPL, and the compiler component share the compiler
+  pipeline and snippet wrapper. Documentation generation verifies every example
+  through compiled execution against the independent interpreter oracle.
+- Macro preparation returns explicitly supplied or generated component artifacts
+  for host instantiation, then resumes with synchronous macro capabilities.
+- REPL value declarations execute during submission and report initializer errors
+  immediately.
+
+### Fixed
+
+- Compiled string concatenation handles characters and sequence payloads.
+  String length counts Unicode scalars, matching the interpreter.
+- Compiled `upper` and `lower` match the interpreter's Unicode casing, including
+  multi-character mappings and context-sensitive Greek sigma.
+- Generated WIT escapes reserved words in public identifiers so components keep
+  the names declared in Wavelet.
+- Tuple length and statically typed tuple indexing agree with the interpreter.
+- Statically resolved builtin callbacks work in collection operations while
+  preserving local shadowing.
+- Form printing preserves uppercase flag names through reading and printing.
+- Browser resource bindings avoid a JavaScript intrinsic-name collision for
+  the built-in set resource.
+
+### Removed
+
+- Placeholder `Derive` implementations that returned constant answers. Unsupported
+  derivation now reports an error; operations can be defined explicitly.
+
 ## [0.11.0] - 2026-11-12
 
 ### Added
 
-- Pinned Code Maat history analysis with revision, churn, and coupling reports,
-  available through the local check suite and as downloadable CI artifacts.
 - A working WASI 0.2 HTTP example in `examples/http`, with vendored interfaces,
   a smoke-test script, and provider-neutral deployment guidance. The HTTP scaffold
   sets content type, escapes reflected text, and releases request/body resources.

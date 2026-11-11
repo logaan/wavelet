@@ -45,8 +45,9 @@ platform matrix builds the CLI and language server for Linux, macOS, and Windows
 from the Cargo lockfiles. The Windows runner extracts a source archive for the
 tagged commit and skips `.lot-vault` because some task filenames contain colons.
 Once checks and every platform build pass, `ci/package-tooling.sh` bundles the
-editor tooling and binaries. `ci/changelog-section.sh <tag>` extracts the
-release body from `CHANGELOG.md`. Asset names are stable and unversioned so
+editor tooling and binaries. The release also includes the compiler component as
+`wavelet-compiler.wasm`. `ci/changelog-section.sh <tag>` extracts the release body
+from `CHANGELOG.md`. Asset names are stable and unversioned so
 install instructions can point at `.../releases/latest/download/<asset>`.
 
 `CHANGELOG.md` (Keep a Changelog format) is the source of truth for release

@@ -82,6 +82,9 @@ jobs:
         env:
           STAGED_BINS: staged-bins
 
+      - name: Stage compiler component
+        run: cp docs/src/compiler/wavelet_compiler.wasm dist/wavelet-compiler.wasm
+
       - name: Extract changelog section for ${{ github.ref_name }}
         run: scripts/ci/changelog-section.sh "$GITHUB_REF_NAME" > release-notes.md
 
