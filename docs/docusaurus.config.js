@@ -1,6 +1,4 @@
 // @ts-check
-// `@type` JSDoc annotations allow editor autocompletion and type checking
-// (when paired with `@ts-check`).
 
 import {themes as prismThemes} from 'prism-react-renderer';
 
@@ -88,6 +86,7 @@ const config = {
             items: [
               {label: 'Introduction', to: '/'},
               {label: 'Getting started', to: '/getting-started'},
+              {label: 'Learn Wavelet in Y minutes', to: '/learn-wavelet'},
               {label: 'Special forms', to: '/language/special-forms'},
               {label: 'Standard library', to: '/stdlib'},
             ],
@@ -97,7 +96,7 @@ const config = {
             items: [
               {label: 'CLI', to: '/cli'},
               {label: 'Components & composition', to: '/components'},
-              {label: 'Roadmap', to: '/roadmap'},
+              {label: 'Supported features', to: '/roadmap'},
             ],
           },
           {

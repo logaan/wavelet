@@ -1,3 +1,4 @@
+import {importComponentBindings as importModule} from './node-component-loader.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -10,7 +11,6 @@ const OUT = join(here, '..', 'examples.json');
 const { initSync, _eval } = await import(pathToFileURL(join(WASM, 'wavelet.js')).href);
 initSync({ module: readFileSync(join(WASM, 'wavelet_bg.wasm')) });
 
-const importModule = (source) => import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const compiler = await createCompilerRuntime(readFileSync(join(here, '..', 'src/compiler/wavelet_compiler.wasm')), {
   instantiate: (bytes, imports) => instantiateComponent(bytes, imports, importModule),
 });
@@ -24,39 +24,27 @@ E['match-result-inc'] = `Match ok(42) [
 ]`;
 E['gs-hello'] = `str-cat(upper("hello") " from wavelet")`;
 
-E['noffi-shout'] = `// 'sh/shout' (an import) and 'shout' (local) would be called identically.
-// Here we just call the local one — the point is there's no glue either way.
-Def shout Fn {phrase: string}
+E['noffi-shout'] = `Def shout Fn {phrase: string}
   str-cat(upper(phrase) "!")
 shout({phrase: "no ffi"})`;
-E['typed-byte-add-ok'] = `// A typed parameter is checked at the call boundary.
-Def byte-add Fn {a: u8 b: u8}
+E['typed-byte-add-ok'] = `Def byte-add Fn {a: u8 b: u8}
   add(a b)
 byte-add({a: 100 b: 50})`;
-E['typed-byte-add-bad'] = `// The same function rejects an out-of-range value.
-Def byte-add Fn {a: u8 b: u8}
+E['typed-byte-add-bad'] = `Def byte-add Fn {a: u8 b: u8}
   add(a b)
 byte-add({a: 300 b: 1})`;
 
-E['syntax-commas'] = `// commas optional — these are the same list
-[1 2 3]`;
+E['syntax-commas'] = `[1 2 3]`;
 E['syntax-quote-call'] = `Quote delete-file({path: "foo.md" force: true})`;
-E['syntax-if-arity'] = `// 'If' has arity 3; it reads the next three forms, no parens needed.
-If gt(10 3) "bigger" "smaller"`;
-E['syntax-chain'] = `// '.name(...)' makes the receiver the call's first argument.
-// This reads as str-cat(upper("hello") ", world!").
-"hello".upper().str-cat(", world!")`;
+E['syntax-if-arity'] = `If gt(10 3) "bigger" "smaller"`;
+E['syntax-chain'] = `"hello".upper().str-cat(", world!")`;
 
 E['values-atoms'] = `{s: "a string" n: 42 d: -1.5 b: true c: 'x' f: {read write}}`;
 E['values-to-u8-ok'] = `to-u8(200)`;
 E['values-to-u8-bad'] = `to-u8(999)`;
 E['values-record'] = `{name: "Ada" born: 1815 fields: ["maths" "computing"]}`;
-E['values-heterogeneous'] = `// A list has exactly one element type; mixing shapes is a compile error.
-// Reach for a record, a variant, or quoted data (a tree) instead.
-[1 "two" true 'x']`;
-E['values-tuple'] = `// In evaluation position parens are calls, so tuples are built with the
-// fixed-arity constructors tuple0..tuple16 (and destructured by pattern).
-Let {p: tuple2("abc" 123)}
+E['values-heterogeneous'] = `[1 "two" true 'x']`;
+E['values-tuple'] = `Let {p: tuple2("abc" 123)}
   Match p [((s n) tuple3(s n true))]`;
 E['values-options-results'] = `{options: [some(1) none] results: [ok("yes") err("nope")]}`;
 
@@ -69,11 +57,9 @@ E['values-unit-def'] = `Def x 10`;
 
 E['eval-fn-by-name'] = `Def delete-file Fn {path: string force: bool}
   tuple2(path force)
-// by name…
 delete-file({path: "foo.md" force: true})`;
 E['eval-fn-by-order'] = `Def delete-file Fn {path: string force: bool}
   tuple2(path force)
-// …and by order
 delete-file("foo.md" true)`;
 E['eval-fn-scalar'] = `Def square Fn {n} mul(n n)
 square(9)`;
@@ -149,9 +135,7 @@ E['pm-nested'] = `Match ok([1 2 3]) [
   (ok(other)                      0)
   (err(e)                         -1)
 ]`;
-E['pm-no-clause'] = `// The checker proves every Match total: clauses that cannot cover
-// every value are a compile error, not a runtime surprise.
-Match 5 [
+E['pm-no-clause'] = `Match 5 [
   (1  "one")
   (2  "two")
 ]`;
@@ -187,7 +171,7 @@ parse(41)`;
 E['tail-count-down'] = `Def count-down Fn {n}
   If eq(n 0)
      "liftoff"
-     count-down(sub(n 1))     // tail position — constant stack
+     count-down(sub(n 1))
 count-down(100000)`;
 E['tail-sum-to'] = `Def sum-to Fn {n acc}
   If eq(n 0)
@@ -226,25 +210,17 @@ E['std-cells'] = `Let {c: cell-new(0)}
       cell-set(c add(cell-get(c) 1))
       cell-get(c)]`;
 
-E['ty-overload-int'] = `// Two same-named monomorphic defs form an overload set;
-// the call resolves on the static argument type.
-Def show Fn {x: s32} "int"
+E['ty-overload-int'] = `Def show Fn {x: s32} "int"
 Def show Fn {x: string} "str"
 show(5)`;
-E['ty-overload-str'] = `// Definition order doesn't matter — the string overload is reachable too.
-Def show Fn {x: string} "str"
+E['ty-overload-str'] = `Def show Fn {x: string} "str"
 Def show Fn {x: s32} "int"
 show("hi")`;
-E['ty-the-return'] = `// When the arguments don't decide, the expected type from 'The'
-// selects which overload to call.
-Def make Fn {} 1
+E['ty-the-return'] = `Def make Fn {} 1
 Def make Fn {} "x"
 The s64 make()`;
-E['ty-the-range'] = `// A literal is range-checked against its type at compile time.
-The u8 300`;
-E['ty-mixed-add'] = `// 'add' has no overload mixing an s32 and a string, so this is a
-// compile-time type error even though 'bad' is never called.
-Def bad Fn {x: s32} add(x "y")`;
+E['ty-the-range'] = `The u8 300`;
+E['ty-mixed-add'] = `Def bad Fn {x: s32} add(x "y")`;
 
 E['ty-user-functor'] = `DefFunctor "demo:pair" {left right} [
   DefType pair tuple(left right)

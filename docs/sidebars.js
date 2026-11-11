@@ -6,6 +6,7 @@ const sidebars = {
     'intro',
     'philosophy',
     'getting-started',
+    'learn-wavelet',
     'browser-repl',
     {
       type: 'category',

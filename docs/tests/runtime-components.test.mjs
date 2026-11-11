@@ -1,10 +1,10 @@
+import {importComponentBindings as importModule} from '../scripts/node-component-loader.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import test from 'node:test';
 import {instantiateComponent} from '../src/runtime/componentLoader.mjs';
 import {createCompilerRuntime, formatError} from '../src/runtime/compilerRuntime.mjs';
 
-const importModule = (source) => import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 
 test('transpiles and executes a real component with explicit instantiation', async () => {
   const bytes = await readFile(new URL('../../tests/fixtures/add.wasm', import.meta.url));
@@ -95,4 +95,12 @@ test('compiler component prepares a macro library supplied as virtual project so
   const artifact = compilation.artifacts.find((artifact) => artifact.name === compilation.entry);
   const component = await instantiateComponent(artifact.bytes, {}, importModule);
   assert.equal(component['memory:app/api@1.0.0'].answer(), 42n);
+});
+
+test('component resources can share names with JavaScript intrinsic classes', async () => {
+  const runtime = await realCompiler();
+  for (const name of ['set', 'array', 'object', 'promise', 'error', 'type-error', 'data-view', 'number', 'symbol']) {
+    const source = `DefResource ${name} { New: Fn {start: u32} cell-new(start) value: Fn {self: ${name}} The u32 cell-get(self) }\nLet {item: ${name}(42)} ${name}/value(item)`;
+    assert.equal((await runtime.evaluate({source})).value, '42', name);
+  }
 });

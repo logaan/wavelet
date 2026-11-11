@@ -1,7 +1,7 @@
 # scripts/
 
 Helper scripts for working on Wavelet. Every script is safe to run from any
-directory — each `cd`s to the repo root itself.
+directory; each `cd`s to the repo root itself.
 
 The top level holds the scripts an engineer runs day to day. The
 [`ci/`](#scriptsci--release--docs-pipeline) subdirectory holds the
@@ -23,7 +23,7 @@ from a local checkout.
 | `install.sh` | Builds the CLI and language server, then symlinks both into `~/bin` (override with `BIN_DIR`). Symlinks point in-tree, so a later `cargo build --release` updates them in place. | Installing Wavelet locally for development. Needs the Rust toolchain. |
 | `init-submodules.sh` | Fetches and checks out git submodules (today just `tooling/neovim`, the `wavelet.nvim` plugin). | Once after a fresh `git clone`, or after a branch switch that moves a submodule pointer. |
 
-## `scripts/ci/` — release & docs pipeline
+## `scripts/ci/`: release & docs pipeline
 
 Run by the GitHub workflows in `.github/workflows/`. You can run them by hand to
 reproduce CI locally, but they aren't part of the normal dev loop.
@@ -33,7 +33,7 @@ reproduce CI locally, but they aren't part of the normal dev loop.
 | `ci/build-cli.sh [TARGET]` | Cross-compiles the `wavelet` CLI for one Rust target and stages it as `dist/wavelet-<target>`. Defaults to the host target. | `release.yml` (matrix); also via `build.sh`'s host build path. |
 | `ci/build-lsp.sh [TARGET]` | Cross-compiles the `wavelet-lsp` language server for one target and stages it as `dist/wavelet-lsp-<target>`. Defaults to the host target. | `release.yml` (matrix); `build.sh`. |
 | `ci/package-tooling.sh` | Packages the editor tooling and standalone binaries into release artifacts in `dist/` (VS Code zip, per-platform tarballs, standalone CLI/LSP binaries). | `release.yml` (consumes the staged binaries above). |
-| `ci/build-docs.sh` | Builds the Docusaurus site (`docs/`) into `docs/build`. Node-only — the playground wasm is committed. | `deploy-docs.yml`; `build.sh`. |
+| `ci/build-docs.sh` | Builds the Docusaurus site (`docs/`) into `docs/build`. Node-only; the compiler component is committed. | `deploy-docs.yml`; `build.sh`. |
 | `ci/changelog-section.sh VERSION` | Prints the `CHANGELOG.md` section for one version to stdout; exits non-zero if there's no section, so a release fails loudly rather than publishing empty notes. | `release.yml`. Also run by hand to sanity-check release notes before tagging `vX.Y.Z`. |
 
 ## How the pipelines fit together
@@ -48,7 +48,7 @@ from `CHANGELOG.md`. Asset names are stable and unversioned so install
 instructions can point at `.../releases/latest/download/<asset>`.
 
 `CHANGELOG.md` (Keep a Changelog format) is the source of truth for release
-notes — record user-visible changes under `## [Unreleased]` as you make them, and
+notes. Record user-visible changes under `## [Unreleased]` as you make them, and
 confirm `ci/changelog-section.sh vX.Y.Z` prints the right section before tagging.
 
 ### The docs + examples pipeline
@@ -69,3 +69,9 @@ Run `npm --prefix docs run test:browser` after building the docs to check every
 example in Chromium and verify cancellation and recovery. Install its browser
 with `docs/node_modules/.bin/playwright install chromium`; use
 `PLAYWRIGHT_BROWSERS_PATH` to select the browser cache location.
+
+The browser binding loader qualifies Jco's generated resource-tracking set
+constructor as `globalThis.Set`. Jco 1.41 otherwise resolves that constructor to
+an exported resource class named `Set`, which breaks set-functor components.
+The tour runtime tests exercise this case. Recheck the normalization when
+updating Jco; the component's exported names remain unchanged.

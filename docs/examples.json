@@ -20,21 +20,21 @@
     "output": ""
   },
   "noffi-shout": {
-    "code": "// 'sh/shout' (an import) and 'shout' (local) would be called identically.\n// Here we just call the local one — the point is there's no glue either way.\nDef shout Fn {phrase: string}\n  str-cat(upper(phrase) \"!\")\nshout({phrase: \"no ffi\"})",
+    "code": "Def shout Fn {phrase: string}\n  str-cat(upper(phrase) \"!\")\nshout({phrase: \"no ffi\"})",
     "value": "\"NO FFI!\"",
     "output": ""
   },
   "typed-byte-add-ok": {
-    "code": "// A typed parameter is checked at the call boundary.\nDef byte-add Fn {a: u8 b: u8}\n  add(a b)\nbyte-add({a: 100 b: 50})",
+    "code": "Def byte-add Fn {a: u8 b: u8}\n  add(a b)\nbyte-add({a: 100 b: 50})",
     "value": "150",
     "output": ""
   },
   "typed-byte-add-bad": {
-    "code": "// The same function rejects an out-of-range value.\nDef byte-add Fn {a: u8 b: u8}\n  add(a b)\nbyte-add({a: 300 b: 1})",
+    "code": "Def byte-add Fn {a: u8 b: u8}\n  add(a b)\nbyte-add({a: 300 b: 1})",
     "error": "eval error: parameter `a`: 300 does not conform to type `u8`"
   },
   "syntax-commas": {
-    "code": "// commas optional — these are the same list\n[1 2 3]",
+    "code": "[1 2 3]",
     "value": "[1, 2, 3]",
     "output": ""
   },
@@ -44,12 +44,12 @@
     "output": ""
   },
   "syntax-if-arity": {
-    "code": "// 'If' has arity 3; it reads the next three forms, no parens needed.\nIf gt(10 3) \"bigger\" \"smaller\"",
+    "code": "If gt(10 3) \"bigger\" \"smaller\"",
     "value": "\"bigger\"",
     "output": ""
   },
   "syntax-chain": {
-    "code": "// '.name(...)' makes the receiver the call's first argument.\n// This reads as str-cat(upper(\"hello\") \", world!\").\n\"hello\".upper().str-cat(\", world!\")",
+    "code": "\"hello\".upper().str-cat(\", world!\")",
     "value": "\"HELLO, world!\"",
     "output": ""
   },
@@ -73,11 +73,11 @@
     "output": ""
   },
   "values-heterogeneous": {
-    "code": "// A list has exactly one element type; mixing shapes is a compile error.\n// Reach for a record, a variant, or quoted data (a tree) instead.\n[1 \"two\" true 'x']",
+    "code": "[1 \"two\" true 'x']",
     "error": "eval error: heterogeneous list: elements must share one type, got IntLit(Some(1)) and String"
   },
   "values-tuple": {
-    "code": "// In evaluation position parens are calls, so tuples are built with the\n// fixed-arity constructors tuple0..tuple16 (and destructured by pattern).\nLet {p: tuple2(\"abc\" 123)}\n  Match p [((s n) tuple3(s n true))]",
+    "code": "Let {p: tuple2(\"abc\" 123)}\n  Match p [((s n) tuple3(s n true))]",
     "value": "(\"abc\", 123, true)",
     "output": ""
   },
@@ -107,12 +107,12 @@
     "output": ""
   },
   "eval-fn-by-name": {
-    "code": "Def delete-file Fn {path: string force: bool}\n  tuple2(path force)\n// by name…\ndelete-file({path: \"foo.md\" force: true})",
+    "code": "Def delete-file Fn {path: string force: bool}\n  tuple2(path force)\ndelete-file({path: \"foo.md\" force: true})",
     "value": "(\"foo.md\", true)",
     "output": ""
   },
   "eval-fn-by-order": {
-    "code": "Def delete-file Fn {path: string force: bool}\n  tuple2(path force)\n// …and by order\ndelete-file(\"foo.md\" true)",
+    "code": "Def delete-file Fn {path: string force: bool}\n  tuple2(path force)\ndelete-file(\"foo.md\" true)",
     "value": "(\"foo.md\", true)",
     "output": ""
   },
@@ -235,7 +235,7 @@
     "output": ""
   },
   "pm-no-clause": {
-    "code": "// The checker proves every Match total: clauses that cannot cover\n// every value are a compile error, not a runtime surprise.\nMatch 5 [\n  (1  \"one\")\n  (2  \"two\")\n]",
+    "code": "Match 5 [\n  (1  \"one\")\n  (2  \"two\")\n]",
     "error": "eval error: non-exhaustive Match: no clause matches every possible value (add a catch-all clause)"
   },
   "macro-swap": {
@@ -269,7 +269,7 @@
     "output": ""
   },
   "tail-count-down": {
-    "code": "Def count-down Fn {n}\n  If eq(n 0)\n     \"liftoff\"\n     count-down(sub(n 1))     // tail position — constant stack\ncount-down(100000)",
+    "code": "Def count-down Fn {n}\n  If eq(n 0)\n     \"liftoff\"\n     count-down(sub(n 1))\ncount-down(100000)",
     "value": "\"liftoff\"",
     "output": ""
   },
@@ -396,26 +396,26 @@
     "output": ""
   },
   "ty-overload-int": {
-    "code": "// Two same-named monomorphic defs form an overload set;\n// the call resolves on the static argument type.\nDef show Fn {x: s32} \"int\"\nDef show Fn {x: string} \"str\"\nshow(5)",
+    "code": "Def show Fn {x: s32} \"int\"\nDef show Fn {x: string} \"str\"\nshow(5)",
     "value": "\"int\"",
     "output": ""
   },
   "ty-overload-str": {
-    "code": "// Definition order doesn't matter — the string overload is reachable too.\nDef show Fn {x: string} \"str\"\nDef show Fn {x: s32} \"int\"\nshow(\"hi\")",
+    "code": "Def show Fn {x: string} \"str\"\nDef show Fn {x: s32} \"int\"\nshow(\"hi\")",
     "value": "\"str\"",
     "output": ""
   },
   "ty-the-return": {
-    "code": "// When the arguments don't decide, the expected type from 'The'\n// selects which overload to call.\nDef make Fn {} 1\nDef make Fn {} \"x\"\nThe s64 make()",
+    "code": "Def make Fn {} 1\nDef make Fn {} \"x\"\nThe s64 make()",
     "value": "1",
     "output": ""
   },
   "ty-the-range": {
-    "code": "// A literal is range-checked against its type at compile time.\nThe u8 300",
+    "code": "The u8 300",
     "error": "eval error: The: 300 does not conform to type `u8`"
   },
   "ty-mixed-add": {
-    "code": "// 'add' has no overload mixing an s32 and a string, so this is a\n// compile-time type error even though 'bad' is never called.\nDef bad Fn {x: s32} add(x \"y\")",
+    "code": "Def bad Fn {x: s32} add(x \"y\")",
     "error": "eval error: `add` requires numeric operands"
   },
   "ty-user-functor": {

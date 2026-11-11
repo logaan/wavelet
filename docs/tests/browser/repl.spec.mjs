@@ -1,3 +1,4 @@
+import {tourBlocks, tourValues} from '../tour-examples.mjs';
 import {expect, test} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
 
@@ -30,7 +31,7 @@ test('cancels an infinite compiled loop without blocking the page', async ({page
   await expect(page.getByTestId('wavelet-result').first()).toContainText('13');
 });
 
-test('every runnable documentation example executes through the compiler worker', async ({page}) => {
+test('documentation examples and tour snippets execute through the compiler worker', async ({page}) => {
   test.setTimeout(600_000);
   await page.goto('repl');
   const failures = await page.evaluate(async (entries) => {
@@ -56,6 +57,6 @@ test('every runnable documentation example executes through the compiler worker'
     }
     worker.terminate();
     return failures;
-  }, Object.entries(examples));
+  }, [...Object.entries(examples), ...tourBlocks.filter((block) => !block.name).map((block, index) => [`tour-${index + 1}`, {code: block.contents, value: tourValues[index], output: ''}])]);
   expect(failures).toEqual([]);
 });

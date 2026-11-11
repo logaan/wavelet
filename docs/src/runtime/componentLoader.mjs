@@ -25,7 +25,11 @@ export async function instantiateComponent(bytes, imports = {}, importModule = i
   const files = new Map(generated.files);
   const javascript = files.get('component.js');
   if (!javascript) throw new Error('Component transpilation did not produce JavaScript bindings.');
-  const module = await importModule(new TextDecoder().decode(javascript));
+  const bindings = new TextDecoder().decode(javascript).replaceAll(
+    '._createdReps = new Set();',
+    '._createdReps = new globalThis.Set();',
+  );
+  const module = await importModule(bindings);
   const modules = new Map();
   const getCoreModule = (path) => {
     const name = path.replace(/^\.\//, '');
