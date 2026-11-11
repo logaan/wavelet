@@ -1,27 +1,29 @@
 ---
-sidebar_position: 4
+sidebar_position: 5
 title: Evaluation
-description: The four evaluation rules and the single-namespace (Lisp-1) model.
+description: Expressions, calls, lexical bindings, and control flow.
 ---
 
 # Evaluation
 
-There are four evaluation rules. That's the whole model.
+Wavelet compiles expressions after resolving names, expanding macros, and checking types. The evaluation rules describe the behavior of that compiled program:
 
-1. **Atoms** — booleans, numbers, chars, strings, flags — evaluate to themselves.
-2. **A bare name** evaluates to its binding in the current lexical environment. Wavelet is a **Lisp-1**: one namespace for everything. Unbound names are errors. Enum cases, imported functions, and constructors are all just bindings.
-3. **A call form** — a tuple `(head arg…)` in evaluation position — evaluates its arguments, **bundles** them (0 ⇒ the empty tuple, 1 ⇒ that value, ≥2 ⇒ a tuple), and applies the value bound to `head`. Heads are names (with `/` normalized to `-`); a tuple **value** comes from the fixed-arity constructors [`tuple0` … `tuple16`](../stdlib#tuples), from `Quote`, or from another builtin like `zip`. Callbacks must resolve statically; runtime data cannot contain function values.
-4. **Special forms and macros** are recognised before evaluation and follow their own rules — see [Special forms](./special-forms) and [Macros](./macros).
+1. Booleans, numbers, characters, strings, and flags evaluate to themselves.
+2. A bare name refers to its binding in the current lexical scope. Unbound names are compile errors.
+3. A call evaluates its arguments and invokes its statically resolved function. Ordinary call heads are names; qualified spellings such as `kv/get` normalize to `kv-get`.
+4. Special forms control how their subexpressions are used. Macros transform source forms before runtime evaluation.
+
+List and record expressions evaluate their elements and fields. A parenthesized expression is a call; use `tuple2`, another tuple constructor, or `zip` to produce a runtime tuple. `Quote` instead preserves source forms as tree data.
 
 ## Functions take exactly one value
 
-This is the rule that makes everything else fit together. A call bundles its arguments into one value — a scalar (1 argument) or a tuple (≥2) — which may also be a record, and that's what gives calls their n-ary feel. The `Fn`'s parameter braces describe how to receive it:
+A call bundles arguments into a value. Zero arguments form an empty tuple, one argument is passed directly, and multiple arguments form a tuple. The `Fn` parameter record describes how to receive them:
 
-- A **record** argument binds parameters by **name**.
-- A **tuple** argument binds them by **order**.
-- Any **single value** — a scalar, a **list**, a record, anything — binds a sole parameter directly. (A list is one value; it is *not* spread across several parameters. Positional multi-binding is the tuple's job.)
+- A record argument can bind parameters by name.
+- A tuple argument binds multiple parameters by position.
+- A sole parameter receives a single value directly, including a list or record.
 
-So both of these reach the same two-parameter function:
+A list is not spread into several parameters. These examples call the same two-parameter function by name and by position:
 
 <Playground id="eval-fn-by-name" />
 
@@ -33,16 +35,16 @@ A sole parameter receives a scalar directly:
 
 ## One namespace
 
-Functions and data share a namespace. A macro can receive a function name and generate direct calls at compile time:
+Functions and data share a namespace. Lexical bindings determine which name a call uses. A macro can receive a function name and generate calls during compilation:
 
 <Playground id="eval-twice" />
 
 ## Choosing an operation at runtime
 
-Runtime collections contain WIT data. Store variant cases and use `Match` to select a direct call; function-valued lists, records, tuples, cells, and returned closures are rejected:
+Callbacks and function aliases must resolve statically. Runtime data cannot contain functions. Store variant cases and use `Match` to choose a direct call:
 
 <Playground id="eval-apply-list" />
 
 ## No loops, no mutation, no early return
 
-The core deliberately omits these. Iteration is [tail recursion](./tail-calls); mutable state lives in resources (the standard library's [cell](../stdlib#cells)); error propagation is a macro over [`Match`](./pattern-matching) (see the `TryLet` pattern under [Macros](./macros#error-propagation-without-early-return)).
+Bindings are immutable. Use collection operations or [tail recursion](./tail-calls) for iteration and [cells](../stdlib#cells) or [resources](./type-system#user-declared-resources) for mutable state. Error propagation can be expressed with `Match` or a [binding macro](./macros#error-propagation-without-early-return).

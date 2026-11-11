@@ -1,58 +1,57 @@
 ---
-sidebar_position: 6
+sidebar_position: 7
 title: Pattern matching
-description: Match destructures the same data shapes the language is built from.
+description: Destructure data and handle every case with Match.
 ---
 
 # Pattern matching
 
-`Match scrutinee [clauses]` evaluates the scrutinee, then tries each `(pattern result)` clause in order. The first pattern that matches wins, and its result is evaluated in [tail position](./tail-calls) with any bindings the pattern introduced. If nothing matches, it's an error.
-
-Patterns are just **forms**, interpreted structurally:
+`Match value [clauses]` evaluates its input and chooses the first matching `(pattern result)` clause. Pattern bindings are available in that clause's result, which is in [tail position](./tail-calls). All results must have compatible types.
 
 | Pattern | Matches |
 |---|---|
-| a literal (`42`, `"hi"`, `true`, `'x'`, `{read}`) | a value equal to it |
-| a bare name (`x`) | anything — and **binds** the name |
-| a payload-less variant case in scope (`none`, an enum case) | that exact case, by equality |
-| a `(case …)` form whose head is a name (`ok(n)`, `point({x: a})`) | a variant case with that label, recursing into the payload |
-| a sub-pattern-less `(case)` form (`(ok)`, `(err)`) | that case with **no payload** (payload-less results) |
-| a tuple `(a b)` | a tuple of the same length, element-wise |
-| a list `[a b c]` | a list of the same length, element-wise |
-| a record `{k: p}` | a record containing key `k` whose value matches `p` |
+| Integer, string, character, boolean, or flags literal | An equal value. |
+| A bare name | Any value, binding it to that name. |
+| A payload-less case in scope, such as `none` | That case. |
+| `ok(n)` or another case pattern | That case, binding or matching its payload. |
+| `(ok)` or `(err)` | A payload-less result case. |
+| Tuple or list pattern | The same length, matching each position. |
+| Record pattern `{key: pattern}` | A record containing the named field with a matching value. |
 
-A `(…)` pattern is both the variant-case shape and the tuple shape, so it is **disambiguated by the value** being matched: against a variant value, `(ok n)` reads as the case `ok` binding its payload to `n`; against a tuple value, the same parentheses destructure element-wise. (A literal tuple value comes from `Quote` or a builtin — see [evaluation](./evaluation).)
+A parenthesized pattern is interpreted according to the matched type. Against a variant, `(ok n)` matches its case and payload; against a tuple, parentheses destructure positions.
 
 ## Literals and the catch-all
 
-A bare name matches anything and binds it — the idiomatic catch-all.
-
-Integer, boolean, character, and string literals match by exact equality. A **float literal is rejected as a pattern** at check time: float equality is unreliable (`0.1 + 0.2` never equals `0.3`; a `nan` pattern matches nothing) and no set of float literals can ever be exhaustive. Compare floats explicitly instead — e.g. `If eq(x 0.5) …` — rather than matching on them.
+A name that is not a case constructor matches any value and binds it. This is the usual catch-all:
 
 <Playground id="pm-catch-all" />
 
+Float literals are rejected as patterns. Use an explicit comparison when you need one; remember that floating-point equality and `nan` have special behavior.
+
 ## Destructuring variants
 
-Call-shaped patterns destructure variant cases — the bread and butter of `result` and `option` handling.
+Case patterns handle variants, options, and results:
 
 <Playground id="pm-describe" />
 
-A payload-less case in scope (like `none`) matches by equality, not by binding:
+A payload-less case such as `none` matches that case without creating a new binding:
 
 <Playground id="pm-none" />
 
 ## Destructuring sequences and records
 
-Lists and tuples match by length and position; records match by the keys you name (extra keys in the value are ignored).
+Lists and tuples match by length and position. Record patterns name the fields they need; additional fields in the value are ignored:
 
 <Playground id="pm-record" />
 
-Nested patterns compose:
+Patterns can nest:
 
 <Playground id="pm-nested" />
 
 ## Every Match must be total
 
-There is no implicit fall-through, and the checker enforces it at compile time: wherever the scrutinee's type is known, the clauses must cover every possible value. Types that can't be enumerated (numbers, strings, lists, trees) need a catch-all clause; `bool`, `option`, `result`, and `DefType` variants must cover every case (a catch-all also works).
+The compiler checks coverage. Booleans, options, results, enums, and variants must cover all their cases, or provide a catch-all. Open-ended domains such as integers, strings, lists, and trees require a catch-all. Nested payload constraints must also leave complete coverage.
+
+An incomplete match is rejected before execution:
 
 <Playground id="pm-no-clause" />

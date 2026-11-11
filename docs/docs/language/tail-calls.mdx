@@ -1,35 +1,33 @@
 ---
 sidebar_position: 8
 title: Tail calls
-description: Guaranteed tail-call elimination — iteration is recursion.
+description: Use tail recursion for iteration within a component.
 ---
 
 # Tail calls
 
-Wavelet **guarantees** tail-call elimination. There is no loop construct: iteration *is* tail recursion, and the guarantee is what makes that practical.
+Wavelet eliminates tail calls within a component. A call in tail position returns its result directly, allowing execution to reuse the current stack frame.
 
 ## Tail positions
 
-A call in tail position reuses the current stack frame instead of growing the stack. The tail positions are:
+A call is in tail position when it is:
 
 - the body of a [`Fn`](./special-forms#fn);
-- both branches of an [`If`](../stdlib#if) (via the `Match` it expands to);
-- every clause result of a [`Match`](./special-forms#match);
-- the last expression of a [`Do`](../stdlib#do) (via the `Match` it expands to);
-- the body of a [`Let`](./special-forms#let).
+- either result branch of [`If`](../stdlib#if);
+- a clause result of [`Match`](./special-forms#match);
+- the last expression of [`Do`](../stdlib#do);
+- the body of [`Let`](./special-forms#let).
 
-So a self-recursive function whose recursive call sits in tail position runs in constant stack, for any input:
+A self-recursive function can therefore iterate without growing the stack:
 
 <Playground id="tail-count-down" />
 
-An accumulator-passing sum, the canonical "loop":
+Carry intermediate results in an accumulator when writing a recursive sum:
 
 <Playground id="tail-sum-to" />
 
-In the compiled backend these become the wasm `return_call` / `return_call_indirect` instructions from the (now widely shipped) tail-call proposal; the in-browser interpreter achieves the same by looping rather than recursing in its evaluator, so the example above doesn't overflow.
+The compiler emits WebAssembly tail-call instructions. Your runtime must support those instructions to execute the component.
 
-## The honest caveat
+## Component boundaries
 
-The guarantee holds **within a component**. A call to an *imported* function passes through canonical-ABI adapters that the composer generates, and those frames are outside Wavelet's control — so a recursion cycle routed through a component boundary consumes stack.
-
-The compiler warns when it can see an unbounded recursion routed through an import.
+Calls to imported functions pass through canonical ABI adapters outside Wavelet's control. A recursion cycle that crosses component boundaries can consume stack even if the source call is in tail position. Keep unbounded recursive iteration within one component.

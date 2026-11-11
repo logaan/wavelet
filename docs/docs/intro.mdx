@@ -2,41 +2,38 @@
 slug: /
 sidebar_position: 1
 title: Introduction
-description: A small homoiconic language for the WebAssembly Component Model.
+description: A small, statically typed language for the WebAssembly Component Model.
 ---
 
 # Wavelet
 
-**Wavelet is a small homoiconic language for the [WebAssembly Component Model](https://component-model.bytecodealliance.org/).** It rests on three commitments:
+Wavelet is a small, statically typed language that compiles to **WebAssembly components**. Each source file becomes a component with a typed interface. You can compose it with components written in other languages and run the result on a compatible host.
 
-1. **One file is one component.** The unit you edit, compile, link, version, and deploy is the same thing. Nothing distinguishes a component written in Wavelet from one written in Rust, Go, or JavaScript — composition happens at the WIT level.
-2. **The syntax is [WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave).** Source code is WAVE text (the Component Model's human-readable value encoding) plus a thin layer of reader sugar. Wavelet is homoiconic the way Lisp is over s-expressions — except its "s-expressions" are exactly the values that cross component boundaries.
-3. **The core is minimal.** Fourteen special forms, closures, guaranteed tail-call elimination, and a macro system. Everything else — including the standard library and macros — is delivered as components.
+Wavelet uses the Component Model's data types: booleans, numbers, strings, lists, records, variants, and resource handles. [WIT](https://component-model.bytecodealliance.org/design/wit.html) describes the functions and types that cross component boundaries. Calling an imported function uses the same syntax as calling a local function.
 
-The consequence that ties these together: **there is no FFI.** Wavelet has no native data types of its own. Its booleans, strings, lists, records, variants, options, results, and flags *are* WIT types, so calling a Rust component looks identical to calling a function defined two lines up.
+Its source syntax builds on [WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave), the Component Model's text format for values. Code can also be treated as data, which lets macros transform source forms during compilation.
 
 ## Try it
 
-The examples in these docs are live. The Wavelet interpreter has been compiled to WebAssembly and runs in your browser — the reference evaluator used to validate the compiled backend. `wavelet run` and the REPL execute compiled components. Edit the code and press **Run** (or `Cmd`/`Ctrl`+`Enter`).
+Edit an example and choose **Run**, or press `Cmd`/`Ctrl`+`Enter`. The compiler runs in a browser worker, produces a component, and executes that component. You can also open the [browser REPL](/repl) to write a larger program.
 
 <Playground id="hello-shout" autoRun />
 
-A function that squares every element of a list:
+A function can be passed directly to a collection operation such as `map`. The compiler resolves the callback and its argument types before execution:
 
 <Playground id="map-square" />
 
-Pattern matching over a `result`:
+Use `Match` to handle the cases of a value. For a `result`, these are success (`ok`) and failure (`err`):
 
 <Playground id="match-result-inc" />
 
-:::note[Browser interpreter scope]
-The in-browser playground runs a single component's worth of code with the standard library in scope. Module linking forms such as `Package`, `Import`, and `Export` are shown as static snippets. Runnable examples can define local types and resources, but cannot call external host interfaces.
-:::
+The compiler checks that lists have one element type, that branches return compatible types, and that matches cover the input type. Inference supplies types where there is enough context; annotations resolve ambiguous cases.
 
-## A taste of components
+## A component in one file
+
+Save this as `shout.wlt`:
 
 ```wavelet
-// shout.wlt — compiles to demo:shout.wasm
 Package "demo:shout@0.1.0"
 
 Export shout
@@ -44,43 +41,33 @@ Def shout Fn {phrase: string}
   str-cat(upper(phrase) "!")
 ```
 
-```wavelet
-// main.wlt — compiles to demo:main.wasm
-Package "demo:main@0.1.0"
-
-// Output is an ordinary import of a WASI interface, not a builtin.
-Import {pkg: "demo:shout/api" as: sh}
-Import {pkg: "wasi:cli/stdout@0.2.0" as: stdout}
-Import {pkg: "wasi:io/streams@0.2.0" as: streams}
-
-// A file adopts the CLI world by exporting wasi:cli/run — no compiler-known
-// target. The WIT for these interfaces is fetched into wit/ by wkg.
-Export {iface: "wasi:cli/run" name: run result: result}
-Def run Fn {}
-  Let {out: stdout/get-stdout()}
-    Do [streams/blocking-write-and-flush(out sh/shout({phrase: "wasm"}))
-        ok(0)]
-```
+`Package` identifies the component, `Def` defines a function, and `Export` makes it available to callers. Build it with:
 
 ```console
-$ wavelet build src/*.wlt -o out
-built out/app.wasm
-$ wasmtime run out/app.wasm
-WASM!
+$ wavelet build shout.wlt -o out
 ```
 
-Each file declares its own package and becomes its own component; `wavelet build` composes them into a single `out/app.wasm`, wiring `main`'s import of `demo:shout/api` to `shout`'s export. Swapping in a Rust implementation of `demo:shout/api` would require changing nothing in `main.wlt`.
+Another component can import and call it:
 
-## Where to next
+```wavelet
+Package "demo:greeting@0.1.0"
 
-- **[Philosophy](./philosophy)** — why no FFI, and the costs the design accepts.
-- **[Getting started](./getting-started)** — build the compiler and run your first program.
-- **[The language](./language/syntax)** — syntax, values, evaluation, the sixteen forms, macros.
-- **[Standard library](./stdlib)** — every built-in function, with live examples.
-- **[CLI reference](./cli)** — `read`, `expand`, `repl`, `wit`, `run`, `build`, `compose`.
-- **[Supply-chain security](./supply-chain)** — how the component model narrows the attack surface.
-- **[Roadmap](./roadmap)** — what works today and what is still on the drawing board.
+Import {pkg: "demo:shout/api" as: sh}
 
-:::info[Draft 0.1]
-Wavelet is at **draft 0.1** and actively implemented. These docs mark clearly what runs today versus what is designed but **not yet implemented**. See the [roadmap](./roadmap) for the full picture.
-:::
+Export {name: greet result: string}
+Def greet Fn {name: string}
+  str-cat("Hello, " sh/shout(name))
+```
+
+Build both files together to compose the matching import and export. A host supplies any remaining interfaces, such as filesystem access or HTTP requests. The browser REPL runs components whose runtime imports can be resolved without host capabilities; supplying WIT describes an interface but does not implement it.
+
+## Learn Wavelet
+
+- [Learn Wavelet in Y minutes](./learn-wavelet) offers a compact tour through commented code.
+- [Getting started](./getting-started) covers installation, a first project, and editor support.
+- [Syntax](./language/syntax), [values](./language/values), and [the type system](./language/type-system) introduce the language.
+- [Special forms](./language/special-forms), [pattern matching](./language/pattern-matching), and [macros](./language/macros) explain how to write programs.
+- [Standard library](./stdlib) is the function reference, with executable examples.
+- [Components and composition](./components) covers interfaces, resources, and dependency wiring.
+- [Web applications](./web-apps) builds an HTTP component; [Compiler API](./compiler-api) embeds the compiler in another application.
+- [Supported features and limits](./roadmap) collects the implementation boundaries.

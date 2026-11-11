@@ -1,88 +1,59 @@
 ---
 sidebar_position: 2
 title: Reader sugar
-description: Every reader-sugar form, enumerated — what you write and the canonical WAVE value it desugars to.
+description: Source spellings and the canonical forms produced by the reader.
 ---
 
 # Reader sugar
 
-Wavelet's tokens *are* [WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave)'s tokens, and the reader is where all sugar dies: every surface form desugars to a canonical WAVE value before anything is evaluated. This page enumerates each reader-sugar form, one per section, with the canonical value it produces.
-
-A form is **reader sugar** when it is *not already* a valid WAVE value, or when the reader **transforms** it into a different shape as it reads. That is the whole list below.
-
-You can confirm any desugaring yourself with `wavelet read`, which prints the canonical WAVE tree for a piece of source:
-
-```console
-$ echo 'f(x y)' | wavelet read
-(f, x, y)
-```
+The reader rewrites a small set of convenient spellings into ordinary source forms. These rules run before macro expansion. `wavelet read` prints the result, making it useful when writing macros or checking how a form is grouped.
 
 ## 1. Commas are whitespace
 
-Commas are whitespace. These read identically:
+These lists read identically:
 
 ```wavelet
 [1 2 3]
 [1, 2, 3]
 ```
 
+The canonical printer includes commas:
+
 ```console
 $ echo '[1 2 3]' | wavelet read
 [1, 2, 3]
 ```
 
-This is the sugar that makes Wavelet a *superset* of WAVE rather than a different language: drop the commas and a WAVE value is already Wavelet. The canonical printer always puts the commas back, so anything Wavelet reads prints as strict WAVE and can be handed to any WAVE tooling. Because every comma-free tuple, list, record, and flag set is just this rule applied, none of them needs its own entry here.
-
 <Playground id="syntax-commas" />
 
 ## 2. The attachment rule (call forms)
 
-Wavelet's only whitespace-sensitive rules are about **attachment** — a token abutting the one before it. The first is the call rule: a `(` that *immediately* follows an identifier — with no intervening whitespace — makes that identifier the **head** of a call, and the reader folds the head and the parenthesized forms into a single tuple. With whitespace in between, the parenthesized expression is a separate, free-standing value:
+An attached parenthesis turns a name and its arguments into one call form:
 
-```wavelet
-delete-file({path: "foo.md" force: true})   // a call: the head plus a record argument
-delete-file ({path: "foo.md" force: true})  // two forms: a variable, then a record in a tuple
-```
-
-A call desugars to a **tuple whose first element is the head**:
-
-| You write | Canonical WAVE form | |
+| Source | Canonical form | Arguments |
 |---|---|---|
-| `f(x)` | `(f, x)` | one argument |
-| `f(x y)` | `(f, x, y)` | positional arguments |
-| `f([x y])` | `(f, [x, y])` | a list argument |
-| `f({a: 1 b: 2})` | `(f, {a: 1, b: 2})` | a record argument — named arguments |
-| `f()` | `(f)` | zero arguments |
+| `f(x)` | `(f, x)` | One value. |
+| `f(x y)` | `(f, x, y)` | Two positional values. |
+| `f([x y])` | `(f, [x, y])` | One list. |
+| `f({a: 1 b: 2})` | `(f, {a: 1, b: 2})` | One record. |
+| `f()` | `(f)` | None. |
 
-```console
-$ echo 'f(x y)' | wavelet read
-(f, x, y)
-$ echo 'f()' | wavelet read
-(f)
-```
+With whitespace, `f (x)` contains two separate forms. A standalone `(x)` is a zero-argument call in expression position, not grouping around `x`.
 
-As data, a call is just a tuple: `log("hi")` is the WAVE tuple `(log, "hi")`. In evaluation position a parenthesized form is always a call; the same tuple is plain data under `Quote`. A standalone `(a)` is therefore a one-element tuple — a zero-argument call of `a` — not a transparent grouping.
+`Quote` preserves a call form as data:
 
 <Playground id="syntax-quote-call" />
 
 ## 3. Qualified calls
 
-A `/` inside a name is spelling sugar for `-`. `kv/get`, `kv-get`, and a
-local binding named `kv-get` all refer to the same symbol. Multiple segments work
-as well: `service/cache/get` becomes `service-cache-get`. There is no qualified
-symbol node in the form tree or macro wire format.
-
-| You write | Canonical WAVE form | |
-|---|---|---|
-| `kv/get({...})` | `(kv-get, {...})` | ordinary call of `kv-get` |
+A slash in a name normalizes to a hyphen. `kv/get` and `kv-get` name the same binding. Multiple segments work too: `service/cache/get` becomes `service-cache-get`.
 
 ```console
-$ echo 'kv/get({bucket: b})' | wavelet read
-(kv-get, {bucket: b})
+$ echo 'kv/get(42)' | wavelet read
+(kv-get, 42)
 ```
 
-Imports bind their functions under `alias-name`; slash spelling is optional.
-Variant constructors can also be aliased normally:
+Imports bind functions under their alias prefix. Slash spelling is optional; it does not create a separate namespace. The same rule applies to a local alias:
 
 ```wavelet
 DefType ttl [days(u32) forever]
@@ -90,63 +61,53 @@ Def ttl-days days
 ttl/days(5)
 ```
 
-
 ## 4. Call chaining
 
-A `.` immediately following a form, then a name and an attached `(`, is **call chaining**: `recv.name(args)` reads as the call `(name, recv, …args)` — the receiver becomes the call's *first* argument. Chains fold left-to-right, so each `.name(...)` wraps everything to its left. Like the attachment rule, this is whitespace-sensitive: the `.`, the name, and the `(` must each abut the token before them.
+A chain inserts its receiver as the first argument. The dot, following name, and opening parenthesis must be attached:
 
-| You write | Canonical WAVE form | |
-|---|---|---|
-| `1.increment()` | `(increment, 1)` | receiver as the sole argument |
-| `x.foo(a b)` | `(foo, x, a, b)` | receiver, then the explicit arguments |
-| `foo(1 2 3).bar(4 5 6)` | `(bar, (foo, 1, 2, 3), 4, 5, 6)` | the call's result chains onward |
+| Source | Canonical form |
+|---|---|
+| `1.increment()` | `(increment, 1)` |
+| `x.foo(a b)` | `(foo, x, a, b)` |
+| `foo(1).bar(2)` | `(bar, (foo, 1), 2)` |
 
-```console
-$ echo '1.increment()' | wavelet read
-(increment, 1)
-$ echo 'foo(1 2 3).bar(4 5 6).baz(7 8 9)' | wavelet read
-(baz, (bar, (foo, 1, 2, 3), 4, 5, 6), 7, 8, 9)
-```
-
-This is **pure rewriting**, not method dispatch: there are no methods and nothing is attached to the receiver. `1.increment()` and `increment(1)` are the same call. It just lets a pipeline read left-to-right instead of inside-out — `"hello".upper().str-cat(", world!")` is exactly `str-cat(upper("hello") ", world!")`.
+Each additional call wraps the preceding result. `"hello".upper().str-cat("!")` therefore means `str-cat(upper("hello") "!")`.
 
 <Playground id="syntax-chain" />
 
 ## 5. TitleCase macro sugar
 
-A **TitleCase** identifier — one of its hyphen- or slash-separated words starts with a capital and contains at least one lower-case letter (`If`, `DefMacro`, `Try-let`) — is reader sugar for a macro call. This can't collide with ordinary identifiers: a WIT label word is all-lower or all-UPPER, so a TitleCase word is syntactically free (`parse-JSON` and `HTTP-get` stay ordinary names). The token is **lower-cased whole** — interior capitals are *not* split into hyphens, and existing hyphens are kept — then gains a `-MACRO` suffix: `If` ↦ `if-MACRO`, `DefMacro` ↦ `defmacro-MACRO`, `Try-let` ↦ `try-let-MACRO`, `lib/Identity` and `lib-Identity` ↦ `lib-identity-MACRO`. A multi-word macro may be spelled either as one word or hyphenated, and is invoked exactly as it was defined, lower-cased: `DefMacro try-let …` ↦ `Try-let …`, `DefMacro trylet …` ↦ `TryLet …`.
+A name containing a word with an initial capital and lowercase letters uses macro syntax. Ordinary all-lowercase or all-uppercase WIT words do not: `parse-JSON` remains an ordinary name.
 
-A TitleCase head does **not** require parentheses. The reader looks up the macro's declared **arity** and consumes exactly that many following forms, folding the head and those forms into a tuple:
+| Source name | Canonical head |
+|---|---|
+| `If` | `if-MACRO` |
+| `DefMacro` | `defmacro-MACRO` |
+| `Try-let` | `try-let-MACRO` |
+| `TryLet` | `trylet-MACRO` |
+| `lib/Identity` | `lib-identity-MACRO` |
 
-```wavelet
-If eq([foo bar]) log("match") log("nope")
-```
+Interior capitals do not insert hyphens. Define `try-let` to use `Try-let`, or `trylet` to use `TryLet`.
+
+The reader uses the declared arity to consume following forms:
 
 ```console
-$ echo 'If eq([foo bar]) log("match") log("nope")' | wavelet read
-(if-MACRO, (eq, [foo, bar]), (log, "match"), (log, "nope"))
+$ echo 'If eq(1 1) "yes" "no"' | wavelet read
+(if-MACRO, (eq, 1, 1), "yes", "no")
 ```
 
-Three consequences:
-
-1. **Define before use.** A macro must be in scope before it's read — a core form, defined earlier in the file, or imported. The reader processes a file top to bottom and always knows every visible macro's arity.
-2. **Explicit parentheses override arity reading.** `Unquote(x)` and `If(c t e)` attach their arguments directly instead of scanning ahead. The lowered call `if-MACRO(c t e)` — canonical `(if-MACRO, c, t, e)` — is always available too, and that tuple is what macros emit.
-3. **Nesting needs no delimiters, in any position.** A TitleCase head consumes its own arity recursively wherever it appears, not just as the final argument. Both `If Quote c t e` (nested in the first slot) and `Def run Fn {} If c a b` (nested in the last) read exactly as intended.
-
-Variadic macros take a single list argument — arity stays fixed, the list flexes (`Do([a b c])`).
+Define or import a macro before use. Each nested macro consumes its own arguments. An attached payload supplies arguments explicitly, so `If(c t e)` has the same structure as `If c t e`.
 
 <Playground id="syntax-if-arity" />
 
 ## At a glance
 
-Every reader-sugar form, in one table:
+| Rule | Example | Effect |
+|---|---|---|
+| Optional commas | `[1 2 3]` | Read as `[1, 2, 3]`. |
+| Attached calls | `f(x y)` | Place the head before the arguments in a tuple. |
+| Qualified names | `kv/get(x)` | Normalize `/` to `-`. |
+| Chaining | `x.f(y)` | Insert the receiver first. |
+| TitleCase forms | `If c t e` | Consume the macro's known number of arguments. |
 
-| # | You write | Canonical WAVE form | |
-|---|---|---|---|
-| 1 | `[1 2 3]` | `[1, 2, 3]` | commas are whitespace |
-| 2 | `f(x y)` | `(f, x, y)` | attachment rule — calls are tuples |
-| 3 | `kv/get({...})` | `(kv-get, {...})` | qualified call |
-| 4 | `x.f(y)` | `(f, x, y)` | call chaining — receiver first |
-| 5 | `If c t e` | `(if-MACRO, c, t, e)` | TitleCase macro |
-
-The [Syntax & reading](./syntax) page covers the same ground as prose, and [`wavelet read`](../cli#read) prints the canonical tree for any source so you can check the desugaring for yourself.
+See [syntax](./syntax) for lexical rules and [evaluation](./evaluation) for how these forms behave after compilation.

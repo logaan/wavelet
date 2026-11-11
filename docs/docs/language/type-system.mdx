@@ -1,598 +1,180 @@
 ---
-sidebar_position: 9
+sidebar_position: 4
 title: The type system
-description: Total monomorphic static typing — two rules, numeric-literal inference, overloading, Derive, and functors.
+description: Static checking, inference, concrete types, resources, and compile-time templates.
 ---
 
 # The type system
 
-Wavelet is **statically typed**. Every expression has exactly one
-[WIT](https://component-model.bytecodealliance.org/design/wit.html) type, decided
-before any code runs. The compiler runs a checker pass over your whole program on
-every path — `wavelet run`, `wavelet build`, `wavelet wit`, and the playground —
-and an ill-typed definition is a **compile error even if nothing calls it**.
-There is no runtime type error to discover at the wasm boundary — if it builds,
-it is well-typed.
+Wavelet checks types before a program runs. The same checking applies to builds, CLI execution, the REPL, and browser examples. A type error in an unused definition is still an error.
 
-The system is **monomorphic**: there are no type variables in the language you
-write or in the WIT it produces. Generics live entirely at compile time
-(`Derive`, functors), and what ships is always concrete.
-
-## Two rules
-
-Checking is **bidirectional**, which is just two rules working together:
-
-1. **Synthesis** — some expressions tell you their own type. An atom
-   (`true`, `'x'`, `"hi"`), a bound name, or a call all *produce* a type from the
-   bottom up.
-2. **Checking** — some positions *expect* a type, and push it inward. A function
-   parameter's declared type, a `Let` binding, the branches of an `If`, and the
-   clause results of a `Match` all flow an expected type down into the
-   sub-expression.
-
-Two consequences fall straight out of "every expression has exactly one type":
-
-- The branches of an `If` must share a type — `If b 1 "s"` is rejected, because
-  an `s64` and a `string` have no common WIT type.
-- The result clauses of a `Match` must likewise all unify to one type.
-
-Because checking is **total**, names are resolved statically too: an unbound name
-or a wrong-typed use inside a never-called function is still a compile error.
-
-## Callback inference
-
-`map`, `filter`, and `fold` infer an unannotated callback's parameters from the
-input list. `fold` also uses the initial accumulator's type. For example,
-`map(Fn {x} mul(x x) [1 2 3])` checks without annotating `x`, including under
-`--strict`. A filter callback must return `bool`; a fold callback must return
-the accumulator type. A callback with incompatible parameter types or arity is
-a compile error.
+Runtime data uses concrete WIT types. A list has one element type, a record has known fields, and every branch of an `If` or `Match` must produce compatible results. The compiler infers types from expressions, calls, and imported signatures. Add annotations when those constraints leave a type ambiguous.
 
 ## Numeric literals and `The`
 
-A bare numeric literal has no fixed type on its own — it takes its type from
-context and is **range-checked** against it. `100` is a fine `u8`; `300` is not:
+An integer literal takes its type from context when possible. Without a constraint it defaults to `s64`; a fractional literal defaults to `f64`.
 
-<Playground id="sf-the-bad" />
-
-When there is no context to resolve a literal, it **defaults**: integer literals
-default to `s64`, fractional literals to `f64`.
-
-The `The` form ascribes a type to an expression. Use it to pin a literal's type,
-to drive a range check, or — as you'll see below — to choose between overloads by
-the result you want:
+`The type expression` supplies an expected type and checks the expression against it:
 
 <Playground id="sf-the-ok" />
 
-A literal that cannot fit the ascribed type is a compile error (`The u8 300`,
-`The u8 -1`, `The s32 1.5` are all rejected).
+A literal outside that type's range is rejected during compilation:
 
-## Declared result types
+<Playground id="ty-the-range" />
 
-The `result:` type in an `Export {…}` form flows into the exported function's
-body as its expected type, exactly as an enclosing `The` would: construction
-sites build at the declared shape, and the body is checked against the declared
-result. A body whose type genuinely conflicts with what the export promises is a
-compile error rather than a silent coercion.
+Use explicit conversion functions such as `to-u8` when converting an existing numeric value. Such conversions check the value's range during execution.
 
-Two coercions the component boundary genuinely performs stay legal. A narrower
-integer result may **widen** into a wider declared result of the *same*
-signedness — an `s32`-typed body satisfies an `s64` result — but mixed
-signedness (`s32` into `u32`) and *narrowing* (`s32` into `s16`) are rejected. A
-value carrying a `result` payload may also flow into a declared payload-less
-`result`, since the ABI drops the payload: the `wasi:cli/run` entry point
-`run: func() -> result` is satisfied by an `ok(0)` body.
+## Function parameters and results
+
+Annotate parameters in the `Fn` record:
+
+```wavelet
+Def increment Fn {n: s32} add(n 1)
+```
+
+The body determines the result type. For an exported function, an explicit `result:` also constrains the body:
+
+```wavelet
+Export {name: increment params: {n: s32} result: s32}
+```
+
+Same-signed integer results can widen to a declared result type. Narrowing and changes of signedness require explicit conversions. A declared payload-less `result` can discard the payload of `ok` or `err`; this permits an `ok(0)` body for a WIT `func() -> result` export.
+
+`map`, `filter`, and `fold` infer callback parameters from their input lists. `fold` also uses the initial accumulator's type. A filter callback must return `bool`, and a fold callback must return the accumulator type.
 
 ## Overloading
 
-Several `Def`s sharing a name form an **overload set**. Each call site is
-resolved statically, first by the WIT types of its arguments:
+Several `Def` forms with the same name form an overload set. The compiler selects a member using argument types:
 
 <Playground id="ty-overload-int" />
 
-Resolution doesn't depend on definition order — the other member is just as
-reachable:
-
 <Playground id="ty-overload-str" />
 
-When the arguments don't decide (for instance, two zero-argument members), the
-**expected return type** breaks the tie. Supply it with `The`:
+An expected result type can resolve a call when the arguments alone do not distinguish the members:
 
 <Playground id="ty-the-return" />
 
-With neither arguments nor an expected type to disambiguate, the call is
-**ambiguous** and is a compile error — you fix it by adding a `The`.
-
-WIT has no overloading, so an *exported* overload set is **name-mangled at the
-component boundary**: each concrete member gets a distinct export. An `eq` over a
-`point` type, for example, is exported as `eq-point`.
-
-A call that has no matching overload at all is simply ill-typed, even when it sits
-in an uncalled function:
+If no member matches, or several remain possible, compilation fails. Add a parameter annotation or `The` where necessary.
 
 <Playground id="ty-mixed-add" />
 
+WIT does not overload function names. Exported overloads receive distinct names, such as `eq-point` for an equality operation on `point`.
+
 ## Function values
 
-A `Fn` literal whose parameters (and inferred result) all have concrete WIT
-types carries a **function type** of its own — an arrow like `(s32) -> s32`. A
-bare reference to a `Def`-bound function with such a signature is a first-class
-value of the same arrow type. Applying a function-typed binding is statically
-checked against its arrow: the arity and every argument type must match, and
-the application synthesizes the arrow's result type.
+Local function aliases and capturing callbacks work when the compiler can determine the called function statically:
 
 ```wavelet
-Def inc Fn {n: s32} add(n 1)
-Let {f: inc} f(41)      // f: (s32) -> s32, so this is 42
+Def increment Fn {n: s32} add(n 1)
+Let {f: increment} f(41)
 ```
 
-Function parameters must have an inferred or declared static type. Numeric and
-string uses constrain ordinary definitions; `map`, `filter`, and `fold` infer
-callback parameters from their input data. Add annotations when the context is
-ambiguous.
+Functions cannot be stored in lists, records, tuples, or cells, returned as closures, or selected dynamically for a later call. For runtime operation selection, store a variant case and use `Match` to choose a direct call. Macros can generate calls during compilation.
 
-Callbacks and aliases can resolve statically inside a component. WIT has no
-function value type: lists, records, tuples, and cells cannot store functions,
-and a function cannot return a closure. Use variant tags plus `Match` for runtime
-operation selection, or a [macro](macros.mdx) that expands into direct calls.
+A function cannot cross a component boundary as a WIT value. To expose callable state, define a resource with methods. The compiler does not automatically turn a closure into a resource or treat a single-method resource as a function.
 
 ## Derive
 
-`Derive` generates the standard operations for a type so you don't write the
-boilerplate by hand. It takes a set of derivers and a type, and expands — at
-compile time — into ordinary monomorphic definitions:
-
-```wavelet
-DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
-```
-
-This produces concrete operations specialized to `point` (an `eq` and a `show`
-for `point`, an ordering comparison, and so on). The available derivers are
-`Eq`, `Ord`, `Show`, and `Hash`. Because the generated definitions are just
-ordinary overload-set members, exporting them mangles their names exactly like
-any other export (`eq-point`, `show-point`, …).
-
-`Derive` is a file-level macro: it runs during compilation of a component, not in
-the interpreter playground.
+`Derive` syntax is recognized, but its generated equality, ordering, display, and hash bodies are placeholders. Do not rely on it for data operations. Write the required functions explicitly; `eq` already compares plain data structurally.
 
 ## Functors
 
-A **functor** specializes a generic data structure to a concrete element type at
-compile time. You apply one with the dedicated `Instantiate` form, naming the
-package, passing the functor's parameters *by name* in `with:`, and choosing a
-local alias (`Import` stays what it is — bringing an unparameterized dependency
-into scope):
+A functor specializes declarations for concrete type arguments. The built-in set functor creates a set resource for its `elem` type:
 
 ```wavelet
-Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
-```
-
-This synthesizes a **concrete, per-element WIT interface** — instantiating `set`
-at `point` yields a `point-set` interface. Nothing generic survives into the
-emitted world: a second instantiation at, say, `string` would produce a separate
-`string-set` interface. WIT cannot write `resource set<t>`, so the functor writes
-the monomorphic interface for you, once per element type you ask for.
-
-The instantiation also brings the functor's operations into scope, qualified by
-the alias. For the `set` functor these are `pts/new`, `pts/add`, `pts/contains`,
-and `pts/size`, with exactly the signatures the synthesized resource promises:
-
-```wavelet
-Let {s: pts/new()}              // new() -> set        (an empty set)
-  Do [ pts/add(s p)             // add(set, elem)       (returns unit)
-       pts/contains(s p)        // contains(set, elem) -> bool
-       pts/size(s) ]            // size(set) -> u32
-```
-
-`new()` hands back a fresh, mutable set; `add` mutates it in place and is a no-op
-for an element already present (membership uses the same equality `Derive {Eq}`
-gives the element type); `contains` and `size` observe it. These run under
-`wavelet run` and the playground today.
-
-:::note Building functors
-
-`wavelet wit`, `wavelet run`, and now `wavelet build` all support functors. The
-backend emits the synthesized per-element interface as a **real exported WIT
-`set` resource**, at interpreter parity: any element type (primitive, string,
-record, and compound list/tuple) works, and you can instantiate the functor
-multiple times in one world. Membership uses the same structural equality the
-interpreter does, so a built component dedups exactly like `wavelet run`.
-
-The single limitation is shaping, not semantics: an export that *returns the
-`set` handle* (`own<set>`) over a **local-record** element would make the
-element's `api` interface and the resource's interface each `use` the other — a
-WIT interface cycle, which WIT cannot express, so it is rejected with a clear
-error. The buildable shapes are therefore (1) exports that derive an ordinary
-result from the set (e.g. `-> u32`), and (2) handle-returning exports whose
-element is a primitive or string.
-
-:::
-
-## Worked example: source to WIT
-
-Putting it together — a derived record type and a `set` of it — and the WIT the
-compiler synthesizes. The headline is that **nothing in the WIT is generic**:
-
-```wavelet
-Package "demo:geo@0.1.0"
-
-DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
-
-Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
-
-Export nearest-set
-Def nearest-set Fn {ps: list(point)}
-  Let {s: pts/new()}
-    Do [ each(ps Fn {p} pts/add(s p))
-         s ]
-```
-
-synthesizes a world whose every signature is a concrete, ordinary WIT function or
-type:
-
-```wit
-package demo:geo@0.1.0;
-
-interface types {
-  record point { x: s32, y: s32 }
-}
-
-interface api {
-  use types.{point};
-  eq-point: func(a: point, b: point) -> bool;
-  compare-point: func(a: point, b: point) -> s32;
-  show-point: func(v: point) -> string;
-  nearest-set: func(ps: list<point>) -> point-set.set;
-}
-
-// the set functor, instantiated at `point`
-interface point-set {
-  use types.{point};
-  resource set {
-    constructor();
-    add: func(value: point);
-    contains: func(value: point) -> bool;
-    size: func() -> u32;
-  }
-}
-
-world geo {
-  export types;
-  export api;
-  export point-set;
-}
-```
-
-The derived operations and the export land in the `api` interface, while each
-functor instantiation gets its own interface. The overload set `eq` lowers to
-the distinctly named `eq-point`, the derived operations become concrete
-functions, and the `set` functor becomes the concrete `point-set` interface. A
-generic set would have wanted `resource set<t>` with `add: func(value: t)`,
-which WIT simply cannot express — the functor produces a concrete interface
-instead.
-
-Note where `point` was declared: because `nearest-set` *returns* the `set`
-handle, `api` needs the handle's type from `point-set` — and `point-set` needs
-the element record. If `api` declared `point` itself, the two interfaces would
-`use` each other, a cycle WIT cannot express. The compiler therefore **hoists**
-the element record into a shared `types` interface that both sides `use`.
-(A program whose exports only derive ordinary results — `-> u32` and friends —
-keeps its record declarations in `api` as usual.)
-
-(`each` here is illustrative iteration over the input list, applying `pts/add`
-for its side effect; it is not yet a builtin. To run a set today, iterate with
-`map`/`fold` or with explicit `pts/add` calls.)
-
-## A program you can build
-
-Every shape above builds — including `nearest-set`, which returns the `set`
-handle over a record (the hoisted `types` interface is what makes that
-expressible). Here are two more shapes shown with the WIT the backend actually
-emits (run `wavelet build` then `wasm-tools component wit` on the result to
-reproduce these verbatim).
-
-### Derive an ordinary result
-
-The simplest buildable functor program never hands the `set` back across the
-boundary — it derives a plain value from it. Reusing the `point` set, an export
-that counts distinct points returns a `u32`:
-
-```wavelet
-Package "demo:geo@0.1.0"
-
-DefType point {x: s32 y: s32}
-Derive {Eq Ord Show} point
-
-Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
-
-Export count-distinct
-Def count-distinct Fn {}
-  Let {s: pts/new()}
-    Do [ pts/add(s {x: 1 y: 2})
-         pts/add(s {x: 3 y: 4})
-         pts/add(s {x: 1 y: 2})   // a structural duplicate of the first
-         pts/size(s) ]
-```
-
-`wavelet build` emits a component whose `api` exports `count-distinct` as an
-ordinary `u32` function; the `set` resource stays entirely inside the guest:
-
-```wit
-package demo:geo@0.1.0;
-
-interface api {
-  record point { x: s32, y: s32 }
-  eq-point: func(a: point, b: point) -> bool;
-  compare-point: func(a: point, b: point) -> s32;
-  show-point: func(v: point) -> string;
-  count-distinct: func() -> u32;
-}
-
-interface point-set {
-  use api.{point};
-  resource set {
-    constructor();
-    add: func(value: point);
-    contains: func(value: point) -> bool;
-    size: func() -> u32;
-  }
-}
-
-world geo {
-  export api;
-  export point-set;
-}
-```
-
-Calling `count-distinct` returns `2`: the two `{x: 1 y: 2}` points are
-structurally equal, so the set dedups them — exactly the answer `wavelet run`
-gives, because membership uses the same structural equality on both paths.
-
-### Return the handle
-
-An export can hand the `set` itself back as an `own<set>` handle for a host to
-keep and query — over any element type (a local-record element just hoists the
-record, as shown above; a primitive element needs no hoisting at all):
-
-```wavelet
-Package "demo:app@0.1.0"
-
 Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
 
-Export build-ints
-Def build-ints Fn {}
+Def count-distinct Fn {}
   Let {s: ints/new()}
-    Do [ ints/add(s 1)
-         ints/add(s 2)
-         ints/add(s 1)            // duplicate; dedups away
-         s ]                      // return the set itself
+    Do [ints/add(s 1)
+        ints/add(s 2)
+        ints/add(s 1)
+        ints/size(s)]
 ```
 
-The emitted `api` returns the handle. Each functor interface names its resource
-`set`, so the `use` is aliased (`set as s32-set-handle`) — which is also what lets
-a single world instantiate the functor at several element types without the names
-colliding:
+The result is `2`. `new` creates a mutable set; `add` inserts an element if it is absent; `contains` checks membership; `size` returns its size. Membership uses structural equality. Calls are qualified by the alias, such as `ints/contains(s 1)`.
 
-```wit
-package demo:app@0.1.0;
-
-interface s32-set {
-  resource set {
-    constructor();
-    add: func(value: s32);
-    contains: func(value: s32) -> bool;
-    size: func() -> u32;
-  }
-}
-
-interface api {
-  use s32-set.{set as s32-set-handle};
-  build-ints: func() -> s32-set-handle;
-}
-```
-
-A host calls `build-ints`, then invokes `size`/`contains` on the returned
-resource (here `size` is `2`; `contains 1` and `contains 2` are true, `contains 9`
-is false) and finally drops the handle to run the resource's destructor. This is
-exactly what `tests/backend_functor.rs` does in-process against the wasmtime host
-to prove the built component matches the interpreter — over `s32`, `string`,
-`point` records, and `list` elements, and with two instantiations in one world.
+Each instantiation emits concrete WIT types. You can instantiate sets for primitive and compound element types and use several instantiations in one component. A function can return the set handle for another component to use. When a returned set contains a local record type, the compiler places shared types in an interface that both the API and the resource interface can reference.
 
 ## User-declared resources
 
-A [functor](#functors) hands you a ready-made resource — the `set` above is one,
-and so is a [`cell`](../stdlib#cells). `DefResource` lets you declare **your own**.
-Where `DefType` introduces a *data* type (a record, variant, enum, or alias — a
-value that is copied by structure across the component boundary), a resource is a
-type with **identity and hidden state**: callers hold an opaque *handle*, never
-the bytes behind it, and every use goes through the methods you declare. A
-`DefResource` form maps one-to-one onto a WIT `resource { … }` block.
+A resource has **identity and private state**. Callers hold an opaque handle and use its declared methods. `DefResource` declares a WIT resource; `DefType` declares data copied by structure.
+
+<Playground id="res-counter" />
+
+A counter can store its state in a cell:
 
 ```wavelet
 DefResource counter {
-  New:   Fn {start: u32} cell-new(start)
-  next:  Fn {self: counter} The u32 Do [ cell-set(self add(cell-get(self) 1))
-                                          cell-get(self) ]
+  New: Fn {start: u32} cell-new(start)
+  next: Fn {self: counter}
+    The u32 Do [cell-set(self add(cell-get(self) 1)) cell-get(self)]
   value: Fn {self: counter} The u32 cell-get(self)
-  sum:   Static Fn {values: list(u32)} The counter counter(fold(add 0 values))
+  sum: Static Fn {values: list(u32)}
+    The counter counter(fold(Fn {total: u32 value: u32} add(total value) 0 values))
 }
 ```
 
 ### Members and their roles
 
-The braces hold the resource's members. Two keys are **reserved and
-capitalized**; everything else is a method or a static.
+- `New` is the constructor. It returns the private representation, which can be plain data or one outer cell containing plain data.
+- An instance method starts with `self: counter`. Within its body, `self` refers to that private representation.
+- `Static Fn` declares a function belonging to the resource type without a `self` parameter. It can provide another way to construct a resource.
+- Optional `Drop` supplies cleanup when the runtime destroys a handle. It is not called as an ordinary method.
 
-<Playground id="res-counter" />
-
-- **`New:` — the constructor.** It runs when the resource is created and returns
-  **the representation** ("the rep"): an ordinary Wavelet value that holds the
-  instance's private state. It is almost always a [`cell`](../stdlib#cells), since
-  a resource without mutable state has little reason to exist. `New` is *anonymous*
-  in WIT — a resource has exactly one constructor and it is unnamed.
-- **`Drop:` — the destructor (optional).** An `Fn {self: <name>}` returning unit,
-  run when a handle is dropped. It is **not user-callable** — the runtime invokes
-  it — and if you omit it the rep is still freed; a `Drop` is only for extra
-  cleanup (closing a handle you opened, say). Absent `Drop` means "no-op on drop."
-- **`Static Fn {…}` — a static.** Marked with `Static` and taking **no `self`**, a
-  static belongs to the type rather than to an instance. Because it can *return*
-  the resource, a static doubles as an **alternative constructor** — `sum` above
-  builds a `counter` from a list.
-- **any other member — an instance method.** Its first field **must** be
-  `self: <name>`, and inside the body `self` is bound to the rep. `next` and
-  `value` read and mutate through `self`.
-
-The checker enforces the discipline, and each violation is a compile error:
-
-- a `Static` member that declares `self`;
-- a non-static member (other than `New`/`Drop`) that lacks `self: <name>` as its
-  first parameter;
-- `Static` written on `New` or `Drop` (neither may be a static).
-
-:::note[Why the `The` ascriptions]
-`counter`'s rep is a `cell`, and neither `cell-get` nor the `counter(…)`
-constructor call can be told the element type by structure alone — a bare `1` also
-has no fixed type until context pins it (see [`The`](#numeric-literals-and-the)).
-So each member result that flows through one is ascribed: `The u32` on the reads,
-`The counter` on `sum`'s constructed result. A resource whose rep is a default-typed
-`s64` cell can often drop them, but writing the ascription is the habit that keeps
-resource members well-typed.
-:::
+The checker rejects a static with `self`, an instance method without the required receiver, and `Static` on `New` or `Drop`. Nested or shared cells, cell cycles, and functions are not supported as persisted resource state.
 
 ### Calling a resource
 
-At the use site a resource reads like the [`set`](#functors) functor's operations,
-because the spellings are the same:
+Apply the resource name to construct it. Qualify methods and statics with that name:
 
 ```wavelet
-Def c counter(5)                 // the constructor: the type name, applied
-Do [ counter/next(c)             // a method: `type/method(handle …)`  -> 6
-     counter/next(c)             //                                    -> 7
-     counter/value(c) ]          // -> 7
+Def c counter(5)
+Do [counter/next(c)
+    counter/next(c)
+    counter/value(c)]
 ```
 
-The **constructor is the type name applied** (`counter(5)`) — anonymous and
-singular, matching WIT's unnamed constructor; extra ways to build one are statics.
-**Methods and statics are qualified** by the type name: `counter/next(c)`,
-`counter/sum([1 2 3 4])`. A method takes the handle as its first argument (the
-`self` field); a static does not.
+This returns `7`. `counter/sum([1 2 3])` calls the static constructor. `The` is useful in members when an operation on the private representation does not provide enough information to infer the result type.
 
 ### Ownership at the boundary
 
-In a type position a resource name carries an **ownership mode**, exactly as WIT's
-`own`/`borrow` do:
+A resource parameter or result carries an ownership mode:
 
-- **`counter` (bare) — owned.** Ownership *transfers* to the callee, which is
-  responsible for dropping it. `own(counter)` is the explicit synonym for the bare
-  spelling.
-- **`borrow(counter)` — borrowed.** The callee may use the handle but does not own
-  it. `borrow` is **parameter-position only**: a borrow may not appear in a result
-  or in a stored position (a record field, a list element), and doing so is a
-  compile error.
+| Type | Meaning |
+|---|---|
+| `counter` or `own(counter)` | Transfer ownership of the handle. |
+| `borrow(counter)` | Allow the callee to use the handle for the call without transferring ownership. |
 
-Owned-handle transfers are supported at Component Model import/export
-boundaries. Within one component, free functions and callbacks must use
-`borrow(counter)` when receiving an existing handle. The checker rejects local
-calls, aliases, and callbacks that would transfer an owned resource, including
-resources nested inside parameter data. Internal handle invalidation is not yet
-implemented, so this restriction prevents interpreter/backend differences.
-Resource methods borrow their implicit receiver; constructors can still create
-new handles locally.
+Borrowing is allowed in parameter position, not in returned or stored data. After an owned handle crosses a component boundary, the caller must not reuse it; an invalid use traps. A borrowed call leaves ownership with the caller.
 
-Passing a handle to an **own** parameter *invalidates the caller's handle* — using
-it again later **traps**. A **borrow** never invalidates: the caller keeps its
-handle. This is WIT's linear-handle discipline surfaced in Wavelet.
+Inside a component, a free function or callback receiving an existing handle must use a borrowed parameter. Local calls that would transfer ownership, including ownership nested in parameter data, are rejected. Resource methods borrow their receiver, and constructors can create handles locally.
 
-Ownership modes only exist at the **component boundary**. Inside a method or static
-body the type name denotes the rep — `self: counter` binds `self` to the `cell`, not
-to a handle — so `own`/`borrow` never appear there.
+Use the imported resource's destructor binding to release an imported owned handle. The generic `drop(value)` only discards its argument and returns unit; it does not invoke a resource destructor.
 
 ### Identity, printing, and serialization
 
-A resource is **not** a value with structure, and its observable behaviour reflects
-that:
-
-- **Equality is identity.** Two handles are equal only when they are the *same
-  instance*; two independently constructed counters are never equal, even with
-  equal state. Because there is nothing structural to compare, `Derive {Eq}` (or
-  `Ord`, `Hash`, `Show`) over a resource type is a **compile error** — the derivers
-  work on data, not handles.
-- **`to-string` is opaque.** Printing a handle yields the token `<counter>` (the
-  type name in angle brackets), never its state.
-- **Not form-serializable.** Resource identity and ownership cannot be reconstructed
-  from text; a handle cannot be round-tripped through the form representation.
-
-```wavelet
-eq(counter(1) counter(1))    // false — two distinct instances
-to-string(counter(9))        // "<counter>"
-```
+Resource equality compares identity. Two separately constructed counters differ even if their states match. Printing a counter yields `<counter>` without exposing its state. A resource handle cannot be serialized as a source form and reconstructed from that text.
 
 ### Exporting a resource
 
-A bare [`Export`](./special-forms#export) publishes the whole resource as one WIT
-`resource` block:
+A bare `Export counter` publishes the constructor, methods, and statics together in the default `api` interface. `Export {iface: "counters" name: counter}` places it in a named interface. An unexported resource stays internal to the component.
+
+Free functions using the resource are exported separately:
 
 ```wavelet
-Export counter
-```
-
-The record form places it in a named interface:
-
-```wavelet
-Export {iface: "counters" name: counter}
-```
-
-A `DefResource` you never export is a perfectly legal **internal** resource — it
-just has no boundary interface hung off it and lives entirely inside the guest.
-
-The methods and statics travel *with* the resource block. **Free functions** that
-pass handles around are ordinary [`Def`](./special-forms#def)s using the
-`own`/`borrow` type spellings, and they are exported individually:
-
-```wavelet
-Export counter
-Def make-counter Fn {start: u32} The counter counter(start)     // hands one out (own)
-Export make-counter
-Def bump-counter Fn {c: borrow(counter)} The u32 counter/next(c) // uses, doesn't consume
-Export bump-counter
-Def take-counter Fn {c: counter} The u32 counter/value(c)        // consumes (own)
-Export take-counter
-```
-
-### Worked example: source to WIT
-
-Putting the pieces together — the `counter` resource, exported alongside the three
-free functions above:
-
-```wavelet
-Package "demo:counters@0.1.0"
-
-DefResource counter {
-  New:   Fn {start: u32} cell-new(start)
-  next:  Fn {self: counter} The u32 Do [ cell-set(self add(cell-get(self) 1))
-                                          cell-get(self) ]
-  value: Fn {self: counter} The u32 cell-get(self)
-  sum:   Static Fn {values: list(u32)} The counter counter(fold(add 0 values))
-}
-
 Export counter
 
 Def make-counter Fn {start: u32} The counter counter(start)
 Export make-counter
+
 Def bump-counter Fn {c: borrow(counter)} The u32 counter/next(c)
 Export bump-counter
-Def take-counter Fn {c: counter} The u32 counter/value(c)
-Export take-counter
 ```
 
-synthesizes a world with a single `resource` block plus the three free functions,
-each carrying its ownership mode straight into the WIT:
+The corresponding WIT exposes the resource and those functions:
 
 ```wit
-package demo:counters@0.1.0;
-
 interface api {
   resource counter {
     constructor(start: u32);
@@ -602,27 +184,14 @@ interface api {
   }
   make-counter: func(start: u32) -> counter;
   bump-counter: func(c: borrow<counter>) -> u32;
-  take-counter: func(c: counter) -> u32;
-}
-
-world counters {
-  export api;
 }
 ```
 
-Note how each member role lowers: `New` becomes the anonymous `constructor`, the
-instance methods become methods whose implicit receiver is the handle (so
-`next: func() -> u32` — the `self` is the handle the method is called on, not a
-parameter), and `sum` becomes a `static func` that returns the resource. The free
-functions keep their `own`/`borrow` spellings (`c: counter` lowers to an owned
-`counter`, `c: borrow<counter>` to a borrow).
+Imported resources use the same ownership rules. Their identity comes from the declaring WIT interface, so two unrelated resources cannot be interchanged merely because their methods look alike.
 
 ## User-defined templates
 
-`DefFunctor` defines a file-local template. Its package string identifies the
-template, its flags literal lists type parameters, and its list body contains
-`Def`, `DefType`, `DefResource`, and `Export` declarations. `Instantiate` supplies
-all type parameters by name and gives the generated declarations a prefix:
+`DefFunctor` declares a file-local template. Its package string identifies it, its flags list the type parameters, and its body contains declarations. `Instantiate` supplies the arguments by name and prefixes the generated names:
 
 ```wavelet
 DefFunctor "demo:box" {elem} [
@@ -638,17 +207,8 @@ Instantiate {pkg: "demo:box" with: {elem: s64} as: numbers}
 Instantiate {pkg: "demo:box" with: {elem: string} as: words}
 ```
 
-This generates independent `numbers-box` and `words-box` resources and concrete
-`numbers-unwrap(s64) -> s64` and `words-unwrap(string) -> string` exports.
-Template-local references follow the generated names; function parameters remain
-local bindings. Type arguments can be named types or compound types such as
-`list(s64)`. Missing, extra, or duplicate arguments and generated-name collisions
-are errors. The generated code goes through the same checker and component emitter
-as handwritten code. No generic types cross a component boundary.
-
-Templates currently live in the source file that instantiates them. Their bodies
-cannot contain imports, nested template declarations, or template instantiations;
-the built-in `wavelet:coll/set` remains available through `Instantiate`. Define and
-instantiate a template in the same submitted buffer when using the REPL.
+This generates independent `numbers-box` and `words-box` resources, plus concrete `numbers-unwrap` and `words-unwrap` functions. Type arguments can also be compound types such as `list(s64)`.
 
 <Playground id="ty-user-functor" />
+
+Templates support `Def`, `DefType`, `DefResource`, and `Export` declarations. They cannot contain imports, nested templates, or template instantiations. Define and instantiate a template in the same file, or in the same submitted REPL source. Missing, extra, or duplicate arguments and generated-name collisions are errors. Generated declarations pass through the same checker as handwritten code.

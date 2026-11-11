@@ -18,8 +18,7 @@ and `src/app.wlt` for HTTP handling and HTML. Rebuild and restart the server
 after changes. The template sets the HTML content type and escapes request
 paths before including them in the page.
 
-The compiler needs `wkg` to fetch WIT dependencies and `wac` to compose the
-components. Keep `wit/deps` and `wkg.lock` with your application to preserve
+The native workflow uses `wkg` to fetch WIT dependencies. The compiler composes components in process. Keep `wit/deps` and `wkg.lock` with your application to preserve
 its interface versions. Deployment uses the composed `out/app.wasm`, whose
 remaining imports are host-provided WASI interfaces.
 
@@ -54,26 +53,6 @@ other hosts depends on their interface and capability support; deployment to a
 remote host is not covered by this suite. Hosts exposing different interfaces
 require a compatible adapter or backend.
 
-## Component Model coverage
+## Validation
 
-`conformance/wavelet/test-matrix.sh` builds a symmetric Wavelet component and
-exercises it as caller and callee against both independent Rust seed sets,
-then against itself. It covers primitives, Unicode chars and strings, nested
-lists, options, all result shapes, tuples, records, variants, enums, flags,
-aliases, zero/multiple parameters, no-result functions, and resources with
-constructors, methods, statics, ownership and borrowing.
-
-This is a synchronous WIT and canonical ABI roundtrip suite, not certification
-of every Component Model proposal. Async functions, futures, streams,
-threading, and arbitrary hostile-component validation are outside its scope.
-
-```sh
-cargo build
-WAVELET="$PWD/target/debug/wavelet" conformance/wavelet/test-matrix.sh
-WAVELET_REQUIRE_HOST_TOOLS=1 cargo test --test compose -- --nocapture
-```
-
-The matrix requires `cargo-component`, `wasm-tools`, `wac`, `wasmtime`, and the
-Rust `wasm32-wasip1` target. The HTTP integration tests additionally require
-`wkg` and registry access; inspect their output for skipped tests when running
-offline.
+The HTTP smoke test checks a local request against the compiled artifact. The broader [development and validation](./development) suite checks synchronous WIT round trips with independent component implementations, including resource ownership and borrowing.

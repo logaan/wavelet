@@ -1,63 +1,62 @@
 # Wavelet documentation site
 
-The [Wavelet](https://github.com/logaan/wavelet) reference documentation, built
-with [Docusaurus](https://docusaurus.io/) and deployed to
-<https://logaan.github.io/wavelet/>.
+The [Wavelet documentation](https://logaan.github.io/wavelet/) is built with
+Docusaurus and published to GitHub Pages.
 
 ## Local development
 
-```console
-$ cd docs
-$ npm install
-$ npm start            # dev server with hot reload
-$ npm run build        # production build into ./build
-$ npm run serve        # serve the production build locally
+From the repository root:
+
+```sh
+npm --prefix docs ci
+npm --prefix docs start
+npm --prefix docs run build
+npm --prefix docs run serve
 ```
 
-## Live, runnable examples
+The build prepares the browser worker bundle from checked-in compiler artifacts
+using Node. Rust is needed only when regenerating those artifacts.
 
-Every example in the docs runs in the reader's browser via the Wavelet
-interpreter compiled to WebAssembly — the same tree-walking evaluator that backs
-`wavelet run`. The pieces:
+## Compiled examples
 
-- **`src/wasm/`** — the wasm package, built from the Rust crate with `wasm-pack`.
-  It is committed so the site builds with Node alone (no Rust toolchain needed
-  in CI).
-- **`src/components/Playground/`** — the `<Playground>` React component. It is
-  registered globally (`src/theme/MDXComponents.js`), so any `.mdx` page can use
-  `<Playground id="…" />` without an import.
-- **`examples.json`** — the **single source of truth** for every runnable
-  example: its Wavelet source plus the expected value / output / error.
+The playgrounds and browser REPL compile Wavelet source with
+`src/compiler/wavelet_compiler.wasm`, then instantiate and execute the emitted
+components in a worker. The reference interpreter under `src/wasm/` is used by
+the example generator, not for browser execution.
 
-### No drift between the docs and the language
+Author playground examples in `scripts/gen-examples.mjs`. It produces
+`examples.json`, containing source and expected values or errors, and verifies
+compiled results against the reference evaluator. Pages refer to example IDs
+through the globally registered `<Playground>` component.
 
-`examples.json` is consumed by two things at once:
+After changing the compiler or example sources, run from the repository root:
 
-1. the `<Playground id="…">` component, which renders and runs each snippet, and
-2. the Rust test `tests/examples.rs`, which runs every snippet through the same
-   interpreter (`wavelet::eval_snippet`) and asserts the recorded result.
-
-So a language change that breaks a documented example breaks `cargo test`. The
-docs cannot silently drift from the implementation.
-
-### Regenerating after a language change
-
-The example sources are authored once in `scripts/gen-examples.mjs`. After
-changing the language (or editing/adding examples):
-
-```console
-# 1. rebuild the in-browser interpreter
-$ wasm-pack build --target web --out-dir docs/src/wasm --out-name wavelet
-
-# 2. regenerate expected results from the interpreter
-$ cd docs && npm run gen:examples
-
-# 3. lock the new behaviour in
-$ cargo test
+```sh
+./scripts/regen-examples.sh
 ```
+
+This rebuilds the reference artifact and compiler component, regenerates example
+results, and runs validation. Commit the generated artifacts so the documentation
+pipeline can build with Node alone.
+
+## Validation
+
+```sh
+npm --prefix docs run test:runtime
+npm --prefix docs run build
+npm --prefix docs run test:browser
+```
+
+Browser tests require Playwright Chromium. They execute the playground examples
+and the code tour through the actual compiler component and emitted runtime,
+and check recovery after errors and cancellation. The tour tests extract source
+from `docs/learn-wavelet.mdx`, so edits to its executable fences are checked too.
+
+The [development guide](docs/development.mdx) describes native conformance,
+structural, duplication, coverage, and history-analysis checks.
 
 ## Deployment
 
-`.github/workflows/deploy-docs.yml` builds `docs/` and publishes to GitHub Pages
-on every push to `main`. It needs only Node, because the wasm artifact and
-`examples.json` are committed.
+`.github/workflows/deploy-docs.yml` builds and publishes the site on pushes to
+`main`. The committed compiler artifact and examples keep that job independent
+of the Rust toolchain.

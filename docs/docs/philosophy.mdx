@@ -1,63 +1,55 @@
 ---
 sidebar_position: 2
 title: Philosophy
-description: The three commitments, no FFI, and the costs the design accepts.
+description: Why Wavelet uses Component Model types, WAVE syntax, and one component per file.
 ---
 
 # Philosophy
 
-Wavelet is an argument that a language for the Component Model can be *smaller* than the languages that target it, because the Component Model already supplies the hard parts: a type system at the boundary, a value encoding, and a composition model. Wavelet's job is to be a thin, homoiconic skin over those primitives.
+Wavelet uses the WebAssembly Component Model as its foundation for data types, interfaces, and composition. This keeps the language small and makes interoperability part of ordinary programming.
 
-## The three commitments
+## One file is one component
 
-### One file is one component
+A source file declares a package, imports interfaces, and exports functions or types. The compiler emits a component for that file. Several files become a program when their imports and exports are connected.
 
-The unit you edit is the unit you compile, link, version, and deploy. A Wavelet program is a *composition of components*, and a Wavelet component is indistinguishable from one written in any other language — because the only thing that crosses the boundary is WIT.
+An interface describes what a component provides without specifying its implementation language. Replacing a component with another implementation of the same WIT contract does not require rewriting its callers.
 
-This collapses a distinction most languages maintain: "module" (an organisational unit inside the language) versus "package" (a distribution unit outside it). In Wavelet they are the same thing.
+## The syntax is WAVE
 
-### The syntax is WAVE
+[WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) is a text encoding for Component Model values. Wavelet adds a small set of [reader rules](./language/reader-sugar) for calls, qualified names, and macros. The reader turns these into ordinary forms.
 
-[WAVE](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) is the Component Model's human-readable encoding for values. Wavelet source is WAVE text plus a thin reader sugar, and every sugared form desugars to a plain WAVE value.
-
-The language is homoiconic the way Lisp is homoiconic over s-expressions — **except Wavelet's "s-expressions" are exactly the values that cross component boundaries.** Code is data, and the data is the Component Model's data. A macro is a function from values to values; those values are WIT values; so a macro can be written in any language that speaks WIT.
-
-### The core is minimal
-
-The whole core language is [fourteen special forms](./language/special-forms), closures, guaranteed [tail-call elimination](./language/tail-calls), and a [macro system](./language/macros). Everything else — the standard library, and the convenience macros — is *delivered as components*.
+This makes the language **homoiconic**: code has a data representation that programs can inspect and construct. A macro receives source forms and returns a replacement form. The macro component interface represents those forms as a WIT tree, so another language can implement a Wavelet macro too.
 
 ## There is no FFI
 
-This is the keystone. Most languages that target WebAssembly maintain a representation gap: the language has its own strings, its own lists, its own records, and a marshalling layer converts them to and from canonical-ABI values at the boundary. That layer is where bugs, overhead, and cognitive load live.
-
-Wavelet has **no value types beyond WIT's.** Its booleans, strings, lists, records, variants, options, results, and flags *are* WIT types. So:
-
-- Calling an imported function is syntactically identical to calling a local one.
-- What you pass is what arrives — there is no marshalling step to reason about.
-- A "library" is anything componentized, from any language.
+Wavelet's runtime data types follow WIT. A local string and a string passed to another component have the same language-level meaning, and imported calls use ordinary function syntax.
 
 <Playground id="noffi-shout" />
 
+The compiler still performs the canonical ABI work needed to move values between components. That boundary can copy data. What you avoid is designing a separate foreign-function interface and manually translating between two unrelated type systems.
+
 ## One type system, from the core to the edges
 
-Every expression has a WIT type, inferred where it can be and declared where it must be. The same types that describe a component's boundary describe its insides: lists are `list<t>`, records and variants are the `DefType` shapes, and quoted code is a `tree`. What the checker cannot prove, it rejects — errors surface at compile time, not as runtime surprises.
+The compiler checks expressions before execution and infers types from literals, operations, call sites, and WIT signatures. Lists have one element type, and records have statically known fields. When the available constraints do not determine a type, write an annotation.
 
-Annotations narrow types where inference alone would not: typed `Fn` parameters and the [`The`](./language/special-forms#the) ascription form.
+Typed `Fn` parameters and [`The`](./language/special-forms#the) make constraints explicit:
 
 <Playground id="typed-byte-add-ok" />
 
 <Playground id="typed-byte-add-bad" />
 
-## The design ledger
+Static typing does not eliminate execution failures. Arithmetic overflow, invalid indexing, and host failures can still trap or return errors.
 
-Every commitment has a cost. The design accepts them openly:
+## A small core with explicit trade-offs
 
-| Decision | Cost accepted |
+[Special forms](./language/special-forms) provide definitions, functions, matching, quotation, and component declarations. `If` and `Do` are bundled macros. Collection functions accept callbacks that the compiler can resolve statically; runtime data cannot store or return functions.
+
+| Choice | Consequence |
 |---|---|
-| WIT identifiers only | No operator names — arithmetic is `add`, not `+`; comparison is `lt`, not `<`. |
-| Fixed macro arity | Paren-free macro syntax, but macros must be defined before use, and variadic macros take a single list. |
-| Code as an arena type | The wire encoding of "a form" is a flat node table, uglier than a recursive type — but it is what WIT can express today, and Wavelet hides it everywhere except the wire. |
-| Dynamic core | Some errors surface at the boundary rather than at the keystroke; annotations recover this where it matters. |
-| Per-file components | Boundary calls copy data. |
+| WIT identifiers | Arithmetic uses `add` and comparisons use `lt`; punctuation operators are not names. |
+| Fixed macro arity | Parentheses are optional for TitleCase macro calls, but macros must be known before use. |
+| Concrete interface types | Templates specialize types during compilation; generic type parameters do not cross component boundaries. |
+| Resource handles | Identity and mutable state have an explicit interface and ownership contract. |
+| Per-file components | Composition is explicit, and calls across boundaries can copy data. |
 
-These trade-offs are deliberate. Wavelet would rather be a small, honest layer over the Component Model than a large language that hides it.
+See [supported features and limits](./roadmap) for the restrictions to account for when designing a program.

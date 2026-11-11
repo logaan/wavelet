@@ -1,67 +1,41 @@
 ---
 sidebar_position: 9
-title: Roadmap & status
-description: What works today, and what is designed but not yet implemented.
+title: Supported features and limits
+description: The capabilities and implementation boundaries to use when planning a Wavelet program.
 ---
 
-# Roadmap & status
+# Supported features and limits
 
-Wavelet is at **draft 0.1**. The language design is complete on paper; the implementation is partial. This page is the single, honest inventory of where the line falls. Anything marked **Not yet implemented** is described elsewhere in these docs for completeness, always with a callout pointing here.
+Wavelet compiles source to WebAssembly components. CLI execution, the native REPL, the browser REPL, and documentation playgrounds execute compiled components. The interpreter supplies reference results for tests and evaluates Wavelet macro bodies during compilation.
 
-## What works today
+## Language coverage
 
-These are implemented and exercised — most of them power the [live playgrounds](./intro.mdx#try-it), and every runnable example is verified against the interpreter by the test suite.
-
-| Area | Status |
+| Area | Supported behavior |
 |---|---|
-| **Reader** — WAVE tokens, the [attachment rule](./language/syntax#the-attachment-rule), the full [desugaring table](./language/syntax#desugaring), qualified calls | ✅ |
-| **TitleCase macro sugar** — arity-driven reading, `DefMacro` arity registration top-to-bottom, explicit-payload override | ✅ |
-| **The fourteen [special forms](./language/special-forms)** | ✅ |
-| **[Macros](./language/macros)** — `DefMacro`, `Quote`/`Quasi`/`Unquote`/`Splice`, `gensym`, `expand` | ✅ |
-| **[Macro components](./language/macros#macros-as-components)** — `Import {… macros: true}`, the `wavelet:meta/macros` interface, compile-time instantiation, writing a macro library in Wavelet, qualified/aliased foreign macros | ✅ |
-| **Tree-walking interpreter** with [tail-call elimination](./language/tail-calls), [pattern matching](./language/pattern-matching), closures | ✅ |
-| **[Standard library](./stdlib)** builtins + `none`/`pi` | ✅ |
-| **`The` ascription** for scalar types | ✅ |
-| **Mutable [`cell`](./stdlib#cells)** | ✅ |
-| **WIT world synthesis** ([`wavelet wit`](./cli#wit)) | ✅ |
-| **wasm backend** — scalars (`f32` included), lists, records, variants, tuples (patterns *and* the [`tuple0` … `tuple16` constructors](./stdlib#tuples)), flags, closures, option/result, including across component boundaries via the canonical ABI | ✅ |
-| **[`build`](./cli#build) + [`compose`](./cli#compose)** producing components that run on wasmtime | ✅ |
-| **[`run`](./cli#run)** compiling and composing files, then executing `api.run` | ✅ |
+| Syntax | WAVE-based forms, calls, qualified names, call chaining, and arity-based TitleCase macro syntax. |
+| Static checking | Homogeneous lists, structural records, annotated and inferred types, overloads, and exhaustive matching. |
+| Functions | Direct calls, statically resolved aliases and capturing callbacks, and tail calls within a component. |
+| Data and state | Primitive and compound WIT values, cells, user-declared resources, and imported resources. |
+| Compile-time abstraction | Local and component macros, the built-in set functor, and file-local `DefFunctor` templates. |
+| Components | WIT synthesis, synchronous imports and exports, composition, resource constructors, methods, statics, ownership, and borrowing. |
+| Embedding | An in-memory Rust compiler API and a compiler component with an explicit macro-host protocol. |
 
-## Not yet implemented
+The runnable documentation examples are checked against the reference evaluator and executed through the browser compiler component. [Development and validation](./development) describes the other conformance checks.
 
-Everything below is part of the [design](./philosophy) but **does not work yet**. Where it's mentioned in the docs, you'll find a callout linking back here.
+## Restrictions to design around
 
-### Boundary coercions & the `safely` wrapper
+- **Function values:** functions cannot be stored in runtime data, returned as closures, selected dynamically for later calls, or passed across component boundaries. Use statically resolved callbacks, variant dispatch, or explicit resources.
+- **Inference:** annotations are required when expression and call-site constraints do not determine a type. Inference is not a promise that every definition can omit its signature.
+- **Resources:** local free functions and callbacks must borrow existing handles. Persisted resource state supports plain data or one outer cell containing plain data.
+- **Macros:** expansion is unhygienic, and binding keys must be literal identifiers. Executable macro artifacts are supplied by the project; automatic registry fetching is not a goal.
+- **Derivation:** `Derive` parses but emits placeholder operation bodies; write those operations explicitly.
+- **Templates:** user-defined templates are local to the source file that instantiates them.
+- **WIT:** async functions, futures, streams, maps, fixed-size lists, and error contexts are unsupported. Canonical memory paths reject variants or enums above 256 cases and flags above 32 members.
+- **Package resolution:** supplying multiple versions of the same package is rejected. Resolve the dependency graph to one version before compiling.
+- **Host access:** the embedded CLI runner and browser REPL provide no runtime host interfaces. Build an artifact and use a host supplying the imports your application requires.
 
-- Automatic checked coercion of dynamic values to boundary WIT types (beyond the scalar checks in typed `Fn` params and [`The`](./language/special-forms#the)) is **partial**.
-- The `safely` wrapper — turning a boundary type-mismatch trap into an `err` instead — is **not implemented**.
+Automatic conversion of closures into resources and function-style use of single-method resources are not implemented. Neither are a `wavelet add` command or a composition manifest. Use explicit macro paths, WIT dependencies, and the existing `build` and `compose` commands.
 
-### A compose manifest
+## Where to find the details
 
-- [`compose`](./cli#compose) auto-plugs by package id. The WAVE-document manifest for settling ambiguities, substitutions, and host wiring is **not implemented**.
-
-### `wavelet add`
-
-- A command to fetch WIT from a registry, pin a version, and feed editor completion is **not implemented**. This concerns interface definitions only. Automatic fetching of executable macro components is not a goal; projects supply macro artifacts through explicit paths or `wit/macros/`.
-
-### Macro hygiene
-
-- Expansion is **unhygienic**; [`gensym`](./stdlib#meta--reflection) is the only discipline. A syntax-object / scope-set hygiene layer is sketched but **not implemented**.
-- Relatedly, the reader requires **literal names** for binding keys, so a `gensym`'d name can't be `Unquote`d into a `Let`/`Fn` binding *position* yet. See the [Macros caution](./language/macros#hygiene-and-gensym).
-
-### Richer type inference
-
-- Inference of export signatures from use is **limited** across component boundaries: an export whose result comes from an imported function's call still needs an explicit `Export` record. (Local inference covers literals, builtins, lists, options, results, and `DefType` values.)
-
-### Async
-
-- Mapping `Fn` bodies that await onto the Component Model's `stream`/`future` types (with an `Await` macro) as WASI 0.3 lands is **undesigned and unimplemented**.
-
-## A note on the convenience macros
-
-`And`, `Or`, and `TryLet` appear throughout the design as examples. They are **not shipped** — the standard library provides [builtins](./stdlib) and the `If` and `Do` convenience macros. Define them yourself with [`DefMacro`](./language/macros), as shown in the docs, or ship them as a [macro component](./language/macros#macros-as-components) and import them.
-
-## Self-hosting
-
-The longer-term goal is to bootstrap in stages: rewrite the reader and expander in Wavelet early (they are the best stress test of the meta interface), with the backend last.
+Read [the type system](./language/type-system) for function and resource rules, [components](./components) for WIT and composition, and [the browser REPL](./browser-repl) for execution and dependency inputs. Release history belongs in the project's [changelog](https://github.com/logaan/wavelet/blob/main/CHANGELOG.md).

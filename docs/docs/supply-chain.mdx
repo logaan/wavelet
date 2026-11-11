@@ -1,83 +1,39 @@
 ---
 sidebar_position: 8
 title: Supply-chain security
-description: How the Component Model and Wavelet's design narrow the dependency attack surface.
+description: Component imports make runtime and compile-time capabilities explicit.
 ---
 
 # Supply-chain security
 
-Modern software is mostly other people's code. A typical application pulls in hundreds of transitive dependencies, and every one of them is a place an attacker can hide. The dominant language ecosystems make this worse in two specific ways, and Wavelet's commitment to the Component Model addresses both.
+A component's imports describe what it needs from its environment. A component cannot access files, open sockets, or read environment variables unless the host or a composed dependency provides an interface granting that access.
 
-:::info[A note on status]
-This page describes the security *model* Wavelet is built around. The capability-based runtime isolation comes from the WebAssembly Component Model and WASI Preview 2, which are real and shipping. **Sandboxed macro components** — the compile-time half of the story — are now implemented: a `macros: true` import is instantiated and run inside a wasm sandbox at build time (see [Macros as components](./language/macros#macros-as-components)).
-:::
+This makes dependency review concrete: inspect both the component's WIT contract and the implementations wired to its imports. An interface can grant broad authority, so its name alone is not enough to determine what a dependency can do.
 
-## The two attack surfaces
+## Runtime capabilities
 
-A dependency can attack you at **two** different times:
+A Wavelet library is a WebAssembly component with explicit imports and exports. When you compose components, matching exports satisfy imports. Any unresolved imports remain requirements for the host or for a later composition step.
 
-1. **At runtime** — the code does something malicious while your program runs: exfiltrates environment variables, reads files it has no business reading, opens network connections, mines cryptocurrency.
-2. **At build time** — the code runs *during compilation or installation* and attacks your developer machine or CI system. `npm` post-install scripts, `build.rs`, setuptools `setup.py`, Gradle plugins, and procedural/compiler macros all execute arbitrary code on the build host, usually with the full ambient authority of the developer.
+For example, a text-formatting component can accept a string and return another string without filesystem or network imports. A component that writes to stdout must import an output interface, such as `wasi:cli/stdout`, and run on a host providing it.
 
-Build-time attacks are especially nasty because they bypass every runtime sandbox: by the time your hardened production container runs, the credentials were already stolen on a laptop or a CI runner.
+Use [`wavelet wit`](./cli#wit) to inspect the interface synthesized from source. Inspect the final artifact's WIT after composition to see the host capabilities it still requires. The runtime enforces the component boundary; the host determines the authority behind each supplied import.
 
-## How the Component Model helps at runtime
+## Compile-time macro components
 
-WebAssembly components are **sandboxed and capability-secure by default**. A component cannot:
-
-- read or write files,
-- read environment variables,
-- open sockets,
-- or otherwise touch the outside world,
-
-…unless it is **explicitly handed an interface that grants that ability.** There is no ambient authority. A component's powers are exactly the imports it was composed with — nothing flows in that you did not wire in.
-
-This turns a vague trust decision ("do I trust this library?") into a concrete, auditable one ("what interfaces did I grant this component?"). A date-formatting library that imports `wasi:filesystem` is immediately suspicious in a way that, in most ecosystems, would be invisible.
-
-Because [Wavelet has no FFI](./philosophy#there-is-no-ffi) and every dependency is a component, this isn't a feature you opt into — it's the only way code is linked. When you [`compose`](./cli#compose), you decide what each plug is allowed to import; anything left unsatisfied flows out to be granted (or denied) at the next layer.
+An imported macro executes during compilation. Wavelet loads it as a component implementing the [macro interface](./language/macros#macros-as-components): a manifest describes its macros, and an expansion function transforms source forms.
 
 ```wavelet
-// Composition is where authority is granted. An untrusted plug only gets
-// what you wire to it — a host capability flows in only if you say so.
-{app: "out/main.wasm"
- plug: [{import: "acme:words/picker"     with: "vendor/words-rs.wasm"}
-        {import: "wasi:cli/environment"  with: host}]}   // granted deliberately
+Import {pkg: "acme:html/dsl" macros: true from: "vendor/dsl.wasm"}
 ```
 
-## How it helps at build time — macros as sandboxed components
+The native and browser macro hosts instantiate these components with the imports they explicitly supply. Macro code receives no ambient filesystem or network access. An embedding application controls the capabilities of its own macro host through the [Compiler API](./compiler-api).
 
-This is the part that is unusual, and the reason Wavelet's [macro design](./language/macros#macros-as-components) matters for security.
+A macro can still consume CPU or memory, fail to terminate, or generate unwanted code. Review the artifact you load and the code it produces. The browser worker supports cancellation and a timeout; an embedding host should choose execution limits suitable for its environment.
 
-In most languages, a macro (or build script) is code that runs **on the build machine with full privileges**. A compromised proc-macro crate, Babel plugin, or Gradle task can read your SSH keys during `cargo build` / `npm run build`. The compile step is a giant, under-examined attack surface.
+## Dependency artifacts
 
-Wavelet's macros are **functions over a WIT type** ([`tree → tree`](./language/macros)), and the design delivers them as **components** — instantiated *at compile time* inside the same wasm sandbox as any other component:
+Projects supply executable macro components using `from:` or the conventional `wit/macros/` directory. The compiler does not automatically download executable macro components from a registry, and that behavior is not a project goal.
 
-```wavelet
-Import {pkg: "acme:html/dsl" macros: true}   // a macro library, run sandboxed
-```
+WIT dependency fetching is separate: `wkg` retrieves interface definitions and records dependency versions in `wkg.lock`. Those definitions describe functions and types; they do not provide their implementations.
 
-The consequence: **an untrusted macro runs inside a wasm component with no capabilities beyond what the build explicitly grants it.** Compile-time code execution without the supply-chain terror. A macro that wants to read a file at build time has to be *handed* a filesystem interface; by default it can transform syntax and nothing else.
-
-You can still write a `Re` macro that compiles a regex to a DFA at build time, or an HTML DSL — but it can't phone home, because it was never given a socket.
-
-:::note[Status]
-Macro **components** — compile-time instantiation, the `macros: true` flag, and routing expansion through a foreign component — are implemented (see [Macros as components](./language/macros#macros-as-components)). One caveat: today the macro library runs inside the wasm sandbox but is **trusted with whatever the build runtime grants it**; the per-library *capability wiring* shown above (handing a macro a filesystem interface only when you choose to) is the next refinement. The isolation boundary is real — a macro can't reach beyond the component — but fine-grained grants are still coarse.
-:::
-
-Macro artifacts are project-supplied files, selected with `from:` or placed in
-`wit/macros/`. The compiler does not automatically fetch executable macros from
-a registry, and adding that behavior is not a project goal. Fetching WIT
-interface definitions with `wkg` does not fetch or run macro implementations.
-
-## Other surface reductions
-
-A few of Wavelet's other commitments quietly help:
-
-- **No FFI / no native code.** There is no `unsafe`, no C shims, no `dlopen`. Everything is portable wasm running in a sandbox; a dependency can't reach memory it wasn't given.
-- **One file, one component, one version.** The unit you audit is the unit you deploy. There is no gap between "the source I read" and "the artifact that runs".
-- **Explicit, typed boundaries.** Every dependency edge is a WIT interface you can read. Adding a capability is a visible, reviewable change to a composition.
-- **Language-agnostic dependencies.** Because a dependency is "anything componentized", you can replace a suspicious package with an implementation in another language *without changing your code* — the boundary is the WIT, not the language.
-
-## The honest summary
-
-The Component Model gives Wavelet runtime capability-security for free, today. The macro-component design extends the same discipline to build time — closing the gap that most ecosystems leave wide open — but that piece is still ahead of us. The architecture is chosen so that, when it lands, *both* the code that runs in production and the code that runs during your build are confined to exactly the authority you granted, and no more.
+The component boundary applies to code executed as a component. Native build tools, installation scripts, and host implementations run with their own process permissions, so review those parts of the toolchain separately.

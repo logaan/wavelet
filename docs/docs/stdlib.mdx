@@ -1,35 +1,33 @@
 ---
 sidebar_position: 5
 title: Standard library
-description: Every built-in function available today, grouped, with live examples.
+description: Built-in functions and macros, grouped by purpose, with compiled examples.
 ---
 
 # Standard library
 
-`wavelet:std/core` is implicitly imported and open in every file. Because identifiers are WIT labels, there is no `+` or `<` — the names are short and boring, a deliberate cost of "the syntax is WAVE, no exceptions".
+The standard library is available in every file. Function names follow WIT identifier rules: use `add` for arithmetic and `lt` for comparison.
 
-Every function below is **implemented and runnable today**. A call bundles its arguments — `add(2 3)` passes two — so most functions read several arguments positionally; a few take a single value. Edit any example and press Run.
+The tables describe supported call shapes. Edit an example and choose **Run** to compile and execute it in the browser.
 
 :::note[What "function" means here]
-These are the core *builtins*. The bundled **macros** are `If` and `Do` (see [Control-flow macros](#control-flow-macros)); other conveniences (`And`, `Or`, `TryLet`) are **not** shipped — define them yourself with [`DefMacro`](./language/macros). Two pre-bound *values* also live in core: `none` (the empty option) and `pi`.
+`If` and `Do` are bundled [control-flow macros](#control-flow-macros). Define other conveniences, such as `And`, `Or`, or `Try-let`, with [`DefMacro`](./language/macros). The library also binds `none`, the empty option, and `pi`.
 :::
 
 <Playground id="std-pi" autoRun />
 
 ## Control-flow macros
 
-`If` and `Do` are the two **bundled macros**. They are not core special forms —
-each expands to [`Match`](./language/special-forms#match), the sole core
-branching construct — but they are always in scope, exactly like the builtins.
+`If` and `Do` are always in scope. Both expand to [`Match`](./language/special-forms#match), which provides the core branching behavior.
 
 ### `If`
 
-`If cond then else` — the everyday conditional. The condition must evaluate to a
+`If cond then else` selects a branch. The condition must evaluate to a
 `bool` (there is no truthiness); a non-`bool` condition is a **compile-time
 error**. Only the taken branch is evaluated, and both branches are in
 [tail position](./language/tail-calls). It expands to a two-clause `Match`:
 
-```wavelet
+```text
 If c t e   ==>   Match The bool c [(true t) (false e)]
 ```
 
@@ -41,11 +39,11 @@ A non-boolean condition is a compile-time error:
 
 ### `Do`
 
-`Do [exprs]` — evaluate each expression in order; the value is the last one.
+`Do [exprs]` evaluates each expression in order and returns the last value.
 Useful for side effects. Takes a single **list**. It expands to nested `Match`
 clauses over a wildcard, so every statement runs and the last is the result:
 
-```wavelet
+```text
 Do [a b c]   ==>   Match a [(_ Match b [(_ c)])]
 ```
 
@@ -86,9 +84,9 @@ A float operand promotes the result to a float:
 
 | Function | Shape | Result |
 |---|---|---|
-| `len` | `len(seq)` | length of a list, tuple, or string |
+| `len` | `len(seq)` | list length or string length in UTF-8 bytes |
 | `empty` | `empty(seq)` | is it empty? |
-| `get` | `get(seq i)` | element at index `i` (list/tuple) |
+| `get` | `get(seq i)` | list element at index `i` |
 | `put` | `put(list i v)` | list with index `i` replaced by `v` |
 | `push` | `push(list v)` | list with `v` appended |
 | `concat` | `concat(a b)` | two lists joined |
@@ -98,7 +96,7 @@ A float operand promotes the result to a float:
 | `range` | `range(lo hi)` | `[lo … hi-1]` |
 | `map` | `map(f list)` | apply `f` to each element |
 | `filter` | `filter(pred list)` | keep elements where `pred` is `true` |
-| `fold` | `fold(f init list)` | left fold; `f` receives `[acc elem]` |
+| `fold` | `fold(f init list)` | left fold; callback parameters receive accumulator and element |
 | `zip` | `zip(a b)` | list of `(a-elem, b-elem)` tuples |
 
 <Playground id="std-seq-basics" />
@@ -107,7 +105,7 @@ A float operand promotes the result to a float:
 
 <Playground id="std-seq-mutate" />
 
-`map`, `filter`, `fold`, `zip` take functions:
+`map`, `filter`, and `fold` take statically resolved callbacks. Use an explicit callback such as `Fn {acc n} add(acc n)` when folding with a built-in operation. `zip` pairs elements from two lists:
 
 <Playground id="std-map" />
 
@@ -118,7 +116,7 @@ A float operand promotes the result to a float:
 <Playground id="std-zip" />
 
 :::note[`get` is for sequences]
-`get` indexes lists and tuples; it does not look up record fields (use [pattern matching](./language/pattern-matching) or `rec-key`/`rec-val` for records).
+Use `get` for lists. Destructure tuples and records with [pattern matching](./language/pattern-matching).
 :::
 
 ## Tuples
@@ -127,7 +125,7 @@ A float operand promotes the result to a float:
 |---|---|---|
 | `tuple0` … `tuple16` | `tuple2(a b)` | the tuple of exactly those arguments |
 
-One constructor per size, from `tuple0()` (the empty tuple) through `tuple16(…)`, each taking **exactly** that many arguments — there is no variadic form, so every constructor has a WIT-expressible fixed-arity shape and works as an ordinary function value. The result type is the tuple of the argument types; no `The` ascription is needed. (In evaluation position parens are calls, which is why tuples get constructors rather than a paren literal — see [Values & types](./language/values#compound-values).)
+Each constructor takes exactly its stated number of arguments. Its result type follows the argument types. To use one in a collection callback, write a function such as `Fn {x} tuple1(x)`. Parentheses in expression position mean a call; see [compound values](./language/values#compound-values).
 
 <Playground id="std-tuple" />
 
@@ -135,8 +133,8 @@ One constructor per size, from `tuple0()` (the empty tuple) through `tuple16(…
 
 | Function | Shape | Result |
 |---|---|---|
-| `str-cat` | `str-cat(a b …)` | concatenate strings/chars (its arguments, or a single list of them) |
-| `upper` `lower` | `upper(s)` | case conversion |
+| `str-cat` | `str-cat(a b …)` | concatenate string arguments; use `join` for a list |
+| `upper` `lower` | `upper(s)` | ASCII case conversion |
 | `split` | `split(s sep)` | split on a separator → list of strings |
 | `join` | `join(parts sep)` | join a list of strings with a separator |
 | `contains` | `contains(s sub)` | does `s` contain `sub`? |
@@ -145,7 +143,7 @@ One constructor per size, from `tuple0()` (the empty tuple) through `tuple16(…
 
 <Playground id="std-strings" />
 
-`str-cat` takes strings and chars only — convert other values first with [`to-string`](#conversion):
+Pass strings to `str-cat`. Convert other data with [`to-string`](#conversion) when you want its printed representation:
 
 <Playground id="std-strcat-tostring" />
 
@@ -153,17 +151,16 @@ One constructor per size, from `tuple0()` (the empty tuple) through `tuple16(…
 
 | Function | Shape | Result |
 |---|---|---|
-| `to-string` | `to-string(v)` | canonical WAVE text for any value |
+| `to-string` | `to-string(v)` | printed value text; see the serialization limits below |
 | `to-u8` … `to-u64`, `to-s8` … `to-s64` | `to-u8(n)` | range-checked integer narrowing (a char gives its codepoint) |
 | `to-f32` `to-f64` | `to-f64(n)` | to floating point |
 | `to-char` | `to-char(n)` | int codepoint → char (must be a Unicode scalar value) |
 
 <Playground id="std-tostring" />
 
-Floats print *indicatively*, to six significant digits — `3.14159`, `0.666667`,
-`2.5e-7` — not with every digit of the underlying double, so `to-string` of a
-float is not guaranteed to read back to the identical bits. Use a formatting
-library when you need exact or styled float text.
+Floats print to six significant digits, for example `3.14159`, `0.666667`, and `2.5e-7`. This text is not guaranteed to read back to identical floating-point bits. Use a formatting library when you need another precision or presentation.
+
+Resources print as opaque handles, and some printed values cannot be read back with their original type. See [WAVE output compliance](./development#wave-output-compliance).
 
 Parsing source is a compiler operation: use `wavelet read` to inspect its form tree. Runtime source parsing is not part of the language.
 
@@ -174,9 +171,7 @@ Numeric conversions range-check:
 
 <Playground id="std-conv-bad" />
 
-Chars convert to and from their Unicode codepoints — `to-u32` (or any integer
-conversion wide enough) reads a char's codepoint, and `to-char` builds a char
-back from an int. `to-char` rejects ints that are not Unicode scalar values
+`to-u32`, or another sufficiently wide integer conversion, reads a character's Unicode codepoint. `to-char` constructs a character from an integer. `to-char` rejects ints that are not Unicode scalar values
 (surrogates, or anything past `0x10FFFF`):
 
 <Playground id="std-char-conv" />
@@ -185,34 +180,32 @@ back from an int. `to-char` rejects ints that are not Unicode scalar values
 
 ## Input / output
 
-The standard library has **no** I/O builtins. The language and compiler know
-nothing about WASI: a program that wants to write to stdout, read its arguments,
-or talk to the host imports the relevant WIT interface (e.g. `wasi:cli/stdout`,
-`wasi:cli/environment`, `wasi:io/streams`) and calls it like any other
+The standard library has no I/O builtins. A program that writes to stdout, reads arguments, or accesses other host features imports a suitable WIT interface, such as `wasi:cli/stdout`,
+`wasi:cli/environment`, or `wasi:io/streams`, and calls it like any other
 [imported component](./components). The `cli` template scaffolded by
 [`wavelet new`](./cli#new) shows the pattern: it imports `wasi:cli/stdout` and
 `wasi:io/streams`, builds the greeting, and writes it through the stream.
 
-Because these are host calls, they only run in a compiled component on a wasm
-runtime — not in the in-browser playground or under [`wavelet run`](./cli#run),
-which evaluate pure programs only.
+The application host must supply these interfaces. The browser playground and embedded [`wavelet run`](./cli#run) host do not supply external runtime interfaces. Build the component and use a host that implements its imports.
 
 ## Meta & reflection
 
 | Function | Shape | Result |
 |---|---|---|
-| `gensym` | `gensym()` | a fresh, unique name |
-| `expand` | `expand(form)` | run one macro-expansion step on a form |
+| `gensym` | `gensym()` | a new generated name within the current instance |
+| `expand` | `expand(form)` | inspect expansion within a macro body |
 | `form-kind` | `form-kind(v)` | the kind tag of a value-as-form |
 | `rec-key` | `rec-key(record)` | the first field's key, as a name |
 | `rec-val` | `rec-val(record)` | the first field's value |
 
 
+`expand` is a compile-time operation used inside macro bodies; it is not available as a runtime evaluator.
+
 `form-kind` classifies a value the way the reader classifies a form (`"int"`, `"str"`, `"sym"`, `"tup"`, `"lst"`, `"rec"`, …). A quoted call is a tuple, so it reports `"tup"`; `"call"` is reserved for a runtime variant carrying a payload (`ok(1)`):
 
 <Playground id="std-form-kind" />
 
-`rec-key` / `rec-val` pull apart a single-field record — the workhorses of binding macros like `TryLet` ([see Macros](./language/macros#error-propagation-without-early-return)):
+`rec-key` and `rec-val` inspect a single-field record, useful in [binding macros](./language/macros#error-propagation-without-early-return):
 
 <Playground id="std-rec-key-val" />
 
@@ -220,16 +213,16 @@ which evaluate pure programs only.
 
 | Name | Shape | Builds |
 |---|---|---|
-| `some` | `some(v)` | `option` — present |
-| `none` | `none` | `option` — absent (a bound value, not a call) |
-| `ok` | `ok(v)` | `result` — success |
-| `err` | `err(v)` | `result` — failure |
+| `some` | `some(v)` | present option |
+| `none` | `none` | absent option, used as a bound value |
+| `ok` | `ok(v)` | successful result |
+| `err` | `err(v)` | failed result |
 
 <Playground id="std-constructors" />
 
 ## Cells
 
-A `cell` is the standard library's mutable reference — the one place mutation lives, since [the core has none](./language/evaluation#no-loops-no-mutation-no-early-return). A cell is also the usual **representation** behind a [user-declared resource](./language/type-system#user-declared-resources): a `DefResource`'s `New:` constructor typically returns a `cell`, and its methods mutate through it.
+A `cell` is a mutable reference. It is also a common private representation for a [user-declared resource](./language/type-system#user-declared-resources): the resource constructor returns a cell, and its methods read or update it.
 
 | Function | Shape | Effect |
 |---|---|---|

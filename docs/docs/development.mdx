@@ -24,6 +24,8 @@ npm --prefix tooling/vscode run check
 npm --prefix docs run build
 ```
 
+## Structural and coverage gates
+
 The quality gate checks formatting, Clippy diagnostics, function complexity,
 and module size. A separate Lizard analyzer measures cyclomatic complexity
 and non-comment function length; its pinned dependency installs automatically
@@ -38,6 +40,8 @@ These are migration limits for existing code, with no allowance for new lint
 categories. After reducing debt, run
 `python3 scripts/check-quality.py --update-baseline` and review the reduction.
 Increasing a baseline requires an explicit reviewed change.
+
+## Duplication
 
 Copy/paste detection uses [jscpd](https://github.com/kucherenko/jscpd/blob/master/docs/rust.md)
 5.4.3, pinned with its platform binaries in `tooling/quality/package-lock.json`.
@@ -60,20 +64,7 @@ behavior, inspect that report, run
 diff. Existing clones remain visible as refactoring work; accepting a new clone
 requires a reviewed baseline change, not an increased percentage allowance.
 
-The 12 November 2026 structural review reduced the largest dispatch functions
-by separating semantic families and compiler phases. Lizard measurements were:
-
-| Function | Code lines before → after | Cyclomatic complexity before → after |
-| --- | --- | --- |
-| Interpreter builtin dispatch | 403 → 30 | 187 → 17 |
-| Builtin type checking | 245 → 32 | 105 → 9 |
-| Core module orchestration | 947 → 21 | 188 → 7 |
-
-At the same detector settings, duplication fell from 114 clones and 1,866
-duplicated lines to 98 clones and 1,587 lines. Shared import metadata parsing,
-runtime-helper slot reservation, sequence/record boxing, and test dependency
-setup removed repeated behavior. The resulting baseline update only removed
-exceptions or lowered existing limits; it added no new clone fingerprints.
+## History analysis
 
 [Code Maat](https://github.com/adamtornhill/code-maat) complements the source
 checks with Git history evidence. `python3 scripts/code-maat.py` downloads the
@@ -116,7 +107,9 @@ to decide whether a refactor is useful. Bulk refactors, recent file moves, a sma
 sample, or a reached history cap can distort the ranking. Only failure to produce
 a valid report fails the history-analysis job.
 
-The compiled execution tests and round-trip tests require `wasm-tools`,
+## Cross-language conformance
+
+The integration and round-trip test workflows require `wasm-tools`,
 `wasmtime`, `wac`, and `wkg` on `PATH`. The round-trip matrix also needs
 `cargo-component` and the `wasm32-wasip1` Rust target:
 
@@ -131,32 +124,27 @@ The matrix checks both Rust seed implementations against Wavelet as caller and
 callee, plus Wavelet against itself. See [Web applications](./web-apps) for HTTP
 validation and deployment boundaries.
 
-Runtime `read` and `apply` are no longer builtins. Read source through the
-compiler API and call functions directly. CLI and REPL compilation errors or
-runtime traps are returned to the user without rerunning in the interpreter.
-Build staging uses private temporary directories with automatic cleanup and
-rejects unsupported paths and colliding filenames. Build preparation also rejects
-repeated package identities (including different versions) and packages whose
-names map to the same component filename. All components must compile before
-artifact writing starts, so a compile error preserves previous build artifacts.
-Package names, including macro-only packages, cannot produce output paths outside
-the requested output directory.
+## Compiler and browser validation
 
-Build orchestration separates prepared source units, dependency resolution,
-checking and byte emission, and filesystem publication. The check/emission phase
-operates on arenas and resolved dependencies without filesystem or process access.
-WIT fetch worlds use a private workspace; dependency files are copied back after
-every fetch succeeds. The `wkg` process retains the original project directory,
-so manifests, relative local overrides, registry configuration, workspace settings,
-and generated lockfile updates keep their normal behavior. Authored root WIT
-files and macro artifacts are preserved. Macro caches use the package, requested version, and
-canonical artifact path, so two explicit artifacts cannot share an instance by
-accident.
+The [Compiler API](./compiler-api) separates source/dependency inputs from host services. Compiler tests exercise in-memory projects, macro preparation, diagnostics, and snippet wrapping. Native and browser callers execute the returned components.
 
-The REPL keeps up to 32 compiled expression instances. Repeating an expression
-executes the cached instance again; accepting a definition invalidates the
-cache. New expressions still compile with the current definitions. Value
-redefinitions replace their previous binding.
+Runnable examples are authored in `docs/scripts/gen-examples.mjs` and generated into `docs/examples.json`. The generator compares the compiled results with the reference evaluator. Both native tests and browser playgrounds consume that data. Regenerate it after changing the language or examples:
+
+```console
+./scripts/regen-examples.sh
+```
+
+The script rebuilds the reference evaluator artifact and compiler component before regenerating results. Both artifacts are committed so a documentation build requires only Node and npm dependencies.
+
+Browser tests run the documentation examples and the commented language tour through the compiler component and execute the emitted artifacts. They also check error recovery and cancellation of a running component:
+
+```console
+npm --prefix docs run test:runtime
+npm --prefix docs run build
+npm --prefix docs run test:browser
+```
+
+Install the Playwright Chromium browser for the last command. The runtime unit tests also exercise worker cancellation, timeouts, dependency inputs, and the macro-host protocol.
 
 ## WAVE output compliance
 
@@ -170,7 +158,4 @@ WAVE does not accept. Unit still prints `{}`, the WAVE spelling of empty flags;
 this is a diagnostic representation rather than a typed empty-record encoding.
 Opaque functions and resources do not have a WAVE text serialization.
 
-Resource state currently permits plain data or one outer cell containing plain
-data. Nested/shared cells, cell cycles, and function-bearing state are rejected
-by the checker before persistence. This conservative contract avoids silent
-loss of cell identity while the persistent heap lacks a graph identity map.
+See the [resource state contract](./language/type-system#members-and-their-roles) for the supported representation shapes.

@@ -1,19 +1,18 @@
 ---
 sidebar_position: 6
 title: Components & composition
-description: Files become components; imports and exports wire them together.
+description: Define WIT interfaces, share resource handles, and compose source files.
 ---
 
 # Components & composition
 
-In Wavelet, **one file is one component**. This page covers how a `.wlt` file declares its place in the component world, and how `build` and `compose` turn files into linked, runnable WebAssembly.
+Each Wavelet source file becomes a WebAssembly component. Its WIT world describes the interfaces it imports and exports. Composition connects those interfaces independently of the language used to implement them.
 
 ## Anatomy of a file
 
-A file is a flat sequence of forms: an optional [`Package`](./language/special-forms#package), any number of [`Import`](./language/special-forms#import)s, then [`DefType`](./language/special-forms#deftype)s, [`Def`](./language/special-forms#def)s, and [`Export`](./language/special-forms#export)s in any order.
+A component file declares a package, imports dependencies, defines values and types, and exports its public interface:
 
 ```wavelet
-// shout.wlt
 Package "demo:shout@0.1.0"
 
 Export shout
@@ -21,7 +20,7 @@ Def shout Fn {phrase: string}
   str-cat(upper(phrase) "!")
 ```
 
-The compiler synthesizes a WIT world from these forms. You can see it with [`wavelet wit`](./cli#wit):
+Inspect its interface with `wavelet wit shout.wlt`:
 
 ```wit
 package demo:shout@0.1.0;
@@ -35,173 +34,129 @@ world shout {
 }
 ```
 
-Exported functions get their WIT signatures from typed `Fn` parameters, from inference against use, or from an explicit record form. A file's exports land in a default interface named `api`; an `Export` record with an `iface` field groups them otherwise.
+Typed parameters, inferred body types, and explicit export records determine signatures. Add an explicit result annotation when inference cannot establish the export's signature.
 
 ## Packages
 
-[`Package`](./language/special-forms#package) declares the component's id and version:
+`Package "demo:shout@0.1.0"` identifies the file's component and version. Ordinary project compilation requires a package declaration; snippet compilation supplies its own wrapper.
 
-```wavelet
-Package "demo:shout@0.1.0"
-```
-
-Every file implicitly imports the standard library (`wavelet:std/core`, open).
+The standard library is available in each file. A build rejects duplicate package identities, including two versions of the same package. Resolve dependencies to one version per package before compiling.
 
 ## Imports
 
-[`Import`](./language/special-forms#import) takes a package path string, or a record for control:
+An import names a WIT interface. A record can specify an alias or expose its names without qualification:
 
 ```wavelet
-Import "wasi:cli/environment"                       // alias defaults to last segment
-Import {pkg: "wasi:keyvalue/store@0.2.0" as: kv}     // explicit alias
-Import {pkg: "demo:text/api" open: true}             // splat names in unqualified
+Import "wasi:cli/environment"
+Import {pkg: "demo:shout/api" as: sh}
+Import {pkg: "demo:math/api" open: true}
 ```
 
-Imported names are ordinary prefixed bindings: `kv-open` and `kv-get`. Slash spelling (`kv/open`, `kv/get`) is equivalent. With `open: true`, the names are also bound without the prefix.
+An alias prefixes imported names. `sh/shout` and `sh-shout` are equivalent; `open: true` also exposes the bare name.
 
-Imported types retain their package and interface identity. Two interfaces may
-both declare `payload` or `device` without sharing their layouts or resource
-handles. Use the import prefix in annotations when a name is ambiguous, such as
-`borrow(numbers/device)` and `borrow(words/device)`. An unambiguous type can
-also use its bare name. WIT `use` aliases preserve the identity of the original
-type; they do not create a new resource. Equivalent plain-data WIT shapes can
-cross a boundary, while resources from different declarations cannot be
-interchanged even when their methods have identical signatures.
+Imported types retain their declaring package and interface identity. Use a prefix when two interfaces declare the same type name, such as `borrow(numbers/device)` and `borrow(words/device)`. WIT `use` aliases preserve the original resource identity. Two resources with similar methods remain distinct types.
 
-When you run a set of files together with [`wavelet run`](./cli#run), imports are resolved **by package id** against the other files on the command line and compiled components are composed before execution:
-
-```console
-$ wavelet run main.wlt shout.wlt
-```
-
-`main.wlt` imports `demo:shout/api`; because `shout.wlt` declares `Package "demo:shout@…"`, the runner wires them together and calls `main`'s exported `api.run`. The embedded runner provides no host imports. Use `wavelet build` and a compatible runtime when the composed artifact requires external interfaces. WASI interfaces follow the same WIT import/export rules as other packages.
+For a set of Wavelet sources, matching imports resolve to sibling packages. Other imports need supplied WIT definitions to compile and a component or host implementation to execute. WASI follows these same rules.
 
 ## Exports
 
-[`Export`](./language/special-forms#export) publishes a definition. A bare name exports into the default `api` interface:
+A bare export publishes a definition in the default `api` interface. A record can choose a signature or another interface:
 
 ```wavelet
 Export shout
-```
-
-A record form gives finer control over the signature and interface grouping:
-
-```wavelet
 Export {name: shout params: {phrase: string} result: string}
 Export {name: render iface: "html"}
 ```
 
 ### Adopting a host world
 
-There is no compiler-known "target world". A component **implements** an external interface by exporting it: name the interface with the `iface` field and the compiler emits the export under that interface's WIT signature. A CLI program exports `wasi:cli/run`; an HTTP front end exports `wasi:http/incoming-handler`.
+To implement a host's entry interface, name it in `iface` and provide the corresponding WIT definition. For example, a CLI component exports `wasi:cli/run`:
 
 ```wavelet
 Export {iface: "wasi:cli/run" name: run result: result}
 ```
 
-The interface's WIT comes from `wit/deps/` (fetched by `wkg`, see [below](#project-layout-and-external-wit)), so the compiler treats `wasi:cli/run` exactly as it would any third-party interface.
+An HTTP component exports `wasi:http/incoming-handler`. Other synchronous interfaces use the same mechanism. A resource-only external interface can export a matching resource declaration with a form such as `Export {iface: "acme:counter/api@1.0.0" name: counter}`.
 
-The same mechanism applies to a resource-only external interface: declare the
-matching `DefResource` and use `Export {iface: "acme:counter/api@1.0.0" name: counter}`.
-Its constructor, methods, statics and resource identity are exported under that
-interface's WIT contract.
-
-Wavelet currently implements synchronous WIT interfaces with primitive and
-compound values and resources. Async functions, futures, streams, error contexts,
-map types and fixed-size lists are unsupported. Canonical memory paths also
-reject variants/enums above 256 cases and flags above 32 members. Namespace-neutral
-resolution does not imply support for every Component Model proposal or host.
-
+The compiler supports synchronous primitive and compound WIT values, aliases, and resources. Async functions, futures, streams, maps, fixed-size lists, and error contexts are unsupported. Canonical memory paths reject variants or enums above 256 cases and flags above 32 members.
 
 ## Resources
 
-Resources come along for free in the design, because WIT canonicalizes methods as functions whose first parameter is the handle: `kv/open({name: "default"})` returns a handle, and `kv/get(bucket "greeting")` calls a method on it. Use the imported resource-specific destructor binding, such as `streams-drop-output-stream(handle)`, to release an imported owned handle. The generic `drop(value)` only discards a value; it does not invoke a resource destructor.
+A resource exposes methods while keeping its state private. Call an imported constructor to obtain a handle and pass that handle to its methods. Ownership is part of the signature: `own(resource)` transfers a handle, while `borrow(resource)` allows temporary use.
 
-That is the *consumer* side — calling an imported resource. To declare a resource of your own, use [`DefResource`](./language/type-system#user-declared-resources): a `DefResource counter { … }` form maps one-to-one onto a WIT `resource` block, with a constructor (`New:`), an optional destructor (`Drop:`), instance methods, and statics. Exporting it is like exporting anything else — a bare `Export counter` publishes the whole resource block into `api`, and the record form (`Export {iface: "counters" name: counter}`) groups it into a named interface:
+Declare your own resource with `DefResource`:
 
 ```wavelet
 DefResource counter {
-  New:   Fn {start: u32} cell-new(start)
-  next:  Fn {self: counter} The u32 Do [ cell-set(self add(cell-get(self) 1))
-                                          cell-get(self) ]
+  New: Fn {start: u32} cell-new(start)
   value: Fn {self: counter} The u32 cell-get(self)
 }
+Export counter
 
-Export counter                                            // the resource block
 Def make-counter Fn {start: u32} The counter counter(start)
-Export make-counter                                       // a free function that hands one out
+Export make-counter
 ```
 
-Handles crossing the boundary carry an **ownership mode**: a bare `counter` is *owned* (`own<counter>` — ownership transfers, the callee drops it), while `borrow(counter)` is a *borrow*, legal only in parameter position. See [ownership at the boundary](./language/type-system#ownership-at-the-boundary) for the full rules, and the [user-declared resources](./language/type-system#user-declared-resources) section for the complete story (member roles, identity equality, opaque `to-string`, and the synthesized WIT).
+`Export counter` publishes the resource's constructor and members together. Free functions using the handle are exported separately. Methods borrow their receiver; local free functions receiving existing handles must use borrowed parameters.
+
+To release an imported owned handle, use that resource's destructor binding, such as `streams-drop-output-stream(handle)`. Generic `drop(value)` only discards a value and does not invoke a resource destructor. See [resources and ownership](./language/type-system#user-declared-resources) for the complete contract.
 
 ## Project layout and external WIT
 
-A Wavelet project carries a `wit/` tree alongside its `src/`:
+| Path | Purpose |
+|---|---|
+| `src/` | Wavelet component files. |
+| `wit/deps/` | WIT dependency packages. |
+| `wkg.lock` | Dependency version lockfile. |
+| `out/` | Generated artifacts. |
 
-```text
-my-app/
-  src/            # your .wlt components
-  wit/            # synthesized world + fetched dependency WIT
-    deps/         # wkg-fetched packages (wasi:cli, wasi:http, …)
-  wkg.lock        # pinned dependency versions
-  out/            # build artifacts (git-ignored)
-```
+`wavelet new` uses `wkg` to fetch dependency definitions. Builds consume the existing dependency tree and can refresh dependency metadata through `wkg`. Authored root WIT files and macro artifacts are preserved. Dependency packages can be WIT directories, `.wit` files, or encoded WIT in `.wasm` or `.wat` files.
 
-The compiler vendors **no** WASI WIT of its own. Any host interface a component imports or exports (`wasi:cli/stdout`, `wasi:http/types`, a third party's `acme:foo/bar`) is fetched as ordinary WIT into `wit/deps/` by [**`wkg`**](https://github.com/bytecodealliance/wasm-pkg-tools) and parsed at build time, with versions pinned in `wkg.lock`. [`wavelet new`](./cli#new) fetches them when it scaffolds; `wavelet build` resolves imports from the existing `wit/deps/` tree and refreshes dependency metadata after emission. Generated fetch worlds live in a private workspace; successful fetches copy dependency files back, preserving authored `wit/*.wit` files. `wkg` runs from the original project directory so local overrides, workspace configuration, and lockfile updates retain their normal behavior. Dependency packages may be WIT source directories, `.wit` files, or WebAssembly-encoded WIT in `.wasm` or `.wat` files. So WASI is "just some WIT packages you import," resolved through the same mechanism as your own components.
+WIT defines a contract; it does not supply the executable implementation. Provide runtime implementations through composition or the host. Supply executable macro components separately through the [macro import mechanism](./language/macros#importing-a-macro-library).
 
 ## Composition
 
-[`wavelet build`](./cli#build) turns each file into a component **and composes them into one artifact**, `out/app.wasm`, wiring every cross-component import to the sibling that exports it via a generated `out/app.wac` run through [**`wac`**](https://github.com/bytecodealliance/wac). Imports not supplied by sibling components remain in the artifact for a runtime or a later composition step to provide. Their namespace does not determine how they are linked.
+Build related files together:
 
 ```console
 $ wavelet build src/*.wlt -o out
-built out/app.wasm
-$ wasmtime run out/app.wasm wasm
-WASM!
 ```
 
-The individual `out/<package>.wasm` components are left alongside `app.wasm`. To compose hand-picked components yourself, [`wavelet compose`](./cli#compose) auto-plugs them: every unresolved import is matched by package id against the exports on the command line, in the spirit of `wac plug`.
+The compiler writes individual package components. When the selected entry imports sibling packages, it also composes them into `out/app.wasm`. Compilation and composition happen in process. Unresolved external imports remain in the output for a host or later composition.
+
+For prebuilt components, use `compose`:
 
 ```console
 $ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
 app.wasm
 ```
 
-Boundary calls copy data (the canonical ABI).
+The first component is the entry. Imports are connected to matching supplied exports. Calls across component boundaries use the canonical ABI and can copy data.
 
-:::info[Status]
-`build` (composing via `wac`), `compose` (auto-plug), and `wit` synthesis are implemented. A WAVE-document compose **manifest** for settling ambiguities/substitutions is **not yet implemented**. See the [roadmap](./roadmap).
-:::
+## Calling another language
 
-## A three-language program
-
-The point of the model: `main` can't tell which of its imports is foreign.
+Suppose a component written in another language exports:
 
 ```wit
-// the Rust side exports this WIT
 package acme:words@1.0.0;
-interface picker { pick: func(seed: u64) -> result<string, string>; }
+interface picker {
+  pick: func(seed: u64) -> result<string, string>;
+}
 ```
 
+With that WIT dependency supplied, a Wavelet component can call it:
+
 ```wavelet
-// main.wlt
 Package "demo:main@0.1.0"
 
 Import {pkg: "acme:words/picker@1.0.0" as: words}
-Import {pkg: "demo:caps/api"           as: caps}
 
-Export pick-word
-Def pick-word Fn {} -> string
-  Match words/pick({seed: 42}) [
-    (ok(w)  caps/shout({phrase: w}))
-    (err(e) str-cat("no word today: " e))
+Export {name: pick-word result: string}
+Def pick-word Fn {}
+  Match words/pick(42) [
+    (ok(word) upper(word))
+    (err(message) str-cat("No word: " message))
   ]
 ```
 
-`main` calls `words/pick` (the Rust component) and `caps/shout` (a Wavelet sibling) identically — neither call reveals which language is on the other side. Build composes the Wavelet components; a third-party component is wired in with `wavelet compose`:
-
-```console
-$ cargo component build --release          # acme_words.wasm
-$ wavelet build src/*.wlt -o out
-$ wavelet compose out/app.wasm target/release/acme_words.wasm -o final.wasm
-```
+Build the Wavelet caller, then provide the external implementation through `wavelet compose` or the application host. The caller depends on the interface, so another implementation of that contract can replace the original component.

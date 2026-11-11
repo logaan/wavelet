@@ -1,0 +1,23 @@
+---
+title: Browser REPL
+---
+
+The [browser REPL](/repl) compiles Wavelet source into a WebAssembly component and runs that component in your browser. The runnable examples throughout this documentation use the same compiler and execution path.
+
+Put reusable `Def` forms in **Definitions** and the expression you want to evaluate in **Expression**. Choose **Compile & run**, or press Ctrl+Enter or ⌘+Enter in either editor. Results and diagnostics appear below the expression; history preserves the source and result of earlier runs.
+
+Each run creates a fresh component instance. Definitions remain in the editor between runs, but cells and resources created during a run do not carry over to the next one. To observe several mutations together, include those operations in a single expression.
+
+Compilation and execution happen in a browser worker. **Cancel** stops the current worker, including a component that never returns. A run also stops automatically after 30 seconds. The next run starts a new worker when necessary.
+
+## Dependencies and macros
+
+Open **Component dependencies** to supply WIT files or encoded WIT packages for imported interfaces. Imported macro libraries also require their compiled component bytes under **Macro components**. Enter the corresponding WIT package ID when an import identifies a package rather than a file.
+
+The REPL does not download imports from registries or grant components access to browser APIs. A component requiring a runtime host interface needs an application that supplies that interface. WIT type information alone does not implement its functions.
+
+Local macro libraries are compiled first, instantiated in the worker, and then supplied to the compiler for expansion. Imported macro components follow the same process after you provide their bytes. Macro callbacks are synchronous; loading and instantiation finish before expansion begins.
+
+## Embedding the compiler
+
+The browser uses the same compiler as the CLI. To embed it in another application, use the [Compiler API](./compiler-api), which describes source and dependency inputs, macro preparation, diagnostics, and component execution.

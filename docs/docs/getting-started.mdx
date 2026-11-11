@@ -1,59 +1,112 @@
 ---
 sidebar_position: 3
 title: Getting started
-description: Build the Wavelet compiler and run your first program.
+description: Install Wavelet, create a component project, and configure your editor.
 ---
 
 # Getting started
 
-## The fastest way to try it
+## Try it in the browser
 
-You don't need to install anything to experiment — the playgrounds throughout these docs run a real Wavelet interpreter in your browser. Start with the [standard library](./stdlib) or the [special forms](./language/special-forms) and edit the examples.
+The examples throughout these docs compile and run components in your browser. Edit this one and choose **Run**:
 
 <Playground id="gs-hello" autoRun />
 
-To run Wavelet on real components — to build `.wasm`, compose, and execute on a host like [wasmtime](https://wasmtime.dev/) — install the compiler.
+The [browser REPL](/repl) has separate editors for reusable definitions and the expression to evaluate. Each run creates a fresh component instance. For a compact introduction to the syntax, follow [Learn Wavelet in Y minutes](./learn-wavelet).
 
-## External tools
+## Install with Homebrew
 
-Building and composing components shells out to two [Bytecode Alliance](https://bytecodealliance.org/) CLIs, so they must be on your `PATH`:
-
-- [**`wkg`**](https://github.com/bytecodealliance/wasm-pkg-tools) fetches dependency WIT (e.g. `wasi:cli`, `wasi:http`) into a project's `wit/` tree and maintains a `wkg.lock` lock file.
-- [**`wac`**](https://github.com/bytecodealliance/wac) composes the project's components into a single artifact.
-
-The Homebrew formula declares both as dependencies, so `brew install` brings them along. Installing by hand: `cargo install wkg wac-cli`. `wavelet run` and the REPL also compile components and use the build toolchain; the in-browser interpreter needs no external tools.
-
-## Installing with Homebrew
-
-On macOS and Linux the quickest way to get the `wavelet` CLI and the `wavelet-lsp` language server is the personal [tap](https://github.com/logaan/homebrew-tap):
+Install the CLI and language server from the personal [tap](https://github.com/logaan/homebrew-tap):
 
 ```console
 $ brew install logaan/tap/wavelet
 ```
 
-This puts both `wavelet` and `wavelet-lsp` on your `PATH` as prebuilt binaries — no Rust toolchain is fetched. To track `main` instead of the latest release (built from source), use `brew install --HEAD logaan/tap/wavelet`.
+This installs prebuilt `wavelet` and `wavelet-lsp` binaries. To build the current `main` branch instead, use `brew install --HEAD logaan/tap/wavelet`.
+
+### External tools
+
+Wavelet compiles and composes components in process. Native dependency fetching uses [`wkg`](https://github.com/bytecodealliance/wasm-pkg-tools), and the scaffolded CLI and HTTP applications use [Wasmtime](https://wasmtime.dev/) to run with WASI interfaces. Install those tools on `PATH` for those workflows. The browser needs neither tool.
 
 ## Building the compiler
 
-Prefer to build it yourself? Wavelet is written in Rust (2024 edition).
+Wavelet is written in Rust, edition 2024:
 
 ```console
 $ git clone https://github.com/logaan/wavelet
 $ cd wavelet
-$ cargo build            # debug binary at ./target/debug/wavelet
-$ cargo build --release  # optimized binary at ./target/release/wavelet
-$ cargo test             # run the test suite
+$ cargo build --release
+$ cargo test
 ```
 
-Add `./target/release` to your `PATH`, or invoke the binary directly.
+The binary is `target/release/wavelet`. Add that directory to `PATH` or invoke the binary directly. See [development and validation](./development) for the full contributor toolchain.
+
+## Your first expression
+
+Start the native REPL:
+
+```console
+$ wavelet repl
+> str-cat("Hello, " upper("world") "!")
+"Hello, WORLD!"
+```
+
+Expressions compile to components. Use `Ctrl-D` to exit. For a reusable application, create a project next.
+
+## Hello, world
+
+The CLI template creates two components and scripts to build and run them:
+
+```console
+$ wavelet new hello
+$ cd hello
+$ scripts/run.sh
+Hello, world!
+$ scripts/run.sh Ada
+Hello, Ada!
+```
+
+`src/greeting.wlt` contains the domain logic:
+
+```wavelet
+Package "hello:greeting@0.1.0"
+
+Export greet
+Def greet Fn {name: string}
+  str-cat("Hello, " name "!")
+```
+
+`src/main.wlt` imports that function and the WASI interfaces for arguments and output. It exports `wasi:cli/run`, the entry interface understood by the CLI host. WASI is one example of an ordinary WIT contract; another host can provide different interfaces.
+
+The project contains:
+
+| Path | Purpose |
+|---|---|
+| `src/` | Wavelet component sources. |
+| `wit/deps/` | Dependency interface definitions fetched by `wkg`. |
+| `wkg.lock` | Pinned dependency versions. |
+| `scripts/` | Build and run commands. |
+| `out/` | Generated components, excluded from Git. |
+
+Keep the dependency definitions and lockfile with your application. `scripts/build.sh` builds the sibling components and composes them into `out/app.wasm`; `scripts/run.sh` also starts Wasmtime and passes through your arguments.
+
+## Run vs. build
+
+| Command | Use it for |
+|---|---|
+| `wavelet run main.wlt helper.wlt` | Compile and compose files, then call the first file's `api.run` with no arguments. |
+| `wavelet build src/*.wlt -o out` | Retain component artifacts for another host or later composition. |
+| `scripts/run.sh Ada` in the CLI scaffold | Run the application's WASI entry point with host output and arguments. |
+
+The embedded `wavelet run` host supplies no external interfaces. It can execute a program whose imports are fully satisfied by composition, including programs using local cells and resources. Build a component and choose a suitable host when the program needs filesystem, HTTP, or other host capabilities.
 
 ## Editor support
 
-`.wlt` files get syntax highlighting plus the `wavelet-lsp` language server (diagnostics, completion, hover, document symbols). The highlighting grammars are derived from the compiler's lexer, so they match the language exactly. `wavelet-lsp` ships as a standalone `wavelet-lsp-<platform>` binary on the [releases page](https://github.com/logaan/wavelet/releases/latest) and is used automatically by the VS Code extension and the Neovim plugin.
+The `wavelet-lsp` language server provides diagnostics, completion, hover, and document symbols. Both editor integrations below include syntax highlighting for `.wlt` files.
 
-### Neovim (LazyVim / lazy.nvim)
+### Neovim
 
-The Neovim plugin lives in its own repo, [`logaan/wavelet.nvim`](https://github.com/logaan/wavelet.nvim). Add it to LazyVim with a spec in `~/.config/nvim/lua/plugins/wavelet.lua`:
+The plugin is [`logaan/wavelet.nvim`](https://github.com/logaan/wavelet.nvim). With lazy.nvim or LazyVim, add:
 
 ```lua
 return {
@@ -67,11 +120,11 @@ return {
 }
 ```
 
-Open any `.wlt` file and it is highlighted. For language features, put the `wavelet-lsp` server on your `PATH` (`brew install logaan/tap/wavelet`, `cargo install --path tooling/wavelet-lsp`, or download a prebuilt binary from the releases page) — the plugin starts it automatically. Point at a specific binary with `vim.g.wavelet_lsp_path`.
+Put `wavelet-lsp` on `PATH`; the plugin starts it automatically. Homebrew installs it alongside the CLI. You can also build it with `cargo install --path tooling/wavelet-lsp` or download a binary from the [releases page](https://github.com/logaan/wavelet/releases/latest). Set `vim.g.wavelet_lsp_path` to choose a different binary.
 
 ### VS Code
 
-Download `wavelet-vscode.zip`, unzip it into your extensions folder, and reload the window:
+Download and unpack the extension, then reload VS Code:
 
 ```console
 $ curl -L -o wavelet-vscode.zip \
@@ -79,99 +132,6 @@ $ curl -L -o wavelet-vscode.zip \
 $ unzip wavelet-vscode.zip -d ~/.vscode/extensions/
 ```
 
-The extension is self-contained — it bundles the matching `wavelet-lsp` server, so language features work with no extra download. Build-from-source and plugin-manager alternatives are documented in [`tooling/`](https://github.com/logaan/wavelet/tree/main/tooling).
+The extension bundles the matching language server. Set `wavelet.lsp.serverPath` to use a different binary or `wavelet.lsp.enable` to disable it. See [tooling](https://github.com/logaan/wavelet/tree/main/tooling) for other installation options.
 
-## Hello, world
-
-The quickest way to a runnable component is [`wavelet new`](./cli#new), which scaffolds a project, fetches its dependency WIT with `wkg`, and lays down build/run scripts:
-
-```console
-$ wavelet new hello
-created hello/
-  hello/.gitignore
-  hello/README.md
-  hello/src/greeting.wlt
-  hello/src/main.wlt
-  hello/scripts/build.sh
-  hello/scripts/run.sh
-
-$ cd hello
-$ scripts/run.sh           # build, then run with wasmtime
-Hello, world!
-$ scripts/run.sh Ada
-Hello, Ada!
-```
-
-The default `cli` template lays down two components. `src/greeting.wlt` is the pure domain model:
-
-```wavelet
-Package "hello:greeting@0.1.0"
-
-Export greet
-Def greet Fn {name: string}
-  str-cat("Hello, " name "!")
-```
-
-`src/main.wlt` is the entry point. It adopts the CLI world by **exporting `wasi:cli/run`** — there is no compiler-known target world — and does its output and argument reading through ordinary imported WASI interfaces (`wasi:cli/stdout`, `wasi:io/streams`, `wasi:cli/environment`), lowered through the generic WIT bridge:
-
-```wavelet
-Package "hello:main@0.1.0"
-
-Import {pkg: "hello:greeting/api" as: greeting}
-Import {pkg: "wasi:cli/stdout@0.2.0" as: stdout}
-Import {pkg: "wasi:io/streams@0.2.0" as: streams}
-
-Export {iface: "wasi:cli/run" name: run result: result}
-Def run Fn {}
-  Let {out: stdout/get-stdout()}
-    Do [streams/blocking-write-and-flush(out
-          str-cat(greeting/greet("world") "\n"))
-        ok(0)]
-```
-
-## Project layout
-
-A scaffolded project pins its dependency WIT in the repository:
-
-```text
-hello/
-  src/            # your .wlt components
-  wit/            # synthesized world + fetched dependency WIT
-    deps/         # wkg-fetched packages (wasi:cli, wasi:io, …)
-  wkg.lock        # pinned dependency versions
-  out/            # build artifacts (git-ignored)
-```
-
-`wavelet build` synthesizes each component's world into `wit/`, ensures the dependency WIT is present (via `wkg`), emits the components, and composes them with `wac` into a single `out/app.wasm`.
-
-## Run vs. build
-
-Both commands compile components, but serve different workflows:
-
-| | `wavelet run` | `wavelet build` |
-|---|---|---|
-| What it does | Compiles, composes, and calls the first file's `api.run` | Emits `.wasm` components and composes sibling dependencies |
-| Artifacts | Temporary files cleaned up after execution | Files retained in `out/` |
-| Host imports | None provided by the embedded runner | Supplied by your chosen runtime or later composition |
-| Role | Exercise fully composed program logic | Produce artifacts for deployment or external execution |
-
-The browser interpreter defines the reference semantics independently of code
-generation. The compiled backend is tested against it. CLI execution reports
-compilation errors and traps directly, without falling back to interpretation.
-A deployment host must support the artifact's remaining WIT imports and exported
-entry interface; WASI is one set of such interfaces.
-
-## A two-component program
-
-The `greeting` and `main` files above are a two-component program: `main.wlt` imports `hello:greeting/api`, and `greeting.wlt` declares `Package "hello:greeting@…"`, so the composer wires them together. `wavelet build` emits each component and links them into one artifact:
-
-```console
-$ wavelet build src/*.wlt -o out
-built out/app.wasm
-$ wasmtime run out/app.wasm Ada
-Hello, Ada!
-```
-
-You can compose hand-picked components yourself with [`wavelet compose`](./cli#compose) instead; `wavelet build` runs it for you.
-
-See the [CLI reference](./cli) for every command and flag, and [Components & composition](./components) for how files become components and link together.
+Continue with [the language tour](./learn-wavelet), [components and composition](./components), or [building a web app](./web-apps).

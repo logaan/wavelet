@@ -1,153 +1,114 @@
 ---
 sidebar_position: 7
 title: CLI reference
-description: Every wavelet subcommand — new, read, expand, repl, wit, run, build, compose.
+description: Create projects, inspect source, compile components, and run programs.
 ---
 
 # CLI reference
 
-The `wavelet` binary is built with `cargo build` (see [Getting started](./getting-started#building-the-compiler)). It exposes eight subcommands: `new` scaffolds a project, and the rest are organised around the compiler pipeline **read → expand → analyze → emit → componentize**.
+| Command | Purpose |
+|---|---|
+| `wavelet new <name> [--type=cli\|http]` | Create a project. |
+| `wavelet read [file.wlt]` | Print the parsed form tree. |
+| `wavelet expand <file.wlt>` | Print expanded source forms. |
+| `wavelet wit <file.wlt>` | Print the synthesized WIT world. |
+| `wavelet repl` | Compile and evaluate expressions interactively. |
+| `wavelet run <file.wlt>... [-- <args>...]` | Compile, compose, and execute the first file's `api.run`. |
+| `wavelet build <file.wlt>... [-o <dir>]` | Write component artifacts. |
+| `wavelet compose <entry.wasm> <plug.wasm>... [-o <file>]` | Connect prebuilt components. |
+| `wavelet <file> [args...]` | Run a source file as a script. |
 
-```text
-wavelet new <name> [--type=cli|http]                        # scaffold a new project
-wavelet read [file.wlt]                                      # parse → canonical WAVE tree (stdin if no file)
-wavelet expand <file.wlt>                                    # run macros to fixpoint
-wavelet wit <file.wlt>                                       # synthesized WIT world
-wavelet repl                                                 # interactive read-eval-print loop
-wavelet run <file.wlt>... [-- <args>...]                     # interpret directly (no codegen)
-wavelet build <file.wlt>... [-o <dir>]                       # compile each file to a .wasm component
-wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
-wavelet <file.wlt> [args...]                                 # run a script directly (also via a #! shebang)
-```
-
----
+Static checking is always enabled. `--strict` is accepted for compatibility and does not enable a different language mode.
 
 ## `new`
 
-Scaffold a fresh project into a new directory of the given name. Every template
-lays down a `.gitignore`, a `src/` with an entry point and the domain model it
-imports across the component boundary, build/run scripts, and a short README.
-`--type` chooses the template; `cli` is the default.
-
-### `--type=cli` (default)
-
-A command-line program: `src/main.wlt` adopts the CLI world by exporting
-[`wasi:cli/run`](./language/special-forms#export) and greets its first argument,
-delegating the wording to the pure `greet` function in `src/greeting.wlt`. Its
-output and argument reading go through imported WASI interfaces
-(`wasi:cli/stdout`, `wasi:io/streams`, `wasi:cli/environment`), whose WIT is
-fetched into `wit/` by `wkg`.
+Create a new directory containing sources, build/run scripts, a README, and a `.gitignore`. The default `cli` template contains a greeting component and an entry component that imports it:
 
 ```console
 $ wavelet new my-app
-created my-app/
-  my-app/.gitignore
-  my-app/README.md
-  my-app/src/greeting.wlt
-  my-app/src/main.wlt
-  my-app/scripts/build.sh
-  my-app/scripts/run.sh
-
 $ cd my-app
-$ scripts/run.sh Ada          # build, then run with wasmtime
+$ scripts/run.sh Ada
 Hello, Ada!
 ```
 
-`new` also runs `wkg wit fetch` to populate the project's `wit/deps/` with the
-dependency WIT and write a `wkg.lock`, so a fresh project has its WASI
-dependencies pinned. `scripts/build.sh` compiles `src/*.wlt` into a git-ignored
-`out/` and composes them into `out/app.wasm`; `scripts/run.sh` does that and then
-runs it with `wasmtime`, passing through any extra arguments.
+The entry exports `wasi:cli/run` and imports standard interfaces for output and arguments. `new` fetches dependency WIT with `wkg` and records versions in `wkg.lock`. The run script builds the components and invokes Wasmtime, passing through arguments.
 
-### `--type=http`
-
-A web app whose front end, `src/app.wlt`, implements the
-[`wasi:http/incoming-handler`](https://github.com/WebAssembly/wasi-http)
-interface and renders a stateless HTML page: it greets via `src/greeting.wlt`
-(the pure `greet` function, imported across the component boundary) and echoes
-the request path. `scripts/serve.sh` serves the component with `wasmtime serve`.
-The front end needs no special language support — it imports `wasi:http/types`
-and `wasi:io/streams` (their WIT fetched into `wit/` by `wkg`) and drives the
-response pipeline with ordinary calls into those interfaces, the same way any
-component implements any WIT interface.
+`--type=http` creates an application exporting `wasi:http/incoming-handler`. Its `scripts/serve.sh` builds and serves the composed component with Wasmtime. See [web applications](./web-apps).
 
 ## `read`
 
-Parse a file and print the **canonical WAVE form tree** — every piece of [reader sugar](./language/syntax#desugaring) resolved. With no path argument it reads from stdin.
+Parse a file and print canonical source forms with reader sugar resolved. With no filename, read stdin:
 
 ```console
-$ wavelet read shout.wlt
 $ echo 'shout("hi")' | wavelet read
+(shout, "hi")
 ```
 
-Use this to see exactly how the attachment rule, qualified calls, and TitleCase macro sugar desugar. It is the ground truth for "what does this syntax mean as data".
+Use it to inspect call grouping, qualified names, and macro syntax.
 
 ## `expand`
 
-Run macros to fixpoint and print the resulting forms. `DefMacro` definitions are evaluated (registering the macro) and dropped; every macro use is rewritten to its expansion.
+Expand macros until no further expansion applies, then print the resulting forms:
 
 ```console
 $ wavelet expand program.wlt
 ```
 
-This is `read` plus the [macro expander](./language/macros) — what the analyzer and emitter actually see.
+Macro definitions register compile-time transformations and are removed from the expanded runtime source.
 
 ## `wit`
 
-Print the **WIT world** synthesized from a file's typed `Fn` params, `Export` records, and `DefType`s.
+Print the WIT world derived from definitions, signatures, types, and exports:
 
 ```console
 $ wavelet wit shout.wlt
-package demo:shout@0.1.0;
+```
 
+A source exporting `shout: string -> string` produces an interface containing:
+
+```wit
 interface api {
   shout: func(phrase: string) -> string;
-}
-
-world shout {
-  export api;
 }
 ```
 
 ## `repl`
 
-An interactive read-eval-print loop. Enter forms; multi-line input continues until a form is complete; `Ctrl-D` exits. Expressions compile to components and execute locally. Results use Wavelet's WAVE-style printer; see the [serialization limits](./development#wave-output-compliance) for values without a round-trippable text representation.
-
-On a terminal the REPL supports arrow-key line editing and a persistent input history (stored under `$XDG_STATE_HOME/wavelet/history`, or `~/.local/state/wavelet/history`); `Ctrl-C` abandons the line you are typing and `Ctrl-D` exits. Piped input (a here-doc or a pipeline) is read plainly, unchanged.
+Enter definitions and expressions interactively. Input continues across lines until a form is complete. Expressions compile to components and run locally:
 
 ```console
 $ wavelet repl
-wavelet repl — enter forms, Ctrl-D to exit
 > add(2 3)
 5
 > map(Fn {x} mul(x x) [1 2 3])
 [1, 4, 9]
 ```
 
-:::note[Reference semantics]
-The [in-browser playgrounds](./intro.mdx#try-it) use the reference interpreter. The REPL uses compiled components, tested against that interpreter. Compilation errors and runtime traps are reported directly; there is no interpreter fallback. Repeated expressions reuse a bounded cache until a definition changes; new expressions still compile with the current definitions.
-:::
+On a terminal, arrow keys edit the input, `Ctrl-C` abandons the current line, and `Ctrl-D` exits. History is stored under `$XDG_STATE_HOME/wavelet/history`, or `~/.local/state/wavelet/history`. Piped input uses plain input handling.
+
+The native REPL caches up to 32 compiled expression instances. Repeating an expression can reuse its instance; accepting a definition clears the cache, and a runtime failure discards the affected instance. Source definitions are retained for later expressions. Value redefinitions replace the earlier binding.
+
+The [browser REPL](./browser-repl) instead creates a fresh component instance for every run. Both execute compiled code and return compilation errors or traps directly. Printed results have the [serialization limits](./development#wave-output-compliance) of Wavelet's value printer.
 
 ## `run`
 
-Compile a set of files in a temporary project, compose their imports, and execute the entry file's `api.run` export with no arguments. The first file is the entry component. Build errors and runtime traps are returned without interpreter fallback.
+Compile the supplied files, compose matching imports, and call the first file's `api.run` export with no arguments:
 
 ```console
 $ wavelet run main.wlt shout.wlt
 ```
 
-The embedded runner provides no host imports. Use `run` for programs whose dependencies are fully composed; use `build` and a compatible host for programs requiring external interfaces, including WASI. Arguments after `--` are accepted but ignored. For command-line arguments and side effects, use the CLI scaffold's build/run scripts.
+The embedded runner supplies no runtime host interfaces. Use it for programs whose imports are satisfied by composition. Arguments after `--` are accepted but ignored; for host arguments or side effects, build the artifact and use a suitable host, such as the CLI scaffold's run script.
 
 ## Running a script directly
 
-A Wavelet source file may begin with a shebang line so it can be marked executable and run as a script:
+An executable source file can begin with a shebang:
 
 ```text
 #!/usr/bin/env wavelet
 Package "demo:hi@0.1.0"
 Export run
-Def run Fn {}
-  add(1 2)
+Def run Fn {} add(1 2)
 ```
 
 ```console
@@ -155,31 +116,27 @@ $ chmod +x hi
 $ ./hi
 ```
 
-The file does not need a `.wlt` extension — an executable script is commonly extensionless (e.g. `hi` above). The shebang line is recognised only on the first line of the file (a `#` is not a comment anywhere else — `//` is). Passing a file path as the sole leading argument, `wavelet hi`, is equivalent to `wavelet run hi`: any first argument that names an existing file and is not a subcommand runs as a script (with `.wlt` kept as a fast-path). The script still needs an exported `run` entry and runs on the same compiled path.
+The shebang is recognized only on the first line. Files need not have a `.wlt` extension. A first argument naming an existing file, rather than a subcommand, follows the same compiled execution path as `wavelet run` and requires an exported `run` entry.
 
 ## `build`
 
-Compile each file to a real `.wasm` component — core wasm (linear-memory value boxes, `return_call` tail calls) wrapped with canonical-ABI lift/lower and componentized via `wasm-tools` — **and compose them into a single `out/app.wasm`**. Each cross-component import is wired to the sibling that exports it via a generated `out/app.wac` run through `wac`; imports not provided by sibling components are left for the runtime or a later composition step. Output goes to `out/` by default, or `-o <dir>`.
+Compile files and write their components to `out/`, or to the directory supplied with `-o`:
 
 ```console
 $ wavelet build src/*.wlt -o out
-built out/app.wasm
-$ wasmtime run out/app.wasm
 ```
 
-The individual `out/<package>.wasm` components are left alongside `app.wasm`. Dependency WIT must already be present in `wit/deps/` (run `wavelet new`, or `wkg wit fetch`, first).
+When the selected entry imports sibling source packages, the compiler also writes a composed `app.wasm`. Individual package components remain available separately. Imports not provided by siblings remain requirements for a host or a later composition step.
+
+Compilation and composition run in process. Dependency WIT must be available in the project's `wit/deps/` tree; populate it with `wavelet new` or `wkg wit fetch`. A compilation error is reported before artifact publication begins.
 
 ## `compose`
 
-Compose hand-picked components by **auto-plugging**: each unresolved import is matched by package id (and version compatibility) against the exports of the other components on the command line, in the spirit of `wac plug`. `wavelet build` does this for you; `compose` is the manual alternative. The first argument is the entry component. Output is `app.wasm` by default, or `-o <file>`.
+Connect prebuilt components by matching unresolved imports to supplied exports:
 
 ```console
 $ wavelet compose out/demo-main.wasm out/demo-shout.wasm -o app.wasm
 app.wasm
 ```
 
-Because this drives standard `wasm-tools` / WAC machinery, the result participates in any component ecosystem workflow.
-
-:::info[Not yet implemented]
-A few CLI features described in the language design are still on the [roadmap](./roadmap): a `wavelet add <pkg>` command (fetch WIT from a registry and pin a version), and a WAVE compose **manifest** for resolving ambiguities and host substitutions.
-:::
+The first argument is the entry. The default output is `app.wasm`. Remaining imports are preserved for the host or a later composition. Inspect the resulting WIT contract before choosing a runtime.

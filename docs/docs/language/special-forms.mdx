@@ -1,138 +1,120 @@
 ---
-sidebar_position: 5
-title: The fourteen special forms
-description: The entire core language, form by form, with live examples.
+sidebar_position: 6
+title: Special forms and declarations
+description: Definitions, functions, control flow, quotation, types, and component declarations.
 ---
 
-# The fourteen special forms
+# Special forms and declarations
 
-This is the **entire core language**. Everything else is the [standard library](../stdlib) or [macros](./macros).
+These forms define the structure of a Wavelet program. They use [TitleCase syntax](./syntax#the-macro-sugar), with a fixed number of following forms. `If` and `Do` are bundled macros that expand to `Match`.
 
-| Form | Arity | Arguments | Meaning |
-|---|---|---|---|
-| [`Package`](#package) | 1 | string | declare this component's package id and version |
-| [`Import`](#import) | 1 | string or record | import an interface |
-| [`Instantiate`](#instantiate) | 1 | record | apply a compile-time functor |
-| [`Export`](#export) | 1 | name or record | export a definition or type |
-| [`DefType`](#deftype) | 2 | name, type form | declare a WIT type for this component |
-| [`Def`](#def) | 2 | name, expression | immutable module-level binding |
-| [`Fn`](#fn) | 2 | parameter braces, body | closure |
-| [`Let`](#let) | 2 | binding record, body | sequential local bindings |
-| [`Match`](#match) | 2 | scrutinee, clause list | pattern matching |
-| [`Quote`](#quote) | 1 | form | the form itself, as data |
-| [`Quasi`](#quasi) | 1 | form | template with holes |
-| [`Unquote`](#unquote) | 1 | form | hole: evaluate and insert |
-| [`Splice`](#splice) | 1 | form | hole: evaluate to a list and splice in |
-| [`DefMacro`](#defmacro) | 3 | name, parameter braces, body | compile-time function from forms to a form |
-| [`The`](#the) | 2 | type form, expression | type ascription |
-
-:::note[Component-level forms run across files]
-`Package`, `Import`, `Instantiate`, `Export`, and `DefType` describe a *file's* relationship to the component world, and are only valid at the top level of a file. The in-browser playground evaluates a single component's code, so most of these are shown as static snippets — except `DefType`, whose case constructors are ordinary bindings, so its examples run.
-:::
-
----
+| Form | Arguments | Purpose |
+|---|---|---|
+| `Def` | name, expression | Define an immutable binding. |
+| `Fn` | parameters, body | Define a function or statically resolved callback. |
+| `Let` | bindings, body | Introduce sequential local bindings. |
+| `Match` | value, clauses | Select a result by pattern. |
+| `Quote` | form | Preserve source as data. |
+| `Quasi` | form | Construct source with holes. |
+| `Unquote` | expression | Insert a value into a `Quasi` form. |
+| `Splice` | expression | Insert a list of forms into a sequence in `Quasi`. |
+| `DefMacro` | name, parameters, body | Define a compile-time transformation. |
+| `The` | type, expression | Supply an expected type. |
+| `Package` | package string | Identify a component. |
+| `Import` | string or record | Import an interface or macro library. |
+| `Export` | name or record | Publish a function, data type, or resource. |
+| `DefType` | name, type form | Declare a data type. |
+| `DefResource` | name, member record | Declare a resource. |
+| `Static` | function | Mark a static resource member. |
+| `Derive` | deriver flags, type | Recognized derivation syntax; operation bodies are placeholders. |
+| `DefFunctor` | package string, parameters, body | Declare a file-local template. |
+| `Instantiate` | record | Specialize a functor for concrete types. |
 
 ## Definitions & functions
 
 ### `Def`
 
-`Def name expr` — an immutable module-level binding. Its value is unit.
+`Def name expression` introduces an immutable binding. The declaration itself produces unit:
 
 <Playground id="sf-def" />
 
 ### `Fn`
 
-`Fn {params} body` defines a function or a statically resolved callback. Capturing callbacks can be specialized inside a component; runtime collections and function results cannot carry function values. The parameter braces describe how the single argument value is received ([see Evaluation](./evaluation#functions-take-exactly-one-value)):
-
-```wavelet
-Fn {path: string force: bool}  // parameter types are explicit
-Fn {phrase: string}            // one parameter
-Fn {}                          // zero parameters
-```
+`Fn {parameters} body` defines a function. Parameters can be annotated or inferred from constrained uses:
 
 <Playground id="sf-fn-adder" />
 
-Parameter types are inferred from constrained uses when possible; otherwise add annotations. Calls are checked before execution:
-
 <Playground id="sf-fn-shout" />
 
----
+Functions and capturing callbacks must resolve statically. They cannot be stored in runtime collections or returned as closures. See [function values](./type-system#function-values).
 
 ## Control flow
 
-`Match` is the **only** core branching construct. The everyday conditional `If`
-and the sequencing form `Do` are not special forms — they are bundled
-[standard-library macros](../stdlib#control-flow-macros) that expand to `Match`,
-so the checker, WIT synthesis, and the backend only ever have `Match` to agree
-on.
-
 ### `Let`
 
-`Let {bindings} body` — sequential local bindings, like `let*`: each binding sees the previous ones. The bindings are a *record form* — homoiconicity doing the work of syntax. The body is in tail position.
+`Let {bindings} body` evaluates bindings in order, so each can use the earlier ones. Its body is in tail position:
 
 <Playground id="sf-let" />
 
 ### `Match`
 
-`Match scrutinee [clauses]` — pattern matching. Each clause is a `(pattern result)` tuple. See [Pattern matching](./pattern-matching) for the full pattern language.
+`Match value [clauses]` chooses the first matching `(pattern result)` clause. The compiler checks coverage and result types:
 
 <Playground id="sf-match" />
 
----
+See [pattern matching](./pattern-matching) for the pattern language and [standard-library control flow](../stdlib#control-flow-macros) for `If` and `Do`.
 
 ## Quotation & macros
 
 ### `Quote`
 
-`Quote form` — the form itself, as data. Nothing is evaluated.
+`Quote form` preserves a source form as data without evaluating it:
 
 <Playground id="sf-quote" />
 
 ### `Quasi`
 
-`Quasi form` — a template. The form is reproduced as data, except that [`Unquote`](#unquote) and [`Splice`](#splice) holes are evaluated.
+`Quasi form` preserves the form except for `Unquote` and `Splice` holes:
 
 <Playground id="sf-quasi" />
 
 ### `Unquote`
 
-`Unquote form` — only meaningful inside `Quasi`. Evaluates `form` and inserts the result.
+Inside `Quasi`, `Unquote expression` evaluates the expression and inserts its value:
 
 <Playground id="sf-unquote" />
 
 ### `Splice`
 
-`Splice form` — only meaningful inside `Quasi`, and only inside a sequence. Evaluates `form` to a **list** and splices its elements into the surrounding sequence.
+Inside a sequence in `Quasi`, `Splice expression` inserts the elements of a list:
 
 <Playground id="sf-splice" />
 
 ### `DefMacro`
 
-`DefMacro name {params} body` — a compile-time function from argument *forms* to a result form. The parameters are bound to the **unevaluated** argument forms; the body runs and must produce a form, which replaces the macro call. See [Macros](./macros) for the full story.
+`DefMacro name {parameters} body` receives unevaluated argument forms and returns the replacement form during compilation:
 
 <Playground id="sf-defmacro" />
 
----
+See [macros](./macros) for expansion, hygiene, and macro components.
 
 ## Type ascription
 
 ### `The`
 
-`The type expr` — evaluate `expr` and assert it conforms to the named WIT type, trapping otherwise. Currently checks the scalar types (`string`, `bool`, `char`, the integer widths, the floats).
+`The type expression` supplies an expected type and checks the expression against it. It works with scalar and compound types, such as `The list(u8) [1 2 3]`. Incompatible expressions fail compilation:
 
 <Playground id="sf-the-ok" />
 
 <Playground id="sf-the-bad" />
 
----
-
 ## Component-level forms
 
-These four describe how a file relates to the component world. They appear at the top level of a `.wlt` file and are covered in depth under [Components & composition](../components).
+Use package, import, and export declarations to describe a complete component source file. The browser REPL accepts local definitions, types, resources, macros, and templates; package and export declarations belong in project compilation.
 
 ### `Package`
 
-Declares the component's package id and version.
+Declares the package identity and version:
 
 ```wavelet
 Package "demo:shout@0.1.0"
@@ -140,63 +122,62 @@ Package "demo:shout@0.1.0"
 
 ### `Import`
 
-Imports an interface. Takes a package string, or a record for control over the alias, opening names unqualified, and (planned) loading a macro manifest.
+Imports an interface. A record controls the alias, unqualified names, or macro role:
 
 ```wavelet
-Import "wasi:cli/environment"                    // alias defaults to last segment
-Import {pkg: "wasi:keyvalue/store@0.2.0" as: kv}  // explicit alias
-Import {pkg: "demo:text/api" open: true}          // splat names in unqualified
+Import "wasi:cli/environment"
+Import {pkg: "demo:text/api" as: text}
+Import {pkg: "demo:math/api" open: true}
 ```
 
-### `Instantiate`
-
-Applies a **compile-time functor** — a generic container specialized to concrete
-type arguments at build time. The functor's parameters are passed *by name* in
-the `with:` record; the alias qualifies the instantiation's operations
-(`pts/new`, `pts/add`, …). See [the type system](./type-system#functors)
-for what this synthesizes.
-
-```wavelet
-Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
-```
-
-(`Import` never applies a functor — it only brings an unparameterized
-dependency into scope.)
+`macros: true` imports a compile-time macro library. `roles: {runtime macro}` enables both roles. See [macro imports](./macros#importing-a-macro-library).
 
 ### `Export`
 
-Exports a definition (or a type). A bare name exports that definition into the default interface `api`; a record form gives finer control over the signature and the interface it lands in.
+Publishes a definition in the default `api` interface or a named interface:
 
 ```wavelet
 Export shout
 Export {name: shout params: {phrase: string} result: string}
-```
-
-There is no compiler-known "target world": a file adopts an external world by **exporting the interface that defines it**, naming it with the `iface` field. A CLI program exports `wasi:cli/run`; an HTTP front end exports `wasi:http/incoming-handler`. The interface's WIT comes from `wit/deps/` (fetched by `wkg`), so the compiler knows nothing special about it.
-
-```wavelet
 Export {iface: "wasi:cli/run" name: run result: result}
 ```
 
+An external interface uses its WIT signature. The compiler applies the same rules to WASI and other interfaces; the host must support the resulting contract.
+
 ### `DefType`
 
-Declares a WIT type for this component's interface: a record (field braces), a
-variant or enum (a list of cases), flags, or a transparent alias to a type form.
+Declares a record, variant, enum, flags type, or alias:
 
 ```wavelet
-DefType point {x: f64 y: f64}          // record
-DefType ttl [days(u32) forever]        // variant (a case carries a payload)
-DefType direction [north east south west]  // enum (all cases payload-less)
-DefType perms {read write exec}        // flags
-DefType points list(point)             // type alias
+DefType point {x: f64 y: f64}
+DefType ttl [days(u32) forever]
+DefType direction [north east south west]
+DefType perms {read write exec}
+DefType points list(point)
 ```
 
-A variant or enum declaration also **binds its case constructors** in the value
-namespace: each payload-less case is a value (like `none`), and each payloaded
-case is a constructor function — first-class, like any other.
+Variant and enum declarations bind their case constructors in the value namespace:
 
 <Playground id="sf-deftype-cases" />
 
-`DefType` declares a *data* type — copied by structure across the boundary. To
-declare a type with identity and hidden state instead (a handle-backed WIT
-`resource`), use [`DefResource`](../language/type-system#user-declared-resources).
+### `DefResource` and `Static`
+
+`DefResource name {members}` declares a resource with a `New` constructor, optional `Drop` destructor, instance methods, and `Static Fn` members. See [user-declared resources](./type-system#user-declared-resources) for examples and ownership rules.
+
+### `Derive`
+
+`Derive` syntax is recognized, but the generated operation bodies are placeholders. Write the operations explicitly. See [Derive](./type-system#derive).
+
+### `DefFunctor`
+
+`DefFunctor "package" {parameters} [declarations]` declares a template in the current file. See [user-defined templates](./type-system#user-defined-templates).
+
+### `Instantiate`
+
+`Instantiate` specializes a functor with named type arguments:
+
+```wavelet
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
+```
+
+The alias qualifies operations such as `ints/new` and `ints/add`. See [functors](./type-system#functors).
