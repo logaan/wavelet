@@ -1,0 +1,30 @@
+{
+  "version": "1.0.4",
+  "sha256": "4287ae2034901844450f769547bc4497a0da1a6d1c7fa6fadc858705e6743b5f",
+  "historyDays": 365,
+  "maxCommits": 1000,
+  "coupling": {
+    "min-revs": 5,
+    "min-shared-revs": 5,
+    "min-coupling": 30,
+    "max-changeset-size": 30
+  },
+  "paths": [
+    "src",
+    "scripts",
+    "tooling/wavelet-lsp/src",
+    "tooling/vscode",
+    "docs/src",
+    "docs/scripts",
+    ".github/workflows",
+    ":(exclude)src/tests",
+    ":(exclude)scripts/tests",
+    ":(exclude)docs/src/wasm",
+    ":(exclude,glob)**/node_modules/**",
+    ":(exclude,glob)**/target/**",
+    ":(exclude,glob)**/build/**",
+    ":(exclude,glob)**/dist/**",
+    ":(exclude,glob)**/vendor/**",
+    ":(exclude,glob)**/package-lock.json"
+  ]
+}

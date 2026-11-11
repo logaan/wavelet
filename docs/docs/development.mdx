@@ -17,6 +17,7 @@ Individual checks:
 cargo test
 python3 scripts/check-quality.py
 python3 scripts/check-duplication.py
+python3 scripts/code-maat.py
 cargo test --manifest-path tooling/wavelet-lsp/Cargo.toml
 npm --prefix tooling/vscode run check
 ./scripts/regen-examples.sh
@@ -73,6 +74,47 @@ duplicated lines to 98 clones and 1,587 lines. Shared import metadata parsing,
 runtime-helper slot reservation, sequence/record boxing, and test dependency
 setup removed repeated behavior. The resulting baseline update only removed
 exceptions or lowered existing limits; it added no new clone fingerprints.
+
+[Code Maat](https://github.com/adamtornhill/code-maat) complements the source
+checks with Git history evidence. `python3 scripts/code-maat.py` downloads the
+official 1.0.4 standalone JAR and verifies its pinned SHA-256 on every run.
+Install Java 17 first (`brew install openjdk@17` on macOS); the script recognizes
+that Homebrew installation, `JAVA_HOME`, or Java on `PATH`. Git, Python 3 and
+curl are also required. Download, checksum, parser, and execution failures are
+reported as errors rather than skipped checks.
+
+The default window is the 365 days ending at the HEAD commit date, capped at
+1,000 non-merge commits reachable from HEAD. Override it with `--since YYYY-MM-DD`
+and `--max-commits N`; `--repo PATH` selects another checkout. Shallow clones
+are rejected with instructions to fetch complete history. CI uses a full-history
+checkout and Java 17, runs fixture checks, and uploads the `code-maat-history`
+artifact. The same report runs through `scripts/check.sh`.
+
+Reports live in ignored `target/code-maat/reports`: `revisions.csv`,
+`entity-churn.csv`, `coupling.csv`, and `hotspots.csv`, plus `summary.md`,
+`metadata.json`, and the parser input `history.log`. Hotspot candidates are
+current files ranked by revision count, then added/deleted lines, with their
+current size shown separately; no synthetic quality score is assigned. Raw
+reports retain historical files, including deleted paths. The metadata records
+the exact commit, date range, commit cap, tool checksum, Java version, path
+filters, and coupling criteria. Current sizes include working-tree edits;
+commit metrics only reflect committed history.
+
+The scope covers implementation and tooling paths, excluding generated wasm
+bindings, separate test trees, dependencies, and build outputs. Inline historical
+tests remain part of their original source files. Rename tracking is disabled
+as required by the chosen `git2` log recipe; file moves can therefore split a
+file's history. The input omits author identities, and no ownership or individual
+contribution reports are generated. Coupling reports require at least five
+revisions per file, five shared revisions, and 30% coupling; changesets with more
+than 30 included files are excluded from coupling. These upstream evidence
+filters are configurable in `tooling/quality/code-maat.json`.
+
+History metrics are advisory review leads. A frequently changed file or a strongly
+coupled pair does not fail the build: inspect the corresponding code and commits
+to decide whether a refactor is useful. Bulk refactors, recent file moves, a small
+sample, or a reached history cap can distort the ranking. Only failure to produce
+a valid report fails the history-analysis job.
 
 The compiled execution tests and round-trip tests require `wasm-tools`,
 `wasmtime`, `wac`, and `wkg` on `PATH`. The round-trip matrix also needs

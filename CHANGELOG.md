@@ -15,6 +15,8 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- Pinned Code Maat history analysis with revision, churn, and coupling reports,
+  available through the local check suite and as downloadable CI artifacts.
 - A working WASI 0.2 HTTP example in `examples/http`, with vendored interfaces,
   a smoke-test script, and provider-neutral deployment guidance. The HTTP scaffold
   sets content type, escapes reflected text, and releases request/body resources.

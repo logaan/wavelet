@@ -13,6 +13,7 @@ if ! rustup target list --installed | grep -qx wasm32-wasip1; then
 fi
 python3 scripts/check-quality.py
 python3 scripts/check-duplication.py
+python3 scripts/code-maat.py
 WAVELET_REQUIRE_HOST_TOOLS=1 ./scripts/coverage.sh --check
 cargo build
 WAVELET="$PWD/target/debug/wavelet" conformance/wavelet/test-matrix.sh
