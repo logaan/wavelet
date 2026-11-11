@@ -5,9 +5,11 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  check:
+    uses: ./.github/workflows/check.yml
 
   build:
     name: Build ${{ matrix.target }}
@@ -20,14 +22,26 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
-          - os: macos-14
+          - os: macos-15-intel
             target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v5
+        if: runner.os != 'Windows'
+
+      - name: Extract Windows build sources
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/tarball/$GITHUB_SHA" |
+            tar -xz --exclude='*/.lot-vault' --strip-components=1
+
+      - uses: dtolnay/rust-toolchain@stable
 
       - name: Build and stage wavelet (CLI)
         shell: bash
@@ -41,12 +55,13 @@ jobs:
         with:
           name: bins-${{ matrix.target }}
           path: dist/*
+          if-no-files-found: error
 
   release:
-    needs: build
-
-    if: ${{ always() }}
+    needs: [check, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
@@ -68,13 +83,12 @@ jobs:
           STAGED_BINS: staged-bins
 
       - name: Extract changelog section for ${{ github.ref_name }}
-        run: scripts/ci/changelog-section.sh "${{ github.ref_name }}" > release-notes.md
+        run: scripts/ci/changelog-section.sh "$GITHUB_REF_NAME" > release-notes.md
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-
           files: dist/wavelet-*
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           body_path: release-notes.md
           generate_release_notes: true

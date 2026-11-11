@@ -9,7 +9,7 @@ if [ -z "$target" ]; then
 fi
 
 rustup target add "$target"
-cargo build --release --bin wavelet --target "$target"
+cargo build --locked --release --bin wavelet --target "$target"
 
 mkdir -p dist
 bin="target/${target}/release/wavelet"
