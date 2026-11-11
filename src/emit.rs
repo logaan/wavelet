@@ -225,7 +225,7 @@ pub fn emit_component(
             format!("internal: synthesized WIT did not parse: {e:#}\n--- WIT ---\n{wit}")
         })?;
     let world = resolve
-        .select_world(&[pkg], Some(&info.world))
+        .select_world(&[pkg], Some(&crate::wit::names::identifier(&info.world)))
         .map_err(|e| format!("internal: world selection failed: {e:#}"))?;
     wit_component::embed_component_metadata(
         &mut module,

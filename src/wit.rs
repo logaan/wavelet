@@ -1,4 +1,5 @@
 mod imports;
+pub(crate) mod names;
 
 pub(crate) use imports::import_from_record;
 
@@ -46,57 +47,19 @@ pub struct ResourceDecl {
 
 impl ResourceDecl {
     pub fn to_wit(&self) -> String {
-        let mut out = format!(
-            "  resource {} {{
-",
-            self.name
-        );
+        let mut out = format!("  resource {} {{\n", names::identifier(&self.name));
         if let Some(params) = &self.constructor {
-            let ps: Vec<String> = params.iter().map(|(n, t)| format!("{n}: {t}")).collect();
             out.push_str(&format!(
-                "    constructor({});
-",
-                ps.join(", ")
+                "    constructor({});\n",
+                names::parameters(params)
             ));
         }
-        for m in &self.methods {
-            let ps: Vec<String> = m.params.iter().map(|(n, t)| format!("{n}: {t}")).collect();
-            match &m.result {
-                Some(r) => out.push_str(&format!(
-                    "    {}: func({}) -> {r};
-",
-                    m.name,
-                    ps.join(", ")
-                )),
-                None => out.push_str(&format!(
-                    "    {}: func({});
-",
-                    m.name,
-                    ps.join(", ")
-                )),
+        for (members, prefix) in [(&self.methods, ""), (&self.statics, "static ")] {
+            for member in members {
+                out.push_str(&format!("    {}\n", member.declaration(prefix)));
             }
         }
-        for st in &self.statics {
-            let ps: Vec<String> = st.params.iter().map(|(n, t)| format!("{n}: {t}")).collect();
-            match &st.result {
-                Some(r) => out.push_str(&format!(
-                    "    {}: static func({}) -> {r};
-",
-                    st.name,
-                    ps.join(", ")
-                )),
-                None => out.push_str(&format!(
-                    "    {}: static func({});
-",
-                    st.name,
-                    ps.join(", ")
-                )),
-            }
-        }
-        out.push_str(
-            "  }
-",
-        );
+        out.push_str("  }\n");
         out
     }
 }
@@ -242,15 +205,20 @@ pub struct FuncSig {
 
 impl FuncSig {
     pub fn to_wit(&self) -> String {
-        let ps: Vec<String> = self
-            .params
-            .iter()
-            .map(|(n, t)| format!("{n}: {t}"))
-            .collect();
-        match &self.result {
-            Some(r) => format!("{}: func({}) -> {r};", self.name, ps.join(", ")),
-            None => format!("{}: func({});", self.name, ps.join(", ")),
-        }
+        self.declaration("")
+    }
+
+    fn declaration(&self, prefix: &str) -> String {
+        let result = self
+            .result
+            .as_ref()
+            .map(|ty| format!(" -> {}", names::type_expression(ty)))
+            .unwrap_or_default();
+        format!(
+            "{}: {prefix}func({}){result};",
+            names::identifier(&self.name),
+            names::parameters(&self.params)
+        )
     }
 }
 
@@ -1012,7 +980,7 @@ fn synthesize_info(
 ) -> Result<String, String> {
     let host_only = local_packages.is_some();
     let mut out = String::new();
-    out.push_str(&format!("package {};\n", info.package));
+    out.push_str(&format!("package {};\n", names::path(&info.package)));
 
     let mut ifaces = iface_order(&info.exports, !info.types.is_empty());
 
@@ -1039,10 +1007,13 @@ fn synthesize_info(
     }
 
     for iface in ifaces.iter().filter(|i| !is_external_iface(i)) {
-        out.push_str(&format!("\ninterface {iface} {{\n"));
+        out.push_str(&format!("\ninterface {} {{\n", names::identifier(iface)));
         if iface == "api" {
             if !hoisted.is_empty() {
-                out.push_str(&format!("  use types.{{{}}};\n", hoisted.join(", ")));
+                out.push_str(&format!(
+                    "  use types.{{{}}};\n",
+                    names::identifiers(&hoisted)
+                ));
             }
             for (name, ty) in info.types.iter().filter(|(n, _)| !hoisted.contains(n)) {
                 out.push_str(&format!("  {}\n", type_decl(arena, name, *ty)?));
@@ -1073,7 +1044,7 @@ fn synthesize_info(
         out.push_str(&functor_interface(arena, f, elem_iface)?);
     }
 
-    out.push_str(&format!("\nworld {} {{\n", info.world));
+    out.push_str(&format!("\nworld {} {{\n", names::identifier(&info.world)));
     for imp in &info.imports {
         if is_macro_only(imp) {
             continue;
@@ -1084,7 +1055,7 @@ fn synthesize_info(
                 Some(version) => format!("{}@{version}", imp.path),
                 None => imp.path.clone(),
             };
-            out.push_str(&format!("  import {path};\n"));
+            out.push_str(&format!("  import {};\n", names::path(&path)));
         }
     }
     if !hoisted.is_empty() && !host_only {
@@ -1092,14 +1063,14 @@ fn synthesize_info(
     }
     for iface in &ifaces {
         if is_external_iface(iface) {
-            out.push_str(&format!("  export {};\n", iface));
+            out.push_str(&format!("  export {};\n", names::path(iface)));
         } else if !host_only {
-            out.push_str(&format!("  export {iface};\n"));
+            out.push_str(&format!("  export {};\n", names::identifier(iface)));
         }
     }
 
     for f in &info.functors {
-        out.push_str(&format!("  export {};\n", f.iface));
+        out.push_str(&format!("  export {};\n", names::identifier(&f.iface)));
     }
     out.push_str("}\n");
     Ok(out)
@@ -1112,10 +1083,14 @@ pub(crate) fn functor_interface(
 ) -> Result<String, String> {
     match f.kind {
         FunctorKind::Set => {
-            let t = &f.elem;
+            let t = names::type_expression(&f.elem);
 
             let uses = match elem_iface {
-                Some(iface) => format!("  use {iface}.{{{t}}};\n"),
+                Some(iface) => format!(
+                    "  use {}.{{{}}};\n",
+                    names::identifier(iface),
+                    names::identifier(&f.elem)
+                ),
                 None => String::new(),
             };
 
@@ -1142,7 +1117,7 @@ pub(crate) fn functor_interface(
             }
             Ok(format!(
                 "\ninterface {iface} {{\n{uses}  resource set {{\n{members}  }}\n}}\n",
-                iface = f.iface,
+                iface = names::identifier(&f.iface),
             ))
         }
     }
@@ -1198,21 +1173,26 @@ fn is_external_iface(iface: &str) -> bool {
 }
 
 pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String> {
+    let name = names::identifier(name);
     match arena.node(ty) {
         Node::Rec(fields) => {
             let mut parts = Vec::new();
             for (k, v) in fields {
-                parts.push(format!("{k}: {}", type_text(arena, *v)?));
+                parts.push(format!(
+                    "{}: {}",
+                    names::identifier(k),
+                    names::type_expression(&type_text(arena, *v)?)
+                ));
             }
             Ok(format!("record {name} {{ {} }}", parts.join(", ")))
         }
-        Node::Flg(names) => Ok(format!("flags {name} {{ {} }}", names.join(", "))),
+        Node::Flg(names) => Ok(format!("flags {name} {{ {} }}", names::identifiers(names))),
         Node::Lst(cases) => {
             if cases.iter().all(|&c| matches!(arena.node(c), Node::Sym(_))) {
                 let names: Vec<String> = cases
                     .iter()
                     .map(|&c| match arena.node(c) {
-                        Node::Sym(s) => s.clone(),
+                        Node::Sym(s) => names::identifier(s).into_owned(),
                         _ => unreachable!("all-Sym checked above"),
                     })
                     .collect();
@@ -1221,7 +1201,7 @@ pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String
             let mut parts = Vec::new();
             for &c in cases {
                 match arena.node(c) {
-                    Node::Sym(s) => parts.push(s.clone()),
+                    Node::Sym(s) => parts.push(names::identifier(s).into_owned()),
 
                     Node::Tup(case_items) => {
                         let Some((&h, payload)) = case_items.split_first() else {
@@ -1236,21 +1216,28 @@ pub fn type_decl(arena: &Arena, name: &str, ty: NodeId) -> Result<String, String
                             ));
                         }
                         if payload.is_empty() {
-                            parts.push(case.clone());
+                            parts.push(names::identifier(case).into_owned());
                             continue;
                         }
                         let payload_text: Vec<String> = payload
                             .iter()
-                            .map(|&i| type_text(arena, i))
+                            .map(|&i| type_text(arena, i).map(|text| names::type_expression(&text)))
                             .collect::<Result<_, _>>()?;
-                        parts.push(format!("{case}({})", payload_text.join(", ")));
+                        parts.push(format!(
+                            "{}({})",
+                            names::identifier(case),
+                            payload_text.join(", ")
+                        ));
                     }
                     _ => return Err(format!("bad variant case in `{name}`")),
                 }
             }
             Ok(format!("variant {name} {{ {} }}", parts.join(", ")))
         }
-        _ => Ok(format!("type {name} = {};", type_text(arena, ty)?)),
+        _ => Ok(format!(
+            "type {name} = {};",
+            names::type_expression(&type_text(arena, ty)?)
+        )),
     }
 }
 

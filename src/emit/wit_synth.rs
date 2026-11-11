@@ -1,9 +1,10 @@
 use super::*;
+use crate::wit::names;
 
 pub fn dep_package_wit(arena: &Arena, info: &FileInfo) -> Result<String, String> {
-    let mut out = format!("package {} {{\n", info.package);
+    let mut out = format!("package {} {{\n", names::path(&info.package));
     for iface in crate::wit::iface_order(&info.exports, !info.types.is_empty()) {
-        out.push_str(&format!("  interface {iface} {{\n"));
+        out.push_str(&format!("  interface {} {{\n", names::identifier(&iface)));
         if iface == "api" {
             for (name, ty) in &info.types {
                 out.push_str(&format!("    {}\n", type_decl(arena, name, *ty)?));
@@ -77,19 +78,27 @@ pub(crate) fn dep_type_uses(
                 else {
                     continue;
                 };
-                let path = versioned_iface(&dep.package, di);
+                let path = names::path(&versioned_iface(&dep.package, di));
                 match out.iter_mut().find(|(p, _)| p == &path) {
                     Some((_, names)) => names.push(if original == tok {
-                        tok.to_string()
+                        names::identifier(tok).into_owned()
                     } else {
-                        format!("{original} as {tok}")
+                        format!(
+                            "{} as {}",
+                            names::identifier(original),
+                            names::identifier(tok)
+                        )
                     }),
                     None => out.push((
                         path,
                         vec![if original == tok {
-                            tok.to_string()
+                            names::identifier(tok).into_owned()
                         } else {
-                            format!("{original} as {tok}")
+                            format!(
+                                "{} as {}",
+                                names::identifier(original),
+                                names::identifier(tok)
+                            )
                         }],
                     )),
                 }
@@ -105,7 +114,7 @@ pub(crate) fn synthesize_world_wit(
     info: &FileInfo,
     deps: &HashMap<String, Dep>,
 ) -> Result<String, String> {
-    let mut out = format!("package {};\n\n", info.package);
+    let mut out = format!("package {};\n\n", names::path(&info.package));
 
     let mut ifaces = crate::wit::iface_order(&info.exports, !info.types.is_empty());
 
@@ -163,10 +172,13 @@ pub(crate) fn synthesize_world_wit(
             })
             .map(|f| f.iface.as_str())
             .collect();
-        out.push_str(&format!("interface {iface} {{\n"));
+        out.push_str(&format!("interface {} {{\n", names::identifier(iface)));
 
         for funct in &used {
-            out.push_str(&format!("  use {funct}.{{set as {funct}-handle}};\n"));
+            out.push_str(&format!(
+                "  use {}.{{set as {funct}-handle}};\n",
+                names::identifier(funct)
+            ));
         }
 
         let mut texts: Vec<String> = Vec::new();
@@ -181,7 +193,10 @@ pub(crate) fn synthesize_world_wit(
         let mut api_decls: Vec<String> = Vec::new();
         if iface == "api" {
             if !hoisted.is_empty() {
-                out.push_str(&format!("  use types.{{{}}};\n", hoisted.join(", ")));
+                out.push_str(&format!(
+                    "  use types.{{{}}};\n",
+                    names::identifiers(&hoisted)
+                ));
             }
             for (name, ty) in info.types.iter().filter(|(n, _)| !hoisted.contains(n)) {
                 let d = type_decl(arena, name, *ty)?;
@@ -225,7 +240,7 @@ pub(crate) fn synthesize_world_wit(
         out.push('\n');
     }
 
-    out.push_str(&format!("world {} {{\n", info.world));
+    out.push_str(&format!("world {} {{\n", names::identifier(&info.world)));
     for imp in &info.imports {
         if crate::wit::is_macro_only(imp) {
             continue;
@@ -237,7 +252,7 @@ pub(crate) fn synthesize_world_wit(
         ))?;
         out.push_str(&format!(
             "  import {};\n",
-            versioned_iface(&dep.package, &iface)
+            names::path(&versioned_iface(&dep.package, &iface))
         ));
     }
 
@@ -248,15 +263,15 @@ pub(crate) fn synthesize_world_wit(
         if is_external_iface(iface) {
             out.push_str(&format!(
                 "  export {};\n",
-                external_versioned_in(iface, deps)
+                names::path(&external_versioned_in(iface, deps))
             ));
         } else {
-            out.push_str(&format!("  export {iface};\n"));
+            out.push_str(&format!("  export {};\n", names::identifier(iface)));
         }
     }
 
     for f in &info.functors {
-        out.push_str(&format!("  export {};\n", f.iface));
+        out.push_str(&format!("  export {};\n", names::identifier(&f.iface)));
     }
     out.push_str("}\n");
 
