@@ -1789,11 +1789,13 @@ version = "0.12.0"
 dependencies = [
  "console_error_panic_hook",
  "rustyline",
+ "sha2",
  "tempfile",
  "wac-graph",
  "wasm-bindgen",
  "wasm-encoder 0.251.0",
  "wasmtime",
+ "wat",
  "wit-component 0.251.0",
  "wit-parser 0.251.0",
 ]
