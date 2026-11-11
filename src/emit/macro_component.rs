@@ -1082,7 +1082,11 @@ pub(crate) fn mc_sym_node(em: &mut Emitter) -> Result<(u32, Function), String> {
 /// `box → wire`, recursively: emit `form`'s subtree into `nodes` (a list box,
 /// elements at +8) using a post-order id cursor (`cur`, a 4-byte cell), and
 /// return this form's assigned node id. Children are emitted before parents.
-pub(crate) fn mc_fill(em: &mut Emitter, fill_idx: u32, sym_node_idx: u32) -> Result<(u32, Function), String> {
+pub(crate) fn mc_fill(
+    em: &mut Emitter,
+    fill_idx: u32,
+    sym_node_idx: u32,
+) -> Result<(u32, Function), String> {
     use ValType::I32;
     let mut fx = FnCtx::new(3);
     let form = 0u32;
@@ -1648,7 +1652,10 @@ pub(crate) fn mc_form_to_tree(
 
 /// `manifest()` → `list<tuple<string, u32>>`: a constant list built from the
 /// file's macros, lowered to a parked `(ptr, len)` (the canonical list return).
-pub(crate) fn mc_manifest(em: &mut Emitter, macros: &[MacroDef]) -> Result<(u32, Function), String> {
+pub(crate) fn mc_manifest(
+    em: &mut Emitter,
+    macros: &[MacroDef],
+) -> Result<(u32, Function), String> {
     use ValType::I32;
     let mut fx = FnCtx::new(0);
     let n = macros.len();
@@ -1865,7 +1872,10 @@ pub(crate) fn mc_expand(
 /// …)` to one of this library's macros, run that macro's compiled body **once**
 /// over the call's argument forms and return the result; otherwise return the
 /// form unchanged. Signature `(form) -> form`.
-pub(crate) fn mc_expand_step(em: &mut Emitter, macros: &[MacroDef]) -> Result<(u32, Function), String> {
+pub(crate) fn mc_expand_step(
+    em: &mut Emitter,
+    macros: &[MacroDef],
+) -> Result<(u32, Function), String> {
     use ValType::I32;
     let mut fx = FnCtx::new(1);
     let form = 0u32;

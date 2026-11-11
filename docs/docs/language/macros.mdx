@@ -58,8 +58,7 @@ DefMacro try-let {binding body}        // binding is a one-field record form
 
 Def load-config Fn {path: string}
   Try-let {text: read-file({path: path})}
-  Try-let {form: read(text)}
-  ok(form)
+  ok(text)
 ```
 
 You can build it live with [`rec-key`/`rec-val`](../stdlib#meta--reflection):
@@ -88,12 +87,23 @@ Def page Fn {title: string}
 
 A `macros: true` import is **compile-time-only**: the library is instantiated and run during the build, then discarded. It is *not* a runtime dependency of your component and contributes nothing to the synthesized world — your shipped component never imports `wavelet:meta/macros`.
 
-A single import is **either** a macro library (`macros: true`) **or** a runtime dependency, not both at once. If one package provides *both* compile-time macros and runtime functions, import it twice — once `macros: true` for the macros, and once as an ordinary runtime import for the functions:
+One import can expose both roles with `roles: {runtime macro}`:
 
 ```wavelet
-Import {pkg: "acme:html/dsl" macros: true}   // compile-time: the macros
-Import {pkg: "acme:html/api" as: html}       // runtime: the functions
+Import {pkg: "demo:library/api" as: lib roles: {runtime macro}
+        from: "vendor/library-macros.wasm"}
+Def answer Fn {} lib/Identity lib/increment(41)
 ```
+
+The TitleCase `Identity` expands at compile time; lowercase `increment` is an
+ordinary runtime call. The macro artifact comes from `from:` or the conventional
+macro location. The runtime interface resolves through the normal sibling-source
+or vendored-WIT dependency pipeline. A library can distribute its macro and runtime
+implementations as separate artifacts while consumers use one declaration.
+
+`roles: {macro}` is equivalent to `macros: true`; `roles: {runtime}` is an
+ordinary import. An empty role set, unknown roles, or combining `roles` with
+`macros` is an error. Existing imports keep their behavior.
 
 Wavelet resolves the library's `.wasm` two ways. Give an explicit path with `from:`, or drop the built component at the conventional location `wit/macros/<ns>-<name>.wasm` and let resolution find it:
 

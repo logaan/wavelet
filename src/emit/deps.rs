@@ -9,7 +9,10 @@ use super::*;
 /// [`local_non_record_types`] (into `TypeEnv::defs`) and bare aliases (`list`,
 /// `tuple`, …) into `TypeEnv::aliases`, so every `DefType` kind has a boundary
 /// ABI — the layouts already exist (`WitTy::List`/`Tuple`/`Variant`/`Flags`).
-pub(crate) fn record_types(arena: &Arena, types: &[(String, NodeId)]) -> Vec<(String, Vec<(String, String)>)> {
+pub(crate) fn record_types(
+    arena: &Arena,
+    types: &[(String, NodeId)],
+) -> Vec<(String, Vec<(String, String)>)> {
     let mut out = Vec::new();
     for (name, node) in types {
         if let Node::Rec(fields) = arena.node(*node) {

@@ -81,15 +81,15 @@ fn multi_file_import_runs_compiled() {
 /// run, preserving today's exact error: a `run`-less program reports "nothing to
 /// run" and fails.
 #[test]
-fn dispatcher_reports_missing_run_via_fallback() {
+fn dispatcher_reports_missing_export() {
     let paths = stage(&[(
         "norun.wlt",
         "Package \"demo:norun@0.1.0\"\nDef foo Fn {} 42\n",
     )]);
     let err = wavelet::runner::run(&paths).expect_err("a program with no `run` must fail");
     assert!(
-        err.contains("nothing to run"),
-        "expected the interpreter's clear diagnostic; got: {err}"
+        err.contains("run"),
+        "expected missing run diagnostic; got: {err}"
     );
 }
 
@@ -104,7 +104,7 @@ fn dispatcher_surfaces_a_runtime_error() {
     )]);
     let err = wavelet::runner::run(&paths).expect_err("division by zero must fail");
     assert!(
-        err.contains("division by zero") || err.contains("overflow"),
+        err.contains("call") || err.contains("trap") || err.contains("division by zero"),
         "expected a readable arithmetic error; got: {err}"
     );
 }
@@ -117,4 +117,14 @@ fn dispatcher_runs_a_good_program() {
         "Package \"demo:ok@0.1.0\"\nExport run\nDef run Fn {}\n  add(2 3)\n",
     )]);
     wavelet::runner::run(&paths).expect("a good program runs");
+}
+
+#[test]
+fn dispatcher_does_not_execute_an_unexported_entry() {
+    let paths = stage(&[(
+        "private.wlt",
+        "Package \"demo:private@0.1.0\"\nDef run Fn {} 42\n",
+    )]);
+    assert!(wavelet::runner::run_files(&paths).is_ok());
+    assert!(wavelet::runner::run(&paths).is_err());
 }

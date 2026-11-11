@@ -96,7 +96,11 @@ fn constructor_next_value_match_interpreter() {
     let h = ctor(&mut c, 5);
     assert_eq!(next(&mut c, &h), Val::U32(5), "first next returns 5");
     assert_eq!(next(&mut c, &h), Val::U32(6), "second next returns 6");
-    assert_eq!(value(&mut c, &h), Val::U32(7), "value reads 7 without advancing");
+    assert_eq!(
+        value(&mut c, &h),
+        Val::U32(7),
+        "value reads 7 without advancing"
+    );
     assert_eq!(value(&mut c, &h), Val::U32(7), "value does not advance");
     c.drop_resource(h)
         .expect("dropping the counter handle runs the no-op dtor cleanly");
@@ -136,12 +140,20 @@ fn own_and_borrow_free_functions_match_interpreter() {
         v @ Val::Resource(_) => v,
         other => panic!("make-counter should return a counter, got {other:?}"),
     };
-    assert_eq!(value(&mut c, &h), Val::U32(5), "make-counter(5) starts at 5");
+    assert_eq!(
+        value(&mut c, &h),
+        Val::U32(5),
+        "make-counter(5) starts at 5"
+    );
 
     let bumped = c
         .call_instance(API, "bump-counter", std::slice::from_ref(&h))
         .expect("bump-counter should run");
-    assert_eq!(bumped, vec![Val::U32(5)], "bump returns the pre-advance value 5");
+    assert_eq!(
+        bumped,
+        vec![Val::U32(5)],
+        "bump returns the pre-advance value 5"
+    );
     assert_eq!(
         value(&mut c, &h),
         Val::U32(6),
@@ -158,7 +170,11 @@ fn own_and_borrow_free_functions_match_interpreter() {
         v @ Val::Resource(_) => v,
         other => panic!("round-trip should return a counter, got {other:?}"),
     };
-    assert_eq!(value(&mut c, &rt), Val::U32(7), "round-trip starts at value+1 = 7");
+    assert_eq!(
+        value(&mut c, &rt),
+        Val::U32(7),
+        "round-trip starts at value+1 = 7"
+    );
     c.drop_resource(rt).expect("dtor runs cleanly");
 }
 

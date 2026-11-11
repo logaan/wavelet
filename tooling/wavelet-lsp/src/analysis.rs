@@ -74,8 +74,6 @@ fn builtin_doc(name: &str) -> &'static str {
         "contains" => "Substring / membership test.",
         "to-string" => "Render a value as a string.",
         "to-char" => "Convert an integer Unicode scalar value to a char.",
-        "read" => "Parse a string into a form.",
-        "apply" => "Call a function with a list of arguments.",
         "gensym" => "A fresh, unique symbol (for macros).",
         "expand" => "Macro-expand a form.",
         "some" | "ok" | "err" => "Construct an option / result variant.",

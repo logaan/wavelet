@@ -4,7 +4,12 @@
 use super::*;
 
 impl<'a> Emitter<'a> {
-    pub(crate) fn builtin(&mut self, fx: &mut FnCtx, name: &str, args: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        args: &[NodeId],
+    ) -> Result<(), String> {
         // Goal 5 (5.2/5.6.1): when the operand types are statically known
         // scalars, compile the polymorphic builtin as unboxed per-type code
         // and box once at the seam. Ineligible calls (unknown/compound
@@ -46,16 +51,25 @@ impl<'a> Emitter<'a> {
         // `items` operand slice. Adding a builtin means extending both this
         // classifier and the relevant `builtin_*` method (plus `BUILTINS`).
         match name {
-            "eq" | "not" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem" | "neg" | "abs" | "min" | "max" => self.builtin_numeric(fx, name, items),
-            "len" | "head" | "tail" | "reverse" | "range" | "empty" | "drop" => self.builtin_seq(fx, name, items),
-            "map" | "fold" | "filter" | "zip" | "apply" => self.builtin_higher_order(fx, name, items),
+            "eq" | "not" | "lt" | "le" | "gt" | "ge" | "add" | "sub" | "mul" | "div" | "rem"
+            | "neg" | "abs" | "min" | "max" => self.builtin_numeric(fx, name, items),
+            "len" | "head" | "tail" | "reverse" | "range" | "empty" | "drop" => {
+                self.builtin_seq(fx, name, items)
+            }
+            "map" | "fold" | "filter" | "zip" => self.builtin_higher_order(fx, name, items),
             "get" | "put" | "push" | "concat" => self.builtin_index(fx, name, items),
             "contains" | "join" | "split" => self.builtin_search(fx, name, items),
-            "str-cat" | "to-string" | "to-char" | "upper" | "lower" => self.builtin_string(fx, name, items),
+            "str-cat" | "to-string" | "to-char" | "upper" | "lower" => {
+                self.builtin_string(fx, name, items)
+            }
             "some" | "ok" | "err" => self.builtin_variant(fx, name, items),
             "cell-new" | "cell-get" | "cell-set" => self.builtin_cell(fx, name, items),
-            "form-kind" | "rec-key" | "rec-val" | "gensym" | "expand" => self.builtin_form(fx, name, items),
-            _ if crate::builtins::tuple_ctor_arity(name).is_some() => self.builtin_tuple(fx, name, items),
+            "form-kind" | "rec-key" | "rec-val" | "gensym" | "expand" => {
+                self.builtin_form(fx, name, items)
+            }
+            _ if crate::builtins::tuple_ctor_arity(name).is_some() => {
+                self.builtin_tuple(fx, name, items)
+            }
             other => Err(format!(
                 "builtin `{other}` not supported by the wasm backend yet"
             )),
@@ -67,7 +81,12 @@ impl<'a> Emitter<'a> {
     /// canonical path (`mem.rs`) did not claim. The arity is fixed per name;
     /// the checker enforces it statically and this check keeps the emitter
     /// honest if it is reached unchecked.
-    pub(crate) fn builtin_tuple(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin_tuple(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        items: &[NodeId],
+    ) -> Result<(), String> {
         let n = crate::builtins::tuple_ctor_arity(name).expect("routed by tuple_ctor_arity");
         if items.len() != n {
             return Err(format!(
@@ -82,7 +101,12 @@ impl<'a> Emitter<'a> {
     /// comparisons, the binary arithmetic ops, `neg`/`abs`, and `min`/`max`.
     /// These are the boxed fallbacks for calls the unboxed scalar fast path
     /// in `builtin` did not claim (unknown/compound operands, arity errors).
-    pub(crate) fn builtin_numeric(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin_numeric(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        items: &[NodeId],
+    ) -> Result<(), String> {
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
                 Ok(())
@@ -189,7 +213,8 @@ impl<'a> Emitter<'a> {
                 fx.op(I::If(BlockType::Result(ValType::I64)));
                 fx.op(I::I64Const(0));
                 fx.op(I::LocalGet(n));
-                fx.op(I::I64Sub);
+                fx.op(I::I32Const(1));
+                fx.op(I::Call(self.h.arith_int));
                 fx.op(I::Else);
                 fx.op(I::LocalGet(n));
                 fx.op(I::End);
@@ -240,7 +265,12 @@ impl<'a> Emitter<'a> {
     /// Sequence access and construction: `len`/`head`/`tail`, `reverse`,
     /// `range`, the `empty` predicate, and `drop` (evaluate for effect →
     /// unit).
-    pub(crate) fn builtin_seq(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin_seq(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        items: &[NodeId],
+    ) -> Result<(), String> {
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
                 Ok(())
@@ -500,7 +530,12 @@ impl<'a> Emitter<'a> {
 
     /// Builtins that take a callable or combine whole sequences: `map`,
     /// `fold`, `filter`, `zip`, and `apply`.
-    pub(crate) fn builtin_higher_order(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin_higher_order(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        items: &[NodeId],
+    ) -> Result<(), String> {
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
                 Ok(())
@@ -885,31 +920,6 @@ impl<'a> Emitter<'a> {
                 fx.op(I::End);
                 fx.op(I::LocalGet(out));
             }
-            "apply" => {
-                // apply(f, payload): call the closure value `f` with `payload` as
-                // its argument bundle, via the boxed-closure convention
-                // (call_indirect(env=f, payload, slot=f[4])) — the same seam
-                // `map`/`fold`/`filter` use. The interpreter's `apply` binds the
-                // payload per the function's arity (a single value to a 1-param
-                // fn, a TAG_TUP bundle to an n-param fn), which is exactly what
-                // the closure wrapper unpacks.
-                nargs(2)?;
-                let fp = fx.local(ValType::I32);
-                self.expr(fx, items[0], false)?;
-                fx.op(I::LocalSet(fp));
-                let pay = fx.local(ValType::I32);
-                self.expr(fx, items[1], false)?;
-                fx.op(I::LocalSet(pay));
-                let apply_ty = self.ty_idx(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
-                fx.op(I::LocalGet(fp));
-                fx.op(I::LocalGet(pay));
-                fx.op(I::LocalGet(fp));
-                fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::CallIndirect {
-                    type_index: apply_ty,
-                    table_index: 0,
-                });
-            }
             _ => unreachable!("builtin_higher_order routed unexpected name `{name}`"),
         }
         Ok(())
@@ -917,7 +927,12 @@ impl<'a> Emitter<'a> {
 
     /// Element access and growth: `get`/`put` (indexed read/replace),
     /// `push`, and `concat`.
-    pub(crate) fn builtin_index(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin_index(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        items: &[NodeId],
+    ) -> Result<(), String> {
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
                 Ok(())
@@ -1019,7 +1034,10 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(out));
                 fx.op(I::LocalGet(lst));
                 fx.op(I::LocalGet(sz));
-                fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+                fx.op(I::MemoryCopy {
+                    src_mem: 0,
+                    dst_mem: 0,
+                });
                 fx.op(I::LocalGet(out));
                 fx.op(I::I32Const(8));
                 fx.op(I::I32Add);
@@ -1068,7 +1086,10 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Mul);
                 fx.op(I::I32Const(8));
                 fx.op(I::I32Add);
-                fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+                fx.op(I::MemoryCopy {
+                    src_mem: 0,
+                    dst_mem: 0,
+                });
                 fx.op(I::LocalGet(out));
                 fx.op(I::LocalGet(n));
                 fx.op(I::I32Const(1));
@@ -1144,7 +1165,10 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(n1));
                 fx.op(I::I32Const(4));
                 fx.op(I::I32Mul);
-                fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+                fx.op(I::MemoryCopy {
+                    src_mem: 0,
+                    dst_mem: 0,
+                });
                 fx.op(I::LocalGet(out));
                 fx.op(I::I32Const(8));
                 fx.op(I::I32Add);
@@ -1158,7 +1182,10 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(n2));
                 fx.op(I::I32Const(4));
                 fx.op(I::I32Mul);
-                fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+                fx.op(I::MemoryCopy {
+                    src_mem: 0,
+                    dst_mem: 0,
+                });
                 fx.op(I::LocalGet(out));
             }
             _ => unreachable!("builtin_index routed unexpected name `{name}`"),
@@ -1168,7 +1195,12 @@ impl<'a> Emitter<'a> {
 
     /// Search and partition over strings/lists: `contains`, `join`, and
     /// `split` (which delegates to `builtin_split`).
-    pub(crate) fn builtin_search(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin_search(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        items: &[NodeId],
+    ) -> Result<(), String> {
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
                 Ok(())
@@ -1367,7 +1399,10 @@ impl<'a> Emitter<'a> {
         // char-boundary split: a leading "", one piece per char, a
         // trailing "".
         if items.len() != 2 {
-            return Err(format!("`split` expects 2 argument(s), got {}", items.len()));
+            return Err(format!(
+                "`split` expects 2 argument(s), got {}",
+                items.len()
+            ));
         }
         let s = fx.local(ValType::I32);
         self.expr(fx, items[0], false)?;
@@ -1631,7 +1666,12 @@ impl<'a> Emitter<'a> {
 
     /// String builtins: `str-cat`, `to-string`, `to-char`, and
     /// `upper`/`lower`.
-    pub(crate) fn builtin_string(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin_string(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        items: &[NodeId],
+    ) -> Result<(), String> {
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
                 Ok(())
@@ -1713,7 +1753,12 @@ impl<'a> Emitter<'a> {
     }
 
     /// Variant constructors: `some`, `ok`, and `err`.
-    pub(crate) fn builtin_variant(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin_variant(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        items: &[NodeId],
+    ) -> Result<(), String> {
         match name {
             "some" | "ok" | "err" => {
                 // the argument(s) bundle into the variant payload, exactly as
@@ -1731,7 +1776,12 @@ impl<'a> Emitter<'a> {
     }
 
     /// Mutable cell builtins: `cell-new`, `cell-get`, and `cell-set`.
-    pub(crate) fn builtin_cell(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin_cell(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        items: &[NodeId],
+    ) -> Result<(), String> {
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
                 Ok(())
@@ -1804,7 +1854,12 @@ impl<'a> Emitter<'a> {
 
     /// Compile-time form machinery used by macro bodies: `form-kind`,
     /// `rec-key`, `rec-val`, `gensym`, and `expand`.
-    pub(crate) fn builtin_form(&mut self, fx: &mut FnCtx, name: &str, items: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn builtin_form(
+        &mut self,
+        fx: &mut FnCtx,
+        name: &str,
+        items: &[NodeId],
+    ) -> Result<(), String> {
         let nargs = |want: usize| -> Result<(), String> {
             if items.len() == want {
                 Ok(())
@@ -1880,7 +1935,6 @@ impl<'a> Emitter<'a> {
     }
 }
 
-
 pub(crate) const BUILTINS: &[&str] = &[
     "eq",
     "not",
@@ -1910,7 +1964,6 @@ pub(crate) const BUILTINS: &[&str] = &[
     "split",
     "join",
     "contains",
-    "apply",
     "head",
     "tail",
     "map",

@@ -431,7 +431,14 @@ pub(crate) fn emit_core_module(
             let idx = take();
             em.funcs.insert(
                 rf.name.clone(),
-                (idx, names, FnSig { params: vec![Repr::Boxed; n], result: Repr::Boxed }),
+                (
+                    idx,
+                    names,
+                    FnSig {
+                        params: vec![Repr::Boxed; n],
+                        result: Repr::Boxed,
+                    },
+                ),
             );
         }
         let mut methods = std::collections::HashSet::new();
@@ -441,7 +448,14 @@ pub(crate) fn emit_core_module(
             let idx = take();
             em.funcs.insert(
                 format!("{}/{}", rf.name, key),
-                (idx, names, FnSig { params: vec![Repr::Boxed; n], result: Repr::Boxed }),
+                (
+                    idx,
+                    names,
+                    FnSig {
+                        params: vec![Repr::Boxed; n],
+                        result: Repr::Boxed,
+                    },
+                ),
             );
             methods.insert(key.clone());
         }
@@ -452,12 +466,26 @@ pub(crate) fn emit_core_module(
             let idx = take();
             em.funcs.insert(
                 format!("{}/{}", rf.name, key),
-                (idx, names, FnSig { params: vec![Repr::Boxed; n], result: Repr::Boxed }),
+                (
+                    idx,
+                    names,
+                    FnSig {
+                        params: vec![Repr::Boxed; n],
+                        result: Repr::Boxed,
+                    },
+                ),
             );
             statics.insert(key.clone());
         }
         let dtor = take();
-        em.user_res.insert(rf.name.clone(), UserRes { methods, statics, dtor });
+        em.user_res.insert(
+            rf.name.clone(),
+            UserRes {
+                methods,
+                statics,
+                dtor,
+            },
+        );
     }
 
     // An *exported overload set* (≥2 same-named `Def Fn`s, or a curated-op name)
@@ -583,7 +611,7 @@ pub(crate) fn emit_core_module(
             let mut fx = FnCtx::new(params.len() as u32);
             let mut scope = HashMap::new();
             for (i, pn) in params.iter().enumerate() {
-                scope.insert(pn.clone(), Binding::new(i as u32, sig.params[i] ));
+                scope.insert(pn.clone(), Binding::new(i as u32, sig.params[i]));
             }
             fx.scopes.push(scope);
             em.expr_repr(&mut fx, body, sig.result, true)
@@ -596,7 +624,7 @@ pub(crate) fn emit_core_module(
             if let Some((pid, body)) = rf.drop_member {
                 let mut scope = HashMap::new();
                 if let Some(pn) = param_names(arena, pid)?.first() {
-                    scope.insert(pn.clone(), Binding::new(0, Repr::Boxed ));
+                    scope.insert(pn.clone(), Binding::new(0, Repr::Boxed));
                 }
                 fx.scopes.push(scope);
                 em.expr_repr(&mut fx, body, Repr::Boxed, false)
@@ -616,10 +644,7 @@ pub(crate) fn emit_core_module(
         let mut fx = FnCtx::new(n as u32);
         let mut scope = HashMap::new();
         for (i, p) in params.iter().enumerate() {
-            scope.insert(
-                p.clone(),
-                Binding::new(i as u32, sig.params[i]),
-            );
+            scope.insert(p.clone(), Binding::new(i as u32, sig.params[i]));
         }
         fx.scopes.push(scope);
         em.expr_repr(&mut fx, body, sig.result, true)
@@ -635,10 +660,7 @@ pub(crate) fn emit_core_module(
         let mut fx = FnCtx::new(n as u32);
         let mut scope = HashMap::new();
         for (i, p) in params.iter().enumerate() {
-            scope.insert(
-                p.clone(),
-                Binding::new(i as u32, sig.params[i]),
-            );
+            scope.insert(p.clone(), Binding::new(i as u32, sig.params[i]));
         }
         fx.scopes.push(scope);
         em.expr_repr(&mut fx, body, sig.result, true)

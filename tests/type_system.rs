@@ -990,7 +990,6 @@ fn node_type_table_propagates_check_errors() {
     assert!(check::node_types_with_imports(&arena, &roots, &check::ImportSigs::new()).is_err());
 }
 
-
 // ---------------------------------------------------------------------------
 // 5.8 — function (arrow) types (Phase D). A `Fn` literal with concretely-typed
 // parameters, and a bare reference to such a function `Def`, carry a static
@@ -1021,7 +1020,10 @@ Let {f: inc} f(5)");
 #[test]
 fn indirect_apply_type_mismatch_rejected() {
     let r = run("Let {g: Fn {n: s32} add(n 1)} g(true)");
-    assert!(!r.ok, "type-mismatched indirect application must be rejected");
+    assert!(
+        !r.ok,
+        "type-mismatched indirect application must be rejected"
+    );
     assert!(r.error.contains("mismatch"), "{}", r.error);
 }
 
@@ -1038,8 +1040,7 @@ fn indirect_apply_arity_mismatch_rejected() {
 #[test]
 fn arrow_type_is_recorded_in_the_node_table() {
     use wavelet::check::{self, Type};
-    let (arena, roots) =
-        read_file("Let {g: Fn {n: s32} add(n 1)} g(1)").expect("reads");
+    let (arena, roots) = read_file("Let {g: Fn {n: s32} add(n 1)} g(1)").expect("reads");
     let (arena, roots) = expand::expand_file(arena, &roots, None).expect("expands");
     let table =
         check::node_types_with_imports(&arena, &roots, &check::ImportSigs::new()).expect("checks");
@@ -1059,7 +1060,6 @@ fn untyped_closure_stays_gradual() {
     assert!(r.ok, "gradual higher-order program rejected: {}", r.error);
     assert_eq!(r.value, "12");
 }
-
 
 /// Boundary rule (5.8, first cut): an exported def whose result is a function
 /// value is a deliberate compile error with the function-boundary diagnostic —
@@ -1100,5 +1100,8 @@ fn internal_function_result_still_accepted() {
         "Package \"test:ok@0.1.0\"\n\nExport shout\nDef make Fn {by: s32}\n  Fn {n: s32} add(n by)\nDef shout Fn {phrase: string} upper(phrase)",
     )
     .expect("non-exported closures must not trip the boundary rule");
-    assert!(wit.contains("shout: func(phrase: string) -> string"), "{wit}");
+    assert!(
+        wit.contains("shout: func(phrase: string) -> string"),
+        "{wit}"
+    );
 }

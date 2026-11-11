@@ -108,16 +108,13 @@ fn typed_int_arithmetic_matches_the_interpreter() {
         ok(&mut c, "divi", &[Val::S64(-7), Val::S64(2)]),
         Val::S64(-3)
     );
-    // wrapping neg, exactly neg_raw / the interpreter's `-n`
-    assert_eq!(
-        ok(&mut c, "negi", &[Val::S64(i64::MIN)]),
-        Val::S64(i64::MIN)
-    );
+    assert_eq!(ok(&mut c, "negi", &[Val::S64(-42)]), Val::S64(42));
     assert_eq!(ok(&mut c, "negf", &[Val::Float64(1.5)]), Val::Float64(-1.5));
 }
 
 #[test]
 fn typed_int_arithmetic_traps_where_the_interpreter_errors() {
+    assert!(call(&mut component(), "negi", &[Val::S64(i64::MIN)]).is_err());
     // a trap poisons the component instance, so each case gets a fresh one
     // i64 overflow — interpreter: `add` error; backend: trap
     assert!(call(&mut component(), "addi", &[Val::S64(i64::MAX), Val::S64(1)]).is_err());

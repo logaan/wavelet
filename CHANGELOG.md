@@ -15,6 +15,12 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- Shared, automatically cleaned build staging with explicit path errors.
+- An independent execution regression corpus covering mutation ordering,
+  recursion, compound values, bounds errors, and checked integer overflow.
+- Contextual typing for `map`, `filter`, and `fold` callbacks, including
+  callback arity and result validation.
+
 - **Tuple constructors `tuple0` … `tuple16`.** Wavelet can now *build* a tuple
   value from computed data: one builtin per size, each taking exactly that many
   arguments (`tuple2(add(1 2) "x")` → `(3, "x")`). Fixed arities keep every
@@ -29,6 +35,13 @@ you work, and rename it to the new version when you cut a release.
   passes against both rust seeds (`conformance/wavelet/test-values-callee.sh`).
 
 ### Fixed
+
+- Variant constructors consistently shadow builtins, including boxed calls.
+  Multi-field variant payloads must use one explicit tuple type.
+- `neg` and `abs` reject signed minimum overflow in the interpreter and wasm.
+- Speculative type inference no longer overwrites authoritative backend types.
+- REPL value redefinitions replace the previous binding; repeated expressions
+  reuse a bounded cache of compiled instances until definitions change.
 
 - **Sym-headed tuple patterns over a statically-known tuple scrutinee now
   destructure on the wasm backend.** The boxed matcher read every Sym-headed
@@ -56,6 +69,11 @@ you work, and rename it to the new version when you cut a release.
   fast-path.
 
 ### Changed
+
+- Runtime `read` and `apply` have been removed. Use compiler-side reading and
+  direct function calls respectively.
+- CLI execution errors and traps are surfaced directly without interpreter
+  fallback or duplicated execution.
 
 - **`wavelet run` and `wavelet repl` now execute on the compiled wasm path**
   instead of the tree-walking interpreter (goal 6, Steps 2 and 6.5). `run`

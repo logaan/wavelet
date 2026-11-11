@@ -748,7 +748,6 @@ impl<'a> Emitter<'a> {
         fx.op(I::GlobalGet(g));
         Ok(())
     }
-
 }
 
 fn param_names(arena: &Arena, params_id: NodeId) -> Result<Vec<String>, String> {
@@ -758,4 +757,3 @@ fn param_names(arena: &Arena, params_id: NodeId) -> Result<Vec<String>, String> 
         _ => Err("malformed Fn parameters".into()),
     }
 }
-

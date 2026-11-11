@@ -11,7 +11,12 @@ impl<'a> Emitter<'a> {
 
     /// Build a sequence box `[tag, len, elem ptrs…]`; `tag` is TAG_LIST or
     /// TAG_TUP (identical layout, distinct identity at the value level).
-    pub(crate) fn seq_box(&mut self, fx: &mut FnCtx, items: &[NodeId], tag: i32) -> Result<(), String> {
+    pub(crate) fn seq_box(
+        &mut self,
+        fx: &mut FnCtx,
+        items: &[NodeId],
+        tag: i32,
+    ) -> Result<(), String> {
         let n = items.len();
         let p = fx.local(ValType::I32);
         fx.op(I::I32Const(8 + 4 * n as i32));
@@ -34,7 +39,11 @@ impl<'a> Emitter<'a> {
 
     /// Build a record box `[TAG_REC, n, (key str box, value box)…]` from field
     /// forms. Keys are interned static string boxes; insertion order preserved.
-    pub(crate) fn rec_box(&mut self, fx: &mut FnCtx, fields: &[(String, NodeId)]) -> Result<(), String> {
+    pub(crate) fn rec_box(
+        &mut self,
+        fx: &mut FnCtx,
+        fields: &[(String, NodeId)],
+    ) -> Result<(), String> {
         let n = fields.len();
         let p = fx.local(ValType::I32);
         fx.op(I::I32Const(8 + 8 * n as i32));
@@ -65,7 +74,12 @@ impl<'a> Emitter<'a> {
     /// Build a payloaded variant box `[TAG_VAR, case, payload]`. The payload is
     /// the call's bundled arguments, matching the interpreter's `ok`/`err`/`some`
     /// exactly: 0 args ⇒ the empty tuple, 1 arg ⇒ that value, ≥2 ⇒ a tuple.
-    pub(crate) fn var_box(&mut self, fx: &mut FnCtx, case: &str, args: &[NodeId]) -> Result<(), String> {
+    pub(crate) fn var_box(
+        &mut self,
+        fx: &mut FnCtx,
+        case: &str,
+        args: &[NodeId],
+    ) -> Result<(), String> {
         let caddr = self.intern_str(case);
         let p = fx.local(ValType::I32);
         fx.op(I::I32Const(12));
@@ -178,7 +192,12 @@ impl<'a> Emitter<'a> {
 
     /// `quote_box` analogue of `seq_box`: a `[tag, len, quoted-elem ptrs…]` box
     /// whose elements are quoted, not evaluated.
-    pub(crate) fn quote_seq(&mut self, fx: &mut FnCtx, items: &[NodeId], tag: i32) -> Result<(), String> {
+    pub(crate) fn quote_seq(
+        &mut self,
+        fx: &mut FnCtx,
+        items: &[NodeId],
+        tag: i32,
+    ) -> Result<(), String> {
         let n = items.len();
         let p = fx.local(ValType::I32);
         fx.op(I::I32Const(8 + 4 * n as i32));
@@ -200,7 +219,11 @@ impl<'a> Emitter<'a> {
     }
 
     /// `quote_box` analogue of `rec_box`: a record box whose values are quoted.
-    pub(crate) fn quote_rec(&mut self, fx: &mut FnCtx, fields: &[(String, NodeId)]) -> Result<(), String> {
+    pub(crate) fn quote_rec(
+        &mut self,
+        fx: &mut FnCtx,
+        fields: &[(String, NodeId)],
+    ) -> Result<(), String> {
         let n = fields.len();
         let p = fx.local(ValType::I32);
         fx.op(I::I32Const(8 + 8 * n as i32));
@@ -230,7 +253,12 @@ impl<'a> Emitter<'a> {
     /// /`Splice` fire at depth 1 (the hole is the compiled expression) and are
     /// rebuilt as data one level shallower at greater depths; a nested `Quasi`
     /// recurses at `depth + 1`. Leaves are quoted (`quote_box`).
-    pub(crate) fn quasi_box(&mut self, fx: &mut FnCtx, id: NodeId, depth: u32) -> Result<(), String> {
+    pub(crate) fn quasi_box(
+        &mut self,
+        fx: &mut FnCtx,
+        id: NodeId,
+        depth: u32,
+    ) -> Result<(), String> {
         match self.arena.node(id).clone() {
             Node::Tup(items) => {
                 // The arity-1 special heads read as 2-element tuples

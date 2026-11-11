@@ -156,8 +156,14 @@ fn option_cases_match_like_the_oracle() {
 // binds through the canonical (ptr, len) at the payload offset.
 fn result_cases_match_like_the_oracle() {
     let Some(mut c) = composed() else { return };
-    assert_eq!(ok(&mut c, "chk", &[Val::Bool(true)]), Val::String("3".into()));
-    assert_eq!(ok(&mut c, "chk", &[Val::Bool(false)]), Val::String("bad".into()));
+    assert_eq!(
+        ok(&mut c, "chk", &[Val::Bool(true)]),
+        Val::String("3".into())
+    );
+    assert_eq!(
+        ok(&mut c, "chk", &[Val::Bool(false)]),
+        Val::String("bad".into())
+    );
 }
 
 #[test]
@@ -197,7 +203,10 @@ fn canonical_variant_rebuild_is_faithful() {
 // wrapper returns the dep's canonical area directly (retptr fast path).
 fn option_export_takes_the_retptr_fast_path() {
     let Some(mut c) = composed() else { return };
-    assert_eq!(ok(&mut c, "fwd", &[Val::Bool(true)]), Val::Option(Some(Box::new(Val::S32(7)))));
+    assert_eq!(
+        ok(&mut c, "fwd", &[Val::Bool(true)]),
+        Val::Option(Some(Box::new(Val::S32(7))))
+    );
     assert_eq!(ok(&mut c, "fwd", &[Val::Bool(false)]), Val::Option(None));
 }
 
@@ -281,7 +290,10 @@ fn okc(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
 // no case-name strings and no boxes.
 fn local_case_constructor_builds_canonically() {
     let mut c = constructed();
-    assert_eq!(okc(&mut c, "c-var", &[Val::Float64(2.5)]), Val::Float64(2.5));
+    assert_eq!(
+        okc(&mut c, "c-var", &[Val::Float64(2.5)]),
+        Val::Float64(2.5)
+    );
 }
 
 #[test]
@@ -345,11 +357,20 @@ fn local_binding_shadows_constructor_names() {
 fn eq_over_canonical_variants_is_structural() {
     let Some(mut c) = composed() else { return };
     // same case (some), same payload
-    assert_eq!(ok(&mut c, "v-eq", &[Val::S32(5), Val::S32(5)]), Val::Bool(true));
+    assert_eq!(
+        ok(&mut c, "v-eq", &[Val::S32(5), Val::S32(5)]),
+        Val::Bool(true)
+    );
     // same case (some), different payload
-    assert_eq!(ok(&mut c, "v-eq", &[Val::S32(1), Val::S32(2)]), Val::Bool(false));
+    assert_eq!(
+        ok(&mut c, "v-eq", &[Val::S32(1), Val::S32(2)]),
+        Val::Bool(false)
+    );
     // same discriminant path: some(7) == some(7)
     assert_eq!(ok(&mut c, "v-eq-disc", &[Val::Bool(true)]), Val::Bool(true));
     // differing discriminant: none vs some(7)
-    assert_eq!(ok(&mut c, "v-eq-disc", &[Val::Bool(false)]), Val::Bool(false));
+    assert_eq!(
+        ok(&mut c, "v-eq-disc", &[Val::Bool(false)]),
+        Val::Bool(false)
+    );
 }

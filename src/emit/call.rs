@@ -294,7 +294,6 @@ impl<'a> Emitter<'a> {
                     }
                     self.closure_call(fx, head, args, tail)
                 }
-                _ if BUILTINS.contains(&name.as_str()) => self.builtin(fx, &name, args),
                 _ => {
                     if self.funcs.contains_key(&name) {
                         self.internal_call(fx, &name, args, Repr::Boxed, tail)
@@ -315,6 +314,8 @@ impl<'a> Emitter<'a> {
                             ));
                         }
                         self.var_box(fx, &name, args)
+                    } else if BUILTINS.contains(&name.as_str()) {
+                        self.builtin(fx, &name, args)
                     } else {
                         Err(format!("unknown function `{name}` (wasm backend)"))
                     }
@@ -400,7 +401,11 @@ impl<'a> Emitter<'a> {
 
     /// Mirror of the interpreter's §4.2 argument-binding rule, at compile time.
     /// `args` are the call's argument forms (`Tup[head, …args]`).
-    pub(crate) fn bind_args(&self, args: &[NodeId], params: &[String]) -> Result<BoundArgs, String> {
+    pub(crate) fn bind_args(
+        &self,
+        args: &[NodeId],
+        params: &[String],
+    ) -> Result<BoundArgs, String> {
         // named: a single record arg whose keys are exactly the parameters
         if let [only] = args
             && let Node::Rec(fields) = self.arena.node(*only)

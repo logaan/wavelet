@@ -40,6 +40,7 @@ wasmtime = { version = "45", default-features = false, features = ["runtime", "c
 # line-reader. Kept off the `wasm32` playground build with the rest of the
 # native table.
 rustyline = "14"
+tempfile = "3"
 
 # wasm-only: the browser playground bindings (see `src/wasm.rs`). Optional and
 # gated behind the `playground` feature, so a `default-features = false` `wasm32`

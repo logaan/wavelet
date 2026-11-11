@@ -30,26 +30,12 @@ use wavelet::host::{HostComponent, Val};
 use wavelet::printer::print;
 use wavelet::reader::read_file;
 
-/// The `read` builtin needs a wasm-side reader (lexer + parser) that does not
-/// exist yet; the value builtins otherwise all compile now. Decision-gated: no
-/// recorded design for a reader-in-wasm (or a host-provided read).
-const READER: &str = "`read` needs a wasm-side reader, not implemented (5.7)";
-/// `apply` compiles, but here a RECORD payload is applied to a multi-parameter
-/// closure. The interpreter's `bind_params` binds record fields to parameters by
-/// name; the backend's closure wrapper requires a TAG_TUP bundle and traps on a
-/// record. Closing this is a closure-ABI change (bind records by name), not a
-/// builtin — a separate decision.
-const APPLY_REC: &str = "record payload applied to a multi-param closure (closure-ABI gap)";
 /// On the build path `expand` is confined to macro libraries (6.1.8).
 const EXPAND: &str = "`expand` is only available inside a macro library when building (6.1.8)";
 
 /// Examples the compiled artifact is known to disagree on, with the current
 /// reason. Removing a fixed entry is part of fixing the backend gap.
-const SKIP: &[(&str, &str)] = &[
-    ("macro-expand", EXPAND),
-    ("std-apply", APPLY_REC), // record payload -> 2-param closure
-    ("std-read", READER),     // read
-];
+const SKIP: &[(&str, &str)] = &[("macro-expand", EXPAND)];
 
 const PACKAGE: &str = "docs:snippet@0.1.0";
 const IFACE: &str = "docs:snippet/api@0.1.0";
@@ -66,6 +52,7 @@ const DECL_HEADS: &[&str] = &[
     "def-MACRO",
     "defmacro-MACRO",
     "deftype-MACRO",
+    "defresource-MACRO",
     "derive-MACRO",
 ];
 
@@ -122,40 +109,18 @@ fn wrap_snippet(code: &str) -> Result<String, String> {
 
 /// Build the wrapped program through the real emitter and execute its entry
 /// point, returning the printed final value. `Err` carries the failing stage.
-fn compiled_eval(id: &str, program: &str) -> Result<String, String> {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static SEQ: AtomicU32 = AtomicU32::new(0);
-    let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "wavelet-differential-{}-{n}-{id}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    let src = dir.join("src");
-    std::fs::create_dir_all(&src).map_err(|e| format!("setup: {e}"))?;
-    let path = src.join("snippet.wlt");
-    std::fs::write(&path, program).map_err(|e| format!("setup: {e}"))?;
-
-    let out_dir = dir.join("out");
-    let result = (|| {
-        let outputs = wavelet::build::build_files(
-            &[path.to_str().unwrap().to_string()],
-            out_dir.to_str().unwrap(),
-        )
-        .map_err(|e| format!("build: {e}"))?;
-        let bytes = std::fs::read(&outputs[0]).map_err(|e| format!("read artifact: {e}"))?;
-        let mut component =
-            HostComponent::from_bytes(&bytes).map_err(|e| format!("instantiate: {e}"))?;
-        let vals = component
-            .call_instance(IFACE, MAIN, &[])
-            .map_err(|e| format!("call: {e}"))?;
-        match vals.as_slice() {
-            [Val::String(s)] => Ok(s.to_string()),
-            other => Err(format!("call: unexpected result shape {other:?}")),
-        }
-    })();
-    let _ = std::fs::remove_dir_all(&dir);
-    result
+fn compiled_eval(_id: &str, program: &str) -> Result<(String, String), String> {
+    let bytes = wavelet::staging::Project::compile(program).map_err(|e| e.to_string())?;
+    let mut component =
+        HostComponent::from_bytes(&bytes).map_err(|e| format!("instantiate: {e}"))?;
+    wavelet::output_capture_start();
+    let result = component.call_instance(IFACE, MAIN, &[]);
+    let output = wavelet::output_capture_take();
+    let vals = result.map_err(|e| format!("call: {e}"))?;
+    match vals.as_slice() {
+        [Val::String(s)] => Ok((s.to_string(), output)),
+        other => Err(format!("call: unexpected result shape {other:?}")),
+    }
 }
 
 /// One example's differential outcome.
@@ -186,7 +151,13 @@ fn run_example(id: &str, code: &str, expect_error: bool) -> Outcome {
             "interpreter succeeds with {:?} but the compiled artifact fails at {e}",
             interp.value
         )),
-        (false, Ok(v)) => {
+        (false, Ok((v, output))) => {
+            if output != interp.output {
+                return Outcome::Disagree(format!(
+                    "stdout mismatch: {:?} != {output:?}",
+                    interp.output
+                ));
+            }
             // `eval_snippet` suppresses a final unit as ""; the compiled side
             // prints it as "{}". The two spell the same value.
             if v == interp.value || (interp.value.is_empty() && v == "{}") {
@@ -252,4 +223,22 @@ fn every_documented_example_agrees_with_the_compiled_artifact() {
         ));
     }
     assert!(report.is_empty(), "{report}");
+}
+
+#[test]
+fn independent_execution_corpus_agrees() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/execution");
+    let mut paths: Vec<_> = std::fs::read_dir(root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    paths.sort();
+    assert!(!paths.is_empty());
+    for path in paths {
+        let code = std::fs::read_to_string(&path).unwrap();
+        let id = path.file_stem().unwrap().to_str().unwrap();
+        if let Outcome::Disagree(message) = run_example(id, &code, id.ends_with("-error")) {
+            panic!("{id}: {message}");
+        }
+    }
 }

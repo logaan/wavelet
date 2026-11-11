@@ -101,7 +101,10 @@ fn oracle_agrees() {
         ),
         ("Let {g: Fn {n: s32} add(n 100)} g(1)", "101"),
         ("Let {by: 5} Let {g: Fn {n: s32} add(n by)} g(1)", "6"),
-        ("Let {a: 10} Let {b: 20} Let {g: Fn {n: s32} add(add(n a) b)} g(1)", "31"),
+        (
+            "Let {a: 10} Let {b: 20} Let {g: Fn {n: s32} add(add(n a) b)} g(1)",
+            "31",
+        ),
     ] {
         let r = wavelet::eval_snippet(src);
         assert!(r.ok, "{src}: {}", r.error);

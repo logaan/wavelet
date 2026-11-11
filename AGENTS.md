@@ -109,7 +109,7 @@ been checked and updated where affected:
     submodule is the `logaan/wavelet.nvim` plugin repo; it also has
     `ftdetect/wavelet.vim` for `.wlt` detection and `plugin/wavelet.lua` to
     start `wavelet-lsp`). Because it's a submodule, changing this grammar means
-    committing/pushing in `wavelet.nvim` and then bumping the submodule pointer
+    committing locally in `wavelet.nvim` and then bumping the submodule pointer
     here.
   - `tooling/vscode/` — VS Code TextMate grammar + language configuration.
 

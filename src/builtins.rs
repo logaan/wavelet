@@ -44,7 +44,6 @@ pub const NAMES: &[&str] = &[
     "join",
     "contains",
     "to-string",
-    "read",
     "to-u8",
     "to-u16",
     "to-u32",
@@ -56,7 +55,6 @@ pub const NAMES: &[&str] = &[
     "to-f32",
     "to-f64",
     "to-char",
-    "apply",
     "gensym",
     "expand",
     "form-kind",
@@ -169,7 +167,13 @@ fn install_stdlib_macros(env: &Env) {
             crate::reader::read_file(body_src).expect("bundled stdlib macro body must read");
         assert_eq!(roots.len(), 1, "a stdlib macro body must be a single form");
         let closure = Closure {
-            params: params.iter().map(|p| Param { name: (*p).to_string() }).collect(),
+            params: params
+                .iter()
+                .map(|p| Param {
+                    name: (*p).to_string(),
+                    resource_type: None,
+                })
+                .collect(),
             body: roots[0],
             arena: Rc::new(arena),
             env: env.clone(),
@@ -426,11 +430,15 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             }
         }
         "neg" => match want_num(&arg, name)? {
-            Num::I(n) => Ok(Value::Int(-n)),
+            Num::I(n) => n.checked_neg().map(Value::Int).ok_or_else(|| EvalError {
+                msg: format!("`{name}`: integer overflow"),
+            }),
             Num::D(f) => Ok(Value::Dec(-f)),
         },
         "abs" => match want_num(&arg, name)? {
-            Num::I(n) => Ok(Value::Int(n.abs())),
+            Num::I(n) => n.checked_abs().map(Value::Int).ok_or_else(|| EvalError {
+                msg: format!("`{name}`: integer overflow"),
+            }),
             Num::D(f) => Ok(Value::Dec(f.abs())),
         },
         "len" => match &arg {
@@ -607,23 +615,6 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
             Ok(Value::Bool(s.contains(&sub)))
         }
         "to-string" => Ok(Value::Str(print_value(&arg))),
-        "read" => {
-            let s = want_str(arg, name)?;
-            match crate::read_file(&s) {
-                Ok((arena, roots)) if roots.len() == 1 => Ok(Value::Variant(
-                    "ok".into(),
-                    Some(Rc::new(form_to_value(&arena, roots[0]))),
-                )),
-                Ok(_) => Ok(Value::Variant(
-                    "err".into(),
-                    Some(Rc::new(Value::Str("expected exactly one form".into()))),
-                )),
-                Err(e) => Ok(Value::Variant(
-                    "err".into(),
-                    Some(Rc::new(Value::Str(e.to_string()))),
-                )),
-            }
-        }
         "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32" | "to-s64" => {
             let n = match &arg {
                 Value::Int(n) => *n,
@@ -667,12 +658,6 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
                 print_value(other)
             )),
         },
-        "apply" => {
-            let mut a = args_n(arg, 2, name)?;
-            let payload = a.pop().unwrap();
-            let f = a.pop().unwrap();
-            interp.apply(&f, payload)
-        }
         "gensym" => {
             let n = interp.gensym.get();
             interp.gensym.set(n + 1);

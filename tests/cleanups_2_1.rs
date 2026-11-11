@@ -20,7 +20,7 @@ fn run(src: &str) -> EvalOutcome {
 fn list_argument_does_not_spread_across_parameters() {
     // A two-element list passed to a two-parameter function is one value bound
     // to the first parameter, leaving the second unbound — a bind error.
-    let r = run("apply(Fn {a b} add(a b) [20 22])");
+    let r = run("Def f Fn {a b} add(a b)\nf([20 22])");
     assert!(
         !r.ok,
         "a list must not spread across parameters (2.1 proposal 1); got {:?}",
@@ -38,7 +38,7 @@ fn tuple_argument_still_binds_by_order() {
 
 #[test]
 fn record_argument_still_binds_by_name() {
-    let r = run("apply(Fn {a b} add(a b) {a: 20 b: 22})");
+    let r = run("Def f Fn {a b} add(a b)\nf({a: 20 b: 22})");
     assert!(r.ok, "record should bind by name: {}", r.error);
     assert_eq!(r.value, "42");
 }
@@ -46,7 +46,7 @@ fn record_argument_still_binds_by_name() {
 #[test]
 fn single_list_binds_to_a_sole_parameter() {
     // With one parameter, a list is simply the one value bound to it.
-    let r = run("apply(Fn {xs} len(xs) [1 2 3])");
+    let r = run("Def f Fn {xs} len(xs)\nf([1 2 3])");
     assert!(r.ok, "a list binds to a sole parameter: {}", r.error);
     assert_eq!(r.value, "3");
 }
@@ -54,7 +54,7 @@ fn single_list_binds_to_a_sole_parameter() {
 #[test]
 fn empty_list_is_not_accepted_as_no_arguments() {
     // Only the empty tuple denotes "no arguments"; an empty list is a value.
-    let r = run("apply(Fn {} 42 [])");
+    let r = run("Def f Fn {} 42\nf([])");
     assert!(
         !r.ok,
         "an empty list must not stand in for no arguments (2.1 proposal 1); got {:?}",
@@ -112,6 +112,10 @@ fn integer_literal_pattern_still_matches() {
 #[test]
 fn string_literal_pattern_still_matches() {
     let r = run("Match \"hi\" [(\"hi\" true)\n(x false)]");
-    assert!(r.ok, "string literal pattern should still work: {}", r.error);
+    assert!(
+        r.ok,
+        "string literal pattern should still work: {}",
+        r.error
+    );
     assert_eq!(r.value, "true");
 }

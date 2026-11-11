@@ -84,38 +84,36 @@ fn synth_program(defs: &[String], expr_src: &str) -> String {
 /// Build the synthetic program through the real emitter and call its entry,
 /// returning the printed value the guest's `to-string` produced. `Err` carries
 /// the failing stage (build / instantiate / call / trap).
-fn compiled_eval(program: &str) -> Result<String, String> {
-    use crate::host::{HostComponent, Val};
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static SEQ: AtomicU32 = AtomicU32::new(0);
-    let n = SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("wavelet-repl-{}-{n}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let src = dir.join("src");
-    std::fs::create_dir_all(&src).map_err(|e| format!("setup: {e}"))?;
-    let path = src.join("entry.wlt");
-    std::fs::write(&path, program).map_err(|e| format!("setup: {e}"))?;
-    let out_dir = dir.join("out");
+#[derive(Default)]
+struct CompiledSession {
+    entries: std::collections::HashMap<String, crate::host::HostComponent>,
+}
 
-    let result = (|| {
-        let outputs = crate::build::build_files(
-            &[path.to_str().unwrap().to_string()],
-            out_dir.to_str().unwrap(),
-        )
-        .map_err(|e| format!("build: {e}"))?;
-        let bytes = std::fs::read(&outputs[0]).map_err(|e| format!("read artifact: {e}"))?;
-        let mut component =
-            HostComponent::from_bytes(&bytes).map_err(|e| format!("instantiate: {e}"))?;
-        let vals = component
-            .call_instance(IFACE, MAIN, &[])
-            .map_err(|e| format!("call: {e}"))?;
-        match vals.as_slice() {
-            [Val::String(s)] => Ok(s.to_string()),
-            other => Err(format!("call: unexpected result shape {other:?}")),
+impl CompiledSession {
+    fn evaluate(&mut self, program: &str) -> Result<String, String> {
+        use crate::host::{HostComponent, Val};
+        if !self.entries.contains_key(program) {
+            let bytes = crate::staging::Project::compile(program).map_err(|e| e.to_string())?;
+            let component =
+                HostComponent::from_bytes(&bytes).map_err(|e| format!("instantiate: {e}"))?;
+            if self.entries.len() >= 32 {
+                self.entries.clear();
+            }
+            self.entries.insert(program.to_owned(), component);
         }
-    })();
-    let _ = std::fs::remove_dir_all(&dir);
-    result
+        let component = self.entries.get_mut(program).unwrap();
+        let result = component.call_instance(IFACE, MAIN, &[]);
+        match result {
+            Ok(vals) => match vals.as_slice() {
+                [Val::String(s)] => Ok(s.to_string()),
+                other => Err(format!("call: unexpected result shape {other:?}")),
+            },
+            Err(e) => {
+                self.entries.remove(program);
+                Err(format!("call: {e}"))
+            }
+        }
+    }
 }
 
 /// Evaluate every form read from one accepted input buffer. A declaration
@@ -125,18 +123,52 @@ fn compiled_eval(program: &str) -> Result<String, String> {
 /// `repl-eval` entry — and its `to-string` value printed, falling back to the
 /// interpreter for that entry on any compiled-path failure. Shared by the
 /// interactive and piped front-ends so both behave identically.
+fn value_definition_name(arena: &Arena, root: NodeId) -> Option<&str> {
+    let Node::Tup(items) = arena.node(root) else {
+        return None;
+    };
+    if items.len() != 3 || !matches!(arena.node(items[0]), Node::Sym(s) if s == "def-MACRO") {
+        return None;
+    }
+    if let Node::Tup(body) = arena.node(items[2])
+        && body
+            .first()
+            .is_some_and(|head| matches!(arena.node(*head), Node::Sym(s) if s == "fn-MACRO"))
+    {
+        return None;
+    }
+    match arena.node(items[1]) {
+        Node::Sym(name) => Some(name),
+        _ => None,
+    }
+}
+
 fn eval_forms(
     arena: &Rc<Arena>,
     roots: &[NodeId],
     defs: &mut Vec<String>,
     interp: &Interp,
     env: &Env,
+    compiled: &mut CompiledSession,
 ) {
     for &root in roots {
         if is_decl(arena, root) {
             match interp.eval(arena, root, env) {
                 Ok(v) => {
+                    if let Some(name) = value_definition_name(arena, root) {
+                        defs.retain(|source| {
+                            crate::reader::read_file(source).ok().is_none_or(
+                                |(old_arena, old_roots)| {
+                                    old_roots
+                                        .first()
+                                        .and_then(|root| value_definition_name(&old_arena, *root))
+                                        != Some(name)
+                                },
+                            )
+                        });
+                    }
                     defs.push(print(arena, root));
+                    compiled.entries.clear();
                     println!("{}", print_value(&v));
                 }
                 Err(e) => {
@@ -147,20 +179,12 @@ fn eval_forms(
         } else {
             let expr_src = print(arena, root);
             let program = synth_program(defs, &expr_src);
-            match compiled_eval(&program) {
+            match compiled.evaluate(&program) {
                 Ok(s) => println!("{s}"),
-                Err(compiled_err) => match interp.eval(arena, root, env) {
-                    Ok(v) => {
-                        eprintln!(
-                            "(interpreter fallback: compiled path unavailable: {compiled_err})"
-                        );
-                        println!("{}", print_value(&v));
-                    }
-                    Err(e) => {
-                        eprintln!("error: {e}");
-                        break;
-                    }
-                },
+                Err(compiled_err) => {
+                    eprintln!("error: {compiled_err}");
+                    break;
+                }
             }
         }
     }
@@ -202,6 +226,7 @@ fn repl_interactive() -> Result<(), String> {
     crate::builtins::install(&env);
     let mut macros = MacroTable::core();
     let mut defs: Vec<String> = Vec::new();
+    let mut compiled = CompiledSession::default();
 
     let mut rl = rustyline::DefaultEditor::new().map_err(|e| e.to_string())?;
     let hist = history_path();
@@ -231,7 +256,7 @@ fn repl_interactive() -> Result<(), String> {
                         let _ = rl.add_history_entry(buf.trim_end());
                         buf.clear();
                         let arena = Rc::new(arena);
-                        eval_forms(&arena, &roots, &mut defs, &interp, &env);
+                        eval_forms(&arena, &roots, &mut defs, &interp, &env, &mut compiled);
                     }
                 }
             }
@@ -265,6 +290,7 @@ fn repl_piped() -> Result<(), String> {
     crate::builtins::install(&env);
     let mut macros = MacroTable::core();
     let mut defs: Vec<String> = Vec::new();
+    let mut compiled = CompiledSession::default();
 
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();
@@ -291,7 +317,7 @@ fn repl_piped() -> Result<(), String> {
             Ok((arena, roots)) => {
                 buf.clear();
                 let arena = Rc::new(arena);
-                eval_forms(&arena, &roots, &mut defs, &interp, &env);
+                eval_forms(&arena, &roots, &mut defs, &interp, &env, &mut compiled);
             }
         }
     }

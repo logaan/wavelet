@@ -63,7 +63,8 @@ fn definitions_accumulate_across_lines() {
 /// (6.4.5).
 #[test]
 fn a_macro_defined_earlier_expands_later() {
-    let script = "DefMacro and2 {a b}\n  Quasi If Unquote(a) Unquote(b) false\nAnd2 lt(3 10) gt(3 0)\n";
+    let script =
+        "DefMacro and2 {a b}\n  Quasi If Unquote(a) Unquote(b) false\nAnd2 lt(3 10) gt(3 0)\n";
     let (stdout, _stderr) = repl(script);
     assert_eq!(stdout, "{}\ntrue\n", "stdout");
 }
@@ -87,9 +88,19 @@ fn a_float_result_stays_on_the_compiled_path() {
 fn an_error_line_is_reported_and_the_session_continues() {
     let (stdout, stderr) = repl("add(1 2)\nnope(1)\nadd(3 4)\n");
     assert!(stdout.contains("3\n"), "first line: stdout:\n{stdout}");
-    assert!(stdout.contains("7\n"), "line after the error: stdout:\n{stdout}");
+    assert!(
+        stdout.contains("7\n"),
+        "line after the error: stdout:\n{stdout}"
+    );
     assert!(
         stderr.contains("error") || stderr.contains("fallback"),
         "the bad line should surface an error; stderr:\n{stderr}"
     );
+}
+
+#[test]
+fn repeated_expressions_reexecute_and_definitions_invalidate_cached_components() {
+    let (stdout, stderr) = repl("Def n 2\nn\nn\nDef n 7\nn\n");
+    assert_eq!(stdout, "{}\n2\n2\n{}\n7\n");
+    assert!(!stderr.contains("error:"), "{stderr}");
 }

@@ -71,10 +71,10 @@ impl<'a> Emitter<'a> {
         let ty = self.mem_tys[t as usize].clone();
         match self.arena.node(pat).clone() {
             Node::Sym(name) if name != "none" && self.local_cases.get(&name) != Some(&false) => {
-                fx.scopes.last_mut().unwrap().insert(
-                    name,
-                    Binding::new(v, Repr::Mem(t)),
-                );
+                fx.scopes
+                    .last_mut()
+                    .unwrap()
+                    .insert(name, Binding::new(v, Repr::Mem(t)));
                 Ok(())
             }
             Node::Rec(fields) => self.pattern_mem_rec(fx, &fields, &ty, v, 0, 0),
@@ -409,7 +409,10 @@ impl<'a> Emitter<'a> {
         // `pattern_top_mem` tuple arm (a boxed tuple scrutinee arrives from a
         // typed param or a `tupleN` construction the canonical path declined).
         if let Node::Tup(pats) = self.arena.node(pat).clone()
-            && matches!(self.node_types.get(&scrut_form), Some(crate::check::Type::Tuple(_)))
+            && matches!(
+                self.node_types.get(&scrut_form),
+                Some(crate::check::Type::Tuple(_))
+            )
         {
             return self.seq_pattern(fx, &pats, v, 0, TAG_TUP);
         }
@@ -422,10 +425,10 @@ impl<'a> Emitter<'a> {
             fx.op(I::LocalGet(v));
             self.unbox_scalar(fx, kind);
             fx.op(I::LocalSet(l));
-            fx.scopes.last_mut().unwrap().insert(
-                name,
-                Binding::new(l, Repr::Scalar(kind)),
-            );
+            fx.scopes
+                .last_mut()
+                .unwrap()
+                .insert(name, Binding::new(l, Repr::Scalar(kind)));
             return Ok(());
         }
         self.pattern(fx, pat, v, 0)
@@ -434,7 +437,13 @@ impl<'a> Emitter<'a> {
     /// Compile a pattern test against the box in local `v`; on mismatch branch
     /// `fail` levels out (the enclosing clause block). Names bind into the
     /// current scope. Nested patterns keep `fail` because no blocks are opened.
-    pub(crate) fn pattern(&mut self, fx: &mut FnCtx, pat: NodeId, v: u32, fail: u32) -> Result<(), String> {
+    pub(crate) fn pattern(
+        &mut self,
+        fx: &mut FnCtx,
+        pat: NodeId,
+        v: u32,
+        fail: u32,
+    ) -> Result<(), String> {
         match self.arena.node(pat).clone() {
             // `none` and the nullary cases of local `DefType` variants/enums
             // match by equality; every other bare name binds. Mirrors the
@@ -476,11 +485,7 @@ impl<'a> Emitter<'a> {
             // proposal 2); the backend refuses them too, matching the
             // interpreter's `match_pattern`, so the two never diverge.
             Node::Dec(_) => Err("a float literal cannot be a Match pattern".into()),
-            Node::Int(_)
-            | Node::Bool(_)
-            | Node::Str(_)
-            | Node::Char(_)
-            | Node::Flg(_) => {
+            Node::Int(_) | Node::Bool(_) | Node::Str(_) | Node::Char(_) | Node::Flg(_) => {
                 fx.op(I::LocalGet(v));
                 self.expr(fx, pat, false)?;
                 fx.op(I::Call(self.h.eq_raw));

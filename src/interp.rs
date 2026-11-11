@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::Rc;
 
@@ -36,6 +36,13 @@ enum Step {
 
 pub struct Interp {
     pub gensym: Cell<u64>,
+    resources: RefCell<Vec<(Value, Rc<Closure>)>>,
+}
+
+impl Drop for Interp {
+    fn drop(&mut self) {
+        let _ = self.teardown();
+    }
 }
 
 impl Default for Interp {
@@ -48,6 +55,22 @@ impl Interp {
     pub fn new() -> Self {
         Self {
             gensym: Cell::new(0),
+            resources: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn teardown(&self) -> R<()> {
+        let mut first_error = None;
+        loop {
+            let next = self.resources.borrow_mut().pop();
+            let Some((rep, destructor)) = next else { break };
+            if let Err(error) = self.apply(&Value::Closure(destructor), rep) {
+                first_error.get_or_insert(error);
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
         }
     }
 
@@ -175,11 +198,20 @@ impl Interp {
             // with the resource's nominal type name.
             Value::ResourceCtor(rc) => {
                 let rep = self.apply(&Value::Closure(rc.ctor.clone()), arg)?;
-                Ok(Step::Done(Value::Resource(std::rc::Rc::new(ResourceInstance {
-                    name: rc.name.clone(),
-                    rep,
-                    consumed: std::cell::Cell::new(false),
-                }))))
+                if let Some(destructor) = &rc.destructor {
+                    self.resources
+                        .borrow_mut()
+                        .push((rep.clone(), destructor.clone()));
+                }
+                Ok(Step::Done(Value::Resource(std::rc::Rc::new(
+                    ResourceInstance {
+                        name: rc.name.clone(),
+                        rep,
+                        consumed: std::cell::Cell::new(false),
+                        identity: Rc::new(()),
+                        borrowed: false,
+                    },
+                ))))
             }
             // A user-declared resource method (4.5): the receiver is the first
             // (or sole) argument; unwrap its handle to the rep so the method's
@@ -320,6 +352,11 @@ impl Interp {
                                 let Node::Sym(case) = arena.node(h) else {
                                     return err("bad variant case in DefType");
                                 };
+                                if case_items.len() > 2 {
+                                    return err(
+                                        "a variant case takes at most one payload type; wrap several types in tuple(...)",
+                                    );
+                                }
                                 env.define(case.clone(), Value::CaseCtor(case.clone()));
                             }
                             _ => return err("bad variant case in DefType"),
@@ -345,6 +382,15 @@ impl Interp {
                     return err("DefResource expects member braces `{ … }`");
                 };
                 let rname = rname.clone();
+                let destructor =
+                    if let Some((_, node)) = members.iter().find(|(key, _)| key == "Drop") {
+                        let Value::Closure(closure) = self.eval(arena, *node, env)? else {
+                            return err("DefResource `Drop` must be an `Fn`");
+                        };
+                        Some(closure)
+                    } else {
+                        None
+                    };
                 for (key, val) in members {
                     match key.as_str() {
                         "New" => {
@@ -356,6 +402,7 @@ impl Interp {
                                 Value::ResourceCtor(std::rc::Rc::new(ResourceCtor {
                                     name: rname.clone(),
                                     ctor: c,
+                                    destructor: destructor.clone(),
                                 })),
                             );
                         }
@@ -380,9 +427,7 @@ impl Interp {
                                 _ => (false, *val),
                             };
                             let Value::Closure(c) = self.eval(arena, fn_id, env)? else {
-                                return err(format!(
-                                    "resource member `{other}` must be an `Fn`"
-                                ));
+                                return err(format!("resource member `{other}` must be an `Fn`"));
                             };
                             let value = if is_static {
                                 Value::Closure(c)
@@ -615,18 +660,71 @@ fn bind_params(c: &Closure, arg: Value) -> R<Env> {
 // unconditional (3.11 — the wasm backend never emitted these checks either,
 // so deleting them also removes an interpreter/backend divergence).
 fn bind_one(env: &Env, p: &Param, v: Value) -> R<()> {
-    env.define(p.name.clone(), v);
+    let value = if let (Some((name, borrow)), Value::Resource(instance)) = (&p.resource_type, &v) {
+        if *name != instance.name {
+            return err(format!(
+                "expected resource `{name}`, got `{}`",
+                instance.name
+            ));
+        }
+        if instance.consumed.get() {
+            return err(format!(
+                "use of a consumed `{name}` handle (its ownership was transferred)"
+            ));
+        }
+        if !borrow && instance.borrowed {
+            return err(format!(
+                "cannot transfer ownership of a borrowed `{name}` handle"
+            ));
+        }
+        if !borrow {
+            instance.consumed.set(true);
+        }
+        Value::Resource(Rc::new(ResourceInstance {
+            name: instance.name.clone(),
+            rep: instance.rep.clone(),
+            consumed: Cell::new(false),
+            identity: instance.identity.clone(),
+            borrowed: *borrow,
+        }))
+    } else {
+        v
+    };
+    env.define(p.name.clone(), value);
     Ok(())
 }
 
 fn parse_params(arena: &Arena, id: NodeId) -> R<Vec<Param>> {
-    // Parameter *types* are a static concern (`crate::check`); the runtime
-    // closure keeps only the names to bind (3.11).
     match arena.node(id) {
-        Node::Flg(names) => Ok(names.iter().map(|n| Param { name: n.clone() }).collect()),
+        Node::Flg(names) => Ok(names
+            .iter()
+            .map(|n| Param {
+                name: n.clone(),
+                resource_type: None,
+            })
+            .collect()),
         Node::Rec(fields) => Ok(fields
             .iter()
-            .map(|(k, _v)| Param { name: k.clone() })
+            .map(|(name, ty)| {
+                let resource_type = match arena.node(*ty) {
+                    Node::Sym(name) => Some((name.clone(), false)),
+                    Node::Tup(items) if items.len() == 2 => {
+                        match (arena.node(items[0]), arena.node(items[1])) {
+                            (Node::Sym(mode), Node::Sym(name))
+                                if mode == "borrow" || mode == "own" =>
+                            {
+                                Some((name.clone(), mode == "borrow"))
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                Param {
+                    name: name.clone(),
+                    resource_type,
+                }
+            })
             .collect()),
         _ => err("Fn expects parameter braces"),
     }

@@ -217,7 +217,7 @@ fn run_resolves_an_overloaded_call_to_the_correct_member() {
 Def show Fn {x: s32} x
 Def show Fn {x: string} upper(x)
 Export run
-Def run Fn {} Do [show(5) ok(0)]
+Def run Fn {} show(5)
 "#,
     );
 

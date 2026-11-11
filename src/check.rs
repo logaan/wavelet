@@ -272,6 +272,11 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             Box::new(unify(tbl, xo, yo)?),
             Box::new(unify(tbl, xe, ye)?),
         )),
+        (Fn(xs, xr), Fn(ys, yr)) if xs.len() == ys.len() => {
+            let params: std::option::Option<Vec<Type>> =
+                xs.iter().zip(ys).map(|(x, y)| unify(tbl, x, y)).collect();
+            Some(Fn(params?, Box::new(unify(tbl, xr, yr)?)))
+        }
         (Tuple(xs), Tuple(ys)) if xs.len() == ys.len() => {
             let elems: std::option::Option<Vec<Type>> =
                 xs.iter().zip(ys).map(|(x, y)| unify(tbl, x, y)).collect();
@@ -512,14 +517,8 @@ struct Checker<'a> {
     /// inference gets `Unknown` for the recursive call, exactly like the
     /// `visiting` guard in [`crate::wit`]'s inference.
     sig_in_progress: RefCell<std::collections::HashSet<NodeId>>,
-    /// Every expression node's inferred static type, recorded as a side effect
-    /// of [`Self::check`] (goal 5: the wasm backend reads this to choose
-    /// type-directed representations). Last write wins: speculative passes
-    /// (return-type-directed resolution, sig-result inference) may record
-    /// transiently, but the authoritative `check_roots` walk re-records each
-    /// body's settled types. A node absent from the table simply keeps the
-    /// boxed fallback in the backend, so coverage is best-effort by design.
     node_types: RefCell<NodeTypes>,
+    speculative_node_types: RefCell<Vec<NodeTypes>>,
     /// Declared result type of each exported def, keyed by export `name` (which
     /// is the def name). Threaded as the `expected` type when checking that
     /// def's body so canonical records/variants/flags/lists are built at their
@@ -816,6 +815,7 @@ impl<'a> Checker<'a> {
             sig_result_cache: RefCell::new(HashMap::new()),
             sig_in_progress: RefCell::new(std::collections::HashSet::new()),
             node_types: RefCell::new(HashMap::new()),
+            speculative_node_types: RefCell::new(Vec::new()),
             export_results,
         }
     }
@@ -826,6 +826,7 @@ impl<'a> Checker<'a> {
         // DefResource member discipline and the borrow-position restriction are
         // structural checks over the declarations, independent of expression
         // typing (4.5).
+        validate_variant_payloads(arena, roots)?;
         validate_defresources(arena, roots)?;
         // Exported names, for the 5.8 boundary rule below.
         let exported = crate::wit::export_names(arena, roots);
@@ -1195,6 +1196,21 @@ fn declares_self(params: &[(String, Type)]) -> bool {
 /// Validate every `DefResource` in the module (4.5): the `New`/`Drop`/`Static`
 /// marker discipline, the `self: <resource>` requirement on methods, and the
 /// `borrow`-position restriction on the file's exports and stored types.
+fn validate_variant_payloads(arena: &Arena, roots: &[NodeId]) -> Result<(), String> {
+    for &root in roots {
+        if let Some((name, TypeDef::Variant(cases))) = as_deftype(arena, root) {
+            for (case, payload) in cases {
+                if payload.len() > 1 {
+                    return Err(format!(
+                        "variant case `{name}/{case}` takes at most one payload type; wrap several types in tuple(...)"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_defresources(arena: &Arena, roots: &[NodeId]) -> Result<(), String> {
     let resources = resource_names(arena, roots);
     for &root in roots {
@@ -1209,9 +1225,7 @@ fn validate_defresources(arena: &Arena, roots: &[NodeId]) -> Result<(), String> 
                             ));
                         }
                         if fn_params(arena, fn_id).is_none() {
-                            return Err(format!(
-                                "DefResource `{rname}`: `New` must be an `Fn`"
-                            ));
+                            return Err(format!("DefResource `{rname}`: `New` must be an `Fn`"));
                         }
                     }
                     "Drop" => {
@@ -1401,12 +1415,30 @@ impl<'a> Checker<'a> {
                     .to_string(),
             );
         }
-        self.node_types.borrow_mut().insert(id, ty.clone());
+        if let Some(table) = self.speculative_node_types.borrow_mut().last_mut() {
+            table.insert(id, ty.clone());
+        } else {
+            self.node_types.borrow_mut().insert(id, ty.clone());
+        }
         Ok(ty)
     }
 
     /// The inferred type of a module-level value def, memoised. Recursive
     /// references contribute `Unknown`.
+    fn infer_speculative(&self, id: NodeId, scope: &mut Scope) -> Result<Type, String> {
+        struct ShadowTable<'a>(&'a RefCell<Vec<NodeTypes>>);
+        impl Drop for ShadowTable<'_> {
+            fn drop(&mut self) {
+                self.0.borrow_mut().pop();
+            }
+        }
+        self.speculative_node_types
+            .borrow_mut()
+            .push(HashMap::new());
+        let _shadow = ShadowTable(&self.speculative_node_types);
+        self.infer(id, None, scope)
+    }
+
     fn value_def_type(&self, name: &str, expr: NodeId) -> Type {
         if let Some(t) = self.value_def_types.borrow().get(name) {
             return t.clone();
@@ -1419,7 +1451,9 @@ impl<'a> Checker<'a> {
             return Type::Unknown;
         }
         let mut scope: Scope = Vec::new();
-        let t = self.infer(expr, None, &mut scope).unwrap_or(Type::Unknown);
+        let t = self
+            .infer_speculative(expr, &mut scope)
+            .unwrap_or(Type::Unknown);
         self.value_defs_in_progress.borrow_mut().remove(name);
         self.value_def_types
             .borrow_mut()
@@ -1646,9 +1680,7 @@ impl<'a> Checker<'a> {
             // precedence over the call path below (which resolves builtins and
             // module defs). Only a fully-concrete arrow lands here; a gradual
             // callback stays `Unknown` and flows through `infer_call`.
-            if let Some((_, Type::Fn(params, ret))) =
-                scope.iter().rev().find(|(n, _)| n == h)
-            {
+            if let Some((_, Type::Fn(params, ret))) = scope.iter().rev().find(|(n, _)| n == h) {
                 let params = params.clone();
                 let ret = (**ret).clone();
                 return self.check_indirect_apply(&params, ret, args, scope);
@@ -1688,12 +1720,27 @@ impl<'a> Checker<'a> {
                 // concrete; otherwise it stays gradual `Unknown` (a callback the
                 // checker cannot pin down — the strict "function values" case).
                 if let [params_id, body] = args {
-                    let params = parse_params(self.arena, *params_id);
+                    let mut params = parse_params(self.arena, *params_id);
+                    let result_expected = if let Some(Type::Fn(inputs, result)) = expected {
+                        if inputs.len() != params.len() {
+                            return Err(
+                                "eval error: callback has the wrong number of parameters".into()
+                            );
+                        }
+                        for ((_, ty), input) in params.iter_mut().zip(inputs) {
+                            if matches!(ty, Type::Unknown) {
+                                *ty = input.clone();
+                            }
+                        }
+                        Some(result.as_ref())
+                    } else {
+                        None
+                    };
                     let mark = scope.len();
                     for (n, t) in &params {
                         scope.push((n.clone(), t.clone()));
                     }
-                    let ret = self.check(*body, None, scope);
+                    let ret = self.check(*body, result_expected, scope);
                     scope.truncate(mark);
                     let ret = ret?;
                     let ptys: Vec<Type> = params.iter().map(|(_, t)| t.clone()).collect();
@@ -1889,7 +1936,11 @@ impl<'a> Checker<'a> {
                     || rt.is_float()
                     || matches!(
                         rt,
-                        Type::IntLit(_) | Type::FloatLit | Type::Unknown | Type::Named(_) | Type::Tree
+                        Type::IntLit(_)
+                            | Type::FloatLit
+                            | Type::Unknown
+                            | Type::Named(_)
+                            | Type::Tree
                     );
                 if !numeric_or_gradual || !int_in_range(*n, ty) {
                     return Err(format!(
@@ -1904,7 +1955,10 @@ impl<'a> Checker<'a> {
                 // concrete non-numeric type like `bool` — is a static error.
                 let rt = self.resolve_alias(ty);
                 let ok = rt.is_float()
-                    || matches!(rt, Type::FloatLit | Type::Unknown | Type::Named(_) | Type::Tree);
+                    || matches!(
+                        rt,
+                        Type::FloatLit | Type::Unknown | Type::Named(_) | Type::Tree
+                    );
                 if !ok {
                     return Err(format!(
                         "eval error: The: {} does not conform to type `{ty_text}`",
@@ -2023,7 +2077,9 @@ impl<'a> Checker<'a> {
             let by_result: Vec<usize> = candidates
                 .iter()
                 .copied()
-                .filter(|&i| compatible_widening(&self.types, exp, &self.infer_sig_result(&sigs[i])))
+                .filter(|&i| {
+                    compatible_widening(&self.types, exp, &self.infer_sig_result(&sigs[i]))
+                })
                 .collect();
             if !by_result.is_empty() {
                 candidates = by_result;
@@ -2082,7 +2138,9 @@ impl<'a> Checker<'a> {
         // Inference errors inside a candidate body don't disqualify it here (the
         // body is checked properly when its own Def is checked); treat them as
         // an unconstrained result so resolution stays gradual.
-        let result = self.infer(body, None, &mut scope).unwrap_or(Type::Unknown);
+        let result = self
+            .infer_speculative(body, &mut scope)
+            .unwrap_or(Type::Unknown);
         self.sig_in_progress.borrow_mut().remove(&body);
         self.sig_result_cache
             .borrow_mut()
@@ -2272,6 +2330,51 @@ impl<'a> Checker<'a> {
         args: &[NodeId],
         scope: &mut Scope,
     ) -> Result<Type, String> {
+        if matches!(name, "map" | "filter" | "fold") {
+            let expected_arity = if name == "fold" { 3 } else { 2 };
+            if args.len() != expected_arity {
+                return Err(format!(
+                    "eval error: `{name}` expects {expected_arity} arguments"
+                ));
+            }
+            let sequence = self.check(*args.last().unwrap(), None, scope)?;
+            let element = match self.resolve_alias(&sequence) {
+                Type::List(element) => *element,
+                Type::Unknown => Type::Unknown,
+                _ => return Err(format!("eval error: `{name}` requires a list")),
+            };
+            let accumulator = if name == "fold" {
+                Some(self.check(args[1], None, scope)?)
+            } else {
+                None
+            };
+            let parameters = match &accumulator {
+                Some(initial) => vec![initial.clone(), element.clone()],
+                None => vec![element.clone()],
+            };
+            let result = match name {
+                "filter" => Type::Bool,
+                "fold" => accumulator.clone().unwrap(),
+                _ => Type::Unknown,
+            };
+            let callback = self.check(
+                args[0],
+                Some(&Type::Fn(parameters, Box::new(result))),
+                scope,
+            )?;
+            let Type::Fn(_, result) = callback else {
+                return Ok(if name == "filter" {
+                    sequence
+                } else {
+                    Type::Unknown
+                });
+            };
+            return Ok(match name {
+                "map" => Type::List(result),
+                "filter" => sequence,
+                _ => *result,
+            });
+        }
         let arg_tys: Vec<Type> = args
             .iter()
             .map(|&a| self.check(a, None, scope))
@@ -2401,14 +2504,10 @@ impl<'a> Checker<'a> {
             // The mapper's result type is not modelled (closures are untyped in
             // Phase A), so `map` yields list<unknown>; `filter` preserves its
             // sequence's type; `fold`'s accumulator is unconstrained.
-            "map" => Ok(Type::List(Box::new(Type::Unknown))),
-            "filter" => Ok(arg_tys.get(1).cloned().unwrap_or(Type::Unknown)),
-            "fold" => Ok(Type::Unknown),
             "split" => Ok(Type::List(Box::new(Type::String))),
             "join" => Ok(Type::String),
             "to-string" | "form-kind" => Ok(Type::String),
             // `read` produces a form or an error string (3.7).
-            "read" => Ok(Type::Result(Box::new(Type::Tree), Box::new(Type::String))),
             // Meta-layer builtins are ordinary typed functions over `tree`
             // (3.7): `gensym` mints a fresh symbol form, `expand` maps a form
             // to a form, `rec-key` projects a record form's first key as a
@@ -2950,3 +3049,24 @@ fn expect2(args: &[NodeId]) -> Result<[NodeId; 2], String> {
     }
 }
 
+#[cfg(test)]
+mod speculative_type_tests {
+    use super::*;
+
+    #[test]
+    fn candidate_inference_never_publishes_backend_types() {
+        let (arena, roots) = crate::reader::read_file(
+            "Def first Fn {n: s64} add(n 1)\nDef second Fn {n: s64} first(n)",
+        )
+        .unwrap();
+        let checker = Checker::collect(&arena, &roots);
+        assert_eq!(
+            checker.infer_sig_result(&checker.sigs["second"][0]),
+            Type::S64
+        );
+        assert!(checker.node_types.borrow().is_empty());
+        assert!(checker.speculative_node_types.borrow().is_empty());
+        checker.check_roots(&roots).unwrap();
+        assert!(!checker.node_types.borrow().is_empty());
+    }
+}

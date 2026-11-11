@@ -81,10 +81,7 @@ fn map_over_component_exports() {
     );
     assert_eq!(
         ok(&mut c, "mapstr"),
-        Val::List(vec![
-            Val::String("a!".into()),
-            Val::String("bee!".into())
-        ])
+        Val::List(vec![Val::String("a!".into()), Val::String("bee!".into())])
     );
     assert_eq!(ok(&mut c, "mapempty"), Val::List(vec![]));
     assert_eq!(
@@ -107,7 +104,10 @@ fn map_over_component_exports() {
 #[test]
 fn oracle_agrees() {
     for (src, want) in [
-        ("Def inc Fn {n: s32} add(n 1)\nmap(inc [1 2 3])", "[2, 3, 4]"),
+        (
+            "Def inc Fn {n: s32} add(n 1)\nmap(inc [1 2 3])",
+            "[2, 3, 4]",
+        ),
         ("map(Fn {n: s32} mul(n 2) [1 2 3])", "[2, 4, 6]"),
         (
             "Def bump Fn {s} str-cat(s \"!\")\nmap(bump [\"a\" \"bee\"])",

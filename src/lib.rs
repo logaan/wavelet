@@ -38,6 +38,8 @@ pub mod runner;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scaffold;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod staging;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tools;
 // `wit` is a pure arena walk (std + `form` only), needed on wasm32 too since
 // the checker's 5.8 boundary rule consults `wit::export_names`.
@@ -188,6 +190,7 @@ pub fn eval_snippet(src: &str) -> EvalOutcome {
         match interp.eval(&arena, root, &env) {
             Ok(v) => last = v,
             Err(e) => {
+                let _ = interp.teardown();
                 return EvalOutcome {
                     ok: false,
                     value: String::new(),
@@ -196,6 +199,14 @@ pub fn eval_snippet(src: &str) -> EvalOutcome {
                 };
             }
         }
+    }
+    if let Err(error) = interp.teardown() {
+        return EvalOutcome {
+            ok: false,
+            value: String::new(),
+            output: output_capture_take(),
+            error: error.to_string(),
+        };
     }
     let output = output_capture_take();
 
@@ -404,9 +415,7 @@ mod tests {
         // A `Static` member takes no `self` and may itself construct the
         // resource (an alternative constructor).
         assert_eq!(
-            eval_str(&format!(
-                "{COUNTER}counter/value(counter/sum([1 2 3 4]))"
-            )),
+            eval_str(&format!("{COUNTER}counter/value(counter/sum([1 2 3 4]))")),
             "10"
         );
     }
@@ -439,7 +448,10 @@ mod tests {
 
     #[test]
     fn check_defresource_valid_counter_ok() {
-        assert!(check_src(COUNTER).is_ok(), "the counter resource should check");
+        assert!(
+            check_src(COUNTER).is_ok(),
+            "the counter resource should check"
+        );
     }
 
     #[test]
@@ -632,7 +644,6 @@ Def quarter Fn {n}
         );
         assert_eq!(eval_str("fold(Fn {a b} add(a b) 0 range(1 5))"), "10");
         assert_eq!(eval_str("to-string({a: 1})"), "\"{a: 1}\"");
-        assert_eq!(eval_str("read(\"ok(5)\")"), "ok((ok, 5))");
     }
 
     #[test]
@@ -1213,8 +1224,9 @@ world shout {
             "unless should be expanded away: {printed:?}"
         );
         assert!(
-            printed.iter().any(|s| s
-                .contains("(match-MACRO, (the-MACRO, bool, (gt, n, 0)), [(true, {}), (false, 42)])")),
+            printed.iter().any(|s| s.contains(
+                "(match-MACRO, (the-MACRO, bool, (gt, n, 0)), [(true, {}), (false, 42)])"
+            )),
             "unless must expand through If to its Match form, args spliced in: {printed:?}"
         );
     }

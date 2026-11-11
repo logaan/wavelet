@@ -171,11 +171,19 @@ fn tuple_export_takes_the_retptr_fast_path() {
 fn eq_over_canonical_tuples_is_structural() {
     let Some(mut c) = composed() else { return };
     assert_eq!(
-        ok(&mut c, "t-eq", &[Val::S32(1), Val::S32(2), Val::S32(1), Val::S32(2)]),
+        ok(
+            &mut c,
+            "t-eq",
+            &[Val::S32(1), Val::S32(2), Val::S32(1), Val::S32(2)]
+        ),
         Val::Bool(true)
     );
     assert_eq!(
-        ok(&mut c, "t-eq", &[Val::S32(1), Val::S32(2), Val::S32(1), Val::S32(3)]),
+        ok(
+            &mut c,
+            "t-eq",
+            &[Val::S32(1), Val::S32(2), Val::S32(1), Val::S32(3)]
+        ),
         Val::Bool(false)
     );
 }

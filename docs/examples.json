@@ -127,7 +127,7 @@
     "output": ""
   },
   "eval-apply-list": {
-    "code": "Def ops [Fn {n} add(n 1)  Fn {n} mul(n 2)]\napply(get(ops 1) 21)",
+    "code": "Def ops [Fn {n} add(n 1)  Fn {n} mul(n 2)]\nLet {op: get(ops 1)} op(21)",
     "value": "42",
     "output": ""
   },
@@ -357,11 +357,6 @@
     "value": "\"{n: 1, opt: some(2), rec: {k: \\\"v\\\"}}\"",
     "output": ""
   },
-  "std-read": {
-    "code": "read(\"add(1 2)\")",
-    "value": "ok((add, 1, 2))",
-    "output": ""
-  },
   "std-conv": {
     "code": "{byte: to-u8(255) signed: to-s8(-128) float: to-f64(3)}",
     "value": "{byte: 255, signed: -128, float: 3.0}",
@@ -379,11 +374,6 @@
   "std-char-conv-bad": {
     "code": "to-char(55296)",
     "error": "eval error: `to-char`: 55296 is not a Unicode scalar value"
-  },
-  "std-apply": {
-    "code": "apply(Fn {a b} add(a b) {a: 20 b: 22})",
-    "value": "42",
-    "output": ""
   },
   "std-form-kind": {
     "code": "[form-kind(42)  form-kind(\"hi\")  form-kind(Quote foo)  form-kind(Quote foo(1))  form-kind(ok(1))  form-kind([1 2])]",

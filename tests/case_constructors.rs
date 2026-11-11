@@ -37,9 +37,9 @@ fn payloaded_case_constructs() {
 }
 
 #[test]
-fn multi_payload_case_bundles_a_tuple() {
+fn tuple_payload_case_bundles_a_tuple() {
     assert_eq!(
-        ok_value("DefType shape [rect(u32 u32) dot]\nrect(3 4)"),
+        ok_value("DefType shape [rect(tuple(u32 u32)) dot]\nrect(tuple2(3 4))"),
         "rect((3, 4))"
     );
 }

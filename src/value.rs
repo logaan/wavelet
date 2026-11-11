@@ -47,6 +47,8 @@ pub struct ResourceInstance {
     /// Set once the handle has been moved through an `own`-typed parameter; a
     /// later use traps (reserved for own-consumption modelling).
     pub consumed: std::cell::Cell<bool>,
+    pub identity: Rc<()>,
+    pub borrowed: bool,
 }
 
 /// The constructor of a user-declared resource: the `New` member's closure plus
@@ -54,6 +56,7 @@ pub struct ResourceInstance {
 pub struct ResourceCtor {
     pub name: String,
     pub ctor: Rc<Closure>,
+    pub destructor: Option<Rc<Closure>>,
 }
 
 /// An instance method of a user-declared resource: the method's closure (whose
@@ -72,6 +75,7 @@ pub struct Closure {
 
 pub struct Param {
     pub name: String,
+    pub resource_type: Option<(String, bool)>,
 }
 
 pub fn unit() -> Value {
@@ -122,7 +126,7 @@ impl PartialEq for Value {
             (Cell(a), Cell(b)) => Rc::ptr_eq(a, b),
             // Resources are identity-equal: same instance (4.5). Constructors
             // and methods compare by closure identity like other callables.
-            (Resource(a), Resource(b)) => Rc::ptr_eq(a, b),
+            (Resource(a), Resource(b)) => Rc::ptr_eq(&a.identity, &b.identity),
             (ResourceCtor(a), ResourceCtor(b)) => Rc::ptr_eq(a, b),
             (ResourceMethod(a), ResourceMethod(b)) => Rc::ptr_eq(a, b),
             _ => false,
@@ -509,7 +513,10 @@ mod tests {
         assert_eq!(super::print_value(&super::Value::Char('\0')), r"'\u{0}'");
         assert_eq!(super::print_value(&super::Value::Char('\n')), r"'\n'");
         assert_eq!(super::print_value(&super::Value::Char('\'')), r"'\''");
-        assert_eq!(super::print_value(&super::Value::Char('\u{7f}')), r"'\u{7f}'");
+        assert_eq!(
+            super::print_value(&super::Value::Char('\u{7f}')),
+            r"'\u{7f}'"
+        );
     }
 
     #[test]

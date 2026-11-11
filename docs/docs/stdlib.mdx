@@ -154,7 +154,6 @@ One constructor per size, from `tuple0()` (the empty tuple) through `tuple16(…
 | Function | Shape | Result |
 |---|---|---|
 | `to-string` | `to-string(v)` | canonical WAVE text for any value |
-| `read` | `read(s)` | parse a string to a form → `ok(form)` / `err(msg)` |
 | `to-u8` … `to-u64`, `to-s8` … `to-s64` | `to-u8(n)` | range-checked integer narrowing (a char gives its codepoint) |
 | `to-f32` `to-f64` | `to-f64(n)` | to floating point |
 | `to-char` | `to-char(n)` | int codepoint → char (must be a Unicode scalar value) |
@@ -166,9 +165,8 @@ Floats print *indicatively*, to six significant digits — `3.14159`, `0.666667`
 float is not guaranteed to read back to the identical bits. Use a formatting
 library when you need exact or styled float text.
 
-`read` is the inverse of `to-string` for code — it parses WAVE/Wavelet text into a form value:
+Parsing source is a compiler operation: use `wavelet read` to inspect its form tree. Runtime source parsing is not part of the language.
 
-<Playground id="std-read" />
 
 Numeric conversions range-check:
 
@@ -203,14 +201,12 @@ which evaluate pure programs only.
 
 | Function | Shape | Result |
 |---|---|---|
-| `apply` | `apply(f payload)` | call a function value with a payload |
 | `gensym` | `gensym()` | a fresh, unique name |
 | `expand` | `expand(form)` | run one macro-expansion step on a form |
 | `form-kind` | `form-kind(v)` | the kind tag of a value-as-form |
 | `rec-key` | `rec-key(record)` | the first field's key, as a name |
 | `rec-val` | `rec-val(record)` | the first field's value |
 
-<Playground id="std-apply" />
 
 `form-kind` classifies a value the way the reader classifies a form (`"int"`, `"str"`, `"sym"`, `"tup"`, `"lst"`, `"rec"`, …). A quoted call is a tuple, so it reports `"tup"`; `"call"` is reserved for a runtime variant carrying a payload (`ok(1)`):
 

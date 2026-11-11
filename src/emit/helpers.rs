@@ -1744,8 +1744,20 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Eq);
         fx.op(I::If(BlockType::Empty));
         to_str_seq(
-            &mut fx, 0, c_n, c_i, c_acc, c_base, c_elem, str_lb, str_rb, str_comma,
-            4, seq_strcat2, seq_to_str, true,
+            &mut fx,
+            0,
+            c_n,
+            c_i,
+            c_acc,
+            c_base,
+            c_elem,
+            str_lb,
+            str_rb,
+            str_comma,
+            4,
+            seq_strcat2,
+            seq_to_str,
+            true,
         );
         fx.op(I::End);
         // tuple: (e0, e1, ...)
@@ -1754,8 +1766,20 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Eq);
         fx.op(I::If(BlockType::Empty));
         to_str_seq(
-            &mut fx, 0, c_n, c_i, c_acc, c_base, c_elem, str_lp, str_rp, str_comma,
-            4, seq_strcat2, seq_to_str, true,
+            &mut fx,
+            0,
+            c_n,
+            c_i,
+            c_acc,
+            c_base,
+            c_elem,
+            str_lp,
+            str_rp,
+            str_comma,
+            4,
+            seq_strcat2,
+            seq_to_str,
+            true,
         );
         fx.op(I::End);
         // flags: {a, b, ...} (names are str boxes, appended verbatim)
@@ -1764,8 +1788,20 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I32Eq);
         fx.op(I::If(BlockType::Empty));
         to_str_seq(
-            &mut fx, 0, c_n, c_i, c_acc, c_base, c_elem, str_lc, str_rc, str_comma,
-            4, seq_strcat2, seq_to_str, false,
+            &mut fx,
+            0,
+            c_n,
+            c_i,
+            c_acc,
+            c_base,
+            c_elem,
+            str_lc,
+            str_rc,
+            str_comma,
+            4,
+            seq_strcat2,
+            seq_to_str,
+            false,
         );
         fx.op(I::End);
         // record: {k0: v0, k1: v1, ...}
@@ -2302,8 +2338,6 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         em.bodies.push((t, fx.finish()));
     }
 
-    // neg_raw(box) -> box   negates an int (wrapping, as the interpreter's `-n`)
-    // or a dec; traps on anything else.
     {
         let mut fx = FnCtx::new(1);
         fx.op(I::LocalGet(0));
@@ -2314,7 +2348,8 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::I64Const(0));
         fx.op(I::LocalGet(0));
         fx.op(I::I64Load(ma(8, 3)));
-        fx.op(I::I64Sub);
+        fx.op(I::I32Const(1));
+        fx.op(I::Call(em.h.arith_int));
         fx.op(I::Call(em.h.box_int));
         fx.op(I::Else);
         fx.op(I::LocalGet(0));
@@ -2682,7 +2717,10 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
         fx.op(I::LocalGet(new));
         fx.op(I::LocalGet(0));
         fx.op(I::LocalGet(sz));
-        fx.op(I::MemoryCopy { src_mem: 0, dst_mem: 0 });
+        fx.op(I::MemoryCopy {
+            src_mem: 0,
+            dst_mem: 0,
+        });
         // for i in 0..pcount: new[pbase+4i] = persist(box[pbase+4i])
         fx.op(I::I32Const(0));
         fx.op(I::LocalSet(i));

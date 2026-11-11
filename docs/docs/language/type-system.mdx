@@ -39,6 +39,15 @@ Two consequences fall straight out of "every expression has exactly one type":
 Because checking is **total**, names are resolved statically too: an unbound name
 or a wrong-typed use inside a never-called function is still a compile error.
 
+## Callback inference
+
+`map`, `filter`, and `fold` infer an unannotated callback's parameters from the
+input list. `fold` also uses the initial accumulator's type. For example,
+`map(Fn {x} mul(x x) [1 2 3])` checks without annotating `x`, including under
+`--strict`. A filter callback must return `bool`; a fold callback must return
+the accumulator type. A callback with incompatible parameter types or arity is
+a compile error.
+
 ## Numeric literals and `The`
 
 A bare numeric literal has no fixed type on its own — it takes its type from

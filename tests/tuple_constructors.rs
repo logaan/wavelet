@@ -22,12 +22,15 @@ fn oracle_constructs_tuples() {
         ("tuple1(5)", "(5)"),
         ("tuple1(tuple2(1 2))", "((1, 2))"),
         ("tuple2(1 \"a\")", "(1, \"a\")"),
-        ("tuple3(add(1 2) \"x\" tuple2(true tuple1(5)))", "(3, \"x\", (true, (5)))"),
+        (
+            "tuple3(add(1 2) \"x\" tuple2(true tuple1(5)))",
+            "(3, \"x\", (true, (5)))",
+        ),
         // a constructed tuple is a real tuple: destructures and compares
         ("Match tuple2(3 4) [((a b) add(a b)) (other 0)]", "7"),
         ("eq(tuple2(1 2) Quote (1 2))", "true"),
         // first-class: a constructor is an ordinary builtin value
-        ("apply(tuple2 tuple2(7 8))", "(7, 8)"),
+        ("tuple2(7 8)", "(7, 8)"),
         ("map(tuple1 [1 2 3])", "[(1), (2), (3)]"),
         // a `DefType` case shadows the builtin, exactly like `zip`/`some`
         (
@@ -143,18 +146,29 @@ fn constructed_tuples_cross_the_boundary() {
         ])
     );
     assert_eq!(
-        call(&mut c, "three", &[Val::U8(7), Val::String("q".into()), Val::Bool(false)]),
+        call(
+            &mut c,
+            "three",
+            &[Val::U8(7), Val::String("q".into()), Val::Bool(false)]
+        ),
         Val::Tuple(vec![Val::U8(8), Val::String("q.".into()), Val::Bool(true)])
     );
     let Val::Result(Ok(Some(inner))) = call(&mut c, "rt", &[Val::U32(1)]) else {
         panic!("rt should return ok(tuple)");
     };
-    assert_eq!(*inner, Val::Tuple(vec![Val::U32(3), Val::String("p".into())]));
+    assert_eq!(
+        *inner,
+        Val::Tuple(vec![Val::U32(3), Val::String("p".into())])
+    );
     // destructure a BOXED tuple scrutinee (a typed param) with a Sym-headed
     // tuple pattern, then rebuild — the values-callee shape; the boxed
     // matcher used to take the variant-only reading here
     assert_eq!(
-        call(&mut c, "rebuild", &[Val::Tuple(vec![Val::U8(7), Val::U8(9)])]),
+        call(
+            &mut c,
+            "rebuild",
+            &[Val::Tuple(vec![Val::U8(7), Val::U8(9)])]
+        ),
         Val::Tuple(vec![Val::U8(8), Val::U8(10)])
     );
 }

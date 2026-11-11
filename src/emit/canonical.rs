@@ -475,7 +475,12 @@ impl<'a> Emitter<'a> {
     /// consecutive flat locals starting at `base`, leave a boxed value on the
     /// stack. Generalizes the per-type lifting for scalars, strings, lists, and
     /// (recursively) records.
-    pub(crate) fn lift_flat(&mut self, fx: &mut FnCtx, ty: &WitTy, base: u32) -> Result<(), String> {
+    pub(crate) fn lift_flat(
+        &mut self,
+        fx: &mut FnCtx,
+        ty: &WitTy,
+        base: u32,
+    ) -> Result<(), String> {
         match ty {
             WitTy::Str => {
                 fx.op(I::LocalGet(base));

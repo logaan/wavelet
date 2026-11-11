@@ -127,7 +127,6 @@ fn flags_literals_match_as_patterns() {
     );
 }
 
-
 /// DISCRIMINATING test for canonical flags FIELDS in records (5.4). A record
 /// `entry {lead: u8 perms: access trail: u32}` is built with a NON-ADJACENT
 /// flags literal `{read exec}` over declared `access {read write exec admin}`.

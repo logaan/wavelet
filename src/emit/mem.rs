@@ -698,9 +698,9 @@ impl<'a> Emitter<'a> {
                         .zip(tfs)
                         .all(|((k, v), (tk, tf))| k == tk && self.mem_field_ok(look, *v, tf))
             }
-            (Node::Lst(items), WitTy::List(elem)) => items
-                .iter()
-                .all(|&v| self.mem_field_ok(look, v, elem)),
+            (Node::Lst(items), WitTy::List(elem)) => {
+                items.iter().all(|&v| self.mem_field_ok(look, v, elem))
+            }
             (Node::Sym(name), _) => {
                 self.lookup_mem(look, name).is_some_and(|t| t == *ty)
                     // `none` / a nullary local case as a value (5.4)
@@ -771,7 +771,11 @@ impl<'a> Emitter<'a> {
             || matches!(&rty, WitTy::Tuple(es) if !es.is_empty())
             || matches!(
                 &rty,
-                WitTy::Str | WitTy::List(_) | WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_)
+                WitTy::Str
+                    | WitTy::List(_)
+                    | WitTy::Option(_)
+                    | WitTy::Result(..)
+                    | WitTy::Variant(_)
             ))
         .then_some(rty)
     }
@@ -850,7 +854,11 @@ impl<'a> Emitter<'a> {
             || matches!(&ty, WitTy::Tuple(es) if !es.is_empty())
             || matches!(
                 &ty,
-                WitTy::Str | WitTy::List(_) | WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_)
+                WitTy::Str
+                    | WitTy::List(_)
+                    | WitTy::Option(_)
+                    | WitTy::Result(..)
+                    | WitTy::Variant(_)
             ))
         {
             return None;
@@ -894,7 +902,11 @@ impl<'a> Emitter<'a> {
     /// If/Do/Let/the), simulating exactly the binding decisions `let_form`
     /// makes; anything else predicts boxed. `env` carries the simulated
     /// `Let` scopes.
-    pub(crate) fn predict_body_mem(&self, id: NodeId, env: &mut Vec<HashMap<String, WitTy>>) -> Option<WitTy> {
+    pub(crate) fn predict_body_mem(
+        &self,
+        id: NodeId,
+        env: &mut Vec<HashMap<String, WitTy>>,
+    ) -> Option<WitTy> {
         match self.arena.node(id).clone() {
             Node::Rec(_) | Node::Lst(_) => self.node_mem_ty(&MemLookup::Sim(env), id),
             Node::Sym(name) => env
@@ -972,7 +984,13 @@ impl<'a> Emitter<'a> {
     /// result positions (mirroring the scalar path); leaf callers must have
     /// established eligibility via [`Self::can_mem_as`] /
     /// [`Self::node_mem`] / [`Self::predict_body_mem`].
-    pub(crate) fn expr_mem(&mut self, fx: &mut FnCtx, id: NodeId, t: MemTy, tail: bool) -> Result<(), String> {
+    pub(crate) fn expr_mem(
+        &mut self,
+        fx: &mut FnCtx,
+        id: NodeId,
+        t: MemTy,
+        tail: bool,
+    ) -> Result<(), String> {
         let ty = self.mem_tys[t as usize].clone();
         match self.arena.node(id).clone() {
             // a binding already in this layout: alias it (values are
@@ -1064,9 +1082,9 @@ impl<'a> Emitter<'a> {
                             let [operand] = args else {
                                 return Err("malformed tail".into());
                             };
-                            let ot = self.node_mem(fx, *operand).ok_or(
-                                "internal: canonical tail over a non-canonical operand",
-                            )?;
+                            let ot = self
+                                .node_mem(fx, *operand)
+                                .ok_or("internal: canonical tail over a non-canonical operand")?;
                             let area = fx.local(ValType::I32);
                             self.expr_mem(fx, *operand, ot, false)?;
                             fx.op(I::LocalSet(area));
@@ -1346,7 +1364,12 @@ impl<'a> Emitter<'a> {
     /// unbox helpers trap on a tag the static type ruled out, exactly where
     /// the boxed path traps inside the polymorphic runtime helper, so the
     /// two representations fail on the same programs.
-    pub(crate) fn expr_scalar(&mut self, fx: &mut FnCtx, id: NodeId, want: Scalar) -> Result<(), String> {
+    pub(crate) fn expr_scalar(
+        &mut self,
+        fx: &mut FnCtx,
+        id: NodeId,
+        want: Scalar,
+    ) -> Result<(), String> {
         self.expr_scalar_t(fx, id, want, false)
     }
 
@@ -1526,10 +1549,10 @@ impl<'a> Emitter<'a> {
             }
             "neg" if args.len() == 1 => match self.node_scalar(args[0]) {
                 Some(Int) => {
-                    // wrapping 0 - x, exactly neg_raw's int arm
                     fx.op(I::I64Const(0));
                     self.expr_scalar(fx, args[0], Int)?;
-                    fx.op(I::I64Sub);
+                    fx.op(I::I32Const(1));
+                    fx.op(I::Call(self.h.arith_int));
                     Ok(Some(Int))
                 }
                 Some(Float) => {
