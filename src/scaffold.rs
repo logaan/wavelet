@@ -211,7 +211,7 @@ Def say Fn {{line: string}}
     Do [streams/blocking-write-and-flush(out line)
         streams/drop-output-stream(out)]
 
-Export {{iface: \"wasi:cli/run\" name: run result: result}}
+Export {{iface: \"wasi:cli/run@0.2.0\" name: run result: result}}
 Def run Fn {{}}
   Do [say(str-cat(greeting/greet(who()) \"\\n\"))
       ok(0)]
@@ -311,7 +311,7 @@ Def write-page Fn {{body: borrow(outgoing-body), html: string}}
            streams/drop-output-stream(stream)])
      (err() drop(0))]
 
-Export {{iface: \"wasi:http/incoming-handler\" name: handle
+Export {{iface: \"wasi:http/incoming-handler@0.2.0\" name: handle
          params: {{request: incoming-request response-out: response-outparam}}}}
 Def handle Fn {{request: incoming-request, response-out: response-outparam}}
   Let {{headers: http/fields()

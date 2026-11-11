@@ -26,7 +26,7 @@ Package "demo:shout@0.1.0"
 
 Export shout
 Def shout Fn {phrase: string}
-  str-cat[upper(phrase) "!"]
+  str-cat(upper(phrase) "!")
 ```
 
 `main.wlt` compiles to `demo:main.wasm`
@@ -43,13 +43,17 @@ Def greet Fn {phrase: string}
 
 <!-- TODO: Switch to a term that's less jargony than REPL-->
 
-The repl (Read Eval Print Loop) lets us run code interactively.
+The REPL (Read Eval Print Loop) evaluates expressions interactively:
 
-``` bash
-$ wavelet repl examples/main.wlt
-$ demo:main/greet("world")
--> "Hello, WORLD!"
+```console
+$ wavelet repl
+> str-cat("Hello, " upper("world") "!")
+"Hello, WORLD!"
 ```
+
+Build the two component source files together with `wavelet build shout.wlt
+main.wlt -o out`. The compiler links the matching import and export into
+`out/app.wasm`.
 
 ## Features of the language
 
@@ -148,7 +152,7 @@ wavelet read [file.wlt]                              # parse and print the canon
 wavelet expand <file.wlt>                            # run macros to fixpoint and print the result
 wavelet wit <file.wlt>                               # show the synthesized WIT world
 wavelet repl                                         # interactive read-eval-print loop (line editing + history)
-wavelet run <file.wlt>... [-- <args>...]             # compile to a component and run it (interpreter fallback)
+wavelet run <file.wlt>... [-- <args>...]             # compile to a component and run it
 wavelet build <file.wlt>... [-o <dir>]               # compile each file to a .wasm component (default: out/)
 wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]  # link components (auto-plug)
 wavelet <file> [args...]                             # run a script directly (also via a #! shebang)
@@ -175,7 +179,7 @@ $ ./hi
 The shebang line is only recognised on the first line. A first argument that
 names an existing file and is not a subcommand runs as a script (`.wlt` is kept
 as a fast-path); the script still needs an exported `run` entry, and runs on the
-same compiled path (with interpreter fallback) as `wavelet run`.
+same compiled path as `wavelet run`.
 
 `run` compiles a set of files together — building each through the emitter,
 composing their runtime `Import`s into one component, and calling the exported

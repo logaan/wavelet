@@ -1,6 +1,3 @@
-//! `wavelet build`: one component per file (§9), and
-//! `wavelet compose`: auto-plug components into one app (§6.5).
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -17,8 +14,6 @@ struct Unit {
 }
 
 pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, String> {
-    // Foreign macro arities (`Import {… macros: true}`) are registered as each
-    // file is read, so they must resolve against the project root.
     let root = project_root(paths).unwrap_or_else(|| PathBuf::from("."));
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{out_dir}: {e}"))?;
     let mut units = Vec::new();
@@ -27,18 +22,13 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
         let (arena, roots) = crate::macrodep::read_file_with_macros(&src, &root)
             .map_err(|e| format!("{path}: {e}"))?;
-        // A pure macro-library file (Package + DefMacros only, no Export) is
-        // compiled into a `wavelet:meta/macros` component via the bundled
-        // interpreter (§6.3, Step 9), NOT through the ordinary emit path: its
-        // `DefMacro`s are the component's payload, so it is neither macro-expanded
-        // nor WIT-synthesised here.
+
         if crate::macrobuild::is_macro_library(&arena, &roots) {
             let out = build_macro_library(path, &src, out_dir)?;
             macro_outputs.push(out);
             continue;
         }
-        // Route foreign macros (`Import {… macros: true}`) through their
-        // components' `expand`; `None` when the file imports no macro library.
+
         let mut foreign = crate::macrodep::FileExpander::for_file(&root, &arena, &roots);
         let (arena, roots) = crate::expand::expand_file(
             arena,
@@ -48,14 +38,7 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                 .map(|f| f as &mut dyn crate::expand::ForeignExpander),
         )
         .map_err(|e| format!("{path}: {e}"))?;
-        // Type-check the expanded program before emit, so an ill-typed build is
-        // rejected with the same error the playground/`run` report — the static
-        // guarantee holds on the build path, not just in the playground. This
-        // also resolves and rewrites every *non-exported* overload set (3.14),
-        // so internal calls dispatch to the member the checker chose rather
-        // than last-wins. *Exported* sets are kept intact: they are emitted
-        // per-member through `wit::collect`'s boundary mangling, which keys on
-        // the un-rewritten sets (`info.fn_defs`/`info.overload_bodies`).
+
         let exported = wit::export_names(&arena, &roots);
         let (arena, roots) = crate::check::resolve_overloads_excluding(arena, &roots, &exported)
             .map_err(|e| format!("{path}: {e}"))?;
@@ -74,30 +57,21 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
         .map(|(i, u)| (u.info.package_path.clone(), i))
         .collect();
 
-    // Project-level WIT vendored by `wkg` lives in `wit/deps`, a sibling of the
-    // `src/` directory the sources come from. Used as a fallback source of
-    // dependency interfaces after sibling-`.wlt` resolution.
     let wit_deps_dir = wit_deps_dir(paths);
 
-    // Macro-library components produced above are part of the build's outputs.
     let mut outputs = macro_outputs;
     for u in &units {
         let mut deps = HashMap::new();
         for imp in &u.info.imports {
-            // A pure macro import (§6.3) is resolved to a macro component and
-            // run during expand ([`crate::macrodep`]); it is *not* a runtime
-            // dependency of this component, so it contributes no `Dep` and is
-            // skipped here. (A single import cannot be both a macro library and
-            // a runtime dep — goal-7 chore 7.4; a package that is both is
-            // imported twice. See `wit::is_macro_only`.)
             if wit::is_macro_only(imp) {
                 continue;
             }
-            // (a) A sibling Wavelet file in the build set satisfies the import.
+
             if let Some(&di) = index.get(&imp.package) {
                 let d = &units[di];
+                validate_import_version(imp, &d.info.package)?;
                 let (type_defs, aliases) = emit::dep_non_record_types(&d.arena, &d.info);
-                // A sibling's DefTypes all land in its `api` interface.
+
                 let type_ifaces = d
                     .info
                     .types
@@ -118,13 +92,9 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                 );
                 continue;
             }
-            // (b) Fall back to an external WIT package vendored under
-            // `wit/deps`, parsed with `wit-parser` into the same `Dep` shape.
-            // This is how host (`wasi:*`) imports now resolve: with a real `Dep`
-            // carrying the interface's parsed signatures, the generic bridge
-            // lowers calls into them (http is routed this way as of Step 8).
+
             if let Some(dir) = &wit_deps_dir
-                && let Some(dep) = crate::witdep::resolve_dep(dir, &imp.package)?
+                && let Some(dep) = crate::witdep::resolve_dep(dir, &requested_package(imp))?
             {
                 deps.insert(imp.package.clone(), dep);
                 continue;
@@ -134,30 +104,27 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                 u.path, imp.path
             ));
         }
-        // External interfaces this component *exports* (e.g.
-        // `wasi:http/incoming-handler`, `wasi:cli/run`) also need their WIT
-        // package available to the encoder so the generic export wrapper
-        // validates against the real interface signature. Resolve each such
-        // package from `wit/deps` into the same `Dep` map; the magic http/cli
-        // export path supplies its own vendored WIT and needs no entry here.
+
         for sig in &u.info.exports {
-            let Some((pkg, _)) = sig.iface.split_once('/') else {
+            let Some((pkg, iface)) = sig.iface.split_once('/') else {
                 continue;
             };
             if !pkg.contains(':') || deps.contains_key(pkg) {
-                continue; // local iface (`api`) or already resolved.
+                continue;
             }
             if let Some(dir) = &wit_deps_dir
-                && let Some(dep) = crate::witdep::resolve_dep(dir, pkg)?
+                && let Some(dep) = crate::witdep::resolve_dep(
+                    dir,
+                    &match iface.split_once('@') {
+                        Some((_, version)) => format!("{pkg}@{version}"),
+                        None => pkg.to_owned(),
+                    },
+                )?
             {
                 deps.insert(pkg.to_string(), dep);
             }
         }
-        // Re-check with the resolved imports' WIT signatures (3.1): qualified
-        // calls are typed against their declared signatures, so a cross-
-        // component type error is rejected here rather than surfacing as an
-        // emit failure or a runtime trap. (The pure local check already ran
-        // right after expansion.)
+
         let mut import_sigs = crate::check::ImportSigs::new();
         for imp in &u.info.imports {
             if wit::is_macro_only(imp) {
@@ -169,8 +136,14 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
             }
         }
         import_sigs.extend(wit::functor_import_sigs(&u.info.functors));
-        crate::check::check_program_with_imports(&u.arena, &u.roots, &import_sigs)
-            .map_err(|e| format!("{}: {e}", u.path))?;
+        crate::check::check_program_with_dependencies(
+            &u.arena,
+            &u.roots,
+            &import_sigs,
+            &deps,
+            &u.info.imports,
+        )
+        .map_err(|e| format!("{}: {e}", u.path))?;
         let bytes = emit::emit_component(&u.arena, &u.roots, &u.info, &deps)
             .map_err(|e| format!("{}: {e}", u.path))?;
         let out = format!("{out_dir}/{}.wasm", u.info.package_path.replace(':', "-"));
@@ -178,24 +151,12 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
         outputs.push(out);
     }
 
-    // Synthesize the project's own WIT into `wit/` and let `wkg` fetch+lock its
-    // host (`wasi:*`) dependencies into `wit/deps`. A toolless or offline
-    // environment (e.g. CI) just skips it with a warning — the build artifacts
-    // are already written.
     if let Some(root) = project_root(paths)
         && let Err(e) = populate_wit(&root, &units)
     {
         eprintln!("warning: could not populate wit/ via wkg: {e}");
     }
 
-    // Compose the project's components into one final artifact, `<out>/app.wasm`,
-    // by generating a `.wac` that wires each sibling import to the component that
-    // exports it and running `wac compose`. Host (`wasi:*`) imports are left
-    // unsatisfied for the runtime to provide. Only attempted when there is
-    // something to wire (a component importing a sibling); a lone component is
-    // already its own artifact. Best-effort like the `wkg` step: a missing `wac`
-    // leaves the per-component wasm in place with a warning, so a toolless build
-    // (and the hermetic single-component tests) still succeed.
     match compose_units(&units, &index, out_dir) {
         Ok(Some(app)) => outputs.push(app),
         Ok(None) => {}
@@ -205,17 +166,25 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
     Ok(outputs)
 }
 
-/// Compile a pure macro-library `.wlt` file into a `wavelet:meta/macros`
-/// component (§6.3, Step 9), writing it to `<out_dir>/<package-path>.wasm` and
-/// returning that path.
-///
-/// The component is produced by compiling each macro body to wasm (strategy B,
-/// [`crate::macrobuild`]); the output is named after the file's own `Package`
-/// path (`:` → `-`) so it sits alongside ordinary components and a consumer can
-/// drop it at the conventional `wit/macros/<ns>-<name>.wasm` location.
+fn requested_package(imp: &ImportInfo) -> String {
+    match &imp.version {
+        Some(version) => format!("{}@{version}", imp.package),
+        None => imp.package.clone(),
+    }
+}
+
+fn validate_import_version(imp: &ImportInfo, resolved: &str) -> Result<(), String> {
+    if imp.version.is_some() && requested_package(imp) != resolved {
+        return Err(format!(
+            "import `{}` requires `{}`, but resolved `{resolved}`",
+            imp.path,
+            requested_package(imp)
+        ));
+    }
+    Ok(())
+}
+
 fn build_macro_library(path: &str, src: &str, out_dir: &str) -> Result<String, String> {
-    // Derive the package path for the output file name from the file's own
-    // `Package` declaration (the same name a consumer imports it under).
     let (arena, roots) = crate::read_file(src).map_err(|e| format!("{path}: {e}"))?;
     let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
 
@@ -227,25 +196,14 @@ fn build_macro_library(path: &str, src: &str, out_dir: &str) -> Result<String, S
     Ok(out)
 }
 
-/// Wire the build's components into one composed `<out_dir>/app.wasm`.
-///
-/// Returns `Ok(Some(path))` when a composed artifact was written, `Ok(None)`
-/// when there was nothing to compose (no component imports a sibling — e.g. a
-/// single-component build). Generates a `.wac` source describing the wiring and
-/// runs `wac compose` via the Step 0 wrapper.
 fn compose_units(
     units: &[Unit],
     index: &HashMap<String, usize>,
     out_dir: &str,
 ) -> Result<Option<String>, String> {
-    // Which units does each unit pull in from the build set? An import is a
-    // *sibling* edge when its package names another unit (host `wasi:*` imports
-    // resolve from `wit/deps` and stay unsatisfied in the composed artifact).
-    let mut edges: Vec<(usize, &ImportInfo, usize)> = Vec::new(); // (importer, import, plug)
+    let mut edges: Vec<(usize, &ImportInfo, usize)> = Vec::new();
     for (ui, u) in units.iter().enumerate() {
         for imp in &u.info.imports {
-            // A pure macro import is a compile-time-only dependency, never a
-            // sibling runtime edge to wire — skip it (see `wit::is_macro_only`).
             if wit::is_macro_only(imp) {
                 continue;
             }
@@ -257,12 +215,9 @@ fn compose_units(
         }
     }
     if edges.is_empty() {
-        return Ok(None); // nothing to wire — the lone component is the artifact.
+        return Ok(None);
     }
 
-    // The root export is the component nothing else imports. If several qualify
-    // (disconnected pieces), prefer the one that imports a sibling — the entry
-    // point that pulls the others in.
     let imported: std::collections::HashSet<usize> =
         edges.iter().map(|&(_, _, plug)| plug).collect();
     let importers: std::collections::HashSet<usize> = edges.iter().map(|&(ui, _, _)| ui).collect();
@@ -271,26 +226,17 @@ fn compose_units(
         .or_else(|| (0..units.len()).find(|i| !imported.contains(i)))
         .ok_or("no root component (cyclic composition?)")?;
 
-    // A stable wac variable per unit, derived from its package path. WAC
-    // identifiers are kebab labels (letters/digits/`-`, no `_`), so map the
-    // package separators `:`/`/` to `-`.
     let var = |i: usize| units[i].info.package_path.replace([':', '/'], "-");
 
-    // Emit `let` bindings in dependency order (a plug before any socket that
-    // wires it), so each reference is already in scope.
     let order = topo_order(units.len(), &edges)?;
     let mut wac =
         String::from("// Generated by `wavelet build`. Wires the project's components into one\n");
-    wac.push_str("// artifact; host (wasi:*) imports stay unsatisfied for the runtime.\n");
     wac.push_str("package wavelet:app;\n\n");
     for &i in &order {
         let wirings: Vec<String> = edges
             .iter()
             .filter(|&&(ui, _, _)| ui == i)
             .map(|&(_, imp, plug)| {
-                // The composed import is versioned by the plug's package version,
-                // e.g. `demo:shout/api@0.1.0`. Both the socket import and the
-                // plug export name it identically.
                 let iface = versioned_iface(&imp.path, &units[plug].info.package);
                 format!(
                     "  \"{iface}\": {plug}[\"{iface}\"],",
@@ -320,7 +266,6 @@ fn compose_units(
     }
     wac.push_str(&format!("\nexport {}...;\n", var(root)));
 
-    // Write the `.wac` beside the components for inspection, then compose.
     let wac_path = format!("{out_dir}/app.wac");
     std::fs::write(&wac_path, &wac).map_err(|e| format!("{wac_path}: {e}"))?;
 
@@ -344,10 +289,7 @@ fn compose_units(
     Ok(Some(app))
 }
 
-/// Order unit indices so every plug precedes the sockets that wire it (a
-/// topological sort over the sibling edges). Errors on a cycle.
 fn topo_order(n: usize, edges: &[(usize, &ImportInfo, usize)]) -> Result<Vec<usize>, String> {
-    // plug -> importers (an edge `plug` must come before `importer`).
     let mut indeg = vec![0usize; n];
     let mut succ: Vec<Vec<usize>> = vec![Vec::new(); n];
     for &(importer, _, plug) in edges {
@@ -371,9 +313,6 @@ fn topo_order(n: usize, edges: &[(usize, &ImportInfo, usize)]) -> Result<Vec<usi
     Ok(order)
 }
 
-/// Append the package's version to an interface path: `demo:shout/api` +
-/// `demo:shout@0.1.0` → `demo:shout/api@0.1.0`. An unversioned package leaves the
-/// path unchanged.
 fn versioned_iface(iface_path: &str, package_versioned: &str) -> String {
     match package_versioned.split_once('@') {
         Some((_, ver)) => format!("{iface_path}@{ver}"),
@@ -381,14 +320,6 @@ fn versioned_iface(iface_path: &str, package_versioned: &str) -> String {
     }
 }
 
-/// Scaffold a project's `wit/` from its source files and fetch+lock its host
-/// dependencies, without emitting any components.
-///
-/// Used by `wavelet new` so a fresh project ships with its dependency WIT
-/// already vendored under `wit/deps` and pinned in `wkg.lock`. `root` is the
-/// project root (the parent of `src/`); `src_paths` are its `.wlt` source files.
-/// Like the build-time path, a `wkg` failure (absent tool, offline) is the
-/// caller's to treat as a warning.
 pub fn populate_project_wit(root: &Path, src_paths: &[PathBuf]) -> Result<(), String> {
     let mut units = Vec::new();
     for path in src_paths {
@@ -416,23 +347,11 @@ pub fn populate_project_wit(root: &Path, src_paths: &[PathBuf]) -> Result<(), St
     populate_wit(root, &units)
 }
 
-/// Synthesize each component's world into `<root>/wit/` and run `wkg wit fetch`
-/// so the project ends up with a populated `wit/deps` and an up-to-date
-/// `wkg.lock`.
-///
-/// Only components that actually reference host (`wasi:*`) packages need
-/// fetching ([`wit::has_host_deps`]); pure components (a domain model with no
-/// imports) contribute nothing to fetch. For each such component we write its
-/// host-only fetch world ([`wit::synthesize_fetch_world`]) as the single root
-/// package in `wit/` and run `wkg wit fetch`; deps and the lock accumulate in
-/// the shared `wit/` across components.
-///
-/// Returns the first `wkg` error encountered. Callers treat that as a warning,
-/// not a hard failure: the magic path has already produced the components.
 fn populate_wit(root: &Path, units: &[Unit]) -> Result<(), String> {
+    let local_packages: Vec<_> = units.iter().map(|u| u.info.package_path.clone()).collect();
     let host_units: Vec<&Unit> = units
         .iter()
-        .filter(|u| wit::has_host_deps(&u.info))
+        .filter(|u| wit::has_external_deps(&u.info, &local_packages))
         .collect();
     if host_units.is_empty() {
         return Ok(());
@@ -441,16 +360,12 @@ fn populate_wit(root: &Path, units: &[Unit]) -> Result<(), String> {
     let wit_dir = root.join("wit");
     std::fs::create_dir_all(&wit_dir).map_err(|e| format!("{}: {e}", wit_dir.display()))?;
 
-    // Preflight: surface a clear, actionable error if `wkg` is absent before we
-    // start writing world files.
     tools::version(tools::Tool::Wkg)?;
 
     for u in &host_units {
-        let world = wit::synthesize_fetch_world(&u.arena, &u.roots)
+        let world = wit::synthesize_fetch_world_excluding(&u.arena, &u.roots, &local_packages)
             .map_err(|e| format!("{}: {e}", u.path))?;
-        // One root package per `wit/` at a time: clear any stale root world file
-        // from a previous component before writing this one. (Fetched packages
-        // live under `wit/deps`, never at the `wit/` root, so they are kept.)
+
         clear_root_wit(&wit_dir)?;
         let file = wit_dir.join(format!("{}.wit", u.info.world));
         std::fs::write(&file, world).map_err(|e| format!("{}: {e}", file.display()))?;
@@ -459,8 +374,6 @@ fn populate_wit(root: &Path, units: &[Unit]) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove top-level `*.wit` files from `wit/` (the synthesized root world),
-/// leaving `wit/deps` and `wkg.lock` in place.
 fn clear_root_wit(wit_dir: &Path) -> Result<(), String> {
     for entry in std::fs::read_dir(wit_dir).map_err(|e| format!("{}: {e}", wit_dir.display()))? {
         let entry = entry.map_err(|e| format!("{}: {e}", wit_dir.display()))?;
@@ -472,14 +385,11 @@ fn clear_root_wit(wit_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// The project root: the parent of the `src/` directory the sources live in
-/// (so `wit/` and `wkg.lock` sit beside `src/`). Mirrors [`wit_deps_dir`].
 fn project_root(paths: &[String]) -> Option<PathBuf> {
     let first = paths.first()?;
     let src_dir = Path::new(first).parent()?;
     let root = src_dir.parent().unwrap_or(src_dir);
-    // A bare `src/foo.wlt` yields an empty parent; normalize to `.` so callers
-    // never hand an empty path to `current_dir` (which the OS rejects).
+
     Some(if root.as_os_str().is_empty() {
         PathBuf::from(".")
     } else {
@@ -487,17 +397,10 @@ fn project_root(paths: &[String]) -> Option<PathBuf> {
     })
 }
 
-/// Locate the project's `wit/deps` directory from its source files.
-///
-/// A project lays its sources under `src/`, with `wit/` as a sibling of `src/`
-/// (so `wit/deps` is `<src-parent>/wit/deps`). We derive it from the first
-/// source path's parent directory. Returns `None` if no parent can be found.
 fn wit_deps_dir(paths: &[String]) -> Option<std::path::PathBuf> {
     Some(project_root(paths)?.join("wit").join("deps"))
 }
 
-/// Compose components: the first file is the entry ("socket"); the rest are
-/// plugs whose exports satisfy its imports. Auto-plug semantics (§6.5).
 pub fn compose_files(paths: &[String], out: &str) -> Result<(), String> {
     use wac_graph::{CompositionGraph, EncodeOptions, types::Package};
 
@@ -511,7 +414,6 @@ pub fn compose_files(paths: &[String], out: &str) -> Result<(), String> {
         let name = if stem.contains(':') {
             stem.to_string()
         } else {
-            // wac package names are `ns:name`; reverse the build step's `-`
             match stem.split_once('-') {
                 Some((ns, n)) => format!("{ns}:{n}"),
                 None => format!("wavelet:{stem}"),
