@@ -23,3 +23,5 @@ npm ci --prefix tooling/vscode
 npm --prefix tooling/vscode run check
 npm ci --prefix docs
 npm --prefix docs run build
+npm --prefix docs run test:runtime
+npm --prefix docs run test:browser

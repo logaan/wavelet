@@ -1,3 +1,4 @@
+import {compiledCases} from '../compiled-cases.mjs';
 import {tourBlocks, tourValues} from '../tour-examples.mjs';
 import {expect, test} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
@@ -57,6 +58,6 @@ test('documentation examples and tour snippets execute through the compiler work
     }
     worker.terminate();
     return failures;
-  }, [...Object.entries(examples), ...tourBlocks.filter((block) => !block.name).map((block, index) => [`tour-${index + 1}`, {code: block.contents, value: tourValues[index], output: ''}])]);
+  }, [...Object.entries(examples), ...compiledCases, ...tourBlocks.filter((block) => !block.name).map((block, index) => [`tour-${index + 1}`, {code: block.contents, value: tourValues[index], output: ''}])]);
   expect(failures).toEqual([]);
 });

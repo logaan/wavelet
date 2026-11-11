@@ -1,3 +1,6 @@
+
+
+
 export function _eval(src: string): string;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -14,6 +17,8 @@ export interface InitOutput {
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;
 
+
 export function initSync(module: { module: SyncInitInput } | SyncInitInput): InitOutput;
+
 
 export default function __wbg_init (module_or_path?: { module_or_path: InitInput | Promise<InitInput> } | InitInput | Promise<InitInput>): Promise<InitOutput>;

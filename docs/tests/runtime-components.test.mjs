@@ -1,3 +1,4 @@
+import {compiledCases} from './compiled-cases.mjs';
 import {importComponentBindings as importModule} from '../scripts/node-component-loader.mjs';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -102,5 +103,12 @@ test('component resources can share names with JavaScript intrinsic classes', as
   for (const name of ['set', 'array', 'object', 'promise', 'error', 'type-error', 'data-view', 'number', 'symbol']) {
     const source = `DefResource ${name} { New: Fn {start: u32} cell-new(start) value: Fn {self: ${name}} The u32 cell-get(self) }\nLet {item: ${name}(42)} ${name}/value(item)`;
     assert.equal((await runtime.evaluate({source})).value, '42', name);
+  }
+});
+
+test('compiler component preserves Unicode and collection semantics', async () => {
+  const runtime = await realCompiler();
+  for (const [name, entry] of compiledCases) {
+    assert.equal((await runtime.evaluate({source: entry.code})).value, entry.value, name);
   }
 });
