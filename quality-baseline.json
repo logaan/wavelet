@@ -1,0 +1,54 @@
+{
+  "function_lines": {
+    "src/builtins.rs::call": 403,
+    "src/check.rs::check_builtin_call": 245,
+    "src/emit/builtins.rs::builtin_higher_order": 358,
+    "src/emit/builtins.rs::builtin_index": 256,
+    "src/emit/builtins.rs::builtin_seq": 238,
+    "src/emit/builtins.rs::builtin_split": 256,
+    "src/emit/core_module.rs::emit_core_module": 947,
+    "src/emit/helpers.rs::to_str_dec": 383,
+    "src/emit/helpers/collections.rs::emit_equality": 278,
+    "src/emit/helpers/printing.rs::emit_string": 499,
+    "src/emit/macro_component.rs::emit_macro_core_module": 266,
+    "src/emit/macro_component.rs::mc_fill": 389,
+    "src/emit/macro_component.rs::mc_tree_to_form": 319,
+    "src/emit/mem.rs::scalar_op": 206,
+    "src/emit/resources.rs::build_core": 216,
+    "src/wit.rs::collect": 268
+  },
+  "cyclomatic_complexity": {
+    "src/builtins.rs::call": 187,
+    "src/check.rs::check_builtin_call": 105,
+    "src/check.rs::collect": 44,
+    "src/check.rs::infer_special": 45,
+    "src/check.rs::unify": 49,
+    "src/check/resource_state.rs::expr": 48,
+    "src/emit/builtins.rs::builtin_numeric": 41,
+    "src/emit/call.rs::dep_call": 52,
+    "src/emit/core_module.rs::emit_core_module": 188,
+    "src/emit/mem.rs::scalar_op": 74,
+    "src/emit/wit_synth.rs::synthesize_world_wit": 41,
+    "src/emit/witty.rs::wit_ty": 45,
+    "src/interp.rs::special_form": 66,
+    "src/lexer.rs::lex": 43,
+    "src/wit.rs::collect": 77,
+    "src/wit.rs::infer": 42
+  },
+  "warnings": {
+    "clippy::cognitive_complexity": 1,
+    "clippy::needless_range_loop": 4,
+    "clippy::too_many_arguments": 2,
+    "clippy::too_many_lines": 15,
+    "clippy::type_complexity": 3
+  },
+  "large_modules": {
+    "src/check.rs": 2976,
+    "src/emit/builtins.rs": 1873,
+    "src/emit/core_module.rs": 1048,
+    "src/emit/macro_component.rs": 1783,
+    "src/emit/mem.rs": 1458,
+    "src/lib.rs": 1205,
+    "src/wit.rs": 1553
+  }
+}

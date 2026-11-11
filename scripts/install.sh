@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-# Build the Wavelet CLI and language server, then symlink both into ~/bin so
-# they're on your PATH. The symlinks point at the release binaries in-tree, so
-# re-running `cargo build --release` (or this script) updates the installed
-# tools in place — no copy step to repeat.
-#
-# Usage: scripts/install.sh
-#   BIN_DIR  Install directory for the symlinks (default: ~/bin).
-#
-# Run from anywhere. Requires the Rust toolchain.
+
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 cd "$here/.."

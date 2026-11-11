@@ -1,0 +1,31 @@
+name: Check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: rustup component add rustfmt clippy llvm-tools-preview
+      - run: python3 scripts/check-quality.py
+      - run: cargo install --locked wasm-tools wasmtime-cli wac-cli wkg cargo-llvm-cov
+      - run: WAVELET_REQUIRE_HOST_TOOLS=1 scripts/coverage.sh --check
+      - run: cargo clippy --manifest-path tooling/wavelet-lsp/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path tooling/wavelet-lsp/Cargo.toml
+  editor-and-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            tooling/vscode/package-lock.json
+            docs/package-lock.json
+      - run: npm ci --prefix tooling/vscode
+      - run: npm --prefix tooling/vscode run check
+      - run: scripts/ci/build-docs.sh

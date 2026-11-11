@@ -1,13 +1,3 @@
-//! `wavelet-lsp` — a basic Language Server for the Wavelet language.
-//!
-//! It speaks LSP over stdio and provides, all driven by `wavelet::read_file`:
-//!   • live syntax diagnostics (publish on open/change),
-//!   • completion (special forms, builtins, names defined in the file),
-//!   • hover (special-form/builtin blurbs),
-//!   • document symbols (top-level `Def`/`DefType`/`DefMacro`).
-//!
-//! See `README.md` in this directory for editor wiring.
-
 mod analysis;
 mod line_index;
 
@@ -19,16 +9,13 @@ use lsp_server::{Connection, Message, Response};
 use lsp_types::{
     CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
     DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentSymbolParams,
-    DocumentSymbolResponse, HoverParams, HoverProviderCapability, OneOf,
-    PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
-    Url,
+    DocumentSymbolResponse, HoverParams, HoverProviderCapability, OneOf, PublishDiagnosticsParams,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 use serde_json::Value;
 
 type LspResult<T> = Result<T, Box<dyn Error + Sync + Send>>;
 
-/// Open documents, keyed by URI. We keep the source text and a line index for
-/// position conversion; both are rebuilt on every change (documents are small).
 #[derive(Default)]
 struct Documents(HashMap<Url, (String, LineIndex)>);
 
@@ -44,8 +31,6 @@ impl Documents {
 }
 
 fn main() -> LspResult<()> {
-    // Answer `--version` without opening the LSP stdio connection, so it works
-    // from a plain shell (and lets package managers smoke-test the binary).
     if std::env::args()
         .nth(1)
         .is_some_and(|a| a == "--version" || a == "-V" || a == "version")
@@ -65,9 +50,7 @@ fn main() -> LspResult<()> {
     })?;
 
     connection.initialize(capabilities)?;
-    // Pass `connection` by value so it is dropped when `main_loop` returns,
-    // closing the writer channel; otherwise `io_threads.join()` would block
-    // forever waiting on a sender that is still alive.
+
     main_loop(connection)?;
     io_threads.join()?;
     Ok(())
@@ -86,15 +69,10 @@ fn main_loop(connection: Connection) -> LspResult<()> {
                     "textDocument/completion" => {
                         let params: CompletionParams = serde_json::from_value(req.params)?;
                         let uri = params.text_document_position.text_document.uri;
-                        // A `file://` URI gives a filesystem path, which the
-                        // analysis uses to locate `wit/deps`; other schemes
-                        // (untitled buffers) yield `None` and skip that step.
+
                         let path = uri.to_file_path().ok();
                         let result = docs.get(&uri).map(|(text, _)| {
-                            CompletionResponse::Array(analysis::completions(
-                                text,
-                                path.as_deref(),
-                            ))
+                            CompletionResponse::Array(analysis::completions(text, path.as_deref()))
                         });
                         ok_response(req.id, result)?
                     }
@@ -116,7 +94,11 @@ fn main_loop(connection: Connection) -> LspResult<()> {
                         });
                         ok_response(req.id, result)?
                     }
-                    _ => Response { id: req.id, result: Some(Value::Null), error: None },
+                    _ => Response {
+                        id: req.id,
+                        result: Some(Value::Null),
+                        error: None,
+                    },
                 };
                 connection.sender.send(Message::Response(response))?;
             }
@@ -128,7 +110,7 @@ fn main_loop(connection: Connection) -> LspResult<()> {
                 }
                 "textDocument/didChange" => {
                     let p: DidChangeTextDocumentParams = serde_json::from_value(not.params)?;
-                    // Full sync: the last change holds the entire new document.
+
                     if let Some(change) = p.content_changes.into_iter().last() {
                         docs.set(p.text_document.uri.clone(), change.text);
                         publish_diagnostics(&connection, &docs, &p.text_document.uri)?;
@@ -137,7 +119,7 @@ fn main_loop(connection: Connection) -> LspResult<()> {
                 "textDocument/didClose" => {
                     let p: DidCloseTextDocumentParams = serde_json::from_value(not.params)?;
                     docs.0.remove(&p.text_document.uri);
-                    // Clear any diagnostics the client is still showing.
+
                     send_diagnostics(&connection, p.text_document.uri, Vec::new())?;
                 }
                 _ => {}
@@ -148,7 +130,6 @@ fn main_loop(connection: Connection) -> LspResult<()> {
     Ok(())
 }
 
-/// Build a JSON-RPC success response, serializing `None` results to `null`.
 fn ok_response<T: serde::Serialize>(
     id: lsp_server::RequestId,
     result: Option<T>,
@@ -157,7 +138,11 @@ fn ok_response<T: serde::Serialize>(
         Some(r) => serde_json::to_value(r)?,
         None => Value::Null,
     };
-    Ok(Response { id, result: Some(value), error: None })
+    Ok(Response {
+        id,
+        result: Some(value),
+        error: None,
+    })
 }
 
 fn publish_diagnostics(connection: &Connection, docs: &Documents, uri: &Url) -> LspResult<()> {
@@ -173,10 +158,16 @@ fn send_diagnostics(
     uri: Url,
     diagnostics: Vec<lsp_types::Diagnostic>,
 ) -> LspResult<()> {
-    let params = PublishDiagnosticsParams { uri, diagnostics, version: None };
-    connection.sender.send(Message::Notification(lsp_server::Notification {
-        method: "textDocument/publishDiagnostics".to_string(),
-        params: serde_json::to_value(params)?,
-    }))?;
+    let params = PublishDiagnosticsParams {
+        uri,
+        diagnostics,
+        version: None,
+    };
+    connection
+        .sender
+        .send(Message::Notification(lsp_server::Notification {
+            method: "textDocument/publishDiagnostics".to_string(),
+            params: serde_json::to_value(params)?,
+        }))?;
     Ok(())
 }

@@ -1,17 +1,3 @@
-// Entry point for the Wavelet VS Code extension.
-//
-// The TextMate grammar (declared in package.json) gives syntax highlighting on
-// its own. This file additionally wires up the Wavelet language server
-// (`wavelet-lsp`) for diagnostics, completion, hover, and document symbols.
-//
-// We locate the server, in order:
-//   1. the `wavelet.lsp.serverPath` setting, if set;
-//   2. a binary bundled in this extension's `server/` directory matching the
-//      current platform (release builds ship one per platform here);
-//   3. `wavelet-lsp` on the PATH.
-// If none can be started, we degrade gracefully to highlighting-only and surface
-// a single, dismissable warning.
-
 const fs = require("fs");
 const path = require("path");
 const { workspace, window } = require("vscode");
@@ -19,7 +5,6 @@ const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 
 let client;
 
-// Map the running platform to the Rust target triple used for asset names.
 function bundledServerPath() {
   const triples = {
     "darwin:arm64": "aarch64-apple-darwin",
@@ -37,11 +22,11 @@ function bundledServerPath() {
     return undefined;
   }
   if (process.platform !== "win32") {
-    // Release zips should carry the exec bit, but make sure (best effort).
+
     try {
       fs.chmodSync(candidate, 0o755);
     } catch (_) {
-      /* ignore */
+
     }
   }
   return candidate;

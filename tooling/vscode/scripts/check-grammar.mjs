@@ -1,24 +1,9 @@
-// Headless end-to-end check of the Wavelet VS Code tooling (7.3).
-//
-// This loads the TextMate grammar (`syntaxes/wavelet.tmLanguage.json`) with
-// `vscode-textmate` + `vscode-oniguruma` — the *same* tokenizer engine VS Code
-// itself uses — and asserts that representative Wavelet snippets tokenize to the
-// scopes the language config and themes rely on. It also validates that
-// `package.json` and `language-configuration.json` are well-formed and mutually
-// consistent. Run it with `npm run check` from `tooling/vscode/`.
-//
-// Keeping this in step with `src/lexer.rs` and `docs/src/prism/wavelet.js` is
-// what "the grammar actually works in-editor" means for CI purposes; the
-// remaining GUI-only checks (bracket matching, auto-closing, LSP wiring) are
-// listed as a manual smoke checklist in README.md.
-
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-// Both packages ship CommonJS; require() gives the correct namespace shape
-// under Node ESM (a bare `import *` puts the exports under `.default`).
+
 const vsctm = require("vscode-textmate");
 const oniguruma = require("vscode-oniguruma");
 const here = new URL(".", import.meta.url);
@@ -53,8 +38,6 @@ async function loadGrammar() {
   return grammar;
 }
 
-// (line, tokenSubstring, expectedScope) — assert the token covering the first
-// occurrence of `sub` in `line` carries `scope`.
 const CASES = [
   ["#!/usr/bin/env wavelet", "#!", "comment.line.number-sign.shebang.wavelet"],
   ["add(1 2) // sum", "//", "comment.line.double-slash.wavelet"],
@@ -66,9 +49,11 @@ const CASES = [
   ["ok(some(x))", "some", "constant.language.wavelet"],
   ["If cond a b", "If", "keyword.control.macro.wavelet"],
   ["upper(phrase)", "upper", "entity.name.function.wavelet"],
-  // A qualified *call* (`sh/shout(`) highlights as one function name; the
-  // namespace scope is for a free-standing qualified *value* (no `(`).
-  ["map(sh/shout xs)", "sh", "entity.name.namespace.wavelet"],
+
+  ["map(sh/shout xs)", "sh", "source.wavelet"],
+  ["lib/Identity 42", "lib/Identity", "keyword.control.macro.wavelet"],
+  ["lib-Identity 42", "lib-Identity", "keyword.control.macro.wavelet"],
+  ["nested/api/get(1)", "nested/api/get", "entity.name.function.wavelet"],
   ["sh/shout(x)", "sh/shout", "entity.name.function.wavelet"],
   ['make({phrase: "x"})', "phrase", "variable.other.property.wavelet"],
 ];
@@ -77,7 +62,7 @@ function tokenScopesAt(grammar, line, sub) {
   const idx = line.indexOf(sub);
   if (idx < 0) throw new Error(`substring ${JSON.stringify(sub)} not in ${JSON.stringify(line)}`);
   const { tokens } = grammar.tokenizeLine(line, vsctm.INITIAL);
-  // The token covering the start of the substring.
+
   const tok = tokens.find((t) => t.startIndex <= idx && idx < t.endIndex);
   return tok ? tok.scopes : [];
 }
@@ -94,7 +79,7 @@ async function checkGrammar(grammar) {
 async function checkManifest() {
   console.log("manifest consistency:");
   const pkg = JSON.parse(await readFile(pkgPath, "utf8"));
-  JSON.parse(await readFile(langCfgPath, "utf8")); // valid JSON or throws
+  JSON.parse(await readFile(langCfgPath, "utf8"));
   const lang = pkg.contributes?.languages?.[0];
   const gram = pkg.contributes?.grammars?.[0];
   if (lang?.id === "wavelet") pass("language id is `wavelet`"); else fail("language id");

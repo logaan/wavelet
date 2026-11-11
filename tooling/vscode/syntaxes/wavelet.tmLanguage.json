@@ -2,22 +2,47 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Wavelet",
   "scopeName": "source.wavelet",
-  "fileTypes": ["wlt"],
+  "fileTypes": [
+    "wlt"
+  ],
   "comment": "Token classes mirror the Wavelet lexer (src/lexer.rs) and the shared Prism grammar (docs/src/prism/wavelet.js). Keep the two in sync.",
   "patterns": [
-    { "include": "#shebang" },
-    { "include": "#comment" },
-    { "include": "#string" },
-    { "include": "#char" },
-    { "include": "#number" },
-    { "include": "#boolean" },
-    { "include": "#constant" },
-    { "include": "#placeholder" },
-    { "include": "#macro" },
-    { "include": "#call-head" },
-    { "include": "#namespace" },
-    { "include": "#property" },
-    { "include": "#punctuation" }
+    {
+      "include": "#shebang"
+    },
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#char"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#boolean"
+    },
+    {
+      "include": "#constant"
+    },
+    {
+      "include": "#placeholder"
+    },
+    {
+      "include": "#macro"
+    },
+    {
+      "include": "#call-head"
+    },
+    {
+      "include": "#property"
+    },
+    {
+      "include": "#punctuation"
+    }
   ],
   "repository": {
     "shebang": {
@@ -33,7 +58,11 @@
       "name": "string.quoted.double.wavelet",
       "begin": "\"",
       "end": "\"",
-      "patterns": [{ "include": "#escape" }]
+      "patterns": [
+        {
+          "include": "#escape"
+        }
+      ]
     },
     "char": {
       "name": "string.quoted.single.wavelet",
@@ -64,17 +93,12 @@
     "macro": {
       "comment": "TitleCase macro head: leading capital, at least one lowercase, no hyphen (the lexer's is_title). Reader sugar for a macro call.",
       "name": "keyword.control.macro.wavelet",
-      "match": "\\b[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*\\b"
+      "match": "\\b(?:[A-Za-z][A-Za-z0-9]*[-/])*[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*(?:[-/][A-Za-z][A-Za-z0-9]*)*\\b"
     },
     "call-head": {
       "comment": "Attachment rule: a (possibly %-escaped, possibly qualified) name immediately followed by ( is a call head. Only ( attaches now. Also covers the name in a chained call (recv.name(...)), which abuts its own (.",
       "name": "entity.name.function.wavelet",
-      "match": "%?[A-Za-z][\\w-]*(?:/%?[\\w-]+)?(?=\\()"
-    },
-    "namespace": {
-      "comment": "The alias side of a free-standing qualified reference (kv/get as a value).",
-      "name": "entity.name.namespace.wavelet",
-      "match": "%?[A-Za-z][\\w-]*(?=/)"
+      "match": "%?[A-Za-z][\\w-]*(?:/%?[\\w-]+)*(?=\\()"
     },
     "property": {
       "comment": "Record keys: name:",

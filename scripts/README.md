@@ -13,9 +13,11 @@ from a local checkout.
 
 | Script | What it does | When to run it |
 | --- | --- | --- |
+| `check.sh` | Runs quality limits, coverage-backed native tests, language-server tests, grammar checks, and the documentation build. | Before merging compiler changes; requires the documented host tools. |
+| `check-quality.py` | Checks formatting, Clippy, Lizard function size/cyclomatic complexity and module-size ratchets. Automatically installs its Python analyzer into `target/quality-venv`. | Run directly for a quick structural gate; use `--update-baseline` only for reviewed baseline changes. |
 | `build.sh` | Full local build: native binary → `regen-examples.sh` → language server (`ci/build-lsp.sh`) → docs site (`ci/build-docs.sh`). The "everything" entry point that mirrors the coverage CI gives you. | Before a release, or whenever you want to catch drift across every surface. Needs the Rust toolchain, `wasm-pack`, and `node`/`npm`. |
 | `regen-examples.sh` | Recompiles the interpreter to wasm, re-runs every documented example into `docs/examples.json`, then `cargo test` to lock the result. | **After any change to language behaviour or the example set** (see [the docs pipeline](#the-docs--examples-pipeline)). Needs `wasm-pack` and `node`. |
-| `coverage.sh` | Measures native test coverage with `cargo-llvm-cov`. Prints a summary table; `--html` opens a report, `--lcov` writes `target/coverage/lcov.info`. | Checking which lines the tests exercise. Bootstraps `cargo-llvm-cov` + `llvm-tools` on first run. |
+| `coverage.sh` | Measures native test coverage with `cargo-llvm-cov`. Prints a summary table; `--html` opens a report, `--lcov` writes `target/coverage/lcov.info`; `--check` enforces the checked-in minimum coverage. | Checking which lines the tests exercise. Bootstraps `cargo-llvm-cov` + `llvm-tools` on first run. |
 | `install.sh` | Builds the CLI and language server, then symlinks both into `~/bin` (override with `BIN_DIR`). Symlinks point in-tree, so a later `cargo build --release` updates them in place. | Installing Wavelet locally for development. Needs the Rust toolchain. |
 | `init-submodules.sh` | Fetches and checks out git submodules (today just `tooling/neovim`, the `wavelet.nvim` plugin). | Once after a fresh `git clone`, or after a branch switch that moves a submodule pointer. |
 

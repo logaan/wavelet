@@ -1,54 +1,61 @@
-//! Language analysis built on top of the `wavelet` compiler crate.
-//!
-//! Every feature here funnels through `wavelet::read_file`, so the server and
-//! the compiler can never disagree about what parses: the reader is the single
-//! source of syntax truth. Diagnostics go further (3.13): after a successful
-//! read, the file is macro-expanded (best-effort, local macros only) and run
-//! through the total type checker (`wavelet::check`), so type errors —
-//! non-exhaustive `Match`es, ill-typed calls, heterogeneous lists — surface at
-//! the keystroke with the exact message the compiler reports. Evaluation and
-//! codegen still never run here.
-
 use std::path::{Path, PathBuf};
 
 use lsp_types::{
-    CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol,
-    Hover, HoverContents, MarkupContent, MarkupKind, Range, SymbolKind,
+    CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol, Hover,
+    HoverContents, MarkupContent, MarkupKind, Range, SymbolKind,
 };
 use wavelet::form::{Arena, Node, NodeId};
 
 use crate::line_index::LineIndex;
 
-/// User-facing TitleCase heads offered by completion/hover: the core special
-/// forms plus the two bundled stdlib macros (`If`, `Do`), each with a one-line
-/// summary. The reader stores these heads as `name-MACRO` symbols. `If`/`Do`
-/// are no longer core special forms (5.7) — they expand to `Match` — but are
-/// always in scope, so they are surfaced here alongside the core forms.
 const SPECIAL_FORMS: &[(&str, &str)] = &[
-    ("Package", "Package \"ns:name@ver\" — declare the component's package id"),
-    ("Import", "Import {pkg: \"…\" as: alias} — import another component's interface"),
+    (
+        "Package",
+        "Package \"ns:name@ver\" — declare the component's package id",
+    ),
+    (
+        "Import",
+        "Import {pkg: \"…\" as: alias} — import another component's interface",
+    ),
     (
         "Instantiate",
         "Instantiate {pkg: \"…\" with: {elem: t} as: alias} — apply a compile-time functor",
     ),
-    ("Export", "Export name — export a function from this component"),
+    (
+        "DefFunctor",
+        "DefFunctor \"ns:name\" {type-params} [declarations] — define a monomorphic template",
+    ),
+    (
+        "Export",
+        "Export name — export a function from this component",
+    ),
     ("DefType", "DefType Name type — define a named WIT type"),
     ("Def", "Def name value — bind a top-level name"),
     ("Fn", "Fn {params} body — a closure"),
-    ("If", "If cond then else — conditional (stdlib macro; expands to `Match The bool cond …`)"),
+    (
+        "If",
+        "If cond then else — conditional (stdlib macro; expands to `Match The bool cond …`)",
+    ),
     ("Let", "Let {bindings} body — local bindings"),
-    ("Do", "Do [a b …] — evaluate expressions in sequence; value is the last (stdlib macro over `Match`)"),
+    (
+        "Do",
+        "Do [a b …] — evaluate expressions in sequence; value is the last (stdlib macro over `Match`)",
+    ),
     ("Match", "Match value (pattern → result …) — pattern match"),
     ("Quote", "Quote form — the form as data"),
-    ("Quasi", "Quasi form — quasiquote (template with Unquote/Splice)"),
+    (
+        "Quasi",
+        "Quasi form — quasiquote (template with Unquote/Splice)",
+    ),
     ("Unquote", "Unquote form — escape a Quasi template"),
-    ("Splice", "Splice form — splice a list into a Quasi template"),
+    (
+        "Splice",
+        "Splice form — splice a list into a Quasi template",
+    ),
     ("DefMacro", "DefMacro Name {params} body — define a macro"),
     ("The", "The type value — a type ascription"),
 ];
 
-/// Short descriptions for the standard builtins (`builtins::NAMES`). Names not
-/// listed here still complete, just without a custom blurb.
 fn builtin_doc(name: &str) -> &'static str {
     match name {
         "eq" => "Structural equality.",
@@ -86,17 +93,13 @@ fn builtin_doc(name: &str) -> &'static str {
     }
 }
 
-/// Diagnostics: a reader error if the file does not parse; otherwise the
-/// first error from the total type checker over the (best-effort) expanded
-/// program.
 pub fn diagnostics(text: &str, index: &LineIndex) -> Vec<Diagnostic> {
     match wavelet::read_file(text) {
         Ok((arena, roots)) => check_diagnostics(text, index, arena, roots),
         Err(e) => {
             let at = (e.at as usize).min(text.len());
             let start = index.position(text, at);
-            // Highlight the offending character; fall back to the previous one
-            // at end-of-input so the squiggle stays visible.
+
             let end_off = next_char_boundary(text, at);
             let end = if end_off > at {
                 index.position(text, end_off)
@@ -111,13 +114,6 @@ pub fn diagnostics(text: &str, index: &LineIndex) -> Vec<Diagnostic> {
     }
 }
 
-/// Run the total checker the way the compile paths do: expand macros to
-/// fixpoint (local macros only — foreign macro components are not
-/// instantiated on the keystroke path; if expansion fails, check the source
-/// tree instead so diagnostics stay best-effort), then `check_program`. The
-/// checker's errors carry no spans yet, so the diagnostic highlights the
-/// first line; the message is the compiler's, verbatim minus its
-/// `eval error: ` surface prefix.
 fn check_diagnostics(
     text: &str,
     index: &LineIndex,
@@ -152,14 +148,6 @@ fn diag(range: Range, message: String) -> Diagnostic {
     }
 }
 
-/// Completions: special forms, builtins, names defined in this document, and —
-/// when the document's path is known — the functions of every external WIT
-/// package it `Import`s, resolved from the project's `wit/deps` directory.
-/// Context-insensitive — a deliberately basic offering.
-///
-/// `path` is the document's filesystem path (from its `file://` URI), used only
-/// to locate `wit/deps`; pass `None` for untitled/in-memory buffers, which
-/// simply skips the import-resolution completions.
 pub fn completions(text: &str, path: Option<&Path>) -> Vec<CompletionItem> {
     let mut items = Vec::new();
 
@@ -203,24 +191,6 @@ pub fn completions(text: &str, path: Option<&Path>) -> Vec<CompletionItem> {
     items
 }
 
-/// Completions contributed by the document's `Import`s: each imported external
-/// WIT package (resolved from `wit/deps`) offers its functions, labelled the way
-/// they are called in source — `alias/func-name` (e.g. `http/body`).
-///
-/// Mirrors the compiler's own resolution (`wavelet::witdep::resolve_dep`): the
-/// LSP and the build therefore agree on which packages and functions exist.
-/// Silently yields nothing when the path is unknown, no `wit/deps` exists, or a
-/// package isn't present there — completion stays best-effort, never an error.
-///
-/// GAP (macro components): this surfaces *runtime* imports only. A
-/// `macros: true` import (a `wavelet:meta/macros` library) contributes
-/// compile-time TitleCase macros, not functions, so its names do not appear in
-/// completion here and hover doesn't know their arity. Surfacing them would mean
-/// instantiating the macro component (via `wasmtime`, the build-time runtime) and
-/// calling `manifest()` on a per-keystroke path — a non-trivial feature with its
-/// own toolchain/error-handling surface, deliberately deferred. Bare foreign
-/// macros still expand correctly at build time; only editor assistance for them
-/// is missing.
 fn imported_completions(
     arena: &Arena,
     roots: &[NodeId],
@@ -238,8 +208,6 @@ fn imported_completions(
 
     let mut items = Vec::new();
     for import in &info.imports {
-        // `Ok(None)` = package not vendored here; `Err` = a parse failure in
-        // `wit/deps`. Either way we just contribute no completions for it.
         let Ok(Some(dep)) = wavelet::witdep::resolve_dep(&deps_dir, &import.package) else {
             continue;
         };
@@ -256,41 +224,33 @@ fn imported_completions(
     items
 }
 
-/// A `.wlt` source lives in a project's `src/`; its external WIT dependencies
-/// sit beside that in `<project-root>/wit/deps`. Derive that directory from the
-/// document path, matching `build.rs`'s `wit_deps_dir`. Returns `None` for a
-/// path with no parent chain to a project root.
 fn wit_deps_dir(file: &Path) -> Option<PathBuf> {
     let src_dir = file.parent()?;
     let root = src_dir.parent().unwrap_or(src_dir);
     Some(root.join("wit").join("deps"))
 }
 
-/// Hover: explain special forms and builtins.
 pub fn hover(text: &str, index: &LineIndex, offset: usize) -> Option<Hover> {
     let (arena, _roots) = wavelet::read_file(text).ok()?;
     let node_id = smallest_node_at(&arena, offset)?;
     let name = match arena.node(node_id) {
-        Node::Sym(s) | Node::Qsym(_, s) => s.clone(),
+        Node::Sym(s) => s.clone(),
         _ => return None,
     };
 
-    // A `name-MACRO` head is a special form; show its TitleCase blurb.
-    if name.ends_with("-MACRO") {
-        if let Some((title, detail)) = SPECIAL_FORMS
+    if name.ends_with("-MACRO")
+        && let Some((title, detail)) = SPECIAL_FORMS
             .iter()
             .find(|(t, _)| wavelet::lexer::title_to_macro_name(t) == name)
-        {
-            return Some(markdown_hover(
-                format!("**{title}** — special form\n\n{detail}"),
-                arena.span(node_id),
-                text,
-                index,
-            ));
-        }
+    {
+        return Some(markdown_hover(
+            format!("**{title}** — special form\n\n{detail}"),
+            arena.span(node_id),
+            text,
+            index,
+        ));
     }
 
-    // A builtin reference.
     if wavelet::builtins::NAMES.contains(&name.as_str()) {
         return Some(markdown_hover(
             format!("**{name}** — builtin\n\n{}", builtin_doc(&name)),
@@ -303,7 +263,6 @@ pub fn hover(text: &str, index: &LineIndex, offset: usize) -> Option<Hover> {
     None
 }
 
-/// Document symbols: top-level `Def`, `DefType`, and `DefMacro` forms.
 pub fn document_symbols(text: &str, index: &LineIndex) -> Vec<DocumentSymbol> {
     let Ok((arena, roots)) = wavelet::read_file(text) else {
         return Vec::new();
@@ -331,14 +290,12 @@ pub fn document_symbols(text: &str, index: &LineIndex) -> Vec<DocumentSymbol> {
         .collect()
 }
 
-// ---- form-tree helpers ---------------------------------------------------
-
-/// `(name, kind, call-node-id)` for every top-level definition form.
 fn definitions(arena: &Arena, roots: &[NodeId]) -> Vec<(String, SymbolKind, NodeId)> {
     let mut out = Vec::new();
     for &root in roots {
-        // Top-level forms are tuples `Tup[head, name, …]`; the head is items[0].
-        let Node::Tup(items) = arena.node(root) else { continue };
+        let Node::Tup(items) = arena.node(root) else {
+            continue;
+        };
         let Some(&head) = items.first() else { continue };
         let kind = match sym_name(arena, head).as_deref() {
             Some("def-MACRO") => SymbolKind::FUNCTION,
@@ -353,36 +310,33 @@ fn definitions(arena: &Arena, roots: &[NodeId]) -> Vec<(String, SymbolKind, Node
     out
 }
 
-/// The node naming a definition: `items[1]` of the top-level call tuple
-/// (`def-MACRO` / `deftype-MACRO` / `defmacro-MACRO` is items[0]).
 fn def_name_node(arena: &Arena, call_id: NodeId) -> Option<NodeId> {
-    let Node::Tup(items) = arena.node(call_id) else { return None };
+    let Node::Tup(items) = arena.node(call_id) else {
+        return None;
+    };
     items.get(1).copied()
 }
 
 fn sym_name(arena: &Arena, id: NodeId) -> Option<String> {
     match arena.node(id) {
-        Node::Sym(s) | Node::Qsym(_, s) => Some(s.clone()),
+        Node::Sym(s) => Some(s.clone()),
         _ => None,
     }
 }
 
-/// The narrowest node whose span contains `offset`.
 fn smallest_node_at(arena: &Arena, offset: usize) -> Option<NodeId> {
     let mut best: Option<(NodeId, u32)> = None;
     for id in 0..arena.nodes.len() as NodeId {
         let (s, e) = arena.span(id);
         if (s as usize) <= offset && offset < (e as usize) {
             let width = e - s;
-            if best.map_or(true, |(_, w)| width < w) {
+            if best.is_none_or(|(_, w)| width < w) {
                 best = Some((id, width));
             }
         }
     }
     best.map(|(id, _)| id)
 }
-
-// ---- position helpers ----------------------------------------------------
 
 fn span_to_range(span: (u32, u32), text: &str, index: &LineIndex) -> Range {
     Range::new(
@@ -432,11 +386,12 @@ mod tests {
     use super::*;
 
     fn labels(text: &str, path: Option<&Path>) -> Vec<String> {
-        completions(text, path).into_iter().map(|c| c.label).collect()
+        completions(text, path)
+            .into_iter()
+            .map(|c| c.label)
+            .collect()
     }
 
-    /// The WASI builtins and the `Target` form were removed from the language
-    /// (the WASI-decoupling work); completion must no longer surface them.
     #[test]
     fn removed_builtins_and_target_are_gone() {
         let got = labels("", None);
@@ -446,14 +401,11 @@ mod tests {
                 "completion still offers removed `{dead}`: {got:?}"
             );
         }
-        // Sanity: a surviving special form and builtin are still offered.
+
         assert!(got.iter().any(|l| l == "Import"));
         assert!(got.iter().any(|l| l == "map"));
     }
 
-    /// 3.13 — the total checker's diagnostics surface in the editor: an
-    /// ill-typed body (never called) is a diagnostic, with the compiler's
-    /// message; a well-typed file has none.
     #[test]
     fn type_errors_surface_as_diagnostics() {
         let index = LineIndex::new("");
@@ -472,7 +424,6 @@ mod tests {
         assert!(got.is_empty(), "well-typed file should be clean: {got:?}");
     }
 
-    /// Non-exhaustive Match diagnostics reach the editor too (3.12 + 3.13).
     #[test]
     fn non_exhaustive_match_is_a_diagnostic() {
         let src = "Def f Fn {b: bool} Match b [(true 1)]\n";
@@ -485,12 +436,9 @@ mod tests {
         );
     }
 
-    /// An `Import` of a package vendored under the project's `wit/deps` offers
-    /// that package's functions, labelled `alias/func` the way source calls them.
     #[test]
     fn import_resolves_functions_from_wit_deps() {
-        let dir = std::env::temp_dir()
-            .join(format!("wavelet-lsp-analysis-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("wavelet-lsp-analysis-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let src = dir.join("src");
         let deps = dir.join("wit").join("deps");
@@ -515,8 +463,6 @@ mod tests {
             "expected `greeting/greet` from wit/deps import: {got:?}"
         );
 
-        // Without a path (in-memory buffer) the import completions are skipped,
-        // but the rest is unaffected.
         let no_path = labels(text, None);
         assert!(!no_path.iter().any(|l| l == "greeting/greet"));
         assert!(no_path.iter().any(|l| l == "Import"));

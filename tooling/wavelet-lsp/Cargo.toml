@@ -1,7 +1,3 @@
-# Standalone crate: an empty [workspace] table severs it from the parent
-# `wavelet` package so building the LSP never perturbs the docs/examples
-# pipeline (which builds the root crate to wasm). It path-depends on the
-# compiler crate to reuse its reader as the single source of syntax truth.
 [workspace]
 
 [package]
