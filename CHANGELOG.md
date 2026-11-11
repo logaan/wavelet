@@ -13,6 +13,8 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-12
+
 ### Added
 
 - A working WASI 0.2 HTTP example in `examples/http`, with vendored interfaces,
@@ -82,6 +84,8 @@ you work, and rename it to the new version when you cut a release.
 
 ### Fixed
 
+- GitHub releases include Windows x86-64 CLI and language server binaries and
+  publish once checks and all platform builds pass.
 - Builds preserve authored `wit/*.wit` files and publish fetched dependencies only
   after all staged fetches succeed. Duplicate packages and colliding component
   filenames and package names that escape the output directory fail before output
@@ -611,7 +615,8 @@ Initial release.
   artifacts.
 - Docusaurus documentation site with a live, wasm-compiled `<Playground>`.
 
-[Unreleased]: https://github.com/logaan/wavelet/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/logaan/wavelet/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/logaan/wavelet/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/logaan/wavelet/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/logaan/wavelet/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/logaan/wavelet/compare/v0.9.0...v0.9.1

@@ -11,7 +11,7 @@ if [ -z "$target" ]; then
 fi
 
 rustup target add "$target"
-cargo build --release --manifest-path "$manifest" --target "$target"
+cargo build --locked --release --manifest-path "$manifest" --target "$target"
 
 mkdir -p dist
 bin="tooling/wavelet-lsp/target/${target}/release/wavelet-lsp"

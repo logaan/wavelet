@@ -1,7 +1,9 @@
 name: Check
 on:
   push:
+    branches: ['**']
   pull_request:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -16,7 +18,21 @@ jobs:
           components: rustfmt, clippy, llvm-tools-preview
           targets: wasm32-wasip1
       - run: python3 scripts/check-quality.py
-      - run: cargo install --locked wasm-tools wasmtime-cli wac-cli wkg cargo-llvm-cov cargo-component
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39
+        with:
+          tool: wasm-tools@1.263.0,wasmtime@50.0.1,cargo-llvm-cov@0.9.1
+          fallback: none
+      - name: Install wac and wkg
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL --retry 3 -o wac https://github.com/bytecodealliance/wac/releases/download/v0.12.0/wac-cli-x86_64-unknown-linux-musl
+          curl -fsSL --retry 3 -o wkg https://github.com/bytecodealliance/wasm-pkg-tools/releases/download/v0.16.1/wkg-x86_64-unknown-linux-gnu
+          sha256sum --check <<'CHECKSUMS'
+          7cd490edbd452221ef89e6750fc43eacc9b71b1242095eb577cb9a3bf0d3beda  wac
+          235ecf455e11b8b146e00f24f24c95b573cfe6a432f332358463b229311cec57  wkg
+          CHECKSUMS
+          install -m 0755 wac wkg "$HOME/.cargo/bin"
+      - run: cargo install --locked cargo-component --version 0.21.1
       - run: WAVELET_REQUIRE_HOST_TOOLS=1 scripts/coverage.sh --check
       - run: cargo build
       - run: WAVELET="$PWD/target/debug/wavelet" conformance/wavelet/test-matrix.sh

@@ -39,12 +39,14 @@ reproduce CI locally, but they aren't part of the normal dev loop.
 
 ### The release pipeline (`release.yml`)
 
-On a `v*` tag: a per-platform matrix builds the CLI and language server
-(`ci/build-cli.sh` + `ci/build-lsp.sh`, staged into `dist/`), then a release job
-runs `ci/package-tooling.sh` to bundle the editor tooling and repackage the
-binaries, and uses `ci/changelog-section.sh <tag>` to extract the release body
-from `CHANGELOG.md`. Asset names are stable and unversioned so install
-instructions can point at `.../releases/latest/download/<asset>`.
+A `v*` tag runs the same checks as branch pushes and pull requests while a
+platform matrix builds the CLI and language server for Linux, macOS, and Windows
+from the Cargo lockfiles. The Windows runner extracts a source archive for the
+tagged commit and skips `.lot-vault` because some task filenames contain colons.
+Once checks and every platform build pass, `ci/package-tooling.sh` bundles the
+editor tooling and binaries. `ci/changelog-section.sh <tag>` extracts the
+release body from `CHANGELOG.md`. Asset names are stable and unversioned so
+install instructions can point at `.../releases/latest/download/<asset>`.
 
 `CHANGELOG.md` (Keep a Changelog format) is the source of truth for release
 notes — record user-visible changes under `## [Unreleased]` as you make them, and
