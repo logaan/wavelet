@@ -29,7 +29,8 @@ and non-comment function length; its pinned dependency installs automatically
 into a private environment under `target/quality-venv`. No function may reach
 1,000 code lines. New modules have a 1,000-line limit; existing large modules
 and lint counts have checked-in upper bounds in `quality-baseline.json`.
-Functions over 200 lines and cognitive complexity over 40 are reported.
+Functions over 200 lines or cyclomatic complexity over 40 are reported;
+Clippy also checks cognitive complexity against a threshold of 40.
 The coverage gate runs the native suite with LLVM instrumentation and enforces
 the minimum in `quality-coverage.json`.
 These are migration limits for existing code, with no allowance for new lint
@@ -57,6 +58,21 @@ behavior, inspect that report, run
 `python3 scripts/check-duplication.py --update-baseline`, and review the baseline
 diff. Existing clones remain visible as refactoring work; accepting a new clone
 requires a reviewed baseline change, not an increased percentage allowance.
+
+The 12 November 2026 structural review reduced the largest dispatch functions
+by separating semantic families and compiler phases. Lizard measurements were:
+
+| Function | Code lines before → after | Cyclomatic complexity before → after |
+| --- | --- | --- |
+| Interpreter builtin dispatch | 403 → 30 | 187 → 17 |
+| Builtin type checking | 245 → 32 | 105 → 9 |
+| Core module orchestration | 947 → 21 | 188 → 7 |
+
+At the same detector settings, duplication fell from 114 clones and 1,866
+duplicated lines to 98 clones and 1,587 lines. Shared import metadata parsing,
+runtime-helper slot reservation, sequence/record boxing, and test dependency
+setup removed repeated behavior. The resulting baseline update only removed
+exceptions or lowered existing limits; it added no new clone fingerprints.
 
 The compiled execution tests and round-trip tests require `wasm-tools`,
 `wasmtime`, `wac`, and `wkg` on `PATH`. The round-trip matrix also needs
@@ -87,9 +103,11 @@ the requested output directory.
 Build orchestration separates prepared source units, dependency resolution,
 checking and byte emission, and filesystem publication. The check/emission phase
 operates on arenas and resolved dependencies without filesystem or process access.
-WIT fetching runs in a private workspace; only fetched dependencies and the lock
-file are copied back after every fetch succeeds. Authored root WIT files and macro
-artifacts are preserved. Macro caches use the package, requested version, and
+WIT fetch worlds use a private workspace; dependency files are copied back after
+every fetch succeeds. The `wkg` process retains the original project directory,
+so manifests, relative local overrides, registry configuration, workspace settings,
+and generated lockfile updates keep their normal behavior. Authored root WIT
+files and macro artifacts are preserved. Macro caches use the package, requested version, and
 canonical artifact path, so two explicit artifacts cannot share an instance by
 accident.
 
