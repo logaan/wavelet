@@ -1039,6 +1039,11 @@ pub fn has_external_deps(info: &FileInfo, local_packages: &[String]) -> bool {
         || iface_order(&info.exports, !info.types.is_empty())
             .iter()
             .any(|i| is_external_iface(i))
+        || info
+            .resources
+            .iter()
+            .filter_map(|resource| resource.iface.as_deref())
+            .any(is_external_iface)
 }
 
 fn synthesize_info(

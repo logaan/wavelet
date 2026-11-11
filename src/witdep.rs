@@ -73,10 +73,8 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
     let full_package = pkg.name.to_string();
 
     let mut funcs = Vec::new();
-    let mut types: Vec<(String, Vec<(String, String)>)> = Vec::new();
-    let mut type_defs: Vec<(String, TypeDef)> = Vec::new();
-    let mut aliases: Vec<(String, String)> = Vec::new();
-    let mut type_ifaces: Vec<(String, String)> = Vec::new();
+    let mut collected = ResolvedTypes::default();
+    let mut type_ifaces: Vec<(String, String, String)> = Vec::new();
 
     for (iface_name, &iface_id) in &pkg.interfaces {
         let iface = &resolve.interfaces[iface_id];
@@ -84,66 +82,16 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
         for (type_name, &type_id) in &iface.types {
             let tdef = &resolve.types[type_id];
 
-            type_ifaces.push((type_name.clone(), iface_name.clone()));
-            match &tdef.kind {
-                TypeDefKind::Record(rec) => {
-                    let fields = rec
-                        .fields
-                        .iter()
-                        .map(|f| Ok((f.name.clone(), type_string(&resolve, &f.ty)?)))
-                        .collect::<Result<Vec<_>, String>>()?;
-                    types.push((type_name.clone(), fields));
-                }
-                TypeDefKind::Resource => {
-                    type_defs.push((type_name.clone(), TypeDef::Resource));
-
-                    funcs.push(FuncSig {
-                        name: format!("[resource-drop]{type_name}"),
-                        iface: iface_name.clone(),
-                        params: vec![("self".to_string(), format!("own<{type_name}>"))],
-                        result: None,
-                    });
-                }
-                TypeDefKind::Enum(en) => {
-                    let cases = en.cases.iter().map(|c| c.name.clone()).collect();
-                    type_defs.push((type_name.clone(), TypeDef::Enum(cases)));
-                }
-                TypeDefKind::Flags(fl) => {
-                    let names = fl.flags.iter().map(|f| f.name.clone()).collect();
-                    type_defs.push((type_name.clone(), TypeDef::Flags(names)));
-                }
-
-                TypeDefKind::List(_)
-                | TypeDefKind::Option(_)
-                | TypeDefKind::Result(_)
-                | TypeDefKind::Tuple(_)
-                | TypeDefKind::Type(_)
-                | TypeDefKind::Handle(_) => {
-                    aliases.push((
-                        type_name.clone(),
-                        structural_type_string(&resolve, &tdef.kind)?,
-                    ));
-                }
-                TypeDefKind::Variant(var) => {
-                    let cases = var
-                        .cases
-                        .iter()
-                        .map(|c| {
-                            let pay = match &c.ty {
-                                Some(t) => Some(type_string(&resolve, t)?),
-                                None => None,
-                            };
-                            Ok((c.name.clone(), pay))
-                        })
-                        .collect::<Result<Vec<_>, String>>()?;
-                    type_defs.push((type_name.clone(), TypeDef::Variant(cases)));
-                }
-                other => {
-                    return Err(format!(
-                        "unsupported WIT type `{type_name}`: {}",
-                        other.as_str()
-                    ));
-                }
+            let internal_name = named_type(&resolve, type_id)?;
+            type_ifaces.push((internal_name.clone(), iface_name.clone(), type_name.clone()));
+            collected.collect(&resolve, type_id)?;
+            if matches!(tdef.kind, TypeDefKind::Resource) {
+                funcs.push(FuncSig {
+                    name: format!("[resource-drop]{type_name}"),
+                    iface: iface_name.clone(),
+                    params: vec![("self".to_owned(), format!("own<{internal_name}>"))],
+                    result: None,
+                });
             }
         }
 
@@ -158,11 +106,102 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
         package: full_package,
         funcs,
         package_wit,
-        types,
-        type_defs,
-        aliases,
+        types: collected.records,
+        type_defs: collected.defs,
+        aliases: collected.aliases,
         type_ifaces,
     }))
+}
+
+#[derive(Default)]
+struct ResolvedTypes {
+    records: Vec<(String, Vec<(String, String)>)>,
+    defs: Vec<(String, TypeDef)>,
+    aliases: Vec<(String, String)>,
+    seen: std::collections::HashSet<wit_parser::TypeId>,
+}
+
+impl ResolvedTypes {
+    fn collect(&mut self, resolve: &Resolve, id: wit_parser::TypeId) -> Result<(), String> {
+        if !self.seen.insert(id) {
+            return Ok(());
+        }
+        let ty = &resolve.types[id];
+        for child in referenced_types(&ty.kind) {
+            if let Type::Id(id) = child {
+                self.collect(resolve, id)?;
+            }
+        }
+        if ty.name.is_none() {
+            structural_type_string(resolve, &ty.kind)?;
+            return Ok(());
+        }
+        let name = named_type(resolve, id)?;
+        match &ty.kind {
+            TypeDefKind::Record(record) => {
+                let fields = record
+                    .fields
+                    .iter()
+                    .map(|field| Ok((field.name.clone(), type_string(resolve, &field.ty)?)))
+                    .collect::<Result<_, String>>()?;
+                self.records.push((name, fields));
+            }
+            TypeDefKind::Resource => self.defs.push((name, TypeDef::Resource)),
+            TypeDefKind::Enum(value) => self.defs.push((
+                name,
+                TypeDef::Enum(value.cases.iter().map(|case| case.name.clone()).collect()),
+            )),
+            TypeDefKind::Flags(value) => self.defs.push((
+                name,
+                TypeDef::Flags(value.flags.iter().map(|flag| flag.name.clone()).collect()),
+            )),
+            TypeDefKind::Variant(value) => {
+                let cases = value
+                    .cases
+                    .iter()
+                    .map(|case| {
+                        Ok((
+                            case.name.clone(),
+                            case.ty
+                                .as_ref()
+                                .map(|ty| type_string(resolve, ty))
+                                .transpose()?,
+                        ))
+                    })
+                    .collect::<Result<_, String>>()?;
+                self.defs.push((name, TypeDef::Variant(cases)));
+            }
+            TypeDefKind::List(_)
+            | TypeDefKind::Option(_)
+            | TypeDefKind::Result(_)
+            | TypeDefKind::Tuple(_)
+            | TypeDefKind::Type(_)
+            | TypeDefKind::Handle(_) => {
+                self.aliases
+                    .push((name, structural_type_string(resolve, &ty.kind)?));
+            }
+            other => {
+                return Err(format!(
+                    "unsupported WIT type `{}`: {}",
+                    ty.name.as_deref().unwrap(),
+                    other.as_str()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn referenced_types(kind: &TypeDefKind) -> Vec<Type> {
+    match kind {
+        TypeDefKind::Record(value) => value.fields.iter().map(|field| field.ty).collect(),
+        TypeDefKind::Variant(value) => value.cases.iter().filter_map(|case| case.ty).collect(),
+        TypeDefKind::Tuple(value) => value.types.clone(),
+        TypeDefKind::Result(value) => value.ok.into_iter().chain(value.err).collect(),
+        TypeDefKind::List(ty) | TypeDefKind::Option(ty) | TypeDefKind::Type(ty) => vec![*ty],
+        TypeDefKind::Handle(Handle::Own(id) | Handle::Borrow(id)) => vec![Type::Id(*id)],
+        _ => Vec::new(),
+    }
 }
 
 fn func_sig(resolve: &Resolve, iface_name: &str, func: &Function) -> Result<FuncSig, String> {
@@ -189,6 +228,35 @@ fn func_sig(resolve: &Resolve, iface_name: &str, func: &Function) -> Result<Func
     })
 }
 
+pub(crate) fn type_identity(package: &str, iface: &str, name: &str) -> String {
+    let identity = format!("{package}/{iface}/{name}");
+    let mut result = String::from("wit-x");
+    for byte in identity.bytes() {
+        use std::fmt::Write;
+        write!(result, "{byte:02x}").unwrap();
+    }
+    result
+}
+
+fn named_type(resolve: &Resolve, id: wit_parser::TypeId) -> Result<String, String> {
+    let ty = &resolve.types[id];
+    let name = ty
+        .name
+        .as_deref()
+        .ok_or("anonymous resource handle in WIT dep")?;
+    let wit_parser::TypeOwner::Interface(iface_id) = ty.owner else {
+        return Err(format!("WIT type `{name}` is not owned by an interface"));
+    };
+    let iface = &resolve.interfaces[iface_id];
+    let package = iface.package.ok_or("WIT interface has no package")?;
+    let iface_name = iface.name.as_deref().ok_or("WIT interface has no name")?;
+    Ok(type_identity(
+        &resolve.packages[package].name.to_string(),
+        iface_name,
+        name,
+    ))
+}
+
 fn type_string(resolve: &Resolve, ty: &Type) -> Result<String, String> {
     Ok(match ty {
         Type::Bool => "bool".into(),
@@ -208,8 +276,8 @@ fn type_string(resolve: &Resolve, ty: &Type) -> Result<String, String> {
         Type::Id(id) => {
             let tdef = &resolve.types[*id];
 
-            if let Some(name) = &tdef.name {
-                name.clone()
+            if tdef.name.is_some() {
+                named_type(resolve, *id)?
             } else {
                 structural_type_string(resolve, &tdef.kind)?
             }
@@ -240,11 +308,7 @@ fn structural_type_string(resolve: &Resolve, kind: &TypeDefKind) -> Result<Strin
             format!("tuple<{}>", parts.join(", "))
         }
         TypeDefKind::Handle(Handle::Own(id)) | TypeDefKind::Handle(Handle::Borrow(id)) => {
-            let inner = &resolve.types[*id];
-            let name = inner
-                .name
-                .clone()
-                .ok_or("anonymous resource handle in WIT dep")?;
+            let name = named_type(resolve, *id)?;
             let kw = if matches!(kind, TypeDefKind::Handle(Handle::Own(_))) {
                 "own"
             } else {

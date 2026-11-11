@@ -223,15 +223,19 @@ pub(crate) fn validate_dependency_versions(
             ));
         }
     }
-    for sig in &info.exports {
-        if let Some((path, version)) = sig.iface.split_once('@')
+    for interface in info.exports.iter().map(|sig| sig.iface.as_str()).chain(
+        info.resources
+            .iter()
+            .filter_map(|resource| resource.iface.as_deref()),
+    ) {
+        if let Some((path, version)) = interface.split_once('@')
             && let Some((package, _)) = path.split_once('/')
             && let Some(dep) = deps.get(package)
             && dep.package != format!("{package}@{version}")
         {
             return Err(format!(
                 "export `{}` conflicts with resolved `{}`",
-                sig.iface, dep.package
+                interface, dep.package
             ));
         }
     }

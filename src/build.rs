@@ -76,7 +76,7 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
                     .info
                     .types
                     .iter()
-                    .map(|(n, _)| (n.clone(), "api".to_string()))
+                    .map(|(n, _)| (n.clone(), "api".to_string(), n.clone()))
                     .collect();
                 deps.insert(
                     imp.package.clone(),
@@ -105,8 +105,13 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
             ));
         }
 
-        for sig in &u.info.exports {
-            let Some((pkg, iface)) = sig.iface.split_once('/') else {
+        for interface in u.info.exports.iter().map(|sig| sig.iface.as_str()).chain(
+            u.info
+                .resources
+                .iter()
+                .filter_map(|resource| resource.iface.as_deref()),
+        ) {
+            let Some((pkg, iface)) = interface.split_once('/') else {
                 continue;
             };
             if !pkg.contains(':') || deps.contains_key(pkg) {
@@ -125,6 +130,7 @@ pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, Strin
             }
         }
 
+        let deps = emit::scope_dependency_types(&u.info, &deps);
         let mut import_sigs = crate::check::ImportSigs::new();
         for imp in &u.info.imports {
             if wit::is_macro_only(imp) {

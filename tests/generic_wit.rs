@@ -77,9 +77,10 @@ fn generic_resources_and_external_exports_compile_with_or_without_versions() {
 Package "app:frontend@1.0.0"
 Import {{pkg: "acme:devices/api{version}" as: devices}}
 Export {{iface: "custom:events/handler{version}" name: handle result: string}}
+Def inspect Fn {{item: borrow(device)}} devices/inspect(item)
 Def handle Fn {{}}
   Let {{item: devices/device()}}
-    Let {{label: devices/inspect(item)}}
+    Let {{label: inspect(item)}}
       Do [devices/drop-device(item) label]
 "#
         );
@@ -195,4 +196,71 @@ fn unsupported_wit_features_report_the_actual_feature() {
             .unwrap();
         assert!(error.contains(expected), "{error}");
     }
+}
+
+#[test]
+fn transitive_wit_record_types_do_not_require_extra_source_imports() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("data.wit"),
+        "package custom:data; interface values { record payload { value: string } }",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("service.wit"), "package custom:service; interface api { use custom:data/values.{payload}; make: func() -> payload; inspect: func(value: payload) -> bool; }").unwrap();
+    let dep = witdep::resolve_dep(dir.path(), "custom:service")
+        .unwrap()
+        .unwrap();
+    assert_eq!(dep.types.len(), 1);
+    assert_eq!(dep.aliases.len(), 1);
+    let source = r#"
+Package "app:test"
+Import {pkg: "custom:service/api" as: service}
+Export {name: run result: bool}
+Def run Fn {} service/inspect(service/make())
+"#;
+    let (arena, roots) = expanded(source);
+    let info = wit::collect(&arena, &roots).unwrap();
+    let bytes = emit::emit_component(
+        &arena,
+        &roots,
+        &info,
+        &HashMap::from([("custom:service".to_owned(), dep)]),
+    )
+    .unwrap();
+    assert!(bytes.starts_with(b"\0asm"));
+}
+
+#[test]
+fn resource_aliases_across_interfaces_preserve_one_nominal_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("devices.wit"),
+        r#"
+package acme:devices;
+interface types { resource device { label: func() -> string; } }
+interface handler { use types.{device}; handle: func(item: device) -> string; }
+interface reader { use types.{device}; inspect: func(item: borrow<device>) -> string; }
+"#,
+    )
+    .unwrap();
+    let dep = witdep::resolve_dep(dir.path(), "acme:devices")
+        .unwrap()
+        .unwrap();
+    let source = r#"
+Package "app:test"
+Import {pkg: "acme:devices/types" as: devices}
+Import {pkg: "acme:devices/reader" as: reader}
+Export {iface: "acme:devices/handler" name: handle params: {item: device} result: string}
+Def handle Fn {item: device}
+  Let {label: reader/inspect(item)} Do [devices/drop-device(item) label]
+"#;
+    let (arena, roots) = expanded(source);
+    let info = wit::collect(&arena, &roots).unwrap();
+    emit::emit_component(
+        &arena,
+        &roots,
+        &info,
+        &HashMap::from([("acme:devices".to_owned(), dep)]),
+    )
+    .unwrap();
 }
