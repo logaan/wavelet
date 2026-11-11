@@ -13,6 +13,8 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-12
+
 ### Added
 
 - A pure in-memory compiler API and a compiler component with a WIT interface.
@@ -657,7 +659,8 @@ Initial release.
   artifacts.
 - Docusaurus documentation site with a live, wasm-compiled `<Playground>`.
 
-[Unreleased]: https://github.com/logaan/wavelet/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/logaan/wavelet/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/logaan/wavelet/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/logaan/wavelet/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/logaan/wavelet/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/logaan/wavelet/compare/v0.9.1...v0.9.2
