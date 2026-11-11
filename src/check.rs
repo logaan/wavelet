@@ -196,11 +196,18 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             Some(Tuple(elems?))
         }
 
-        (Named(n), t) | (t, Named(n)) if matches!(tbl.get(n), Some(TypeDef::Alias(_))) => {
+        (Named(n), t) if matches!(tbl.get(n), Some(TypeDef::Alias(_))) => {
             let Some(TypeDef::Alias(target)) = tbl.get(n) else {
                 unreachable!("guard matched an alias")
             };
             unify(tbl, target, t)?;
+            Some(Named(n.clone()))
+        }
+        (t, Named(n)) if matches!(tbl.get(n), Some(TypeDef::Alias(_))) => {
+            let Some(TypeDef::Alias(target)) = tbl.get(n) else {
+                unreachable!("guard matched an alias")
+            };
+            unify(tbl, t, target)?;
             Some(Named(n.clone()))
         }
 
@@ -208,34 +215,28 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             unify_dependency_types(tbl, left, right)
         }
 
-        (Named(n), Flags(ms)) | (Flags(ms), Named(n)) => match tbl.get(n) {
-            Some(TypeDef::Flags(decl)) => {
-                if ms.iter().all(|m| decl.contains(m)) {
-                    Some(Named(n.clone()))
-                } else {
-                    None
-                }
-            }
-            Some(_) => None,
-            None => Some(Named(n.clone())),
-        },
-
-        (Named(n), _) | (_, Named(n)) if !tbl.contains_key(n) => Some(Named(n.clone())),
-
-        (Named(n), Record(fs)) | (Record(fs), Named(n)) => match tbl.get(n) {
-            Some(TypeDef::Record(dfs)) => {
-                unify_fields(tbl, dfs, fs)?;
-                Some(Named(n.clone()))
-            }
-            Some(_) => None,
-            None => Some(Named(n.clone())),
-        },
+        (Named(name), other) | (other, Named(name)) => unify_named_type(tbl, name, other),
 
         (Record(xs), Record(ys)) => {
             let fields = unify_fields(tbl, xs, ys)?;
             Some(Record(fields))
         }
 
+        _ => None,
+    }
+}
+
+fn unify_named_type(tbl: &TypeTable, name: &str, other: &Type) -> Option<Type> {
+    match (tbl.get(name), other) {
+        (None, _) => Some(Type::Named(name.to_owned())),
+        (Some(TypeDef::Flags(declared)), Type::Flags(members)) => members
+            .iter()
+            .all(|member| declared.contains(member))
+            .then(|| Type::Named(name.to_owned())),
+        (Some(TypeDef::Record(declared)), Type::Record(fields)) => {
+            unify_fields(tbl, declared, fields)?;
+            Some(Type::Named(name.to_owned()))
+        }
         _ => None,
     }
 }
