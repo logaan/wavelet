@@ -1,11 +1,3 @@
-//! 4.2 — payload-less results are spellable and cross the boundary.
-//!
-//! `result`, `result(t)`, and `result(_ e)` type text (the `_` placeholder
-//! lexes); `ok()` / `err()` construct genuinely payload-less cases (no unit
-//! payload — the unit value is gone, 2.4); the `(ok)` / `(err)` call-shaped
-//! patterns destructure them. Lowering these at a bare-result boundary used to
-//! ICE the compiler ("never a single flat value").
-
 use wavelet::eval_snippet;
 use wavelet::host::{HostComponent, Val};
 

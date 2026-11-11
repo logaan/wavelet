@@ -1,10 +1,3 @@
-//! Flags VALUES in the wasm backend (goal 5 / 5.4): a flags literal
-//! `{read write}` is the interpreter's `Value::Flg` — a TAG_FLG box over the
-//! set names — and the boundary form is the canonical i32 bitset. Lowering
-//! reads membership from the box; lifting rebuilds the box with the set
-//! names in declaration order. `eq` over flags values is elementwise (order
-//! matters), exactly the interpreter's `Value::Flg` equality.
-
 use wavelet::host::{HostComponent, Val};
 
 fn component() -> HostComponent {
@@ -68,8 +61,8 @@ fn ok(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
 fn flags_round_trip_through_the_boundary() {
     let mut c = component();
     let p = Val::Flags(vec!["read".into(), "exec".into()]);
-    assert_eq!(ok(&mut c, "keep", &[p.clone()]), p);
-    // empty set
+    assert_eq!(ok(&mut c, "keep", std::slice::from_ref(&p)), p);
+
     assert_eq!(
         ok(&mut c, "keep", &[Val::Flags(vec![])]),
         Val::Flags(vec![])
@@ -88,8 +81,7 @@ fn flags_literal_lowers_as_a_result() {
 #[test]
 fn flags_eq_is_the_interpreters_value_flg_equality() {
     let mut c = component();
-    // the lifted argument lists set names in DECLARATION order (read, exec),
-    // matching the literal in `same`
+
     assert_eq!(
         ok(
             &mut c,
@@ -104,8 +96,6 @@ fn flags_eq_is_the_interpreters_value_flg_equality() {
     );
 }
 
-/// Flags literals work as Match patterns in compiled code (5.9): structural
-/// equality over the set names, exactly the interpreter's `match_pattern`.
 #[test]
 fn flags_literals_match_as_patterns() {
     let mut c = component();
@@ -127,18 +117,6 @@ fn flags_literals_match_as_patterns() {
     );
 }
 
-/// DISCRIMINATING test for canonical flags FIELDS in records (5.4). A record
-/// `entry {lead: u8 perms: access trail: u32}` is built with a NON-ADJACENT
-/// flags literal `{read exec}` over declared `access {read write exec admin}`.
-///
-/// This pins two things a mere round-trip would mask:
-///  - BIT POSITIONS: the canonical bitset must use the DECLARED positions
-///    (read=0, exec=2 → 0b101), so the host lifts `{read exec}`. If the
-///    literal's own positions were used (read=0, exec=1 → 0b011) the host
-///    would lift `{read write}`.
-///  - ALIGNMENT: `access` has 4 members → 1-byte flags, so `perms` sits at
-///    offset 1 (right after `lead: u8`) and `trail: u32` at offset 4. A
-///    stale 4-byte flags alignment would shift `trail` and corrupt it.
 #[test]
 fn canonical_flags_field_uses_declared_bit_positions_and_alignment() {
     let mut c = component();

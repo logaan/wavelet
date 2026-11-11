@@ -42,18 +42,17 @@ This is the **entire core language**. Everything else is the [standard library](
 
 ### `Fn`
 
-`Fn {params} body` — a closure. Closures capture lexically and are first-class within a component. The parameter braces describe how the single argument value is received ([see Evaluation](./evaluation#functions-take-exactly-one-value)):
+`Fn {params} body` defines a function or a statically resolved callback. Capturing callbacks can be specialized inside a component; runtime collections and function results cannot carry function values. The parameter braces describe how the single argument value is received ([see Evaluation](./evaluation#functions-take-exactly-one-value)):
 
 ```wavelet
-Fn {path force}                // two parameters, dynamically typed
-Fn {path: string force: bool}  // two parameters, typed
-Fn {phrase}                    // one parameter
+Fn {path: string force: bool}  // parameter types are explicit
+Fn {phrase: string}            // one parameter
 Fn {}                          // zero parameters
 ```
 
 <Playground id="sf-fn-adder" />
 
-Typed parameters are checked when the function is called:
+Parameter types are inferred from constrained uses when possible; otherwise add annotations. Calls are checked before execution:
 
 <Playground id="sf-fn-shout" />
 

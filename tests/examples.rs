@@ -1,15 +1,3 @@
-//! Documentation-example test suite.
-//!
-//! Every runnable example in the docs lives in `docs/examples.json` (generated
-//! by `docs/scripts/gen-examples.mjs`). The `<Playground>` component renders
-//! those snippets in the browser via the wasm-compiled interpreter; this test
-//! runs the *same* snippets through the *same* evaluator (`eval_snippet`) on the
-//! native target and checks the recorded value / output / error.
-//!
-//! Because the docs and the test share one source of truth, a language change
-//! that breaks a documented example breaks `cargo test` — there is no way for
-//! the docs to silently drift from the implementation.
-
 use serde_json::Value;
 
 fn examples() -> Value {
@@ -35,7 +23,6 @@ fn every_documented_example_matches_the_interpreter() {
         let outcome = wavelet::eval_snippet(code);
 
         if let Some(expected_err) = entry.get("error").and_then(Value::as_str) {
-            // Error example: must fail, with the recorded message.
             if outcome.ok {
                 failures.push(format!(
                     "`{id}`: expected an error but it succeeded with value {:?}",
@@ -50,7 +37,6 @@ fn every_documented_example_matches_the_interpreter() {
             continue;
         }
 
-        // Success example: must succeed, with the recorded value and output.
         if !outcome.ok {
             failures.push(format!(
                 "`{id}`: expected success but got error: {}",

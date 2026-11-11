@@ -1,14 +1,3 @@
-// Regenerates docs/examples.json — the single source of truth for every
-// runnable documentation example. Each example's Wavelet source is authored
-// here once; this script runs it through the WebAssembly-compiled interpreter
-// and records the expected value / output / error. Both the docs <Playground>
-// component and the Rust `tests/examples.rs` suite consume the generated JSON,
-// so an example can never drift from what the interpreter actually does.
-//
-// Run after editing examples or changing the language:
-//   1. wasm-pack build --target web --out-dir docs/src/wasm --out-name wavelet
-//   2. node docs/scripts/gen-examples.mjs
-//   3. cargo test            # locks the new behaviour in
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -19,7 +8,6 @@ const OUT = join(here, '..', 'examples.json');
 const { initSync, _eval } = await import(pathToFileURL(join(WASM, 'wavelet.js')).href);
 initSync({ module: readFileSync(join(WASM, 'wavelet_bg.wasm')) });
 
-// ── Single source of truth: every runnable doc example, id → Wavelet source ──
 const E = {};
 E['hello-shout'] = `str-cat(upper("hello") ", world!")`;
 E['map-square'] = `map(Fn {x} mul(x x) [1 2 3 4 5])`;
@@ -64,8 +52,7 @@ E['values-tuple'] = `// In evaluation position parens are calls, so tuples are b
 Let {p: tuple2("abc" 123)}
   Match p [((s n) tuple3(s n true))]`;
 E['values-options-results'] = `{options: [some(1) none] results: [ok("yes") err("nope")]}`;
-// Payload-less results (goal 4.2): ok()/err() construct genuinely payload-less
-// cases; the sub-pattern-less call shapes (ok)/(err) match them.
+
 E['values-payloadless-results'] = `Def flip Fn {v: result}
   Match v [((ok) err()) ((err) ok())]
 flip(ok())`;
@@ -73,34 +60,32 @@ E['values-quote-days'] = `Quote days(30)`;
 E['values-eq'] = `eq({a: 1 b: [2 3]} {a: 1 b: [2 3]})`;
 E['values-unit-def'] = `Def x 10`;
 
-E['eval-fn-by-name'] = `Def delete-file Fn {path force}
-  [path force]
+E['eval-fn-by-name'] = `Def delete-file Fn {path: string force: bool}
+  tuple2(path force)
 // by name…
 delete-file({path: "foo.md" force: true})`;
-E['eval-fn-by-order'] = `Def delete-file Fn {path force}
-  [path force]
+E['eval-fn-by-order'] = `Def delete-file Fn {path: string force: bool}
+  tuple2(path force)
 // …and by order
 delete-file("foo.md" true)`;
 E['eval-fn-scalar'] = `Def square Fn {n} mul(n n)
 square(9)`;
-E['eval-twice'] = `Def twice Fn {f x} f(f(x))
-Def inc Fn {n} add(n 1)
-twice(inc 10)`;
-E['eval-apply-list'] = `Def ops [Fn {n} add(n 1)  Fn {n} mul(n 2)]
-Let {op: get(ops 1)} op(21)`;
+E['eval-twice'] = `DefMacro twice {f x} Quasi (Unquote(f) (Unquote(f) Unquote(x)))
+Def inc Fn {n: s64} add(n 1)
+Twice inc 10`;
+E['eval-apply-list'] = `DefType operation [increment double]
+Def ops [increment double]
+Match get(ops 1) [(increment add(21 1)) (double mul(21 2))]`;
 
 E['sf-def'] = `Def pi-ish 3.14159
 mul(pi-ish 2)`;
-// DefType binds its variant/enum case constructors (goal 4.1): nullary cases
-// are values (like none), payloaded cases are first-class constructors.
+
 E['sf-deftype-cases'] = `DefType ttl [days(u32) forever]
 Def describe Fn {t: ttl}
   Match t [((days n) str-cat("expires in " to-string(n) " days"))
            (forever "never expires")]
 [describe(days(30)) describe(forever)]`;
-E['sf-fn-adder'] = `Def adder Fn {by}
-  Fn {n} add(n by)
-Def add5 adder(5)
+E['sf-fn-adder'] = `Def add5 Fn {n: s64} add(n 5)
 add5(10)`;
 E['sf-fn-shout'] = `Def shout Fn {phrase: string}
   str-cat(upper(phrase) "!")
@@ -138,13 +123,13 @@ E['pm-catch-all'] = `Match 3 [
   (2  "two")
   (n  str-cat("many: " to-string(n)))
 ]`;
-E['pm-describe'] = `Def describe Fn {r}
+E['pm-describe'] = `Def describe Fn {r: result(s64 string)}
   Match r [
     (ok(v)   str-cat("got " to-string(v)))
     (err(e)  str-cat("failed: " e))
   ]
 describe(ok(42))`;
-E['pm-none'] = `Match none [
+E['pm-none'] = `Match The option(string) none [
   (none     "nothing")
   (some(v)  to-string(v))
 ]`;
@@ -185,8 +170,8 @@ E['macro-trylet'] = `DefMacro try-let {binding body}
       (ok(Unquote(name))  Unquote(body))
       (err(e)             err(e))
     ]
-Def parse Fn {x}
-  Try-let {n: ok(x)}
+Def parse Fn {x: s64}
+  Try-let {n: The result(s64 string) ok(x)}
   ok(add(n 1))
 parse(41)`;
 
@@ -222,10 +207,7 @@ E['std-conv'] = `{byte: to-u8(255) signed: to-s8(-128) float: to-f64(3)}`;
 E['std-conv-bad'] = `to-u8(256)`;
 E['std-char-conv'] = `{code: to-u32('a') char: to-char(98) next: to-char(add(to-u32('a') 1))}`;
 E['std-char-conv-bad'] = `to-char(55296)`;
-// A single list argument is one value bound to one parameter (2.1), so a
-// computed multi-parameter function is fed a *record* payload, binding by name.
-// A quoted call is a tuple now, so 'form-kind(Quote foo(1))' reports "tup"; a
-// runtime variant with a payload ('ok(1)') still reports "call".
+
 E['std-form-kind'] = `[form-kind(42)  form-kind("hi")  form-kind(Quote foo)  form-kind(Quote foo(1))  form-kind(ok(1))  form-kind([1 2])]`;
 E['std-rec-key-val'] = `Let {b: {text: "hello"}}
   {key: rec-key(b) val: rec-val(b)}`;
@@ -235,7 +217,6 @@ E['std-cells'] = `Let {c: cell-new(0)}
       cell-set(c add(cell-get(c) 1))
       cell-get(c)]`;
 
-// ── Type system: overloading, `The`, range-checked literals ──
 E['ty-overload-int'] = `// Two same-named monomorphic defs form an overload set;
 // the call resolves on the static argument type.
 Def show Fn {x: s32} "int"
@@ -256,7 +237,21 @@ E['ty-mixed-add'] = `// 'add' has no overload mixing an s32 and a string, so thi
 // compile-time type error even though 'bad' is never called.
 Def bad Fn {x: s32} add(x "y")`;
 
-// ── Run each through the interpreter and record expected results ──
+E['ty-user-functor'] = `DefFunctor "demo:pair" {left right} [
+  DefType pair tuple(left right)
+  Def make Fn {x: left y: right} The pair tuple2(x y)
+]
+Instantiate {pkg: "demo:pair" with: {left: s64 right: string} as: mixed}
+mixed-make(7 "seven")`;
+
+E['res-counter'] = `DefResource counter {
+  New: Fn {start: u32} cell-new(start)
+  next: Fn {self: counter} The u32
+    Let {value: cell-get(self)} Do [cell-set(self add(value 1)) value]
+  value: Fn {self: counter} The u32 cell-get(self)
+}
+Let {c: counter(10)} Do [counter-next(c) counter-next(c) counter-value(c)]`;
+
 const out = {};
 let errCount = 0;
 for (const [id, code] of Object.entries(E)) {

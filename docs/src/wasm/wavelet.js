@@ -1,14 +1,5 @@
 /* @ts-self-types="./wavelet.d.ts" */
 
-/**
- * Evaluate a snippet of Wavelet source and return a JSON object string:
- *
- * ```json
- * {"ok": true, "value": "...", "output": "...", "error": ""}
- * ```
- * @param {string} src
- * @returns {string}
- */
 export function _eval(src) {
     let deferred2_0;
     let deferred2_1;
@@ -199,7 +190,6 @@ async function __wbg_load(module, imports) {
 function initSync(module) {
     if (wasm !== undefined) return wasm;
 
-
     if (module !== undefined) {
         if (Object.getPrototypeOf(module) === Object.prototype) {
             ({module} = module)
@@ -218,7 +208,6 @@ function initSync(module) {
 
 async function __wbg_init(module_or_path) {
     if (wasm !== undefined) return wasm;
-
 
     if (module_or_path !== undefined) {
         if (Object.getPrototypeOf(module_or_path) === Object.prototype) {

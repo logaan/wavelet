@@ -1,12 +1,3 @@
-//! Goal 5 (5.3 canonical records): a `Let`-bound record whose construction
-//! is provably faithful to its static type lives in canonical ABI layout
-//! (`Repr::Mem`) instead of a `TAG_REC` box; boxed consumers rebuild the box
-//! at the reference seam. These tests pin the *faithfulness* of that
-//! representation against the interpreter's record semantics, which are
-//! field-order-sensitive (`Value::Rec` is a `Vec`; `eq` compares
-//! positionally): a canonical-layout value must rebuild, at every boxed
-//! seam, exactly the box the interpreter would have carried.
-
 use wavelet::host::{HostComponent, Val};
 
 fn component() -> HostComponent {
@@ -46,7 +37,7 @@ Def nested-roundtrip Fn {}
 Export {name: narrow params: {a: u8 b: u16} result: s64}
 Def narrow Fn {a: u8 b: u16}
   Let {p: {lo: a hi: b}}
-    Match p [({lo: l hi: h} add(l h))]
+    Match p [({lo: l hi: h} to-s64(add(l h)))]
 
 Export {name: destructure params: {} result: s64}
 Def destructure Fn {}
@@ -100,8 +91,7 @@ fn ok(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
 }
 
 #[test]
-// A canonical-layout binding lowers at the boundary exactly like the boxed
-// value would: the host sees the declared record.
+
 fn canonical_record_lowers_to_the_declared_record() {
     let mut c = component();
     let got = ok(&mut c, "mk-point", &[Val::S32(7), Val::S32(-3)]);
@@ -118,9 +108,7 @@ fn canonical_record_lowers_to_the_declared_record() {
 }
 
 #[test]
-// The rebuilt box is exactly the interpreter's value: eq is field-order
-// sensitive (Value::Rec is a Vec), so the same order compares true and a
-// permuted literal compares false — precisely the oracle's answers.
+
 fn canonical_record_rebuild_preserves_field_order() {
     let mut c = component();
     assert_eq!(ok(&mut c, "same-order", &[]), Val::Bool(true));
@@ -129,17 +117,14 @@ fn canonical_record_rebuild_preserves_field_order() {
 }
 
 #[test]
-// Nested record fields construct in place (no intermediate boxes) and
-// rebuild faithfully: nested structure, a string field, and an int-literal
-// field (which lays out as s64 — the interpreter's full Value::Int domain).
+
 fn nested_canonical_record_roundtrips() {
     let mut c = component();
     assert_eq!(ok(&mut c, "nested-roundtrip", &[]), Val::Bool(true));
 }
 
 #[test]
-// Narrow int fields (u8/u16) store at WIT width — the gate proved the
-// static range fits — and reload into the interpreter's Value::Int domain.
+
 fn narrow_int_fields_roundtrip_losslessly() {
     let mut c = component();
     assert_eq!(
@@ -149,36 +134,28 @@ fn narrow_int_fields_roundtrip_losslessly() {
 }
 
 #[test]
-// Record patterns destructure canonical layout at despec offsets: nested
-// record patterns recurse in place, scalar binders load typed locals.
+
 fn canonical_record_patterns_destructure_by_offset() {
     let mut c = component();
     assert_eq!(ok(&mut c, "destructure", &[]), Val::S64(305));
 }
 
 #[test]
-// Clause fallthrough matches the oracle: a statically-absent field fails
-// the clause, a literal field pattern compares structurally, and the first
-// matching clause wins.
+
 fn canonical_record_pattern_fallthrough_matches_the_oracle() {
     let mut c = component();
     assert_eq!(ok(&mut c, "fallthrough", &[]), Val::S64(2));
 }
 
 #[test]
-// A non-record pattern (variant case) against a canonical record scrutinee
-// fails that clause — the rebuilt-box fallback preserves the uniform
-// matcher's semantics — and the bare-binder clause matches.
+
 fn non_record_pattern_falls_through_on_canonical_scrutinee() {
     let mut c = component();
     assert_eq!(ok(&mut c, "not-a-variant", &[]), Val::S64(1));
 }
 
 #[test]
-// A def whose BODY is provably canonical carries a Mem result signature:
-// the export wrapper returns the canonical pointer directly when the
-// layout equals the boundary type (the 5.3 retptr fast path), and an If
-// threads the Mem want through both branches.
+
 fn mem_result_def_through_if_lowers_correctly() {
     let mut c = component();
     for (cond, want) in [(true, (7, -3)), (false, (-3, 7))] {
@@ -201,22 +178,19 @@ fn mem_result_def_through_if_lowers_correctly() {
 }
 
 #[test]
-// An internal caller of a Mem-result def reboxes at the call seam: the
-// rebuilt box is exactly the interpreter's record value.
+
 fn internal_call_of_mem_result_def_reboxes_faithfully() {
     let mut c = component();
     assert_eq!(ok(&mut c, "use-internal", &[]), Val::Bool(true));
 }
 
 #[test]
-// A canonical-layout local captured by a closure boxes at the capture seam
-// (capture slots hold box pointers) with its exact field order.
+
 fn canonical_record_closure_capture_is_faithful() {
     let mut c = component();
     assert_eq!(ok(&mut c, "through-closure", &[]), Val::Bool(true));
 }
 
-/// Is `bin` runnable (`<bin> --version` succeeds)?
 fn have(bin: &str) -> bool {
     std::process::Command::new(bin)
         .arg("--version")
@@ -226,10 +200,7 @@ fn have(bin: &str) -> bool {
 }
 
 #[test]
-// A dep call returning a record consumed by Match: the retptr area the
-// callee wrote is already the canonical layout (declared field order —
-// exactly what the interpreter's boundary lift produces), so the value is
-// born canonical and destructures by offset with no boxes at all.
+
 fn dep_call_record_result_is_born_canonical() {
     if !have("wac") {
         eprintln!("skipping: wac not on PATH");

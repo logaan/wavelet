@@ -1,22 +1,8 @@
-//! Tests for the compiled `wavelet run` path (goal 6.5).
-//!
-//! `runner::run_files_compiled` builds the program through the real emitter,
-//! composes any runtime imports, instantiates the artifact in the
-//! capability-free host, and calls the exported `run` — the wasm analogue of the
-//! interpreter's "look up `run`, apply it". `runner::run` wraps it with an
-//! interpreter fallback so a program the backend cannot yet run still behaves as
-//! it did before. The interpreter path (`runner::run_files`) is retained as the
-//! semantics oracle and the fallback; these tests pin the compiled path directly
-//! and the dispatcher's fallback contract.
-
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// Stage `files` (name, source) into a fresh temp `src/` and return their paths,
-/// entry first. The caller keeps the returned dir alive; it is cleaned by the OS
-/// temp reaper (each test uses a unique dir).
 fn stage(files: &[(&str, &str)]) -> Vec<String> {
     let dir = std::env::temp_dir().join(format!(
         "wavelet-run-test-{}-{}",
@@ -35,7 +21,6 @@ fn stage(files: &[(&str, &str)]) -> Vec<String> {
         .collect()
 }
 
-/// A single self-contained program runs on the compiled path (no fallback).
 #[test]
 fn single_file_runs_compiled() {
     let paths = stage(&[(
@@ -46,11 +31,6 @@ fn single_file_runs_compiled() {
         .expect("a self-contained program runs on the compiled path");
 }
 
-/// A multi-file program with a runtime import is composed and run on the
-/// compiled path — the wasm analogue of `run_files`' interpreter stand-in for
-/// `wavelet compose`. (Composition needs `wac`; if it is absent the build leaves
-/// no `app.wasm` and this returns an error, which is why the dispatcher falls
-/// back — but in this repo's toolchain `wac` is present.)
 #[test]
 fn multi_file_import_runs_compiled() {
     let paths = stage(&[
@@ -77,9 +57,6 @@ fn multi_file_import_runs_compiled() {
     }
 }
 
-/// The dispatcher falls back to the interpreter for a program the backend cannot
-/// run, preserving today's exact error: a `run`-less program reports "nothing to
-/// run" and fails.
 #[test]
 fn dispatcher_reports_missing_export() {
     let paths = stage(&[(
@@ -93,9 +70,6 @@ fn dispatcher_reports_missing_export() {
     );
 }
 
-/// A genuine runtime error (division by zero) surfaces the interpreter's clear
-/// message rather than a bare wasm trap — the compiled path traps, the fallback
-/// re-runs and returns the readable error (F5).
 #[test]
 fn dispatcher_surfaces_a_runtime_error() {
     let paths = stage(&[(
@@ -109,7 +83,6 @@ fn dispatcher_surfaces_a_runtime_error() {
     );
 }
 
-/// A program that runs fine on both paths succeeds through the dispatcher.
 #[test]
 fn dispatcher_runs_a_good_program() {
     let paths = stage(&[(

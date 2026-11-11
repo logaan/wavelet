@@ -1,9 +1,3 @@
-//! Goal 5 (5.12): the backend `map` builtin. `map(f, list)` applies the
-//! function value `f` to each element in source order and collects the results
-//! in a length-preserving list, driving `f` through the boxed-closure
-//! convention (call_indirect on the funcref table). Bare def references and
-//! inline `Fn` literals are both usable as `f`; results equal the oracle's.
-
 use wavelet::host::{HostComponent, Val};
 
 fn built() -> HostComponent {
@@ -39,7 +33,7 @@ Export {name: sumf params: {} result: s64}
 Def sumf Fn {} fold(Fn {acc x} add(acc x) 0 [1 2 3 4 5])
 
 Export {name: foldempty params: {} result: s64}
-Def foldempty Fn {} fold(Fn {acc x} add(acc x) 7 [])
+Def foldempty Fn {} fold(Fn {acc x} add(acc x) 7 The list(s64) [])
 
 Export {name: filt params: {} result: list(s32)}
 Def filt Fn {} The list(s32) filter(Fn {x: s32} gt(x 2) [1 2 3 4 1])
@@ -100,7 +94,6 @@ fn map_over_component_exports() {
     assert_eq!(ok(&mut c, "filtnone"), Val::List(vec![]));
 }
 
-/// Oracle cross-check: the same bodies as interpreter snippets.
 #[test]
 fn oracle_agrees() {
     for (src, want) in [
@@ -120,7 +113,7 @@ fn oracle_agrees() {
         ),
         ("fold(Fn {acc x} add(acc x) 0 [1 2 3 4 5])", "15"),
         ("fold(Fn {acc x} mul(acc x) 1 [1 2 3 4])", "24"),
-        ("fold(Fn {acc x} add(acc x) 7 [])", "7"),
+        ("fold(Fn {acc x} add(acc x) 7 The list(s64) [])", "7"),
         ("filter(Fn {x} gt(x 2) [1 2 3 4 1])", "[3, 4]"),
         ("filter(Fn {x} gt(x 99) [1 2 3])", "[]"),
     ] {

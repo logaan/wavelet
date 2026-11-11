@@ -1,10 +1,6 @@
-//! `Emitter` methods for the canonical ABI: lower/lift between boxes and flat
-//! core values, and store/load against linear memory, incl. variant chains.
-
 use super::*;
 
 impl<'a> Emitter<'a> {
-    /// box on stack → flat value(s) on stack
     pub(crate) fn lower(&mut self, fx: &mut FnCtx, ty: &WitTy) -> Result<(), String> {
         match ty {
             WitTy::Bool => fx.op(I::Call(self.h.truthy)),
@@ -18,7 +14,6 @@ impl<'a> Emitter<'a> {
             }
             WitTy::S64 => fx.op(I::Call(self.h.unbox_int)),
             WitTy::F32 => {
-                // boundary-only f32: internally an f64 Dec box, demoted here
                 fx.op(I::Call(self.h.unbox_dec));
                 fx.op(I::F32DemoteF64);
             }
@@ -32,12 +27,6 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Load(ma(4, 2)));
             }
             WitTy::List(elem) if is_byte_elem(elem) => {
-                // `list<u8>` accepts a Wavelet string directly: its bytes are
-                // already contiguous (a string box is `[tag, len, bytes…]`), so a
-                // string lowers to `(box+8, len)` with no copy. A real list box
-                // still goes through the element-by-element builder. The branch is
-                // on the box tag so e.g. an http body can be written from a string
-                // (`blocking-write-and-flush` takes `list<u8>`).
                 let b = fx.local(ValType::I32);
                 fx.op(I::LocalSet(b));
                 fx.op(I::LocalGet(b));
@@ -46,7 +35,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Eq);
                 let rty = self.ty_idx(vec![], vec![ValType::I32, ValType::I32]);
                 fx.op(I::If(BlockType::FunctionType(rty)));
-                // string box → (ptr = box+8, len = load@4)
+
                 fx.op(I::LocalGet(b));
                 fx.op(I::I32Const(8));
                 fx.op(I::I32Add);
@@ -59,7 +48,6 @@ impl<'a> Emitter<'a> {
             }
             WitTy::List(elem) => self.lower_list(fx, elem)?,
             WitTy::Record(fields) => {
-                // record box on stack → field flats pushed in declaration order
                 let b = fx.local(ValType::I32);
                 fx.op(I::LocalSet(b));
                 for (k, ft) in fields {
@@ -71,8 +59,6 @@ impl<'a> Emitter<'a> {
                 }
             }
             WitTy::Tuple(elems) => {
-                // TAG_TUP box on stack → element flats in order (element boxes
-                // live at @8+4i, the list/tuple layout)
                 let b = fx.local(ValType::I32);
                 fx.op(I::LocalSet(b));
                 for (i, et) in elems.iter().enumerate() {
@@ -82,9 +68,6 @@ impl<'a> Emitter<'a> {
                 }
             }
             WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
-                // variant box → [disc i32] ++ joined payload flats; every arm
-                // produces the same flat shape (zero-padded where shorter). A
-                // chain of `case == name ? lower(case) : …` over all cases.
                 let cases: Vec<(String, Option<WitTy>)> = ty
                     .variant_cases()
                     .unwrap()
@@ -99,19 +82,12 @@ impl<'a> Emitter<'a> {
                 self.lower_variant_chain(fx, b, &cases, &joined, resty, 0)?;
             }
             WitTy::Enum(cases) => {
-                // payload-less variant box → discriminant i32. Compare the box's
-                // case-name against each enum case, yielding its ordinal.
                 let resty = self.ty_idx(vec![], vec![ValType::I32]);
                 let b = fx.local(ValType::I32);
                 fx.op(I::LocalSet(b));
                 self.lower_enum_chain(fx, b, cases, resty, 0)?;
             }
             WitTy::Flags(names) => {
-                // flags value box (TAG_FLG: the set names, like the
-                // interpreter's `Value::Flg`) → bitset i32: OR `1<<i` for
-                // each declared member present in the box. Names the type
-                // does not declare contribute no bit (the checker rejects
-                // them statically for typed literals).
                 let b = fx.local(ValType::I32);
                 let acc = fx.local(ValType::I32);
                 fx.op(I::LocalSet(b));
@@ -135,8 +111,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Lower an N-case variant box to `[disc] ++ joined`: emit
-    /// `name==cases[i] ? lower(i) : <recurse i+1>`; the last case is the else.
     pub(crate) fn lower_variant_chain(
         &mut self,
         fx: &mut FnCtx,
@@ -162,8 +136,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Lower an N-case enum box to its discriminant: emit
-    /// `name==cases[i] ? i : <recurse i+1>`; the last case is the else.
     pub(crate) fn lower_enum_chain(
         &mut self,
         fx: &mut FnCtx,
@@ -189,14 +161,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// One arm of a lowered option/result: push the discriminant, the payload's
-    /// flats (if any) widened into the joined slot types, then zero-pad the
-    /// remaining joined positions.
-    ///
-    /// Canonical-ABI variant flattening widens each arm's payload to a shared
-    /// union (`join`), so a payload flat (e.g. `i32`) may have to be coerced into
-    /// a wider joined slot (e.g. `i64`). We materialise the payload flats into
-    /// payload-typed locals first, then re-push each coerced to its joined slot.
     pub(crate) fn lower_variant_case(
         &mut self,
         fx: &mut FnCtx,
@@ -212,12 +176,12 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(b));
                 fx.op(I::I32Load(ma(8, 2)));
                 self.lower(fx, pt)?;
-                // Pop the payload's flats (last-first) into payload-typed locals.
+
                 let locals: Vec<u32> = pflat.iter().rev().map(|&vt| fx.local(vt)).collect();
                 for &l in &locals {
                     fx.op(I::LocalSet(l));
                 }
-                // Re-push in order, widening each into its joined slot type.
+
                 for (i, &have) in pflat.iter().enumerate() {
                     fx.op(I::LocalGet(locals[pflat.len() - 1 - i]));
                     coerce_flat_to(fx, have, joined[i]);
@@ -232,8 +196,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// list box on stack → canonical (ptr, len) on stack: a fresh buffer of
-    /// `len` elements, each stored at its canonical size/stride.
     pub(crate) fn lower_list(&mut self, fx: &mut FnCtx, elem: &WitTy) -> Result<(), String> {
         use ValType::I32;
         let size = elem_size(elem);
@@ -258,7 +220,7 @@ impl<'a> Emitter<'a> {
         fx.op(I::LocalGet(n));
         fx.op(I::I32GeU);
         fx.op(I::BrIf(1));
-        // dst = buf + i*size ; store the i-th element there in canonical layout
+
         let dst = fx.local(I32);
         fx.op(I::LocalGet(buf));
         fx.op(I::LocalGet(i));
@@ -287,7 +249,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// canonical (ptr, len) in the given locals → list box on stack
     pub(crate) fn lift_list(
         &mut self,
         fx: &mut FnCtx,
@@ -327,7 +288,7 @@ impl<'a> Emitter<'a> {
         fx.op(I::I32Mul);
         fx.op(I::I32Add);
         fx.op(I::LocalSet(src));
-        // destination slot address, then the lifted element box
+
         fx.op(I::LocalGet(lst));
         fx.op(I::LocalGet(i));
         fx.op(I::I32Const(4));
@@ -346,7 +307,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// flat value on stack → box on stack (single-flat types only)
     pub(crate) fn lift(&mut self, fx: &mut FnCtx, ty: &WitTy) {
         match ty {
             WitTy::Bool => fx.op(I::Call(self.h.box_bool)),
@@ -369,20 +329,16 @@ impl<'a> Emitter<'a> {
             }
             WitTy::F64 => fx.op(I::Call(self.h.box_dec)),
             WitTy::Enum(cases) => {
-                // disc i32 on stack → payload-less variant box of the i-th case.
                 let d = fx.local(ValType::I32);
                 fx.op(I::LocalSet(d));
                 self.lift_enum(fx, d, cases, 0);
             }
             WitTy::Flags(names) => {
-                // bitset i32 on stack → record box of name → bool (set/clear).
                 let v = fx.local(ValType::I32);
                 fx.op(I::LocalSet(v));
                 self.lift_flags(fx, v, names);
             }
-            // A variant whose every case is payload-less (e.g. a bare
-            // `result`, 4.2) flattens to its lone i32 discriminant — exactly
-            // an enum's shape, so lift it the same way.
+
             WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) if flat_len(ty) == 1 => {
                 let cases: Vec<String> = ty
                     .variant_cases()
@@ -406,8 +362,6 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// disc in local `d` → a payload-less variant box of `cases[d]`. Built as a
-    /// chain `d==i ? box(cases[i]) : <recurse>`; falls through to the last case.
     pub(crate) fn lift_enum(&mut self, fx: &mut FnCtx, d: u32, cases: &[String], i: usize) {
         if i + 1 == cases.len() {
             let a = self.none_like_box(&cases[i]);
@@ -425,14 +379,11 @@ impl<'a> Emitter<'a> {
         fx.op(I::End);
     }
 
-    /// bitset in local `v` → flags value box (TAG_FLG: the names of the set
-    /// bits, in declaration order — the interpreter's `Value::Flg`).
     pub(crate) fn lift_flags(&mut self, fx: &mut FnCtx, v: u32, names: &[String]) {
         let n = names.len();
         let p = fx.local(ValType::I32);
         let idx = fx.local(ValType::I32);
-        // allocate for the worst case (all bits set); the bump allocator
-        // wastes the unset slots, which die with the arena
+
         fx.op(I::I32Const(8 + 4 * n as i32));
         fx.op(I::Call(self.h.alloc));
         fx.op(I::LocalSet(p));
@@ -443,7 +394,7 @@ impl<'a> Emitter<'a> {
         fx.op(I::LocalSet(idx));
         for (i, name) in names.iter().enumerate() {
             let kaddr = self.intern_str(name);
-            // if (v >> i) & 1 { box[8 + 4*idx] = name; idx += 1 }
+
             fx.op(I::LocalGet(v));
             fx.op(I::I32Const(i as i32));
             fx.op(I::I32ShrU);
@@ -471,10 +422,6 @@ impl<'a> Emitter<'a> {
         fx.op(I::LocalGet(p));
     }
 
-    /// Lift a value passed flattened across the boundary: read `flat(ty)`
-    /// consecutive flat locals starting at `base`, leave a boxed value on the
-    /// stack. Generalizes the per-type lifting for scalars, strings, lists, and
-    /// (recursively) records.
     pub(crate) fn lift_flat(
         &mut self,
         fx: &mut FnCtx,
@@ -514,7 +461,6 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(p));
             }
             WitTy::Tuple(elems) => {
-                // build a TAG_TUP box `[tag, n, elem ptrs…]` from the flat locals
                 let n = elems.len();
                 let p = fx.local(ValType::I32);
                 fx.op(I::I32Const(8 + 4 * n as i32));
@@ -536,7 +482,6 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(p));
             }
             WitTy::Option(_) | WitTy::Result(..) | WitTy::Variant(_) => {
-                // disc at `base`, payload union starting at `base + 1`
                 let cases: Vec<(String, Option<WitTy>)> = ty
                     .variant_cases()
                     .unwrap()
@@ -554,8 +499,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Lift an N-case variant passed flattened: dispatch on the disc at `base`
-    /// (`disc==i ? lift(case i) : <recurse>`); payload union starts at `base+1`.
     pub(crate) fn lift_variant_flat_chain(
         &mut self,
         fx: &mut FnCtx,
@@ -578,9 +521,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Build one arm of a lifted option/result: a payload-carrying case lifts
-    /// its payload from the flat locals and wraps it; a payload-less case is the
-    /// static box.
     pub(crate) fn lift_variant_case(
         &mut self,
         fx: &mut FnCtx,
@@ -592,13 +532,9 @@ impl<'a> Emitter<'a> {
         match pay {
             Some(pt) => {
                 let pflat = flat(pt);
-                // The payload was widened into the joined union slots; narrow
-                // each joined-typed local back to the payload's flat type into a
-                // fresh contiguous block, then lift from that block. When no slot
-                // needs narrowing this is a straight copy.
+
                 let needs_narrowing = pflat.iter().zip(joined).any(|(have, want)| have != want);
                 if needs_narrowing {
-                    // Allocate the payload-typed block contiguously.
                     let block: Vec<u32> = pflat.iter().map(|&vt| fx.local(vt)).collect();
                     for (i, &have) in pflat.iter().enumerate() {
                         fx.op(I::LocalGet(payload_base + i as u32));
@@ -619,10 +555,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Store the canonical in-memory representation of `src` (a boxed value in
-    /// the given local) at `dst + off`. Records lay fields out at aligned
-    /// offsets; scalar fields only (string/list inside a boundary record are
-    /// not supported by the wasm backend yet).
     pub(crate) fn store_to_mem(
         &mut self,
         fx: &mut FnCtx,
@@ -695,7 +627,6 @@ impl<'a> Emitter<'a> {
                 }
             }
             WitTy::Tuple(_) => {
-                // element boxes live at @8+4i in the TAG_TUP box
                 for (i, (o, et)) in record_field_offsets(ty).into_iter().enumerate() {
                     let fld = fx.local(ValType::I32);
                     fx.op(I::LocalGet(src));
@@ -725,7 +656,7 @@ impl<'a> Emitter<'a> {
                                 by the wasm backend yet"
                         .into());
                 }
-                // store the box's case ordinal as a 1-byte discriminant
+
                 fx.op(I::LocalGet(dst));
                 let resty = self.ty_idx(vec![], vec![ValType::I32]);
                 let b = fx.local(ValType::I32);
@@ -740,8 +671,7 @@ impl<'a> Emitter<'a> {
                                 by the wasm backend yet"
                         .into());
                 }
-                // OR the set flags into a bitset word, then store it at the
-                // canonical width (1/2/4 bytes for ≤8/≤16/≤32 members).
+
                 fx.op(I::LocalGet(dst));
                 fx.op(I::LocalGet(src));
                 self.lower(fx, &WitTy::Flags(names.clone()))?;
@@ -752,12 +682,10 @@ impl<'a> Emitter<'a> {
                 }
             }
             WitTy::Str => {
-                // canonical string in memory is (ptr, len); the component adapter
-                // copies the bytes via our cabi_realloc when lifting
                 fx.op(I::LocalGet(dst));
                 fx.op(I::LocalGet(src));
                 fx.op(I::I32Const(8));
-                fx.op(I::I32Add); // bytes begin after the [tag, len] header
+                fx.op(I::I32Add);
                 fx.op(I::I32Store(ma(off, 2)));
                 fx.op(I::LocalGet(dst));
                 fx.op(I::LocalGet(src));
@@ -765,7 +693,6 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Store(ma(off + 4, 2)));
             }
             WitTy::List(elem) => {
-                // lower to a canonical (ptr, len) buffer, then store both words
                 fx.op(I::LocalGet(src));
                 self.lower_list(fx, elem)?;
                 let len = fx.local(ValType::I32);
@@ -783,8 +710,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Store one arm of an option/result to memory: the 1-byte discriminant at
-    /// `off`, then (if present) the payload at `off + payload_offset`.
     pub(crate) fn store_variant_case(
         &mut self,
         fx: &mut FnCtx,
@@ -801,15 +726,13 @@ impl<'a> Emitter<'a> {
         if let Some(pt) = pay {
             let fld = fx.local(ValType::I32);
             fx.op(I::LocalGet(src));
-            fx.op(I::I32Load(ma(8, 2))); // variant payload box
+            fx.op(I::I32Load(ma(8, 2)));
             fx.op(I::LocalSet(fld));
             self.store_to_mem(fx, pt, fld, dst, off + poff)?;
         }
         Ok(())
     }
 
-    /// Store an N-case variant box to memory: match the box's case-name against
-    /// each case (`name==cases[i] ? store(i) : <recurse>`), the last is the else.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn store_variant_chain(
         &mut self,
@@ -826,7 +749,7 @@ impl<'a> Emitter<'a> {
         }
         let naddr = self.intern_str(&cases[i].0);
         fx.op(I::LocalGet(src));
-        fx.op(I::I32Load(ma(4, 2))); // TAG_VAR case-name box
+        fx.op(I::I32Load(ma(4, 2)));
         fx.op(I::I32Const(naddr as i32));
         fx.op(I::Call(self.h.eq_raw));
         fx.op(I::If(BlockType::Empty));
@@ -837,8 +760,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Inverse of [`store_to_mem`]: read the canonical representation of `ty`
-    /// at `src + off` and leave a boxed value on the stack.
     pub(crate) fn load_from_mem(
         &mut self,
         fx: &mut FnCtx,
@@ -952,7 +873,7 @@ impl<'a> Emitter<'a> {
                     .map(|(n, p)| (n.to_string(), p.cloned()))
                     .collect();
                 let poff = variant_payload_offset(ty);
-                // read the 1-byte disc into a local, then dispatch on it
+
                 let d = fx.local(ValType::I32);
                 fx.op(I::LocalGet(src));
                 fx.op(I::I32Load8U(ma(off, 0)));
@@ -960,7 +881,6 @@ impl<'a> Emitter<'a> {
                 self.load_variant_chain(fx, d, &cases, src, off + poff, 0)?;
             }
             WitTy::Enum(cases) => {
-                // 1-byte disc → payload-less variant box of the i-th case
                 let d = fx.local(ValType::I32);
                 fx.op(I::LocalGet(src));
                 fx.op(I::I32Load8U(ma(off, 0)));
@@ -968,7 +888,6 @@ impl<'a> Emitter<'a> {
                 self.lift_enum(fx, d, cases, 0);
             }
             WitTy::Flags(names) => {
-                // bitset word → record box of name → bool
                 let v = fx.local(ValType::I32);
                 fx.op(I::LocalGet(src));
                 if names.len() <= 8 {
@@ -983,9 +902,9 @@ impl<'a> Emitter<'a> {
             }
             WitTy::Str => {
                 fx.op(I::LocalGet(src));
-                fx.op(I::I32Load(ma(off, 2))); // ptr (into our memory)
+                fx.op(I::I32Load(ma(off, 2)));
                 fx.op(I::LocalGet(src));
-                fx.op(I::I32Load(ma(off + 4, 2))); // len
+                fx.op(I::I32Load(ma(off + 4, 2)));
                 fx.op(I::Call(self.h.box_str));
             }
             WitTy::List(elem) => {
@@ -1003,8 +922,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Build one arm of an option/result loaded from memory: read the payload at
-    /// `payload_addr` and wrap it, or yield the static payload-less box.
     pub(crate) fn load_variant_case(
         &mut self,
         fx: &mut FnCtx,
@@ -1026,8 +943,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// Load an N-case variant from memory: dispatch on the disc in local `d`
-    /// (`d==i ? load(case i) : <recurse>`); the last case is the else.
     pub(crate) fn load_variant_chain(
         &mut self,
         fx: &mut FnCtx,

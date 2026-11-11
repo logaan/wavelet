@@ -1,14 +1,3 @@
-//! Backend ↔ interpreter parity for user-declared resources (4.5, DefResource).
-//!
-//! `CLAUDE.md` makes the interpreter the semantics oracle: a wasm-backend change
-//! that diverges from it is a bug. Session 1 landed read/interp/check/wit and
-//! verified the counter's behaviour at the interpreter (`counter(10)` /
-//! `counter/next` / `counter/value` / `counter/sum` / identity). These tests
-//! build the *same* resource program through the real emitter and execute it
-//! in-process (the capability-free `wasmtime` host), asserting the backend
-//! agrees. Each would fail against the pre-emit backend (which had no resource
-//! machinery beyond the functor `set`).
-
 use wavelet::host::{HostComponent, Val};
 
 fn build_component(src_text: &str) -> HostComponent {
@@ -45,7 +34,7 @@ DefResource counter {
 }
 Export counter
 
-Def sum-list Fn {vs}
+Def sum-list Fn {vs: list(u32)}
   If eq(vs []) 0 add(head(vs) sum-list(tail(vs)))
 
 Export make-counter

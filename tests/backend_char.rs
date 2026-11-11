@@ -1,18 +1,5 @@
-//! Backend regression: chars at the component boundary and `to-char`.
-//!
-//! Chars box as `TAG_CHAR` in compiled code, but the boundary used to lower
-//! them through `unbox_int` — which traps unless the tag is `TAG_INT` — so
-//! calling any imported/exported function with a char argument hit a wasm
-//! `unreachable`. Lifting had the mirror bug: an incoming char was boxed as an
-//! *int*, so it stopped being a char in-guest (`eq(c 'a')` false, `lt` on it
-//! trapped). These tests cross the real component boundary with chars in
-//! every placement (flat argument, flat-ish result, list element, option
-//! payload) and exercise the `to-char` builtin's int and char paths.
-
 use wavelet::host::{HostComponent, Val};
 
-/// Build the char API and instantiate it. The app is self-contained (no
-/// imports), so it builds and runs with no external toolchain.
 fn char_component() -> HostComponent {
     use std::sync::atomic::{AtomicU32, Ordering};
     static SEQ: AtomicU32 = AtomicU32::new(0);
@@ -78,7 +65,7 @@ fn ok(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
 #[test]
 fn char_arguments_cross_the_boundary_without_trapping() {
     let mut c = char_component();
-    // The original failure: any char argument trapped in `unbox_int`.
+
     assert_eq!(ok(&mut c, "echo-char", &[Val::Char('a')]), Val::Char('a'));
     assert_eq!(ok(&mut c, "echo-char", &[Val::Char('☃')]), Val::Char('☃'));
 }
@@ -86,7 +73,7 @@ fn char_arguments_cross_the_boundary_without_trapping() {
 #[test]
 fn lifted_chars_stay_chars_in_guest() {
     let mut c = char_component();
-    // Pre-fix a lifted char boxed as an int, so `eq(c 'a')` was false.
+
     assert_eq!(ok(&mut c, "is-a", &[Val::Char('a')]), Val::Bool(true));
     assert_eq!(ok(&mut c, "is-a", &[Val::Char('b')]), Val::Bool(false));
 }

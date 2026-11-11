@@ -1,25 +1,7 @@
-//! Runtime (interpreter-oracle) tests for the `Set` functor.
-//!
-//! The interpreter (`interp.rs`/`builtins.rs`) is the language's semantics
-//! oracle; the wasm backend is validated against it. These tests pin the
-//! `wavelet:coll/set` functor's runtime behaviour at two levels:
-//!
-//!   * the `set-*` builtins directly (the exact dispatch a functor `Import`'s
-//!     `alias/op` bindings reach), and
-//!   * the whole `wavelet run` path (`runner::run_files`), so a functor program
-//!     — `Derive`, the parameterized `Import`, and qualified ops together —
-//!     evaluates end to end.
-//!
-//! The op semantics mirror the `SET_OPS` WIT descriptor in `wit.rs`:
-//! `new() -> set`, `add(set, elem)`, `contains(set, elem) -> bool`,
-//! `size(set) -> u32` (an integer here).
-
 use wavelet::builtins;
 use wavelet::interp::Interp;
 use wavelet::value::{Value, unit};
 
-/// Call a `set-*` builtin with positional args, as the interpreter does after
-/// bundling a call's arguments.
 fn op(interp: &Interp, name: &str, args: Vec<Value>) -> Value {
     let arg = match args.len() {
         0 => unit(),
@@ -37,7 +19,7 @@ fn point(x: i64, y: i64) -> Value {
 }
 
 #[test]
-// A fresh set is empty: `new()` then `size` is 0, and `contains` is false.
+
 fn new_set_is_empty() {
     let interp = Interp::new();
     let s = op(&interp, "set-new", vec![]);
@@ -49,15 +31,14 @@ fn new_set_is_empty() {
 }
 
 #[test]
-// `add` mutates the handle in place (shared identity): a `size`/`contains` on
-// the same handle observes earlier `add`s, and adding a duplicate is a no-op.
+
 fn add_is_observed_on_the_same_handle_and_dedups() {
     let interp = Interp::new();
     let s = op(&interp, "set-new", vec![]);
 
     op(&interp, "set-add", vec![s.clone(), Value::Int(1)]);
     op(&interp, "set-add", vec![s.clone(), Value::Int(2)]);
-    op(&interp, "set-add", vec![s.clone(), Value::Int(1)]); // duplicate
+    op(&interp, "set-add", vec![s.clone(), Value::Int(1)]);
 
     assert_eq!(op(&interp, "set-size", vec![s.clone()]), Value::Int(2));
     assert_eq!(
@@ -75,7 +56,7 @@ fn add_is_observed_on_the_same_handle_and_dedups() {
 }
 
 #[test]
-// `add` returns unit (a discarding op), exactly like the WIT `add: func(value)`.
+
 fn add_returns_unit() {
     let interp = Interp::new();
     let s = op(&interp, "set-new", vec![]);
@@ -83,16 +64,14 @@ fn add_returns_unit() {
 }
 
 #[test]
-// Element membership uses `Value` equality — the same equality the `eq` builtin
-// computes — so structurally-equal records are the same element (the functor is
-// instantiated at a derived record type in the worked example).
+
 fn element_equality_matches_eq_for_records() {
     let interp = Interp::new();
     let s = op(&interp, "set-new", vec![]);
 
     op(&interp, "set-add", vec![s.clone(), point(1, 2)]);
     op(&interp, "set-add", vec![s.clone(), point(3, 4)]);
-    op(&interp, "set-add", vec![s.clone(), point(1, 2)]); // structural duplicate
+    op(&interp, "set-add", vec![s.clone(), point(1, 2)]);
 
     assert_eq!(op(&interp, "set-size", vec![s.clone()]), Value::Int(2));
     assert_eq!(
@@ -104,7 +83,6 @@ fn element_equality_matches_eq_for_records() {
         Value::Bool(false)
     );
 
-    // Cross-check: the set's "same element" agrees with the `eq` builtin.
     let eq =
         |a: Value, b: Value| builtins::call(&interp, "eq", Value::Tup(vec![a, b]), None).unwrap();
     assert_eq!(eq(point(1, 2), point(1, 2)), Value::Bool(true));
@@ -112,7 +90,7 @@ fn element_equality_matches_eq_for_records() {
 }
 
 #[test]
-// Two independent `new()` handles do not share state.
+
 fn distinct_handles_are_independent() {
     let interp = Interp::new();
     let a = op(&interp, "set-new", vec![]);
@@ -123,16 +101,10 @@ fn distinct_handles_are_independent() {
     assert_eq!(op(&interp, "set-size", vec![b]), Value::Int(0));
 }
 
-// ---- end-to-end through `wavelet run` (`runner::run_files`) ----------------
-
-/// Run one `.wlt` source through the real `wavelet run` path and return the
-/// outcome. The program is written to a temp file because `run_files` reads
-/// files (it is the interpreter stand-in for `wavelet compose`).
 fn run_source(src: &str) -> Result<(), String> {
     let dir = std::env::temp_dir().join(format!(
         "wavelet-functor-{}-{}",
         std::process::id(),
-        // a per-call salt so parallel tests don't collide on the path
         RUN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
@@ -145,11 +117,6 @@ fn run_source(src: &str) -> Result<(), String> {
 
 static RUN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// The functor worked example, made self-checking: `run` builds a set of
-/// `point`s (with a duplicate), then *asserts* the expected `size`/`contains`
-/// results. A failed assertion calls `head([])`, which the interpreter rejects,
-/// so a wrong answer turns this from `Ok` into `Err` — the program is its own
-/// oracle. `map` stands in for the (not-yet-implemented) `each`.
 const WORKED_EXAMPLE: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Derive {Eq Ord Show} point
@@ -165,16 +132,13 @@ Def run Fn {}
          assert(not(pts/contains(s {x: 9 y: 9}))) ]"#;
 
 #[test]
-// The whole functor program — `Derive`, the parameterized `Import`, and the
-// qualified `pts/...` ops — evaluates end to end under `wavelet run`, and its
-// self-checks all hold.
+
 fn worked_example_runs_and_self_checks_pass() {
     run_source(WORKED_EXAMPLE).expect("functor worked example should run cleanly");
 }
 
 #[test]
-// Sanity check that the self-checking harness can fail: a wrong expected size
-// trips the `assert`, so a divergence would not silently pass.
+
 fn a_wrong_assertion_is_caught() {
     let bad = WORKED_EXAMPLE.replace("eq(pts/size(s) 2)", "eq(pts/size(s) 99)");
     assert!(
@@ -184,17 +148,13 @@ fn a_wrong_assertion_is_caught() {
 }
 
 #[test]
-// `each` is referenced by the documented worked example but is not yet a real
-// builtin/macro; this test documents that gap so it is not mistaken for a
-// regression. (The runnable form above uses `map`/explicit `add`s instead.)
+
 fn each_is_not_yet_defined() {
     let src = r#"Def run Fn {} each([1 2 3] Fn {x} x)"#;
     let err = run_source(src).expect_err("`each` is not defined yet");
     assert!(err.contains("each"), "unexpected error: {err}");
 }
 
-/// Build one `.wlt` source through `wavelet build` in a throwaway dir, returning
-/// the build result and (on success) the bytes of the single output component.
 fn build_source(src_text: &str) -> Result<Vec<u8>, String> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -219,17 +179,7 @@ fn build_source(src_text: &str) -> Result<Vec<u8>, String> {
 }
 
 #[test]
-// `wavelet build` now emits the functor `set` resource. A program that
-// instantiates the functor and *derives an ordinary result* from it (here a
-// `u32` from `size`) builds and produces a component that `wasm-tools` validates,
-// whose WIT exports the specialized `point-set` interface with the `set`
-// resource and its four ops. As of step 04 the qualified `pts/...` calls are
-// *routed* to those emitted bodies (`new` -> constructor, `add`/`contains`/`size`
-// -> the method bodies via `[resource-rep]set`), so the program runs correctly,
-// not just validates — `backend_functor::routed_record_set_size_matches_interpreter`
-// executes this exact shape end-to-end and the deduped `size` matches the
-// interpreter. This test pins the structural WIT contract (interface, resource,
-// the four ops).
+
 fn build_emits_a_validating_set_resource() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
@@ -243,7 +193,7 @@ Def count-distinct Fn {ps: list(point)}
 
     let bytes = build_source(SRC).expect("a functor program now builds");
     let wit = wasm_tools_component_wit(&bytes);
-    // The specialized interface and its `set` resource with all four ops.
+
     assert!(
         wit.contains("interface point-set"),
         "WIT missing point-set: {wit}"
@@ -261,13 +211,7 @@ Def count-distinct Fn {ps: list(point)}
 }
 
 #[test]
-// 4.7 — an export that *returns* a `set` handle whose element is a *local
-// record* (the docs `nearest-set: func(..) -> point-set.set` shape) used to be
-// rejected as a WIT interface cycle (`api` uses the handle, `point-set` uses
-// the record). The element record is now hoisted into a shared `types`
-// interface both sides `use`, so the shape BUILDS, and the emitted component's
-// WIT shows the hoisting. (Runtime behaviour of the returned handle is locked
-// by tests/backend_functor.rs::record_element_handle_return_hoists_the_element.)
+
 fn build_hoists_handle_returning_export_over_local_record() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
@@ -292,9 +236,6 @@ Def nearest-set Fn {ps: list(point)}
     );
 }
 
-/// Run `wasm-tools component wit` on built component bytes, returning the WIT
-/// text. Skips with a panic only if `wasm-tools` is absent (it is a dev/test
-/// dependency the build path already relies on transitively).
 fn wasm_tools_component_wit(bytes: &[u8]) -> String {
     use std::io::Write;
     let dir = std::env::temp_dir().join(format!(

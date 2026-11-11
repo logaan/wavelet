@@ -126,17 +126,15 @@ Def inc Fn {n: s32} add(n 1)
 Let {f: inc} f(41)      // f: (s32) -> s32, so this is 42
 ```
 
-A `Fn` whose parameters are untyped has no concrete arrow — it stays a gradual
-function value, exactly as before. (Higher-order stdlib functions like `map`
-and `filter` accept either.)
+Function parameters must have an inferred or declared static type. Numeric and
+string uses constrain ordinary definitions; `map`, `filter`, and `fold` infer
+callback parameters from their input data. Add annotations when the context is
+ambiguous.
 
-Function types are **component-internal**: WIT has no function type, so a
-function value cannot cross a component boundary. Exporting a function whose
-result is (or contains) a function value is a compile error with a deliberate
-diagnostic — *function types cannot cross component boundaries yet; import the
-combinator as a macro so it expands into this component instead*. Sharing
-behaviour **across** components is what [macro imports](macros.mdx) are for:
-the combinator's *form* travels, and expands into each consuming component.
+Callbacks and aliases can resolve statically inside a component. WIT has no
+function value type: lists, records, tuples, and cells cannot store functions,
+and a function cannot return a closure. Use variant tags plus `Match` for runtime
+operation selection, or a [macro](macros.mdx) that expands into direct calls.
 
 ## Derive
 
@@ -427,6 +425,8 @@ DefResource counter {
 The braces hold the resource's members. Two keys are **reserved and
 capitalized**; everything else is a method or a static.
 
+<Playground id="res-counter" />
+
 - **`New:` — the constructor.** It runs when the resource is created and returns
   **the representation** ("the rep"): an ordinary Wavelet value that holds the
   instance's private state. It is almost always a [`cell`](../stdlib#cells), since
@@ -492,6 +492,15 @@ In a type position a resource name carries an **ownership mode**, exactly as WIT
   or in a stored position (a record field, a list element), and doing so is a
   compile error.
 
+Owned-handle transfers are supported at Component Model import/export
+boundaries. Within one component, free functions and callbacks must use
+`borrow(counter)` when receiving an existing handle. The checker rejects local
+calls, aliases, and callbacks that would transfer an owned resource, including
+resources nested inside parameter data. Internal handle invalidation is not yet
+implemented, so this restriction prevents interpreter/backend differences.
+Resource methods borrow their implicit receiver; constructors can still create
+new handles locally.
+
 Passing a handle to an **own** parameter *invalidates the caller's handle* — using
 it again later **traps**. A **borrow** never invalidates: the caller keeps its
 handle. This is WIT's linear-handle discipline surfaced in Wavelet.
@@ -512,8 +521,8 @@ that:
   work on data, not handles.
 - **`to-string` is opaque.** Printing a handle yields the token `<counter>` (the
   type name in angle brackets), never its state.
-- **Not form-serializable.** A resource is not a form, so [`read`](../stdlib#conversion)
-  can never produce one and a handle cannot be round-tripped through text.
+- **Not form-serializable.** Resource identity and ownership cannot be reconstructed
+  from text; a handle cannot be round-tripped through the form representation.
 
 ```wavelet
 eq(counter(1) counter(1))    // false — two distinct instances
@@ -607,3 +616,39 @@ instance methods become methods whose implicit receiver is the handle (so
 parameter), and `sum` becomes a `static func` that returns the resource. The free
 functions keep their `own`/`borrow` spellings (`c: counter` lowers to an owned
 `counter`, `c: borrow<counter>` to a borrow).
+
+## User-defined templates
+
+`DefFunctor` defines a file-local template. Its package string identifies the
+template, its flags literal lists type parameters, and its list body contains
+`Def`, `DefType`, `DefResource`, and `Export` declarations. `Instantiate` supplies
+all type parameters by name and gives the generated declarations a prefix:
+
+```wavelet
+DefFunctor "demo:box" {elem} [
+  Export box
+  DefResource box {
+    New: Fn {value: elem} cell-new(value)
+    get: Fn {self: box} The elem cell-get(self)
+  }
+  Def unwrap Fn {value: elem} box/get(box(value))
+  Export {name: unwrap params: {value: elem} result: elem}
+]
+Instantiate {pkg: "demo:box" with: {elem: s64} as: numbers}
+Instantiate {pkg: "demo:box" with: {elem: string} as: words}
+```
+
+This generates independent `numbers-box` and `words-box` resources and concrete
+`numbers-unwrap(s64) -> s64` and `words-unwrap(string) -> string` exports.
+Template-local references follow the generated names; function parameters remain
+local bindings. Type arguments can be named types or compound types such as
+`list(s64)`. Missing, extra, or duplicate arguments and generated-name collisions
+are errors. The generated code goes through the same checker and component emitter
+as handwritten code. No generic types cross a component boundary.
+
+Templates currently live in the source file that instantiates them. Their bodies
+cannot contain imports, nested template declarations, or template instantiations;
+the built-in `wavelet:coll/set` remains available through `Instantiate`. Define and
+instantiate a template in the same submitted buffer when using the REPL.
+
+<Playground id="ty-user-functor" />

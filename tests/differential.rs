@@ -1,49 +1,16 @@
-//! F4 — the permanent differential harness for program *execution*.
-//!
-//! Every runnable documentation example (`docs/examples.json`, the corpus
-//! `tests/examples.rs` already locks against the interpreter) is executed
-//! **two** ways and the outcomes must agree:
-//!
-//! 1. the **interpreter** (`eval_snippet`) — the semantics oracle
-//!    (`CLAUDE.md`), kept for the life of the project; and
-//! 2. the **compiled artifact** — the snippet is wrapped into a self-contained
-//!    component (declarations stay top-level; expression forms are sequenced
-//!    into an exported `differential-main: func() -> string` whose body is
-//!    `to-string(Do [ … ])`), built through the real emitter
-//!    (`build::build_files`), instantiated in the capability-free `wasmtime`
-//!    host, and called.
-//!
-//! Because the backend's `to-string` is the port of the interpreter's
-//! `print_value` — the same printer that produced each example's recorded
-//! `value` — agreement is **exact string equality** on the printed final value.
-//! Error examples must fail on both sides (the compiled side at any stage:
-//! type check, emit, instantiation, or a runtime trap).
-//!
-//! The wasm backend cannot express every example yet. Those live in [`SKIP`],
-//! each with the reason it diverges today. Skipped examples still *run*: one
-//! that starts agreeing fails the suite until its entry is removed, so the
-//! list only ever shrinks. Sister harness: `tests/macro_differential.rs`
-//! (macro *expansion*); this file is the execution half of F4.
-
 use wavelet::form::{Arena, Node, NodeId};
 use wavelet::host::{HostComponent, Val};
 use wavelet::printer::print;
 use wavelet::reader::read_file;
 
-/// On the build path `expand` is confined to macro libraries (6.1.8).
 const EXPAND: &str = "`expand` is only available inside a macro library when building (6.1.8)";
 
-/// Examples the compiled artifact is known to disagree on, with the current
-/// reason. Removing a fixed entry is part of fixing the backend gap.
 const SKIP: &[(&str, &str)] = &[("macro-expand", EXPAND)];
 
 const PACKAGE: &str = "docs:snippet@0.1.0";
 const IFACE: &str = "docs:snippet/api@0.1.0";
 const MAIN: &str = "differential-main";
 
-/// Top-level declaration heads (post-reader `-MACRO` spellings): forms that
-/// declare rather than evaluate, and therefore stay top-level in the wrapped
-/// component. Everything else is an expression and moves into the `Do`.
 const DECL_HEADS: &[&str] = &[
     "package-MACRO",
     "target-MACRO",
@@ -66,14 +33,6 @@ fn is_decl(arena: &Arena, root: NodeId) -> bool {
     matches!(arena.node(head), Node::Sym(s) if DECL_HEADS.contains(&s.as_str()))
 }
 
-/// Wrap a documentation snippet into a self-contained component source.
-///
-/// The reader's printed forms are canonical and re-readable, so the wrapped
-/// program is reconstructed from the parsed tree: declarations in original
-/// order, then the expression forms sequenced in a `Do` inside the exported
-/// entry point. A snippet whose *last* form is an expression reports
-/// `to-string` of the `Do`'s value; one that ends in a declaration reports
-/// `""`, matching `eval_snippet`'s suppressed unit.
 fn wrap_snippet(code: &str) -> Result<String, String> {
     let (arena, roots) = read_file(code).map_err(|e| format!("read: {e}"))?;
     let mut decls = Vec::new();
@@ -81,6 +40,12 @@ fn wrap_snippet(code: &str) -> Result<String, String> {
     for &root in &roots {
         if is_decl(&arena, root) {
             decls.push(print(&arena, root));
+            if let Node::Tup(items) = arena.node(root)
+                && matches!(arena.node(items[0]), Node::Sym(head) if head == "defresource-MACRO")
+                && let Some(name) = items.get(1)
+            {
+                decls.push(format!("Export {}", print(&arena, *name)));
+            }
         } else {
             exprs.push(print(&arena, root));
         }
@@ -99,16 +64,12 @@ fn wrap_snippet(code: &str) -> Result<String, String> {
     } else if exprs.is_empty() {
         "\"\"".to_string()
     } else {
-        // Effects (and errors) of the expressions still run; the snippet's
-        // final value is the trailing declaration's unit, printed as "".
         format!("Do [{}\n    \"\"]", exprs.join("\n    "))
     };
     out.push_str(&format!("  {body}\n"));
     Ok(out)
 }
 
-/// Build the wrapped program through the real emitter and execute its entry
-/// point, returning the printed final value. `Err` carries the failing stage.
 fn compiled_eval(_id: &str, program: &str) -> Result<(String, String), String> {
     let bytes = wavelet::staging::Project::compile(program).map_err(|e| e.to_string())?;
     let mut component =
@@ -123,11 +84,9 @@ fn compiled_eval(_id: &str, program: &str) -> Result<(String, String), String> {
     }
 }
 
-/// One example's differential outcome.
 enum Outcome {
-    /// Both sides agree (matching value, or both failing).
     Agree,
-    /// The sides disagree; the string says how.
+
     Disagree(String),
 }
 
@@ -158,8 +117,7 @@ fn run_example(id: &str, code: &str, expect_error: bool) -> Outcome {
                     interp.output
                 ));
             }
-            // `eval_snippet` suppresses a final unit as ""; the compiled side
-            // prints it as "{}". The two spell the same value.
+
             if v == interp.value || (interp.value.is_empty() && v == "{}") {
                 Outcome::Agree
             } else {
@@ -199,7 +157,7 @@ fn every_documented_example_agrees_with_the_compiled_artifact() {
         match (run_example(id, code, expect_error), skip) {
             (Outcome::Agree, None) => {}
             (Outcome::Agree, Some(_)) => ratchet.push(id.clone()),
-            (Outcome::Disagree(_), Some(_)) => {} // known gap, documented in SKIP
+            (Outcome::Disagree(_), Some(_)) => {}
             (Outcome::Disagree(how), None) => {
                 divergences.push(format!("`{id}`: {how}"));
             }

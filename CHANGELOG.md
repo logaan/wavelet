@@ -15,422 +15,107 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
-- Official WAVE parser compliance checks for documented values and backend
-  float/character output, with a ratcheted empty-tuple exception.
-- Resource persistence guards reject nested/shared cell graphs before emission.
-
-- Shared, automatically cleaned build staging with explicit path errors.
-- An independent execution regression corpus covering mutation ordering,
-  recursion, compound values, bounds errors, and checked integer overflow.
-- Contextual typing for `map`, `filter`, and `fold` callbacks, including
-  callback arity and result validation.
-
-- **Tuple constructors `tuple0` … `tuple16`.** Wavelet can now *build* a tuple
-  value from computed data: one builtin per size, each taking exactly that many
-  arguments (`tuple2(add(1 2) "x")` → `(3, "x")`). Fixed arities keep every
-  constructor's shape WIT-expressible and make each usable as an ordinary
-  first-class function value (`apply(tuple2 pair)`, `map(tuple1 xs)`). The
-  checker infers the result as the tuple of the argument types (no `The`
-  ascription needed) and rejects wrong arities statically; the wasm backend
-  constructs in place on the canonical path — including as export results,
-  nested, and as variant/result/record payloads — and `DefType` variant cases
-  shadow the names exactly like other builtins. With these, the conformance
-  values callee (`conformance/wavelet/src/roundtrip-values.wlt`) builds and
-  passes against both rust seeds (`conformance/wavelet/test-values-callee.sh`).
-
-### Fixed
-
-- String printing now escapes ASCII control characters, including NUL, as valid
-  WAVE in both the interpreter and compiled backend.
-- Interpreter resource ownership transfers invalidate the source handle;
-  borrowed handles remain borrowed, and remaining destructors run at teardown.
-
-- Variant constructors consistently shadow builtins, including boxed calls.
-  Multi-field variant payloads must use one explicit tuple type.
-- `neg` and `abs` reject signed minimum overflow in the interpreter and wasm.
-- Speculative type inference no longer overwrites authoritative backend types.
-- REPL value redefinitions replace the previous binding; repeated expressions
-  reuse a bounded cache of compiled instances until definitions change.
-
-- **Sym-headed tuple patterns over a statically-known tuple scrutinee now
-  destructure on the wasm backend.** The boxed matcher read every Sym-headed
-  tuple pattern as a variant-case pattern, so `Match p [((a b) …)]` over a
-  tuple-typed parameter diverged from the interpreter (which disambiguates by
-  the value). When the checker knows the scrutinee is a tuple, the backend now
-  takes the element-wise tuple reading.
-
-- **Line editing and history in the interactive REPL.** When `wavelet repl` runs
-  on a terminal it now uses `rustyline`: arrow-key line editing, a persistent
-  history file (`$XDG_STATE_HOME/wavelet/history`, else
-  `~/.local/state/wavelet/history`), Ctrl-C to abandon the current entry, and
-  Ctrl-D to exit. Piped/scripted input keeps the plain line-reader, so
-  non-interactive sessions are unchanged.
-
-- **Shebang support for executable scripts.** A source file may begin with a
-  `#!/usr/bin/env wavelet` line so it can be marked executable and run directly
-  (`./script`). The reader skips a leading shebang line — recognised only at
-  the very start of the file; `#` is not a comment anywhere else — and a bare
-  `wavelet <file> [args...]` invocation runs the script through the same
-  compiled path (with interpreter fallback) as `wavelet run`. The script may be
-  **extensionless** (the common Unix shape, e.g. an executable named `deploy`
-  with no suffix): a first argument that names an existing file and is not one
-  of the bare-word subcommands is run as a script, with `.wlt` kept as a
-  fast-path.
+- A working WASI 0.2 HTTP example in `examples/http`, with vendored interfaces,
+  a smoke-test script, and provider-neutral deployment guidance. The HTTP scaffold
+  sets content type, escapes reflected text, and releases request/body resources.
+- A complete symmetric Component Model round-trip component and automated
+  matrix against two independent Rust seeds, in both directions and against
+  itself. Coverage includes stable WIT values, nested compounds, owned/borrowed
+  resources, constructors, methods, statics, and zero/multiple parameters.
+- User-defined `DefFunctor` templates with named type parameters and concrete
+  `Instantiate` expansion, including resource and compound-result templates.
+- Dual-role imports using `roles: {runtime macro}` to share one alias between
+  compile-time macros and runtime functions.
+- User-declared `DefResource` resources; compiled cells; persistent resource
+  state; resource methods, statics, constructors, and destructors.
+- Tuple constructors `tuple0` through `tuple16`, tuple argument bundling,
+  payloadless results, bound variant/enum constructors, and constructor aliases.
+- Compiled numeric conversions, f32, flags, collections, string operations,
+  statically resolved `map`/`filter`/`fold`, and compound-value printing.
+- Cross-package signature types, dependency aliases, named functor application,
+  typed macro trees, pattern exhaustiveness, and cross-component type checking.
+- Contextual callback typing and inference for recursive functions, cells,
+  imported resource methods, and exported parameter/result annotations.
+- An independent execution regression corpus, output comparison, and official
+  WAVE-parser checks for documented values and backend float/character output.
+- Shared private build staging with automatic cleanup, explicit path errors,
+  duplicate filename rejection, and copied WIT/macro dependencies.
+- Formatting, Clippy, Lizard complexity, module/function-size, and measured
+  LLVM coverage gates in `scripts/check.sh` and CI. Existing complexity debt
+  has checked-in ratchets; functions cannot reach 1,000 code lines.
+- Pinned copy/paste detection for implementation Rust and JavaScript/TypeScript,
+  with a content-based baseline that rejects new clones and extra copies.
+- Interactive line editing, persistent REPL history, and executable `.wlt` or
+  extensionless scripts using a leading shebang.
 
 ### Changed
 
-- Runtime `read` and `apply` have been removed. Use compiler-side reading and
-  direct function calls respectively.
-- CLI execution errors and traps are surfaced directly without interpreter
-  fallback or duplicated execution.
-
-- **`wavelet run` and `wavelet repl` now execute on the compiled wasm path**
-  instead of the tree-walking interpreter (goal 6, Steps 2 and 6.5). `run`
-  builds the program through the real emitter, composes its runtime `Import`s
-  into one component, instantiates it in the capability-free `wasmtime` host,
-  and calls the exported `run`. The REPL evaluates each expression by compiling
-  the accumulated session (its definitions plus a synthetic `repl-eval` entry)
-  and printing the value the guest's `to-string` renders. For the covered
-  language subset the output is identical to before — the interpreter remains
-  the reference oracle the backend is validated against. A program (or REPL
-  line) that hits a decision-gated backend hole (a record-payload `apply`, or
-  `read`) transparently falls back
-  to the interpreter for that entry, announced on stderr, so nothing that ran
-  before regresses. Macro expansion had already moved to the compiled path.
-
-- **Floats print to six significant digits.** `to-string` (and every value
-  printed by `run`, the REPL, and the playground) now renders floats
-  *indicatively* — six significant digits, fixed notation for magnitudes
-  between `0.0001` and `999999`, scientific (`2.5e-7`) outside, `nan`/`inf`/
-  `-inf` unchanged — instead of Rust's shortest-round-trip digits
-  (`3.14159` rather than `3.141592653589793`). The printed text still lexes
-  as a Wavelet float but is no longer guaranteed to read back bit-identical
-  (0.2: keeps compiled components small — the interpreter and the emitted
-  runtime share one tiny fixed-order f64 algorithm, so both pipelines agree
-  exactly). Float *literals* in source are untouched.
-
-### Added
-
-- **The remaining value builtins now compile to wasm components.** The backend
-  gained `abs`, `min`, `max`, `empty`, `get`, `put`, `push`, `concat`, `reverse`,
-  `range`, `zip`, `split`, `join`, `contains`, `apply`, and `drop`, plus the
-  `pi` constant — previously each traded on the interpreter only, so a compiled
-  component using any of them failed to build. Each follows the interpreter's
-  reference semantics exactly (out-of-range `get`/`put` traps, `range`/`reverse`
-  over empty lists, `zip` stopping at the shorter list, Rust's empty-separator
-  `split`, `min`/`max` over the shared total order, and so on). This drains the
-  differential harness's SKIP list down to the entries gated on open decisions
-  (float/char `to-string`, flags construction, a computed-function record-payload
-  ABI, and a wasm-side reader for `read`).
-
-- **The higher-order list builtins `map`, `filter`, and `fold` are now compiled
-  by the wasm backend (5.12).** `map(f, list)` applies a function value to each
-  element (length-preserving); `filter(f, list)` keeps the elements for which
-  the predicate returns true; `fold(f, acc, list)` left-folds, applying `f` to
-  the `(acc, elem)` tuple at each step. All three work in compiled components as
-  well as the interpreter, `f` may be a named function or an inline `Fn` literal,
-  and they nest. Previously these ran only under the interpreter; the documented
-  `map-square`, `std-fold`, and `std-filter` examples now agree between the
-  interpreter and the compiled artifact.
-
-- **Function (arrow) types in the checker (5.8, Phase D).** A `Fn` literal whose
-  parameter types and inferred result are all concrete now carries a static
-  function type `(T1 … Tn) -> R`, and a bare reference to such a single-signature
-  function `Def` is a first-class value of the same arrow type. Applying a
-  function-typed local (`Let {f: inc} f(5)`) is statically checked against the
-  arrow: wrong arity or argument types are compile errors, and the application's
-  result type is known. Untyped/gradual function values behave exactly as before.
-- **Explicit boundary rule for function values.** Exporting a function whose
-  result is (or contains) a function value is now a deliberate compile error —
-  `function types cannot cross component boundaries yet; import the combinator
-  as a macro so it expands into this component instead` — in the interpreter,
-  the runner, WIT synthesis, and the wasm build alike (previously the build
-  failed with a generic "cannot infer result type" while `wavelet run` silently
-  allowed it).
-
-- **User-declared resource types (`DefResource`).** A dedicated
-  `DefResource <name> { … }` form declares a resource type that maps 1:1 onto a
-  WIT `resource` block. Members are identified by role: `New:` is the
-  constructor (returns the rep; called at the use site as `counter(5)` — the
-  type name applied), `Drop:` is the optional destructor (`Fn {self: <name>}` →
-  unit, not user-callable), a `Static Fn {…}` member is a static (an alternative
-  constructor may return the resource), and any other member is an instance
-  method whose first parameter is `self: <name>` (bound to the rep in the body).
-  Methods and statics are called qualified: `counter/next(c)`, `counter/sum(vs)`.
-  In type position a bare resource name means `own` (ownership transfers),
-  `own(<name>)` is the explicit synonym, and `borrow(<name>)` is a
-  parameter-only borrow (illegal in result or stored position). Resource
-  handles have identity equality and print opaquely as `<name>`; they are not
-  form-serializable and cannot be `Derive`d (`Eq`/`Ord`/`Hash`/`Show` over a
-  resource is a compile error). Exporting a resource (`Export <name>`) exports
-  the whole block; an unexported one is a legal internal resource. The
-  interpreter (the semantics oracle), checker discipline, WIT synthesis, and the
-  wasm backend all agree: the backend generalizes the functor `set` machinery to
-  emit each resource's constructor/method/static/`Drop` core functions and the
-  canonical `[constructor]`/`[method]`/`[static]`/`[dtor]` boundary exports,
-  carrying a resource value guest-internally as its rep and minting/deref-ing
-  handles only at the component edge (own via `resource.new`/`resource.rep`, a
-  borrow arrives as the rep directly). The 5.12 conformance suite's `counter`
-  callee (`conformance/wavelet/src/roundtrip-resources.wlt`) passes
-  `run-resources()` against both rust seed builds.
-
-- **`cell-new` / `cell-get` / `cell-set` compile.** The mutable-cell builtins
-  (the interpreter's `Value::Cell`) now have a wasm backend (a heap box with
-  pointer identity), so cells — and the resource reps built on them — work in
-  compiled components, not just the interpreter.
+- Static typing is now the default language behavior. Unknown runtime types,
+  heterogeneous lists, function-valued runtime storage/returns, and dynamic
+  callback selection are rejected. Statically resolved functions and macros
+  remain supported. `--strict` is accepted for compatibility.
+- `/` in a name normalizes to `-`; qualified-symbol AST and macro-wire variants
+  have been removed. Rebuild macro components against the updated meta ABI.
+  The docs, language server, and all editor grammars follow the new spelling.
+- `wavelet run` and the REPL execute compiled components and surface build
+  errors or traps directly. The interpreter remains the reference oracle.
+- Repeated REPL expressions reuse a bounded cache of compiled instances;
+  definitions invalidate it, and value redefinitions replace older bindings.
+- Local resource calls use borrowed arguments. Owned transfers are supported
+  at Component Model import/export boundaries; unsupported local owned
+  transfers are rejected rather than silently diverging between engines.
+- Resource state is restricted to plain data or one outer cell containing
+  plain data. Nested/shared cell graphs and function-bearing state are rejected
+  before persistence.
+- Per-call arenas reset between exported calls while resource state persists.
+  Runtime helper emission is split into smaller modules and functions.
+- `If` and `Do` are standard-library macros. `The` is a static ascription;
+  conditions must be bool; integer literals must fit their contextual type;
+  float literals are not Match patterns. A list argument binds to one parameter.
+- Floats print indicatively to six significant digits. Empty tuples and unit
+  retain their documented diagnostic spellings; the WAVE check records its
+  single empty-tuple syntax exception explicitly.
+- Source comments have been removed; agent guidance requires explanations in
+  documentation and preserves executable/tool directives. Work happens in the
+  shared checkout with local commits.
+- The official source extension is `.wlt`.
 
 ### Fixed
 
-- **The compiled backend's `to-string` now matches the interpreter's
-  `print_value` for strings and compound values.** Strings are quoted and
-  escaped (`"` `\\` `\n` `\t` `\r`); lists print as `[a, b]`, tuples as
-  `(a, b)`, records as `{k: v}`, variants as `name` / `name(payload)`, flags as
-  `{a, b}`, and cells as `cell(v)`, each recursing through `to-string` with the
-  same nested quoting the oracle uses. Previously the backend printed strings
-  verbatim and trapped on every compound. Closes a large batch of
-  differential-test divergences.
+- Builds preserve authored `wit/*.wit` files and publish fetched dependencies only
+  after all staged fetches succeed. Duplicate packages and colliding component
+  filenames and package names that escape the output directory fail before output
+  files are written; empty build/run/compose inputs
+  return diagnostics.
+- Macro component caching distinguishes requested versions and explicit artifact
+  paths. WIT dependencies accept binary and text-encoded WebAssembly packages.
 
-- **`to-string` of floats and chars no longer traps in compiled components.**
-  The emitted runtime gained the two missing `to_str` arms, so float and char
-  values — bare or inside compounds — print on the compiled path, and
-  `wavelet run`/`wavelet repl` no longer fall back to the interpreter for
-  them. Chars match the interpreter exactly for every Latin-1 codepoint
-  (named escapes, `\u{..}` for non-printables) and pass other printable
-  Unicode through as UTF-8. Char output is valid WAVE text: NUL prints as
-  `'\u{0}'` (WAVE and the Wavelet reader have no `\0` escape, so Rust's
-  `{c:?}` spelling would not read back).
 
-### Changed
+- Imported WIT types retain package and interface identity, including aliases;
+  colliding record layouts and resource names no longer overwrite one another.
+  Passing a handle to a different resource interface is rejected statically.
+- Imported single-field record results lift correctly through the canonical ABI.
+- The embedded runtime uses Wasmtime 50, which runs the composed resource and
+  variant regression that failed in the previous runtime's adapter compiler.
 
-- **Resource and functor components now free per-call memory (5.1).** Components
-  that instantiate a functor or declare a `DefResource` used to keep their bump
-  arena for the lifetime of the instance (never freeing), because resource state
-  had to survive across export calls. Resource state (a `DefResource` cell, a
-  functor `set`'s backing list) now lives in a dedicated persistent region that
-  the per-call arena reset leaves untouched, so these components reset their
-  arena at every export call like any other component — reclaiming each call's
-  temporaries instead of leaking them. Behaviour is unchanged; only the
-  memory footprint of long-lived resource/functor components improves.
+- Variant constructors shadow builtins consistently, including boxed calls;
+  multi-field variant payloads use an explicit tuple type.
+- Checked `neg`/`abs` overflow agrees in the interpreter and both backend paths.
+- Speculative type inference cannot overwrite authoritative backend types.
+- Interpreter ownership transfer invalidates the source handle; borrowed handles
+  remain borrowed, and destructors run once at teardown.
+- Tuple/record/variant pattern binding and coverage, canonical layout for narrow
+  values and flags, dependency type aliases, resource compound results, and
+  local overload resolution agree with their declared types.
+- Strings containing ASCII controls, including NUL, print valid WAVE escapes in
+  both engines. Float/character formatting and compound printing agree.
+- `wkg` dependency fetching uses the current CLI directory syntax.
 
-- **`If` and `Do` are now bundled standard-library macros, not core special
-  forms.** `Match` is the sole core branching construct; `If c t e` expands to
-  `Match The bool c [(true t) (false e)]` and `Do [e1 … en]` to nested
-  `Match ei [(_ …)]`. They remain always in scope and behave exactly as before —
-  the same laziness, tail positions, and single-list argument for `Do`. Because
-  they lower to `Match` before the checker, WIT synthesis, and the backend run,
-  those stages agree on them by construction. The core is now **fourteen**
-  special forms. Diagnostics are preserved: a non-`bool` `If` condition is still
-  a compile-time error (`The bool c` also makes `The <non-numeric> <int-literal>`
-  — e.g. `The bool 1` — a static "does not conform" error, which previously
-  slipped through the range-only check).
+### Removed
 
-- **An exported function's body is checked against its declared result type.**
-  The `result:` type declared in an `Export {…}` form is now threaded into the
-  matching def's body as its expected type, so a body whose type genuinely
-  conflicts with the declared result is a compile error rather than being
-  accepted and coerced silently. Two boundary coercions stay legal: a narrower
-  integer result may **widen** into a wider declared result of the *same*
-  signedness (an `s32` body into an `s64` result), and a value carrying a
-  `result` payload may flow into a declared payload-less `result` (the ABI drops
-  the payload — the `wasi:cli/run` `run: func() -> result` shape with an `ok(0)`
-  body). Mixed-signedness widening, integer *narrowing*, and shape mismatches
-  are rejected. Threading also lets an overloaded call in an export body resolve
-  by the declared return type.
-
-- **A list argument no longer spreads across parameters.** A single list value
-  passed to a function is one value bound to one parameter, like any other
-  value; positional multi-binding across parameters is the tuple's job, by-name
-  binding the record's. The empty-list, empty-flags, and empty-record "no
-  arguments" acceptances are also gone — only the empty tuple `()` denotes no
-  arguments. (Coupling a function's arity to a runtime list length was a
-  runtime shape-dispatch the checker could not see.)
-
-- **A float literal is rejected as a Match pattern.** Matching a `Dec` literal
-  by floating-point equality is a footgun (`0.1 + 0.2` never equals `0.3`; a
-  `nan` pattern matches nothing) and no set of float literals can ever be
-  exhaustive, so it is now a check-time error pointing at an explicit
-  comparison. Integer, boolean, character, and string literal patterns are
-  unaffected — their equality is exact.
-
-- **Compiled components reset their heap between export calls.** Every export
-  now carries a canonical post-return function that resets the bump allocator
-  to the arena floor once the caller has read the results, so a long-lived
-  instance no longer grows memory monotonically across calls (arena-per-call;
-  module-level value defs recompute per call). Components that instantiate
-  functors (`Set`) OR user-declared resources (`DefResource`) keep the previous
-  never-free behaviour for now, since their resource state (the rep) lives on the
-  same heap and must survive across calls.
-
-### Added
-
-- **Match pattern coverage in compiled code is complete.** Char and flags
-  literals now work as patterns in the wasm backend (matching by codepoint /
-  set names, like the interpreter), and a qualified name in pattern position
-  reports the interpreter's exact error. Every pattern form the interpreter
-  accepts now compiles.
-
-- **Multiple arguments bundle into a sole tuple parameter, imports
-  included.** Calling `f(1 "x" true)` where `f` takes one `tuple<...>`
-  parameter binds the arguments as the tuple payload — the checker and the
-  wasm backend now model the same §4.2 call shape the interpreter has always
-  bound, so bundled calls to imported functions compile and run.
-
-- **The numeric conversion builtins work in compiled components.**
-  `to-u8`…`to-s64`, `to-f32`/`to-f64`, and `to-char` compile for
-  statically-typed operands, with the interpreter's exact semantics: range
-  errors trap, chars convert through their codepoint, whole floats truncate.
-  The next-Unicode-scalar transform (`to-char(add(to-u32(c) 1))`) now
-  compiles.
-
-- **Flags values work in compiled components.** A flags literal (`{read
-  write}`) evaluates in the wasm backend to the same value the interpreter
-  produces (`Value::Flg` — the set names), crosses boundaries as the
-  canonical i32 bitset, and lifts back with the set names in declaration
-  order; `eq` over flags matches the interpreter exactly. The conformance
-  runner's `permissions-rt` checks are restored — every caller-role check
-  the suite defines is now present and green against both Rust callees.
-
-- **`f32` is supported by the wasm backend.** Exports and imports may use
-  `f32` in any position — flat params/results, record/tuple fields, list
-  elements, variant/option/result payloads. Internally every float remains an
-  `f64` (matching the interpreter, which models all floats as `f64`); `f32`
-  is a boundary-only representation, promoted on lift and demoted on lower.
-  The conformance runner's `f32-rt` and `every-primitive-rt` checks are
-  restored and green against both Rust callees.
-
-- **Variant/enum case constructors are bound values.** A `DefType name
-  [case case(t) …]` declaration now binds each case in the value namespace:
-  nullary cases as payload-less variant values (like `none`), payloaded cases
-  as first-class constructor functions. Dep-declared cases are reachable
-  through the import alias (`t/circle(1.0)`, `t/north`), on the interpreter
-  and build paths alike. Calling a nullary case (`north()`) is a compile
-  error pointing at the bare name.
-
-- **Payload-less results are spellable and constructible.** A standalone `_`
-  lexes as the absent-arm placeholder, so `result`, `result(t)`, and
-  `result(_ e)` are all writable type text; `ok()`/`err()` with no arguments
-  construct genuinely payload-less cases, and the sub-pattern-less call
-  shapes `(ok)`/`(err)` match them.
-
-- **`Instantiate` — functor application is its own form.**
-  `Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}`
-  replaces the parameterized-`Import` spelling; functor arguments are passed
-  by name in `with:`. `Import` only brings unparameterized dependencies into
-  scope, and importing a functor package is an actionable error.
-
-- **Cross-package type references in signatures.** A local export signature
-  (or a local `DefType` field) can name a type an imported package defines;
-  the synthesized WIT brings it into scope with a
-  `use <pkg>/<iface>@<ver>.{name};`, versioned from the resolved dependency.
-
-- **Dep type aliases resolve.** A dependency's named alias
-  (`type points = list<point>`) now expands at the boundary like a local
-  `DefType` alias, and sibling `.wlt` dependencies carry their full type
-  surface (variants, enums, flags, aliases) on the build path.
-
-- **`--strict` mode (opt-in).** `wavelet run|build|wit --strict` makes
-  `Type::Unknown` a compile error: every expression must have a concrete
-  static type. Strict ships opt-in while the remaining gradual holes
-  (chiefly untyped function values and higher-order builtins) are burned
-  down; the plan flips it to the default — and deletes gradual mode — once
-  the documented example suite and the conformance suite pass under it.
-
-- **Pattern exhaustiveness checking.** Every `Match` whose scrutinee's type is
-  known must now be total, at compile time: `bool`, `option`, `result`, and
-  `DefType` variant scrutinees must cover every case, and types that cannot
-  be enumerated (numbers, strings, chars, lists, trees) require a catch-all
-  clause. What used to be the runtime "no Match clause for …" error is now a
-  compile-time "non-exhaustive Match" diagnostic.
-
-- **Cross-component calls are type-checked.** On the build path, qualified
-  calls (`alias/fn`) are checked against — and typed by — the imported
-  function's declared WIT signature (sibling components, `wit/deps` packages,
-  and functor instantiations), so a mistyped argument to an import is a
-  compile error instead of an emit failure or a runtime trap.
-
-- **The meta layer is typed.** `Quote`/`Quasi` have the static type `tree`
-  (the `wavelet:meta` interchange record); `DefMacro` templates check as
-  `tree -> tree` (template bodies are checked, with parameters typed as
-  forms); `Quasi`'s `Unquote`/`Splice` holes are checked as ordinary
-  expressions; `gensym`/`expand`/`rec-key` return `tree` and `read` returns
-  `result<tree, string>`. Macro-*generated* code is also now type-checked
-  after expansion on every path, including the playground.
-
-- **Richer static types everywhere.** The checker now models records
-  (structural and `DefType`-nominal), variants and their constructors,
-  options, results, tuples, and type aliases; every builtin has a typed
-  signature; non-overloaded def calls carry their inferred result type; and
-  `Match` patterns bind variables at the types the scrutinee implies. WIT
-  synthesis falls back to the full checker, so exports returning options,
-  results, list literals, or `DefType` values synthesize without an explicit
-  `Export` record form.
-
-- **`wavelet-lsp` surfaces the total checker's diagnostics.** After a
-  successful parse, the file is macro-expanded and run through the type
-  checker on every edit, so type errors — ill-typed calls, non-exhaustive
-  `Match`es, heterogeneous lists — appear in the editor with the compiler's
-  exact message.
-
-### Changed
-
-- **All-payload-less `DefType` variants synthesize a WIT `enum`.**
-  `DefType direction [north east south west]` now emits
-  `enum direction { … }` rather than a payload-less `variant` (same
-  single-discriminant ABI).
-
-- **Functor element records hoist to break WIT cycles.** An export returning
-  (or taking) a `set` handle over a locally-declared record no longer fails
-  with an interface-cycle error: the element record is hoisted into a shared
-  `types` interface that both `api` and the functor interface `use`.
-
-- **Lists are `list<t>`.** A list literal's elements must share one type;
-  mixing shapes is a compile error. Reach for a record, a `DefType` variant,
-  or quoted data (a `tree`) instead.
-
-- **A non-bool `If` condition is a compile error** (there is no truthiness,
-  and the check no longer waits for runtime).
-
-- **`The` is a pure static ascription.** The annotated type is checked
-  against the expression at compile time for every annotation shape
-  (constructor annotations like `list(s32)` included). The runtime `The`
-  conformance check and the runtime typed-parameter conformance check are
-  **deleted** — the total checker runs ahead of the interpreter, and the
-  wasm backend never emitted them, so removing them also removes an
-  interpreter/backend divergence. (`The` is now also tail-transparent at
-  runtime.)
-
-- **Out-of-range integer literals are compile errors.** A literal that meets
-  a concrete integer context (a typed parameter, a `to-*` conversion, an
-  overload filter) is resolved and range-checked statically, with the same
-  message the runtime check used to produce.
-
-- **Non-exported overload sets now dispatch correctly in compiled
-  components.** The build path resolves and rewrites internal overloaded
-  calls exactly as the interpreter does (previously every internal call
-  dispatched to the last definition).
-
-- **The official file extension is now `.wlt`** (was `.wvl`). The CLI usage
-  text, `wavelet new` scaffolding, the macro-library build pipeline, the
-  examples, the conformance suite, the docs, and the editor tooling (VS Code
-  extension, `wavelet.nvim`, `wavelet-lsp`) all use `.wlt`. Rename existing
-  `.wvl` sources to `.wlt`.
-
-### Fixed
-
-- **Quoted tuples type-check at tuple boundaries.** `Quote (1 2)` (the
-  literal-tuple spelling) is accepted where a `tuple<…>` parameter is
-  expected instead of being rejected as `tree`.
-
-- **`ok()`/`err()` at a bare-`result` boundary no longer panic the compiler**
-  ("internal error: never a single flat value").
-
-- **Flags fields nested in records/tuples use the correct canonical-ABI
-  alignment.** A `flags` value was always given 4-byte alignment; the
-  canonical ABI aligns it to 1/2/4 bytes by member count (≤8/≤16/≤32). The
-  stale alignment (and a matching 4-byte store width) corrupted the layout of
-  any record or tuple containing a flags field when it crossed a component
-  boundary. Standalone flags values were unaffected. Such records now also
-  build in canonical (unboxed) form.
+- Runtime `read` and `apply`; use compiler-side reading and direct calls.
+- Interpreter fallback for failed CLI/REPL execution.
+- Qsym values and their macro ABI representation.
 
 ## [0.10.0] - 2026-07-02
 

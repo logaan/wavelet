@@ -1,12 +1,6 @@
-//! `Emitter` methods for `Match`: pattern compilation on both the boxed and
-//! the canonical-memory paths.
-
 use super::*;
 
 impl<'a> Emitter<'a> {
-    /// Each clause is a block: a failed test branches past the clause; a
-    /// matched clause leaves its result and branches to the end. No clause
-    /// matching traps (the interpreter raises "no Match clause" instead).
     pub(crate) fn match_form(
         &mut self,
         fx: &mut FnCtx,
@@ -20,10 +14,7 @@ impl<'a> Emitter<'a> {
         let Node::Lst(clauses) = self.arena.node(clauses_form).clone() else {
             return Err("Match expects a list of (pattern result) clauses".into());
         };
-        // The scrutinee's representation drives the pattern path: a scalar
-        // kind lets a bare-name clause bind a TYPED local (5.2); a canonical
-        // record (5.3) destructures by despec offsets with no boxes; the
-        // boxed fallback walks boxes as before.
+
         let scrut_kind = self.node_scalar(scrut_form);
         let scrut_mem = self.node_mem(fx, scrut_form);
         match scrut_mem {
@@ -55,12 +46,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// A clause's top-level pattern over a canonical-layout scrutinee (5.3):
-    /// a bare binder aliases the pointer (a `Repr::Mem` binding), a record
-    /// pattern destructures a record layout at despec offsets, a tuple
-    /// pattern destructures a tuple layout element-wise, and any other
-    /// pattern rebuilds the box once and delegates to the uniform matcher
-    /// (where a mismatched pattern fails, like the oracle).
     pub(crate) fn pattern_top_mem(
         &mut self,
         fx: &mut FnCtx,
@@ -91,19 +76,13 @@ impl<'a> Emitter<'a> {
             {
                 self.pattern_mem_var(fx, &pats, &ty, v, 0, 0)
             }
-            // A bare nullary-case Sym (`none` or a DefType case registered
-            // payload-less) over a canonical variant scrutinee: route it to
-            // the discriminant matcher as a one-element pattern slice instead
-            // of reboxing. `pattern_mem_var`'s `(0, None)` arm matches on the
-            // disc alone — equivalent to the boxed matcher's "TAG_VAR + name
-            // eq + payload absent" for a payload-less case (5.4 residue).
+
             Node::Sym(name)
                 if (name == "none" || self.local_cases.get(&name) == Some(&false))
                     && ty.variant_cases().is_some() =>
             {
                 self.pattern_mem_var(fx, &[pat], &ty, v, 0, 0)
             }
-            Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
                 let l = fx.local(ValType::I32);
                 self.load_from_mem(fx, &ty, v, 0)?;
@@ -113,10 +92,6 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// A record pattern over canonical layout: each named sub-pattern
-    /// destructures at its despec offset (a subset of fields, like the boxed
-    /// path). A field the static type lacks can never match — the clause
-    /// branches out, exactly where the interpreter's match fails.
     pub(crate) fn pattern_mem_rec(
         &mut self,
         fx: &mut FnCtx,
@@ -132,7 +107,6 @@ impl<'a> Emitter<'a> {
         let offsets = record_field_offsets(ty);
         for (k, p) in pats {
             let Some(i) = tfs.iter().position(|(n, _)| n == k) else {
-                // statically absent field: this clause cannot match
                 fx.op(I::Br(fail));
                 return Ok(());
             };
@@ -142,14 +116,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// A tuple pattern over canonical layout: element sub-patterns
-    /// destructure positionally at their despec offsets. The scrutinee is
-    /// statically a tuple, so EVERY tuple pattern destructures element-wise
-    /// — the oracle disambiguates tuple-vs-variant patterns by the VALUE,
-    /// and a tuple value never matches a variant case — which is why a
-    /// Sym-headed pattern binds its first element here instead of reading
-    /// as a variant case (the boxed matcher's recorded 5.9 limitation). A
-    /// length mismatch can never match: the clause branches out.
     pub(crate) fn pattern_mem_tup(
         &mut self,
         fx: &mut FnCtx,
@@ -172,11 +138,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// A list pattern over a canonical (ptr, len) list at `v + off` (5.5):
-    /// the length must equal the pattern's arity (checked at runtime — a
-    /// list's length is a value property, unlike a tuple's static arity),
-    /// then each element sub-pattern destructures the packed element at its
-    /// stride offset.
     pub(crate) fn pattern_mem_lst(
         &mut self,
         fx: &mut FnCtx,
@@ -205,12 +166,6 @@ impl<'a> Emitter<'a> {
         Ok(())
     }
 
-    /// A variant-case pattern `(case p…)` over a canonical variant layout
-    /// (5.4): the case name resolves to its numeric discriminant at COMPILE
-    /// time, so the match is one integer comparison — no runtime case-name
-    /// strings — and the payload destructures at the canonical payload
-    /// offset. A case the static type lacks, or an arity the case's payload
-    /// cannot satisfy, can never match: the clause branches out.
     pub(crate) fn pattern_mem_var(
         &mut self,
         fx: &mut FnCtx,
@@ -241,13 +196,12 @@ impl<'a> Emitter<'a> {
         match (rest.len(), payload) {
             (0, None) => Ok(()),
             (1, Some(pt)) => self.pattern_mem_field(fx, rest[0], &pt, v, off + poff, fail),
-            // several sub-patterns destructure a tuple payload element-wise,
-            // exactly like the interpreter's `(case p q …)` rule
+
             (n, Some(WitTy::Tuple(es))) if n > 1 && es.len() == n => {
                 let t = WitTy::Tuple(es);
                 self.pattern_mem_tup(fx, rest, &t, v, off + poff, fail)
             }
-            // payload/arity mismatch can never match
+
             _ => {
                 fx.op(I::Br(fail));
                 Ok(())
@@ -255,11 +209,6 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// One canonical field against a sub-pattern: a bare binder binds the
-    /// field at its natural representation (typed scalar / interior record
-    /// pointer / rebuilt box), a nested record pattern recurses in place,
-    /// and any other pattern reboxes just this field and delegates to the
-    /// uniform matcher.
     pub(crate) fn pattern_mem_field(
         &mut self,
         fx: &mut FnCtx,
@@ -291,19 +240,13 @@ impl<'a> Emitter<'a> {
             {
                 self.pattern_mem_var(fx, &pats, tf, v, off, fail)
             }
-            // A bare nullary-case Sym (`none` or a DefType case registered
-            // payload-less) as a NESTED field pattern over a canonical variant
-            // field: route it to the discriminant matcher as a one-element
-            // pattern slice instead of reboxing the field and running the boxed
-            // string-compare matcher. Mirrors pattern_top_mem's arm (5.4 residue
-            // / TAG_VAR consumer shrink); behavior-preserving.
+
             Node::Sym(name)
                 if (name == "none" || self.local_cases.get(&name) == Some(&false))
                     && tf.variant_cases().is_some() =>
             {
                 self.pattern_mem_var(fx, &[pat], tf, v, off, fail)
             }
-            Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
             _ => {
                 let l = fx.local(ValType::I32);
                 self.load_from_mem(fx, tf, v, off)?;
@@ -313,10 +256,6 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// Bind one canonical field at its natural representation: scalar fields
-    /// load unboxed into typed locals (widening to the interpreter's value
-    /// domains), a nested record or tuple binds an interior pointer
-    /// (headerless layout — 5.1), everything else rebuilds its box.
     pub(crate) fn mem_field_binding(
         &mut self,
         fx: &mut FnCtx,
@@ -390,9 +329,6 @@ impl<'a> Emitter<'a> {
         })
     }
 
-    /// A clause's top-level pattern: like [`Self::pattern`], except a bare
-    /// binder over a scrutinee with a known scalar kind binds a TYPED local
-    /// (unboxed once, at bind time) instead of a box pointer.
     pub(crate) fn pattern_top(
         &mut self,
         fx: &mut FnCtx,
@@ -401,13 +337,6 @@ impl<'a> Emitter<'a> {
         scrut_kind: Option<Scalar>,
         scrut_form: NodeId,
     ) -> Result<(), String> {
-        // Over a scrutinee the checker KNOWS is a tuple, a tuple pattern takes
-        // the tuple reading even with a Sym head — the oracle disambiguates by
-        // the VALUE (`interp::match_pattern`), and a tuple-typed value can
-        // never be a variant, so the boxed matcher's variant-case reading is
-        // statically dead here. This is the boxed sibling of the
-        // `pattern_top_mem` tuple arm (a boxed tuple scrutinee arrives from a
-        // typed param or a `tupleN` construction the canonical path declined).
         if let Node::Tup(pats) = self.arena.node(pat).clone()
             && matches!(
                 self.node_types.get(&scrut_form),
@@ -434,9 +363,6 @@ impl<'a> Emitter<'a> {
         self.pattern(fx, pat, v, 0)
     }
 
-    /// Compile a pattern test against the box in local `v`; on mismatch branch
-    /// `fail` levels out (the enclosing clause block). Names bind into the
-    /// current scope. Nested patterns keep `fail` because no blocks are opened.
     pub(crate) fn pattern(
         &mut self,
         fx: &mut FnCtx,
@@ -445,10 +371,6 @@ impl<'a> Emitter<'a> {
         fail: u32,
     ) -> Result<(), String> {
         match self.arena.node(pat).clone() {
-            // `none` and the nullary cases of local `DefType` variants/enums
-            // match by equality; every other bare name binds. Mirrors the
-            // interpreter, which keys this off names bound to a payload-less
-            // variant (`none` builtin, DefType case bindings — 4.1).
             Node::Sym(name) if name == "none" || self.local_cases.get(&name) == Some(&false) => {
                 let naddr = self.intern_str(&name);
                 fx.op(I::LocalGet(v));
@@ -457,11 +379,11 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Ne);
                 fx.op(I::BrIf(fail));
                 fx.op(I::LocalGet(v));
-                fx.op(I::I32Load(ma(8, 2))); // payload must be absent
+                fx.op(I::I32Load(ma(8, 2)));
                 fx.op(I::BrIf(fail));
                 fx.op(I::LocalGet(v));
                 fx.op(I::I32Load(ma(4, 2)));
-                fx.op(I::I32Const(naddr as i32)); // case name must equal
+                fx.op(I::I32Const(naddr as i32));
                 fx.op(I::Call(self.h.eq_raw));
                 fx.op(I::I32Eqz);
                 fx.op(I::BrIf(fail));
@@ -477,13 +399,7 @@ impl<'a> Emitter<'a> {
                     .insert(name, Binding::boxed(l));
                 Ok(())
             }
-            // Literal patterns match by structural equality — the same
-            // eq_raw the `eq` builtin uses, so char (codepoint) and flags
-            // (set-name list) literals match exactly like the interpreter's
-            // `match_pattern` (5.9).
-            // Float literals are rejected as patterns at check time (2.1
-            // proposal 2); the backend refuses them too, matching the
-            // interpreter's `match_pattern`, so the two never diverge.
+
             Node::Dec(_) => Err("a float literal cannot be a Match pattern".into()),
             Node::Int(_) | Node::Bool(_) | Node::Str(_) | Node::Char(_) | Node::Flg(_) => {
                 fx.op(I::LocalGet(v));
@@ -493,19 +409,9 @@ impl<'a> Emitter<'a> {
                 fx.op(I::BrIf(fail));
                 Ok(())
             }
-            // the interpreter's exact wording, for error parity
-            Node::Qsym(..) => Err("qualified names cannot appear in patterns".into()),
+
             Node::Lst(pats) => self.seq_pattern(fx, &pats, v, fail, TAG_LIST),
-            // A tuple pattern is disambiguated by its first element: a `Sym`
-            // head is a variant-case pattern (`ok(x)`, `some(x)`, `none`, …);
-            // anything else is a tuple destructure. (Limitation: a tuple
-            // pattern whose first element is a bare name is always read as a
-            // variant case here, never as a tuple binding the first element —
-            // except at the top of a clause over a scrutinee the checker
-            // KNOWS is a tuple, where `pattern_top` routes to the tuple
-            // reading statically. A runtime tag dispatch cannot work here:
-            // the two readings bind different names to different locals, but
-            // the clause body is compiled once against a single scope.)
+
             Node::Tup(pats) => match pats.first().map(|&p| self.arena.node(p).clone()) {
                 Some(Node::Sym(case)) => {
                     let caddr = self.intern_str(&case);
@@ -522,7 +428,6 @@ impl<'a> Emitter<'a> {
                     fx.op(I::BrIf(fail));
                     match pats.len() {
                         1 => {
-                            // payload must be absent
                             fx.op(I::LocalGet(v));
                             fx.op(I::I32Load(ma(8, 2)));
                             fx.op(I::BrIf(fail));
@@ -538,7 +443,6 @@ impl<'a> Emitter<'a> {
                             self.pattern(fx, pats[1], inner, fail)
                         }
                         _ => {
-                            // payload is a tuple; destructure it element-wise
                             let inner = fx.local(ValType::I32);
                             fx.op(I::LocalGet(v));
                             fx.op(I::I32Load(ma(8, 2)));
@@ -557,9 +461,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Const(TAG_REC));
                 fx.op(I::I32Ne);
                 fx.op(I::BrIf(fail));
-                // A record pattern matches a subset of fields: each named field
-                // must be present (rec_get returns 0 when absent) and its
-                // sub-pattern must match. Extra value fields are ignored.
+
                 for (k, p) in &fields {
                     let kaddr = self.intern_str(k);
                     let elem = fx.local(ValType::I32);
@@ -576,7 +478,6 @@ impl<'a> Emitter<'a> {
         }
     }
 
-    /// List/tuple pattern: tag + length check, then element sub-patterns.
     pub(crate) fn seq_pattern(
         &mut self,
         fx: &mut FnCtx,

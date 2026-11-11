@@ -9,19 +9,17 @@ pub enum Tok {
     LBrace,
     RBrace,
     Colon,
-    /// `.` joining a receiver to a chained call (`recv.name(...)`, §2.5)
+
     Dot,
     Bool(bool),
     Int(i64),
     Dec(f64),
     Char(char),
     Str(String),
-    /// kebab-case identifier (WIT label); `%` escape already stripped
+
     Ident(String),
-    /// TitleCase macro head, already lowercased with `-MACRO` suffix
+
     Title(String),
-    /// `alias/name`; bool = name part was TitleCase (already suffixed)
-    QIdent(String, String, bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -55,11 +53,7 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
     let b = src.as_bytes();
     let mut i = 0usize;
     let mut out = Vec::new();
-    // A leading shebang line (`#!/usr/bin/env wavelet`) lets a `.wlt` file be
-    // executed directly as a script (7.2). It is recognised only at byte 0 —
-    // `#` is not a comment anywhere else (`//` is the only comment form) — and
-    // is skipped up to, but not including, the newline that ends it, so the
-    // rest of the file lexes normally.
+
     if b.starts_with(b"#!") {
         while i < b.len() && b[i] != b'\n' {
             i += 1;
@@ -70,8 +64,6 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
         match c {
             ' ' | '\t' | '\r' | '\n' | ',' => i += 1,
             '/' if b.get(i + 1) == Some(&b'/') => {
-                // `//` to end of line is a comment and leaves no token (this
-                // includes `///`, which is no longer special).
                 while i < b.len() && b[i] != b'\n' {
                     i += 1;
                 }
@@ -104,9 +96,7 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
             }
             '-' | '0'..='9' => {
                 let start = i;
-                // Whole-word match only, like the positive `inf` path in
-                // `lex_name`: `-inf` must not be a prefix of a longer token
-                // (`-info`, `-infinity`).
+
                 if c == '-'
                     && src[i + 1..].starts_with("inf")
                     && b.get(i + 4).is_none_or(|&ch| !is_name_char(ch))
@@ -119,9 +109,7 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
                     i = next;
                 }
             }
-            // A standalone `_` is the type placeholder (WIT's absent result
-            // arm: `result(_ e)`). Only the lone underscore lexes; `_` is not
-            // a name character, so `_foo`/`foo_` stay errors.
+
             '_' if b
                 .get(i + 1)
                 .is_none_or(|&ch| !is_name_char(ch) && ch != b'_') =>
@@ -133,28 +121,37 @@ pub fn lex(src: &str) -> Result<Vec<(Tok, Token)>, ReadError> {
                 let start = i;
                 let (tok, next) = lex_name(src, i)?;
                 i = next;
-                // qualified name: name "/" name with no whitespace
-                if b.get(i) == Some(&b'/') && b.get(i + 1) != Some(&b'/') {
-                    let (tok2, next2) = lex_name(src, i + 1)?;
-                    let alias = match tok {
+                let mut name = match &tok {
+                    Tok::Ident(s) => Some(s.clone()),
+                    Tok::Title(s) => Some(s.trim_end_matches("-MACRO").to_owned()),
+                    _ => None,
+                };
+                let mut title = matches!(tok, Tok::Title(_));
+                while b.get(i) == Some(&b'/') && b.get(i + 1) != Some(&b'/') {
+                    let (part, end) = lex_name(src, i + 1)?;
+                    let Some(ref mut name) = name else {
+                        return err("slash sugar requires identifier segments", start as u32);
+                    };
+                    let segment = match part {
                         Tok::Ident(s) => s,
-                        _ => {
-                            return err(
-                                "alias part of a qualified name must be kebab-case",
-                                start as u32,
-                            );
+                        Tok::Title(s) => {
+                            title = true;
+                            s.trim_end_matches("-MACRO").to_owned()
                         }
+                        _ => return err("slash sugar requires identifier segments", start as u32),
                     };
-                    let q = match tok2 {
-                        Tok::Ident(s) => Tok::QIdent(alias, s, false),
-                        Tok::Title(s) => Tok::QIdent(alias, s, true),
-                        _ => return err("bad qualified name", start as u32),
-                    };
-                    out.push((q, span(start, next2)));
-                    i = next2;
-                } else {
-                    out.push((tok, span(start, i)));
+                    name.push('-');
+                    name.push_str(&segment);
+                    i = end;
                 }
+                let tok = match name {
+                    Some(name) if title => {
+                        Tok::Title(format!("{}-MACRO", name.to_ascii_lowercase()))
+                    }
+                    Some(name) => Tok::Ident(name),
+                    None => tok,
+                };
+                out.push((tok, span(start, i)));
             }
             _ => return err(format!("unexpected character {c:?}"), i as u32),
         }
@@ -211,32 +208,19 @@ fn lex_name(src: &str, start: usize) -> Result<(Tok, usize), ReadError> {
     }
 }
 
-/// TitleCase macro head: the **first** hyphen-separated word is Title-case —
-/// it starts with a capital and contains at least one lowercase letter
-/// (`If`, `DefMacro`, `Try-let`). A Title-case leading word can't be a WIT
-/// label word (those are all-lower or all-UPPER), so this never collides with
-/// an ordinary identifier such as `parse-JSON` or `HTTP-get`.
 fn is_title(text: &str) -> bool {
-    let first = text.split('-').next().unwrap_or("");
-    first.starts_with(|c: char| c.is_ascii_uppercase())
-        && first.contains(|c: char| c.is_ascii_lowercase())
+    text.split('-').any(|word| {
+        word.starts_with(|c: char| c.is_ascii_uppercase())
+            && word.contains(|c: char| c.is_ascii_lowercase())
+    })
 }
 
-/// `TryLet` -> `trylet-MACRO`, `DefMacro` -> `defmacro-MACRO`,
-/// `Try-let` -> `try-let-MACRO`.
-///
-/// The token is lowercased wholesale; there is no internal capitalisation
-/// spreading (an interior capital does *not* introduce a hyphen). Existing
-/// hyphens are preserved, so a hyphenated head like `Try-let` maps onto the
-/// kebab-named macro `try-let`; a single TitleCase word like `TryLet` maps
-/// onto `trylet`.
 pub fn title_to_macro_name(text: &str) -> String {
     let mut out = text.to_ascii_lowercase();
     out.push_str("-MACRO");
     out
 }
 
-/// Each hyphen-separated word must be all-lowercase or all-UPPERCASE (WIT labels).
 fn validate_kebab(text: &str, at: u32) -> Result<(), ReadError> {
     for word in text.split('-') {
         let ok = !word.is_empty()
@@ -260,8 +244,7 @@ fn lex_number(src: &str, start: usize) -> Result<(Tok, usize), ReadError> {
     while i < b.len() {
         match b[i] {
             b'0'..=b'9' => i += 1,
-            // a `.` is a decimal point only when a digit follows; otherwise it
-            // ends the number and is lexed as a chain `.` (`1.increment()`, §2.5)
+
             b'.' if b.get(i + 1).is_some_and(|d| d.is_ascii_digit()) => {
                 is_dec = true;
                 i += 1;
@@ -373,18 +356,15 @@ mod tests {
 
     #[test]
     fn neg_inf_is_a_whole_word() {
-        // bare `-inf` is the negative-infinity literal, including at a boundary
         assert_eq!(toks("-inf"), vec![Tok::Dec(f64::NEG_INFINITY)]);
         assert_eq!(
             toks("(-inf)"),
             vec![Tok::LParen, Tok::Dec(f64::NEG_INFINITY), Tok::RParen]
         );
-        // it must not be split out of a longer token (the old prefix match gave
-        // `[-inf, o]`); since identifiers can't begin with `-`, the leftover
-        // `-` is now a lex error rather than a bogus split.
+
         assert!(lex("-info").is_err());
         assert!(lex("-infinity").is_err());
-        // positive `inf` is already whole-word; the symmetry now holds
+
         assert_eq!(toks("inf"), vec![Tok::Dec(f64::INFINITY)]);
         assert_eq!(toks("info"), vec![Tok::Ident("info".into())]);
     }

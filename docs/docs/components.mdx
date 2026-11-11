@@ -59,6 +59,15 @@ Import {pkg: "demo:text/api" open: true}             // splat names in unqualifi
 
 Imported names are ordinary prefixed bindings: `kv-open` and `kv-get`. Slash spelling (`kv/open`, `kv/get`) is equivalent. With `open: true`, the names are also bound without the prefix.
 
+Imported types retain their package and interface identity. Two interfaces may
+both declare `payload` or `device` without sharing their layouts or resource
+handles. Use the import prefix in annotations when a name is ambiguous, such as
+`borrow(numbers/device)` and `borrow(words/device)`. An unambiguous type can
+also use its bare name. WIT `use` aliases preserve the identity of the original
+type; they do not create a new resource. Equivalent plain-data WIT shapes can
+cross a boundary, while resources from different declarations cannot be
+interchanged even when their methods have identical signatures.
+
 When you run a set of files together with [`wavelet run`](./cli#run), imports are resolved **by package id** against the other files on the command line and compiled components are composed before execution:
 
 ```console
@@ -138,7 +147,7 @@ my-app/
   out/            # build artifacts (git-ignored)
 ```
 
-The compiler vendors **no** WASI WIT of its own. Any host interface a component imports or exports (`wasi:cli/stdout`, `wasi:http/types`, a third party's `acme:foo/bar`) is fetched as ordinary WIT into `wit/deps/` by [**`wkg`**](https://github.com/bytecodealliance/wasm-pkg-tools) and parsed at build time, with versions pinned in `wkg.lock`. [`wavelet new`](./cli#new) fetches them when it scaffolds; `wavelet build` synthesizes each component's world into `wit/` and ensures the deps are present before emitting. So WASI is "just some WIT packages you import," resolved through the same mechanism as your own components.
+The compiler vendors **no** WASI WIT of its own. Any host interface a component imports or exports (`wasi:cli/stdout`, `wasi:http/types`, a third party's `acme:foo/bar`) is fetched as ordinary WIT into `wit/deps/` by [**`wkg`**](https://github.com/bytecodealliance/wasm-pkg-tools) and parsed at build time, with versions pinned in `wkg.lock`. [`wavelet new`](./cli#new) fetches them when it scaffolds; `wavelet build` resolves imports from the existing `wit/deps/` tree and refreshes dependency metadata after emission. Generated fetch worlds live in a private workspace; successful fetches copy dependency files back, preserving authored `wit/*.wit` files. `wkg` runs from the original project directory so local overrides, workspace configuration, and lockfile updates retain their normal behavior. Dependency packages may be WIT source directories, `.wit` files, or WebAssembly-encoded WIT in `.wasm` or `.wat` files. So WASI is "just some WIT packages you import," resolved through the same mechanism as your own components.
 
 ## Composition
 

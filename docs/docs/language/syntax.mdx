@@ -41,7 +41,7 @@ Every surface form desugars to a canonical WAVE value. A call is a tuple whose f
 | `f([x y])` | `(f, [x, y])` | call with a list argument |
 | `f({a: 1 b: 2})` | `(f, {a: 1, b: 2})` | call with a record argument — named arguments |
 | `f()` | `(f)` | zero-argument call |
-| `kv/get({...})` | qualified call | name `get` from the import aliased `kv` |
+| `kv/get({...})` | slash spelling | ordinary call of `kv-get` |
 | `x.f(y)` | `(f, x, y)` | call chaining — receiver becomes the first argument |
 | `(a b)` | `(a, b)` | a parenthesized form — a call in evaluation position, a tuple under `Quote` |
 | `(a)` | `(a)` | a zero-argument call of `a` (no transparent grouping) |

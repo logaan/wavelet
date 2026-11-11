@@ -1,13 +1,5 @@
-//! Goal 5 (5.4 canonical variants, dep-born slice): a dep call returning an
-//! option/result/variant is BORN canonical — the retptr area carries the
-//! numeric discriminant + payload at the canonical offset — and Match
-//! compiles a case pattern to ONE integer comparison (the case name
-//! resolves to its discriminant at compile time; no runtime case-name
-//! strings), destructuring the payload in place at despec offsets.
-
 use wavelet::host::{HostComponent, Val};
 
-/// Is `bin` runnable (`<bin> --version` succeeds)?
 fn have(bin: &str) -> bool {
     std::process::Command::new(bin)
         .arg("--version")
@@ -16,8 +8,6 @@ fn have(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Build the two-component project (a variant-producing dep + a consumer)
-/// and instantiate the composed app. `None` without `wac`.
 fn composed() -> Option<HostComponent> {
     if !have("wac") {
         eprintln!("skipping: wac not on PATH");
@@ -132,9 +122,7 @@ fn ok(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
 }
 
 #[test]
-// Case patterns over a dep-born canonical variant select by integer
-// discriminant; f64 payloads bind typed locals straight from the payload
-// offset. A payload-less case matches via `(case)` with zero sub-patterns.
+
 fn variant_cases_select_by_discriminant() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "area", &[Val::S32(0)]), Val::Float64(2.25));
@@ -143,8 +131,7 @@ fn variant_cases_select_by_discriminant() {
 }
 
 #[test]
-// Options: `(some x)` takes the disc fast path; bare `none` falls back to
-// the rebuilt-box matcher — both answers equal the interpreter's.
+
 fn option_cases_match_like_the_oracle() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "get", &[Val::Bool(true)]), Val::S64(7));
@@ -152,8 +139,7 @@ fn option_cases_match_like_the_oracle() {
 }
 
 #[test]
-// Results: ok/err select by discriminant; the err side's string payload
-// binds through the canonical (ptr, len) at the payload offset.
+
 fn result_cases_match_like_the_oracle() {
     let Some(mut c) = composed() else { return };
     assert_eq!(
@@ -167,40 +153,35 @@ fn result_cases_match_like_the_oracle() {
 }
 
 #[test]
-// A record payload destructures in place at the canonical payload offset
-// (interior pointer, no payload box).
+
 fn record_payload_destructures_in_place() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "deep", &[]), Val::S64(3));
 }
 
 #[test]
-// Several sub-patterns destructure a tuple payload element-wise, exactly
-// like the interpreter's `(case p q)` rule.
+
 fn tuple_payload_spreads_across_sub_patterns() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "spread", &[]), Val::S64(13));
 }
 
 #[test]
-// Discriminant mismatches branch out; then — exactly the interpreter's
-// rule — a case pattern with ONE sub-pattern binds the WHOLE payload, so
-// `(two a)` matches a tuple-payload value before `(two a b)` is reached.
+
 fn case_mismatches_fall_through_and_one_binder_takes_the_payload() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "fall", &[]), Val::S64(2));
 }
 
 #[test]
-// A Let-bound dep-born variant reboxes faithfully at the eq seam.
+
 fn canonical_variant_rebuild_is_faithful() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "same", &[]), Val::Bool(true));
 }
 
 #[test]
-// A def forwarding a dep option carries a Mem result signature; the export
-// wrapper returns the dep's canonical area directly (retptr fast path).
+
 fn option_export_takes_the_retptr_fast_path() {
     let Some(mut c) = composed() else { return };
     assert_eq!(
@@ -211,17 +192,12 @@ fn option_export_takes_the_retptr_fast_path() {
 }
 
 #[test]
-// A bare nullary-case (`none`) pattern in a NESTED field position over a
-// canonical record scrutinee takes the discriminant matcher (pattern_mem_field
-// nested-nullary arm), not the reboxed string-compare matcher. Both answers
-// equal the interpreter's (5.4 residue / TAG_VAR consumer shrink).
+
 fn nested_nullary_field_pattern_matches_like_the_oracle() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "unbox", &[Val::Bool(true)]), Val::S64(5));
     assert_eq!(ok(&mut c, "unbox", &[Val::Bool(false)]), Val::S64(-1));
 }
-
-// ---- construction slice: canonical case constructors (5.4, no dep) ----
 
 fn constructed() -> HostComponent {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -285,9 +261,7 @@ fn okc(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
 }
 
 #[test]
-// A Let-bound local case-constructor call builds disc+payload in place
-// and Match selects it by discriminant — construction to consumption with
-// no case-name strings and no boxes.
+
 fn local_case_constructor_builds_canonically() {
     let mut c = constructed();
     assert_eq!(
@@ -297,8 +271,7 @@ fn local_case_constructor_builds_canonically() {
 }
 
 #[test]
-// A def whose body is a some() call carries a Mem result signature and
-// exports through the retptr fast path.
+
 fn some_constructor_exports_through_the_fast_path() {
     let mut c = constructed();
     assert_eq!(
@@ -308,8 +281,7 @@ fn some_constructor_exports_through_the_fast_path() {
 }
 
 #[test]
-// ok(a b) bundles two arguments into a tuple payload in place — the
-// interpreter's bundling rule, canonical from birth.
+
 fn ok_bundles_arguments_into_a_tuple_payload() {
     let mut c = constructed();
     let got = okc(&mut c, "c-okpair", &[Val::S32(4), Val::S32(9)]);
@@ -320,7 +292,7 @@ fn ok_bundles_arguments_into_a_tuple_payload() {
 }
 
 #[test]
-// err(m) stores its string payload through the canonical (ptr, len) seam.
+
 fn err_string_payload_stores_canonically() {
     let mut c = constructed();
     let got = okc(&mut c, "c-err", &[Val::String("bad".into())]);
@@ -331,8 +303,7 @@ fn err_string_payload_stores_canonically() {
 }
 
 #[test]
-// A canonically-built variant reboxes faithfully at the eq seam, both as
-// a Let binding and as a record field.
+
 fn constructed_variant_rebuild_is_faithful() {
     let mut c = constructed();
     assert_eq!(okc(&mut c, "c-eq", &[]), Val::Bool(true));
@@ -340,35 +311,29 @@ fn constructed_variant_rebuild_is_faithful() {
 }
 
 #[test]
-// A local binding SHADOWS a constructor name (the interpreter's scoping):
-// `ok` bound to a closure routes to the closure call, not the case
-// constructor — the gate refuses and the boxed path answers.
+
 fn local_binding_shadows_constructor_names() {
     let mut c = constructed();
     assert_eq!(okc(&mut c, "c-shadow", &[]), Val::S64(5));
 }
 
 #[test]
-// `eq` over two dep-born (canonical) variants takes the type-indexed
-// structural fast path (5.6): equal discriminant then equal payload compares
-// true; equal discriminant with differing payload is false; differing
-// discriminant is false — all matching the interpreter's `Value::Variant`
-// equality.
+
 fn eq_over_canonical_variants_is_structural() {
     let Some(mut c) = composed() else { return };
-    // same case (some), same payload
+
     assert_eq!(
         ok(&mut c, "v-eq", &[Val::S32(5), Val::S32(5)]),
         Val::Bool(true)
     );
-    // same case (some), different payload
+
     assert_eq!(
         ok(&mut c, "v-eq", &[Val::S32(1), Val::S32(2)]),
         Val::Bool(false)
     );
-    // same discriminant path: some(7) == some(7)
+
     assert_eq!(ok(&mut c, "v-eq-disc", &[Val::Bool(true)]), Val::Bool(true));
-    // differing discriminant: none vs some(7)
+
     assert_eq!(
         ok(&mut c, "v-eq-disc", &[Val::Bool(false)]),
         Val::Bool(false)

@@ -1,21 +1,5 @@
-//! Browser playground bindings.
-//!
-//! Compiled to `wasm32-unknown-unknown` with `wasm-bindgen` and loaded by the
-//! documentation site's `<Playground>` component, so the examples throughout
-//! the docs are editable and runnable in the reader's browser — the same
-//! tree-walking interpreter that backs `wavelet run`, nothing simulated.
-//!
-//! The actual evaluation lives in [`crate::eval_snippet`], shared with the
-//! documentation-example test suite (`tests/examples.rs`); this module only
-//! adds the wasm boundary and JSON serialisation.
-
 use wasm_bindgen::prelude::*;
 
-/// Evaluate a snippet of Wavelet source and return a JSON object string:
-///
-/// ```json
-/// {"ok": true, "value": "...", "output": "...", "error": ""}
-/// ```
 #[wasm_bindgen]
 pub fn eval(src: &str) -> String {
     console_error_panic_hook::set_once();

@@ -1,12 +1,3 @@
-//! Goal 5 (5.8 defunctionalization, zero-capture case): a `Let` binding
-//! initialised with a bare module-level def reference whose checked type is a
-//! concrete arrow is statically known to hold exactly that function value, so
-//! an apply through the binding compiles to a DIRECT call (the same path a
-//! direct `inc(…)` call takes) instead of bundling a payload box and calling
-//! through the TAG_FN funcref table. Every non-apply use of the binding still
-//! reads the boxed closure value, and shadowing/rebinding fall back to the
-//! indirect path — results must equal the oracle's in all cases.
-
 use wavelet::host::{HostComponent, Val};
 
 fn built() -> HostComponent {
@@ -72,9 +63,6 @@ fn ok(c: &mut HostComponent, f: &str) -> Val {
         .clone()
 }
 
-/// The devirtualized apply (`Let {f: inc} f(41)`), shadowing to another known
-/// def, re-binding through a local (indirect boxed path), and a Fn-literal
-/// binding (indirect path) all agree with the oracle.
 #[test]
 fn known_def_bindings_apply_like_the_oracle() {
     let mut c = built();
@@ -86,7 +74,6 @@ fn known_def_bindings_apply_like_the_oracle() {
     assert_eq!(ok(&mut c, "capture2"), Val::S64(31));
 }
 
-/// Oracle cross-check: the same bodies as snippets in the interpreter.
 #[test]
 fn oracle_agrees() {
     for (src, want) in [

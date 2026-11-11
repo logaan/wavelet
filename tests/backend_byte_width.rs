@@ -1,29 +1,5 @@
-//! Backend regression: byte-width payloads (u8/s8/u16/s16) in linear memory.
-//!
-//! The emitter used to give every sub-4-byte integer a 4-byte size/alignment
-//! and load/store it with full `i32` accesses. Values passed *flat* were fine,
-//! but anything the canonical ABI puts in linear memory — list elements,
-//! record/tuple fields, option/result payloads — was read at the wrong strides
-//! and offsets: the head of a `list<u8>` `[1 2 3]` lifted as 197121 in-guest,
-//! `some(7)` lifted as `some(0)`.
-//!
-//! Two subtleties shape these tests:
-//!
-//!  - A pure echo cannot catch the stride bug on its own: the guest lifted
-//!    *and* re-lowered at the same wrong stride, which is a byte-level
-//!    bijection, so the host got its own bytes back unchanged. The echoes here
-//!    pin the canonical layout for option payloads and future asymmetric
-//!    regressions; the real stride/offset checks are the **in-guest** `eq`
-//!    exports, which compare the lifted value before it can be re-encoded.
-//!  - The host masks a flat `u8` result to its low byte on lift, and the low
-//!    byte of a misaligned 4-byte load is the correct byte — so a corrupt head
-//!    still looked right through a `u8` result. `head8-wide` returns the same
-//!    head through an `s64` result, where nothing is masked.
-
 use wavelet::host::{HostComponent, Val};
 
-/// Build the byte-width API and instantiate it. The app is self-contained
-/// (no imports), so it builds and runs with no external toolchain.
 fn byte_width_component() -> HostComponent {
     use std::sync::atomic::{AtomicU32, Ordering};
     static SEQ: AtomicU32 = AtomicU32::new(0);
@@ -37,7 +13,7 @@ fn byte_width_component() -> HostComponent {
 
 Export {name: head8-wide params: {xs: list(u8)} result: s64}
 Def head8-wide Fn {xs}
-  head(xs)
+  to-s64(head(xs))
 
 Export {name: u8s-ok params: {xs: list(u8)} result: bool}
 Def u8s-ok Fn {xs}
@@ -109,8 +85,7 @@ fn assert_in_guest(c: &mut HostComponent, f: &str, arg: Val) {
 #[test]
 fn narrow_list_elements_lift_at_canonical_stride() {
     let mut c = byte_width_component();
-    // The original failure shape: head of [1 2 3] lifted as a 4-byte read of
-    // byte-packed memory (197121). An s64 result returns the head unmasked.
+
     let u8s = Val::List(vec![Val::U8(1), Val::U8(2), Val::U8(3)]);
     assert_eq!(
         ok(&mut c, "head8-wide", std::slice::from_ref(&u8s)),
@@ -118,7 +93,6 @@ fn narrow_list_elements_lift_at_canonical_stride() {
     );
     assert_in_guest(&mut c, "u8s-ok", u8s);
 
-    // 513 = 0x0201: a wrong stride or byte order changes the lifted value.
     let u16s = Val::List(vec![Val::U16(513), Val::U16(2), Val::U16(65535)]);
     assert_in_guest(&mut c, "u16s-ok", u16s);
 }
@@ -136,8 +110,7 @@ fn signed_narrow_elements_sign_extend_in_guest() {
 #[test]
 fn mixed_width_tuple_fields_sit_at_canonical_offsets() {
     let mut c = byte_width_component();
-    // tuple<u8, u16, u8>: fields at offsets 0/2/4, element size 6, align 2 —
-    // every one of which the old 4-byte-everything layout got wrong.
+
     let xs = Val::List(vec![
         Val::Tuple(vec![Val::U8(1), Val::U16(513), Val::U8(2)]),
         Val::Tuple(vec![Val::U8(255), Val::U16(65535), Val::U8(0)]),
@@ -148,17 +121,13 @@ fn mixed_width_tuple_fields_sit_at_canonical_offsets() {
 #[test]
 fn option_u8_payload_sits_next_to_its_discriminant() {
     let mut c = byte_width_component();
-    // option<u8> in a list: discriminant at 0, payload at 1, element size 2.
-    // The old layout put the payload at offset 4, so `some(x)` lifted as
-    // `some(0)`.
+
     let somes = Val::List(vec![
         Val::Option(Some(Box::new(Val::U8(1)))),
         Val::Option(Some(Box::new(Val::U8(255)))),
     ]);
     assert_in_guest(&mut c, "opts-ok", somes);
 
-    // `none` is not constructible in guest source yet, so it is covered by the
-    // echo instead: lift + re-lower against the host's canonical layout.
     let with_none = Val::List(vec![
         Val::Option(Some(Box::new(Val::U8(1)))),
         Val::Option(None),
@@ -169,7 +138,6 @@ fn option_u8_payload_sits_next_to_its_discriminant() {
         with_none
     );
 
-    // Returned through the export's return area rather than a list element.
     assert_eq!(
         ok(&mut c, "mk-opt8", &[]),
         Val::Option(Some(Box::new(Val::U8(7))))

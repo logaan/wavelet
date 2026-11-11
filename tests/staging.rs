@@ -40,6 +40,9 @@ fn dependencies_and_lock_are_copied_without_modifying_the_original() {
     let project = Project::new().unwrap();
     project.copy_dependencies(source.path()).unwrap();
     assert!(project.path().join("wit/deps/example/world.wit").is_file());
-    assert_eq!(std::fs::read_to_string(project.path().join("wkg.lock")).unwrap(), "locked");
+    assert_eq!(
+        std::fs::read_to_string(project.path().join("wkg.lock")).unwrap(),
+        "locked"
+    );
     assert!(deps.join("world.wit").is_file());
 }

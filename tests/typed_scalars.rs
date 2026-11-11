@@ -1,12 +1,3 @@
-//! Goal 5 (5.2 unboxed scalars + 5.6.1 static arithmetic): when operand
-//! types are statically known, the backend compiles the polymorphic scalar
-//! builtins to unboxed per-type code (shared `arith_int`/`cmp_f64` semantic
-//! cores). The interpreter is the semantics oracle — these tests pin the
-//! typed path to the interpreter's exact behaviour, including its edges:
-//! checked i64 arithmetic (trap where the interpreter errors), f64-widened
-//! comparisons (ints included), wrapping `neg`, codepoint char order, and
-//! the boxed fallback for strings/mixed kinds.
-
 use wavelet::host::{HostComponent, Val};
 
 fn component() -> HostComponent {
@@ -98,12 +89,12 @@ fn typed_int_arithmetic_matches_the_interpreter() {
         ok(&mut c, "addi", &[Val::S64(40), Val::S64(2)]),
         Val::S64(42)
     );
-    // nested chain computes unboxed end-to-end
+
     assert_eq!(
         ok(&mut c, "nest", &[Val::S64(6), Val::S64(7), Val::S64(1)]),
         Val::S64(42)
     );
-    // int division truncates like the interpreter's checked_div
+
     assert_eq!(
         ok(&mut c, "divi", &[Val::S64(-7), Val::S64(2)]),
         Val::S64(-3)
@@ -115,12 +106,11 @@ fn typed_int_arithmetic_matches_the_interpreter() {
 #[test]
 fn typed_int_arithmetic_traps_where_the_interpreter_errors() {
     assert!(call(&mut component(), "negi", &[Val::S64(i64::MIN)]).is_err());
-    // a trap poisons the component instance, so each case gets a fresh one
-    // i64 overflow — interpreter: `add` error; backend: trap
+
     assert!(call(&mut component(), "addi", &[Val::S64(i64::MAX), Val::S64(1)]).is_err());
-    // div by zero
+
     assert!(call(&mut component(), "divi", &[Val::S64(1), Val::S64(0)]).is_err());
-    // INT_MIN / -1
+
     assert!(
         call(
             &mut component(),
@@ -138,7 +128,7 @@ fn typed_mixed_arithmetic_widens_to_f64() {
         ok(&mut c, "mixed", &[Val::S64(1), Val::Float64(2.5)]),
         Val::Float64(3.5)
     );
-    // f64 rem matches Rust `%`
+
     assert_eq!(
         ok(&mut c, "remf", &[Val::Float64(5.5), Val::Float64(2.0)]),
         Val::Float64(1.5)
@@ -152,19 +142,17 @@ fn typed_comparisons_match_the_interpreter() {
         ok(&mut c, "lti", &[Val::S64(1), Val::S64(2)]),
         Val::Bool(true)
     );
-    // ints compare WIDENED TO F64 like the interpreter's `compare`: these two
-    // huge ints are equal at f64 precision, so neither is less
-    let a = 9_007_199_254_740_993i64; // 2^53 + 1
-    let b = 9_007_199_254_740_992i64; // 2^53
+
+    let a = 9_007_199_254_740_993i64;
+    let b = 9_007_199_254_740_992i64;
     assert_eq!(ok(&mut c, "lti", &[Val::S64(b), Val::S64(a)]), {
-        // oracle: interpreter compare = (b as f64).partial_cmp(&(a as f64))
         Val::Bool((b as f64) < (a as f64))
     });
     assert_eq!(
         ok(&mut c, "gef", &[Val::Float64(2.0), Val::Float64(2.0)]),
         Val::Bool(true)
     );
-    // chars order by codepoint
+
     assert_eq!(
         ok(&mut c, "ltc", &[Val::Char('a'), Val::Char('b')]),
         Val::Bool(true)
@@ -173,8 +161,7 @@ fn typed_comparisons_match_the_interpreter() {
         ok(&mut c, "ltc", &[Val::Char('b'), Val::Char('a')]),
         Val::Bool(false)
     );
-    // NaN compare: interpreter "values are not comparable" -> backend trap
-    // (last: the trap poisons the instance)
+
     assert!(call(&mut c, "gef", &[Val::Float64(f64::NAN), Val::Float64(1.0)]).is_err());
 }
 
@@ -189,7 +176,7 @@ fn typed_eq_matches_the_interpreter() {
         ok(&mut c, "eqf", &[Val::Float64(0.5), Val::Float64(0.5)]),
         Val::Bool(true)
     );
-    // NaN != NaN, like Value::Dec's PartialEq
+
     assert_eq!(
         ok(
             &mut c,
@@ -202,8 +189,7 @@ fn typed_eq_matches_the_interpreter() {
         ok(&mut c, "eqc", &[Val::Char('x'), Val::Char('x')]),
         Val::Bool(true)
     );
-    // mixed int/float eq is FALSE at the value level (Value::Int != Value::Dec),
-    // via the boxed eq_raw fallback
+
     assert_eq!(
         ok(&mut c, "eqmix", &[Val::S64(1), Val::Float64(1.0)]),
         Val::Bool(false)
@@ -218,9 +204,6 @@ fn typed_bool_conditions_and_not() {
     assert_eq!(ok(&mut c, "notb", &[Val::Bool(true)]), Val::Bool(false));
 }
 
-/// Numeric conversion builtins compile per-kind (5.6): range checks trap
-/// exactly where the interpreter errors, chars convert through their
-/// codepoint (the char-rt "next scalar" transform), whole floats truncate.
 #[test]
 fn typed_numeric_conversions_match_the_interpreter() {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -261,13 +244,13 @@ Def widen Fn {a: s64} to-f64(a)
         c.call_instance(iface, "clamp8", &[Val::S64(200)]).unwrap()[0],
         Val::U8(200)
     );
-    // the char-rt transform: next Unicode scalar
+
     assert_eq!(
         c.call_instance(iface, "next-char", &[Val::Char('a')])
             .unwrap()[0],
         Val::Char('b')
     );
-    // whole float truncates; s64 result
+
     assert_eq!(
         c.call_instance(iface, "floor64", &[Val::Float64(-3.0)])
             .unwrap()[0],
@@ -277,7 +260,7 @@ Def widen Fn {a: s64} to-f64(a)
         c.call_instance(iface, "widen", &[Val::S64(7)]).unwrap()[0],
         Val::Float64(7.0)
     );
-    // traps where the interpreter errors (fresh instances per trap)
+
     let mut t1 = HostComponent::from_bytes(&bytes).unwrap();
     assert!(t1.call_instance(iface, "clamp8", &[Val::S64(256)]).is_err());
     let mut t2 = HostComponent::from_bytes(&bytes).unwrap();
@@ -287,10 +270,6 @@ Def widen Fn {a: s64} to-f64(a)
     );
 }
 
-/// Typed internal signatures preserve tail calls: a typed-result recursive
-/// def compiles its self-call to `return_call` (caller and callee agree on
-/// the result representation), so a million-deep recursion runs in constant
-/// stack — as the interpreter's Step::Jump loop does.
 #[test]
 fn typed_defs_keep_tail_recursion() {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -325,8 +304,6 @@ Def run Fn {n: u64} countdown(n 0)
     assert_eq!(got[0], Val::U64(1_000_000));
 }
 
-/// Char literals work as Match patterns in compiled code (5.9), matching by
-/// codepoint like the interpreter.
 #[test]
 fn char_literals_match_as_patterns() {
     use std::sync::atomic::{AtomicU32, Ordering};

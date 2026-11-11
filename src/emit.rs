@@ -22,12 +22,14 @@ mod mem;
 mod pattern;
 mod resources;
 mod scan;
+mod type_scope;
 mod wit_synth;
 mod witty;
 
 pub use deps::{dep_non_record_types, dep_record_types};
 pub use macro_component::emit_macro_component;
 pub use resources::ResourceFns;
+pub(crate) use type_scope::scope_dependency_types;
 pub use wit_synth::dep_package_wit;
 pub use witty::TypeDef;
 
@@ -52,7 +54,7 @@ pub struct Dep {
 
     pub aliases: Vec<(String, String)>,
 
-    pub type_ifaces: Vec<(String, String)>,
+    pub type_ifaces: Vec<(String, String, String)>,
 }
 
 const SCRATCH: i32 = 0;
@@ -164,6 +166,39 @@ struct Helpers {
     persist: u32,
 }
 
+impl Helpers {
+    fn reserve(take: &mut impl FnMut() -> u32) -> Self {
+        Self {
+            alloc: take(),
+            realloc: take(),
+            box_int: take(),
+            box_bool: take(),
+            box_dec: take(),
+            box_str: take(),
+            truthy: take(),
+            unbox_int: take(),
+            unbox_char: take(),
+            unbox_dec: take(),
+            eq_raw: take(),
+            len_raw: take(),
+            head_h: take(),
+            tail_h: take(),
+            strcat2: take(),
+            case_h: take(),
+            to_str: take(),
+            rec_get: take(),
+            as_f64: take(),
+            arith_raw: take(),
+            cmp_raw: take(),
+            neg_raw: take(),
+            arith_int: take(),
+            cmp_f64: take(),
+            persist_alloc: take(),
+            persist: take(),
+        }
+    }
+}
+
 pub fn emit_component(
     arena: &Arena,
     roots: &[NodeId],
@@ -171,6 +206,8 @@ pub fn emit_component(
     deps: &HashMap<String, Dep>,
 ) -> Result<Vec<u8>, String> {
     validate_dependency_versions(info, deps)?;
+    let scoped = scope_dependency_types(info, deps);
+    let deps = &scoped;
     let mut module = emit_core_module(arena, roots, info, deps)?;
     let wit = synthesize_world_wit(arena, info, deps)?;
 

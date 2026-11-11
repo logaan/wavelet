@@ -1,11 +1,3 @@
-//! 5.1 arena-per-call: every export gets a canonical post-return companion
-//! (`cabi_post_<export>`) that resets the bump pointer to the arena floor and
-//! clears the lazily-cached value-def globals. wasmtime invokes post-return
-//! after each call, so repeated calls on one instance re-allocate from the
-//! floor and recompute value defs — these tests pin the behaviour the reset
-//! must NOT break: results stay correct call after call, including values
-//! that depend on cached value defs and freshly heap-allocated compounds.
-
 use wavelet::host::{HostComponent, Val};
 
 fn component() -> HostComponent {
@@ -48,9 +40,6 @@ Def spin Fn {xs: list(u64)}
 
 const IFACE: &str = "demo:app/api@0.1.0";
 
-/// Repeated calls on one instance stay correct: the value-def cache resets
-/// with the arena (no dangling cached box), and each call's heap allocations
-/// start from the floor.
 #[test]
 fn repeated_calls_reset_the_arena_and_recompute_value_defs() {
     let mut c = component();
@@ -62,8 +51,6 @@ fn repeated_calls_reset_the_arena_and_recompute_value_defs() {
     }
 }
 
-/// Compound argument lowering + allocation-heavy recursion across many calls:
-/// results must not be corrupted by earlier calls' garbage after resets.
 #[test]
 fn compound_args_survive_resets_across_calls() {
     let mut c = component();

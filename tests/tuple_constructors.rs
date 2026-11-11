@@ -1,23 +1,8 @@
-//! 0.1 — the fixed-arity tuple constructors `tuple0` .. `tuple16`.
-//!
-//! One builtin per size (no variadics: every constructor has a
-//! WIT-expressible fixed-arity shape and works as a first-class function
-//! value). The interpreter is the oracle; the backend must agree on both the
-//! boxed path (`to-string`, `eq`, Match over a constructed tuple) and the
-//! canonical path (a computed tuple as an export result, nested tuples, a
-//! tuple as a result payload) — the constructions the conformance values
-//! callee needs.
-
 use wavelet::host::{HostComponent, Val};
 
-// ---------------------------------------------------------------- oracle ---
-
-/// Interpreter semantics: construction at every arity shape, nesting,
-/// first-class use, and case-constructor shadowing.
 #[test]
 fn oracle_constructs_tuples() {
     for (src, want) in [
-        // arity 0/1/2/3, nesting
         ("tuple0()", "()"),
         ("tuple1(5)", "(5)"),
         ("tuple1(tuple2(1 2))", "((1, 2))"),
@@ -26,13 +11,10 @@ fn oracle_constructs_tuples() {
             "tuple3(add(1 2) \"x\" tuple2(true tuple1(5)))",
             "(3, \"x\", (true, (5)))",
         ),
-        // a constructed tuple is a real tuple: destructures and compares
         ("Match tuple2(3 4) [((a b) add(a b)) (other 0)]", "7"),
         ("eq(tuple2(1 2) Quote (1 2))", "true"),
-        // first-class: a constructor is an ordinary builtin value
         ("tuple2(7 8)", "(7, 8)"),
         ("map(tuple1 [1 2 3])", "[(1), (2), (3)]"),
-        // a `DefType` case shadows the builtin, exactly like `zip`/`some`
         (
             "DefType t [tuple2(u32) other]\nMatch tuple2(30) [((tuple2 n) n) (other 0)]",
             "30",
@@ -44,7 +26,6 @@ fn oracle_constructs_tuples() {
     }
 }
 
-/// The checker enforces the fixed arity statically.
 #[test]
 fn oracle_rejects_wrong_arity() {
     for src in ["tuple2(1)", "tuple0(1)", "tuple1(1 2)", "tuple3(1 2)"] {
@@ -57,8 +38,6 @@ fn oracle_rejects_wrong_arity() {
         );
     }
 }
-
-// --------------------------------------------------------------- backend ---
 
 fn built() -> HostComponent {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -124,9 +103,6 @@ fn call(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
         .clone()
 }
 
-/// A computed tuple crosses the boundary canonically at every shape the
-/// values callee needs: flat, 1-tuple, nested, mixed widths, and as a
-/// result's ok-payload.
 #[test]
 fn constructed_tuples_cross_the_boundary() {
     let mut c = built();
@@ -160,9 +136,7 @@ fn constructed_tuples_cross_the_boundary() {
         *inner,
         Val::Tuple(vec![Val::U32(3), Val::String("p".into())])
     );
-    // destructure a BOXED tuple scrutinee (a typed param) with a Sym-headed
-    // tuple pattern, then rebuild — the values-callee shape; the boxed
-    // matcher used to take the variant-only reading here
+
     assert_eq!(
         call(
             &mut c,
@@ -173,8 +147,6 @@ fn constructed_tuples_cross_the_boundary() {
     );
 }
 
-/// The boxed path agrees with the oracle: `to-string`, Match destructuring,
-/// and a local binding shadowing a constructor name.
 #[test]
 fn boxed_path_agrees_with_the_oracle() {
     let mut c = built();

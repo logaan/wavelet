@@ -1,8 +1,3 @@
-//! Shebang support (7.2): a `.wlt` file may begin with `#!/usr/bin/env wavelet`
-//! so it can be marked executable and run directly. Two guarantees are pinned:
-//! the lexer skips a leading shebang line (only at byte 0), and a bare
-//! `wavelet <file.wlt>` invocation runs the script through the normal run path.
-
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,26 +17,22 @@ fn stage(name: &str, body: &str) -> (PathBuf, PathBuf) {
     (dir, path)
 }
 
-/// The reader skips a leading `#!` line so a shebang'd script still parses to
-/// exactly the forms that follow it.
 #[test]
 fn reader_skips_leading_shebang() {
     let src = "#!/usr/bin/env wavelet\nPackage \"demo:hi@0.1.0\"\nExport run\n\
                Def run Fn {}\n  add(1 2)\n";
     let (arena, roots) = wavelet::read_file(src).expect("shebang'd source reads");
-    // First form is the Package declaration, not a stray comment/error.
+
     let first = wavelet::print(&arena, roots[0]);
     assert!(first.contains("package-MACRO"), "got: {first}");
 }
 
-/// `#!` is a shebang only at byte 0; a `#` elsewhere is still a read error.
 #[test]
 fn hash_bang_not_at_start_is_an_error() {
     let src = "Package \"demo:hi@0.1.0\"\n#!not a shebang\n";
     assert!(wavelet::read_file(src).is_err(), "mid-file #! must not lex");
 }
 
-/// A bare `wavelet <file.wlt>` runs the script (the shape a shebang produces).
 #[test]
 fn bare_wlt_argument_runs_the_script() {
     let (_dir, path) = stage(
@@ -60,9 +51,6 @@ fn bare_wlt_argument_runs_the_script() {
     );
 }
 
-/// An *extensionless* executable script runs too: the kernel invokes `wavelet
-/// /path/to/deploy` for a `#!`-marked file with no `.wlt` suffix, which is the
-/// common Unix shape. It must dispatch to the run path, not the usage error.
 #[test]
 fn bare_extensionless_argument_runs_the_script() {
     let (_dir, path) = stage(
@@ -81,14 +69,8 @@ fn bare_extensionless_argument_runs_the_script() {
     );
 }
 
-/// A bare-word subcommand still wins over a like-named file in the working
-/// directory: `is_script_path` must never steal `repl` (or any subcommand) just
-/// because a file called `repl` exists next to it.
 #[test]
 fn subcommand_wins_over_like_named_file() {
-    // Create a file literally named `repl`, then invoke `wavelet repl` from
-    // that directory. It must reach the REPL (which, with no TTY on stdin,
-    // exits cleanly at EOF) rather than trying to run the file as a script.
     let dir = std::env::temp_dir().join(format!(
         "wavelet-shebang-sub-{}-{}",
         std::process::id(),
@@ -102,8 +84,7 @@ fn subcommand_wins_over_like_named_file() {
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn wavelet");
-    // The REPL path succeeds at empty stdin; the script path would fail to parse
-    // "not a real script". Either way it must not be treated as a script.
+
     assert!(
         out.status.success(),
         "`wavelet repl` should reach the REPL, not run the `repl` file: {}",

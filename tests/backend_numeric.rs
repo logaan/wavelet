@@ -1,30 +1,6 @@
-//! Backend ↔ interpreter parity for the numeric and comparison builtins.
-//!
-//! `CLAUDE.md` makes the interpreter the semantics oracle: "a wasm-backend
-//! change that diverges from the interpreter is a bug." The wasm backend used
-//! to `unbox_int` unconditionally, so float/string operands trapped at runtime,
-//! arithmetic was silently variadic, and integer overflow wrapped instead of
-//! erroring. These tests build a component **through the real emitter** and then
-//! *execute* it in-process (the same capability-free `wasmtime` host the macro
-//! runtime uses), asserting the backend now agrees with the interpreter:
-//!
-//!  - `f64` arithmetic and `string` comparison run instead of trapping;
-//!  - mixed int/float arithmetic widens to float, as `arith` does;
-//!  - integer overflow and `div`/`rem` edge cases trap (checked), matching the
-//!    interpreter's `checked_*` errors;
-//!  - the arithmetic builtins are strictly binary.
-
 use wavelet::host::{HostComponent, Val};
 
-/// Build the fixed numeric API app and return the instantiated component.
-/// The app is self-contained (no imports), so it builds and runs with no
-/// external toolchain — `build_files` runs the component encoder with
-/// validation on, and `HostComponent` instantiates against an empty linker.
 fn numeric_component() -> HostComponent {
-    // Unique per call: both tests in this binary build through here, and each
-    // removes its dir at start and end. Keying the dir on the PID alone let two
-    // concurrent calls (same process) wipe each other's build mid-flight under a
-    // loaded `cargo test`; a per-call sequence number keeps them isolated.
     use std::sync::atomic::{AtomicU32, Ordering};
     static SEQ: AtomicU32 = AtomicU32::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -108,17 +84,16 @@ fn ok(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
 fn float_and_string_builtins_run_instead_of_trapping() {
     let mut c = numeric_component();
 
-    // f64 arithmetic — interpreter: add(1.5 2.5) -> 4.0
     assert_eq!(
         ok(&mut c, "addf", &[Val::Float64(1.5), Val::Float64(2.5)]),
         Val::Float64(4.0)
     );
-    // f64 rem — interpreter: rem(5.5 2.0) -> 1.5
+
     assert_eq!(
         ok(&mut c, "remf", &[Val::Float64(5.5), Val::Float64(2.0)]),
         Val::Float64(1.5)
     );
-    // f64 div by zero is +inf (no trap), matching f64 `/` in the interpreter
+
     match ok(&mut c, "divf", &[Val::Float64(1.0), Val::Float64(0.0)]) {
         Val::Float64(v) => assert!(
             v.is_infinite() && v > 0.0,
@@ -126,13 +101,12 @@ fn float_and_string_builtins_run_instead_of_trapping() {
         ),
         other => panic!("unexpected {other:?}"),
     }
-    // mixed int/float widens to float, as `arith` does: add(2 0.5) -> 2.5
+
     assert_eq!(
         ok(&mut c, "mix", &[Val::S64(2), Val::Float64(0.5)]),
         Val::Float64(2.5)
     );
 
-    // string comparison — interpreter compares by byte/codepoint order
     assert_eq!(
         ok(
             &mut c,
@@ -149,7 +123,7 @@ fn float_and_string_builtins_run_instead_of_trapping() {
         ),
         Val::Bool(false)
     );
-    // a proper prefix is less than the longer string
+
     assert_eq!(
         ok(
             &mut c,
@@ -166,7 +140,7 @@ fn float_and_string_builtins_run_instead_of_trapping() {
         ),
         Val::Bool(false)
     );
-    // float and mixed comparison
+
     assert_eq!(
         ok(&mut c, "ltf", &[Val::Float64(1.5), Val::Float64(2.5)]),
         Val::Bool(true)
@@ -181,7 +155,6 @@ fn float_and_string_builtins_run_instead_of_trapping() {
 fn integer_arithmetic_is_checked_like_the_interpreter() {
     let mut c = numeric_component();
 
-    // in-range integer arithmetic still works
     assert_eq!(
         ok(&mut c, "addi", &[Val::S64(2), Val::S64(40)]),
         Val::S64(42)
@@ -193,7 +166,6 @@ fn integer_arithmetic_is_checked_like_the_interpreter() {
     assert_eq!(ok(&mut c, "divi", &[Val::S64(7), Val::S64(2)]), Val::S64(3));
     assert_eq!(ok(&mut c, "remi", &[Val::S64(7), Val::S64(2)]), Val::S64(1));
 
-    // overflow traps (interpreter returns a checked error)
     assert!(
         call(&mut c, "addi", &[Val::S64(i64::MAX), Val::S64(1)]).is_err(),
         "add overflow should trap"
@@ -207,7 +179,6 @@ fn integer_arithmetic_is_checked_like_the_interpreter() {
         "MIN*-1 should trap"
     );
 
-    // division edge cases trap
     assert!(
         call(&mut c, "divi", &[Val::S64(1), Val::S64(0)]).is_err(),
         "div by zero should trap"
@@ -216,13 +187,12 @@ fn integer_arithmetic_is_checked_like_the_interpreter() {
         call(&mut c, "divi", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(),
         "MIN/-1 should trap"
     );
-    // INT_MIN % -1: the interpreter's checked_rem errors; wasm i64.rem_s alone
-    // would return 0, so the guard must make this trap too.
+
     assert!(
         call(&mut c, "remi", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(),
         "MIN %% -1 should trap"
     );
-    // rem by zero traps as well
+
     assert!(
         call(&mut c, "remi", &[Val::S64(1), Val::S64(0)]).is_err(),
         "rem by zero should trap"

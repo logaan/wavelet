@@ -1,21 +1,6 @@
-//! Regression test for §8: `wavelet wit` must expand macros before synthesizing
-//! WIT, exactly as `wavelet build` does.
-//!
-//! The bug: `wit_cmd` synthesized straight from `read_file` output without
-//! running expansion, so `Derive` (and any foreign macro) never ran on the
-//! `wavelet wit` path. A `Derive {Eq} point` program that `wavelet build`
-//! compiles failed under `wavelet wit` with `Export eq-point has no definition`,
-//! because the derived `eq-point` `Def` was never produced. This drove the two
-//! CLI subcommands to disagree about the same source.
-//!
-//! This runs the built `wavelet` binary (`CARGO_BIN_EXE_wavelet`) on a temp file
-//! containing a `Derive` program and asserts the synthesized WIT contains the
-//! derived `eq-point` — i.e. that expansion happened before synthesis.
-
 use std::path::PathBuf;
 use std::process::Command;
 
-/// A fresh temp directory unique to this test, cleaned on entry.
 fn scratch(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("wavelet-wit-expand-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -50,9 +35,7 @@ Derive {Eq} point
         "`wavelet wit` failed (exit {:?}):\nstdout:\n{stdout}\nstderr:\n{stderr}",
         output.status.code(),
     );
-    // The derived operation is only present if `Derive {Eq}` expanded before
-    // synthesis; without expansion the export had no definition and the command
-    // errored.
+
     assert!(
         stdout.contains("eq-point"),
         "expected synthesized WIT to contain the derived `eq-point`; got:\n{stdout}",

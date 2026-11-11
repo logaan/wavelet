@@ -1,14 +1,5 @@
-//! Goal 5 (5.5 canonical lists/strings, dep-born slice): a dep call
-//! returning a list or string is BORN canonical — the import's retptr area
-//! already carries the canonical (ptr, len) pair over packed elements /
-//! raw UTF-8 — and Let/Match consume it without a box lift. List patterns
-//! destructure packed elements at stride offsets (the length check is a
-//! runtime comparison, unlike a tuple's static arity); every boxed seam
-//! rebuilds exactly the interpreter's value.
-
 use wavelet::host::{HostComponent, Val};
 
-/// Is `bin` runnable (`<bin> --version` succeeds)?
 fn have(bin: &str) -> bool {
     std::process::Command::new(bin)
         .arg("--version")
@@ -17,8 +8,6 @@ fn have(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Build the two-component project (a list/string-producing dep + a
-/// consumer) and instantiate the composed app. `None` without `wac`.
 fn composed() -> Option<HostComponent> {
     if !have("wac") {
         eprintln!("skipping: wac not on PATH");
@@ -136,59 +125,49 @@ fn ok(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
 }
 
 #[test]
-// A list pattern over a dep-born canonical list destructures packed
-// elements at stride offsets: scalar binders load typed locals directly
-// from the element buffer, no boxes.
+
 fn dep_born_list_destructures_by_stride() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "sum", &[]), Val::S64(6));
 }
 
 #[test]
-// The list-length check is a runtime comparison (a value property): the
-// wrong-arity clause falls through, the right one matches — like the
-// oracle.
+
 fn list_pattern_length_mismatch_falls_through() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "fall", &[]), Val::S64(1));
 }
 
 #[test]
-// Records packed inside a canonical list destructure in place: each
-// element's record pattern takes an interior pointer at its stride offset.
+
 fn records_inside_canonical_list_destructure_in_place() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "deep", &[]), Val::S64(5));
 }
 
 #[test]
-// A Let-bound dep-born list reboxes faithfully at the eq seam: the rebuilt
-// box is exactly the interpreter's Value::Lst (element order, Int domain).
+
 fn canonical_list_rebuild_is_faithful() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "same", &[]), Val::Bool(true));
 }
 
 #[test]
-// Strings packed inside a canonical list bind lazily (interior (ptr, len)
-// pointers) and rebox only where consumed.
+
 fn strings_inside_canonical_list_bind_and_rebox() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "cat", &[]), Val::String("abee".into()));
 }
 
 #[test]
-// A dep-born string is born canonical (raw UTF-8 behind (ptr, len)) and
-// reboxes only at the consuming seam.
+
 fn dep_born_string_reboxes_at_the_seam() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "shout", &[]), Val::String("hola!".into()));
 }
 
 #[test]
-// A def forwarding a dep list/string carries a Mem result signature and
-// the export wrapper returns the dep's canonical area directly (the 5.5
-// retptr fast path): two boundary crossings, zero boxes.
+
 fn list_and_string_exports_take_the_retptr_fast_path() {
     let Some(mut c) = composed() else { return };
     assert_eq!(
@@ -199,34 +178,26 @@ fn list_and_string_exports_take_the_retptr_fast_path() {
 }
 
 #[test]
-// A list field inside a dep-born canonical record binds as an interior
-// (ptr, len) pointer and destructures by stride from there.
+
 fn list_field_inside_canonical_record_destructures() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "field", &[]), Val::S64(15));
 }
 
 #[test]
-// `len` over a statically-canonical dep-born list reads the stored length
-// word directly (5.6 type-indexed builtin) — no rebox, same count as the
-// interpreter's `len`.
+
 fn len_over_canonical_list_reads_the_length_word() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "count", &[]), Val::S64(3));
 }
 
 #[test]
-// `head` over a statically-canonical dep-born list loads element[0] straight
-// from the (ptr, len) area (5.6 type-indexed builtin) — no rebox — and a
-// record element materializes at its natural boxed repr so a Match still
-// destructures it, both agreeing with the interpreter's `head`.
+
 fn head_over_canonical_list_loads_the_first_element() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "first", &[]), Val::S64(1));
     assert_eq!(ok(&mut c, "firstpt", &[]), Val::S64(1));
 }
-
-// ---- construction slice: canonical list literals (5.5, no dep needed) ----
 
 fn constructed() -> HostComponent {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -288,9 +259,7 @@ fn okc(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
 }
 
 #[test]
-// A Let-bound list literal of declared-scalar names constructs canonically
-// (packed s32 elements) and its export takes the retptr fast path (the
-// layout equals the boundary type).
+
 fn constructed_list_exports_through_the_fast_path() {
     let mut c = constructed();
     assert_eq!(
@@ -300,8 +269,7 @@ fn constructed_list_exports_through_the_fast_path() {
 }
 
 #[test]
-// The rebuilt box is exactly the interpreter's Value::Lst: element order
-// preserved, int literals in the full Value::Int domain (s64 layout).
+
 fn constructed_list_rebuild_preserves_elements() {
     let mut c = constructed();
     assert_eq!(okc(&mut c, "c-same", &[]), Val::Bool(true));
@@ -309,45 +277,38 @@ fn constructed_list_rebuild_preserves_elements() {
 }
 
 #[test]
-// Record elements pack in place inside the buffer (records-inside-lists —
-// the recorded 5.3 residue — now constructs canonically too).
+
 fn record_elements_pack_and_rebuild_faithfully() {
     let mut c = constructed();
     assert_eq!(okc(&mut c, "c-pts", &[]), Val::Bool(true));
 }
 
 #[test]
-// Nested list literals pack (ptr, len) pairs as elements; nested list
-// patterns destructure them through interior pointers.
+
 fn nested_list_literals_pack_and_destructure() {
     let mut c = constructed();
     assert_eq!(okc(&mut c, "c-nested", &[]), Val::S64(6));
 }
 
 #[test]
-// String elements store as (ptr, len) into the literal's interned bytes
-// and rebox only where consumed.
+
 fn string_elements_store_and_rebox() {
     let mut c = constructed();
     assert_eq!(okc(&mut c, "c-strs", &[]), Val::String("xy".into()));
 }
 
 #[test]
-// A list field inside a canonical record literal packs its buffer in
-// place; the whole record reboxes faithfully at the eq seam.
+
 fn list_field_inside_record_literal_constructs() {
     let mut c = constructed();
     assert_eq!(okc(&mut c, "c-rec-field", &[]), Val::Bool(true));
 }
 
 #[test]
-// `tail` of a canonical list is itself canonical (5.6, zero-copy): a fresh
-// (ptr, len) sharing the operand's element buffer from element[1]. It feeds
-// the canonical `len`/`head` slices directly and a list Match destructures it
-// — every answer equal to the interpreter's `tail`.
+
 fn tail_over_canonical_list_is_zero_copy() {
     let Some(mut c) = composed() else { return };
-    // tail([1 2 3]) = [2 3]
+
     assert_eq!(ok(&mut c, "count2", &[]), Val::S64(2));
     assert_eq!(ok(&mut c, "firsttail", &[]), Val::S64(2));
     assert_eq!(ok(&mut c, "mtail", &[]), Val::S64(5));

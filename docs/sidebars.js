@@ -24,8 +24,10 @@ const sidebars = {
     },
     'stdlib',
     'components',
+    'web-apps',
     'cli',
     'supply-chain',
+    'development',
     'roadmap',
   ],
 };

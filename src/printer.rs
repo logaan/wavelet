@@ -1,6 +1,5 @@
 use crate::form::{Arena, Node, NodeId};
 
-/// Canonical WAVE text: strict commas, escapes normalized (§2.1).
 pub fn print(arena: &Arena, id: NodeId) -> String {
     let mut out = String::new();
     write_form(arena, id, &mut out);
@@ -25,11 +24,7 @@ fn write_form(arena: &Arena, id: NodeId, out: &mut String) {
             out.push('"');
         }
         Node::Sym(name) => out.push_str(name),
-        Node::Qsym(alias, name) => {
-            out.push_str(alias);
-            out.push('/');
-            out.push_str(name);
-        }
+
         Node::Tup(items) => write_seq(arena, items, '(', ')', out),
         Node::Lst(items) => write_seq(arena, items, '[', ']', out),
         Node::Rec(fields) => {

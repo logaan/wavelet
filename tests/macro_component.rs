@@ -1,9 +1,3 @@
-//! End-to-end tests for the strategy-B macro component
-//! ([`wavelet::emit::emit_macro_component`]): compile a macro-library file's
-//! `DefMacro`s into a `wavelet:meta/macros` component and drive it through the
-//! same [`wavelet::macros::MacroComponent`] consumer the build uses, asserting
-//! the compiled `manifest`/`expand` match the interpreter's reference output.
-
 use wavelet::emit::emit_macro_component;
 use wavelet::macros::MacroComponent;
 use wavelet::meta::{arena_to_tree, tree_to_arena};
@@ -23,8 +17,6 @@ fn component(src: &str) -> MacroComponent {
     MacroComponent::from_bytes(&bytes).expect("loads as a wavelet:meta/macros component")
 }
 
-/// The whole call form, shipped as the pinned `args` tree (element 0 is the
-/// head, `1..` the argument forms).
 fn args_tree(call_src: &str) -> wavelet::meta::Tree {
     let (arena, roots) = read_file(call_src).expect("read call");
     assert_eq!(roots.len(), 1);

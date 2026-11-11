@@ -1,4 +1,3 @@
-// main.wlt — compiles to demo:main.wasm
 Package "demo:main@0.1.0"
 
 Import {pkg: "demo:shout/api" as: sh}

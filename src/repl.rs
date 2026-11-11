@@ -1,31 +1,3 @@
-//! `wavelet repl` (§9): read a form, evaluate it, print the value.
-//! Multi-line input is supported by continuing while the reader reports an
-//! unexpected end of input.
-//!
-//! ## Compiled-first evaluation (goal 6, Step 2)
-//!
-//! Each expression entry is evaluated the *accumulate-and-recompile* way: the
-//! session keeps the accepted **definitions** (`Def`/`DefMacro`/`DefType`/…) as
-//! canonical source, and a bare expression is compiled as a synthetic
-//! single-file program — the accumulated definitions plus a synthetic
-//! `Def repl-eval Fn {} to-string(<expr>)` exported as a `string` — built
-//! through the real emitter (`build::build_files`), instantiated in the
-//! capability-free `wasmtime` host (`host::HostComponent`), and called. The
-//! guest renders its own result with the backend's `to-string` (the port of the
-//! interpreter's `print_value`) and returns it as a WIT `string`, so no
-//! linear-memory value reader is needed — this is the path the differential
-//! harness (`tests/differential.rs`) proves agrees with the interpreter.
-//!
-//! The wasm backend is still a strict subset of the interpreter on a few
-//! decision-gated behaviours (float/char `to-string`, runtime flag literals,
-//! record-payload `apply`, `read`). When the compiled path cannot produce a
-//! result for an expression — a build error, or a runtime trap — the REPL falls
-//! back to the interpreter for **that entry** and notes it on stderr, so a line
-//! that hits one of those holes still evaluates (as it did before) rather than
-//! failing with a mystery trap. The interpreter therefore remains wired into the
-//! REPL as the fallback until those decisions land; it is not yet fully retired
-//! from this surface (goal 6.6).
-
 use std::rc::Rc;
 
 use crate::form::{Arena, Node, NodeId};
@@ -34,18 +6,10 @@ use crate::printer::print;
 use crate::reader::MacroTable;
 use crate::value::{Env, print_value};
 
-/// The synthetic package/interface/entry the accumulate-and-recompile REPL
-/// wraps each expression into. Names mirror the differential harness's
-/// self-contained component (`docs:snippet` / `differential-main`); WIT
-/// identifiers are kebab-case, so the entry is `repl-eval`, not `__eval`.
 const PACKAGE: &str = "repl:session@0.0.0";
 const IFACE: &str = "repl:session/api@0.0.0";
 const MAIN: &str = "repl-eval";
 
-/// Top-level declaration heads (post-reader `-MACRO` spellings): forms that
-/// declare rather than evaluate. A declaration accumulates into the session; any
-/// other form is an expression and is the evaluation target. Mirrors
-/// `tests/differential.rs`'s list.
 const DECL_HEADS: &[&str] = &[
     "package-MACRO",
     "target-MACRO",
@@ -67,9 +31,6 @@ fn is_decl(arena: &Arena, root: NodeId) -> bool {
     matches!(arena.node(head), Node::Sym(s) if DECL_HEADS.contains(&s.as_str()))
 }
 
-/// Assemble the synthetic program compiled to evaluate one expression:
-/// `Package` + the accumulated definitions + a `repl-eval` entry whose body is
-/// `to-string(<expr>)`, exported as a `string`.
 fn synth_program(defs: &[String], expr_src: &str) -> String {
     let mut out = format!("Package \"{PACKAGE}\"\n\n");
     for d in defs {
@@ -81,9 +42,6 @@ fn synth_program(defs: &[String], expr_src: &str) -> String {
     out
 }
 
-/// Build the synthetic program through the real emitter and call its entry,
-/// returning the printed value the guest's `to-string` produced. `Err` carries
-/// the failing stage (build / instantiate / call / trap).
 #[derive(Default)]
 struct CompiledSession {
     entries: std::collections::HashMap<String, crate::host::HostComponent>,
@@ -116,13 +74,6 @@ impl CompiledSession {
     }
 }
 
-/// Evaluate every form read from one accepted input buffer. A declaration
-/// accumulates into `defs` (and is evaluated in the interpreter to keep the
-/// fallback env consistent, validate the form, and yield the unit echo); an
-/// expression is compiled — the accumulated session plus a synthetic
-/// `repl-eval` entry — and its `to-string` value printed, falling back to the
-/// interpreter for that entry on any compiled-path failure. Shared by the
-/// interactive and piped front-ends so both behave identically.
 fn value_definition_name(arena: &Arena, root: NodeId) -> Option<&str> {
     let Node::Tup(items) = arena.node(root) else {
         return None;
@@ -190,10 +141,6 @@ fn eval_forms(
     }
 }
 
-/// Where the interactive REPL persists its input history. Follows the XDG state
-/// convention (`$XDG_STATE_HOME/wavelet/history`, else `~/.local/state/wavelet/
-/// history`); `None` when neither `XDG_STATE_HOME` nor `HOME` is set, in which
-/// case history is kept in memory for the session only.
 fn history_path() -> Option<std::path::PathBuf> {
     if let Some(x) = std::env::var_os("XDG_STATE_HOME").filter(|s| !s.is_empty()) {
         return Some(std::path::PathBuf::from(x).join("wavelet").join("history"));
@@ -202,10 +149,6 @@ fn history_path() -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(home).join(".local/state/wavelet/history"))
 }
 
-/// `wavelet repl`: interactive line-editing + history when stdin is a terminal
-/// (7.1), and a plain line-reader when it is not (a pipe or here-doc), so
-/// scripted/piped sessions stay byte-for-byte what they were before readline was
-/// added. Both front-ends share [`eval_forms`].
 pub fn repl() -> Result<(), String> {
     use std::io::IsTerminal;
     if std::io::stdin().is_terminal() {
@@ -215,9 +158,6 @@ pub fn repl() -> Result<(), String> {
     }
 }
 
-/// Interactive front-end: `rustyline` provides arrow-key line editing, a
-/// persistent history file, Ctrl-C to abandon the current (possibly multi-line)
-/// entry, and Ctrl-D to exit.
 fn repl_interactive() -> Result<(), String> {
     use rustyline::error::ReadlineError;
 
@@ -247,7 +187,7 @@ fn repl_interactive() -> Result<(), String> {
                     continue;
                 }
                 match crate::reader::read_with(&buf, &mut macros) {
-                    Err(e) if e.msg == "unexpected end of input" => continue, // more lines
+                    Err(e) if e.msg == "unexpected end of input" => continue,
                     Err(e) => {
                         eprintln!("read error: {e}");
                         buf.clear();
@@ -260,8 +200,7 @@ fn repl_interactive() -> Result<(), String> {
                     }
                 }
             }
-            // Ctrl-C abandons the current entry but keeps the session going;
-            // Ctrl-D (EOF) exits.
+
             Err(ReadlineError::Interrupted) => {
                 buf.clear();
             }
@@ -279,9 +218,6 @@ fn repl_interactive() -> Result<(), String> {
     Ok(())
 }
 
-/// Piped/non-terminal front-end: read stdin line by line with no editing (the
-/// original REPL loop). Prompts go to stderr; results to stdout. Used for
-/// here-docs, pipelines, and the behaviour tests.
 fn repl_piped() -> Result<(), String> {
     use std::io::{BufRead, Write};
 
@@ -309,7 +245,7 @@ fn repl_piped() -> Result<(), String> {
             continue;
         }
         match crate::reader::read_with(&buf, &mut macros) {
-            Err(e) if e.msg == "unexpected end of input" => continue, // more lines
+            Err(e) if e.msg == "unexpected end of input" => continue,
             Err(e) => {
                 eprintln!("read error: {e}");
                 buf.clear();

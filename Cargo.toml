@@ -17,10 +17,10 @@ playground = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 wac-graph = "0.10.0"
 wasm-encoder = "0.251.0"
 wit-component = "0.251.0"
-wit-parser = "0.251.0"
+wit-parser = { version = "0.251.0", features = ["wat"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-wasmtime = { version = "45", default-features = false, features = ["runtime", "cranelift", "component-model"] }
+wasmtime = { version = "50", default-features = false, features = ["runtime", "cranelift", "component-model"] }
 
 rustyline = "14"
 tempfile = "3"

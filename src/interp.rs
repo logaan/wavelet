@@ -30,7 +30,7 @@ type R<T> = Result<T, EvalError>;
 
 enum Step {
     Done(Value),
-    /// Continue the eval loop at a new position: tail-call elimination (§5).
+
     Jump(Rc<Arena>, NodeId, Env),
 }
 
@@ -109,15 +109,7 @@ impl Interp {
                 Some(v) => Ok(Step::Done(v)),
                 None => err(format!("unbound name `{name}`")),
             },
-            Node::Qsym(alias, name) => {
-                let q = format!("{alias}/{name}");
-                match env.lookup(&q) {
-                    Some(v) => Ok(Step::Done(v)),
-                    None => err(format!("unbound qualified name `{q}` (missing import?)")),
-                }
-            }
-            // A parenthesized form in evaluation position is a call (§4.1):
-            // take items[0] as the head and apply it to the bundled args.
+
             Node::Tup(items) => self.step_call(arena, items, env),
             Node::Lst(items) => {
                 let vals = self.eval_each(arena, items, env)?;
@@ -143,7 +135,6 @@ impl Interp {
         };
         let name = match arena.node(head) {
             Node::Sym(s) => s.clone(),
-            Node::Qsym(a, n) => format!("{a}/{n}"),
             _ => return err("call head must be a name (use apply for a computed function)"),
         };
         if let Some(step) = self.special_form(&name, arena, args, env)? {
@@ -160,9 +151,6 @@ impl Interp {
         self.apply_step(&f, arg, Some(env))
     }
 
-    /// §4.2 argument bundling at a call: 0 args ⇒ the empty tuple, 1 arg ⇒ that
-    /// value directly, ≥2 args ⇒ a tuple. This reproduces the old payload shape,
-    /// so `bind_params` is unchanged.
     fn bundle_args(&self, arena: &Rc<Arena>, args: &[NodeId], env: &Env) -> R<Value> {
         match args {
             [] => Ok(Value::Tup(vec![])),
@@ -171,8 +159,6 @@ impl Interp {
         }
     }
 
-    /// `env` is the caller's environment, used only by builtins that need to
-    /// see macro bindings (`expand`).
     fn apply_step(&self, f: &Value, arg: Value, env: Option<&Env>) -> R<Step> {
         match f {
             Value::Closure(c) => {
@@ -180,10 +166,7 @@ impl Interp {
                 Ok(Step::Jump(c.arena.clone(), c.body, env))
             }
             Value::Builtin(name) => Ok(Step::Done(builtins::call(self, name, arg, env)?)),
-            // A `DefType` variant case constructor: wrap the bundled argument
-            // as its case's payload (4.1). Zero-argument application (`arg` is
-            // the empty tuple) is rejected — a payloaded case needs a payload;
-            // the checker enforces the exact arity statically.
+
             Value::CaseCtor(case) => match arg {
                 Value::Tup(items) if items.is_empty() => err(format!(
                     "variant case `{case}` takes a payload, got no arguments"
@@ -193,9 +176,7 @@ impl Interp {
                     Some(Rc::new(payload)),
                 ))),
             },
-            // A user-declared resource constructor (4.5): run `New` on the
-            // argument, then wrap the resulting rep in a fresh handle stamped
-            // with the resource's nominal type name.
+
             Value::ResourceCtor(rc) => {
                 let rep = self.apply(&Value::Closure(rc.ctor.clone()), arg)?;
                 if let Some(destructor) = &rc.destructor {
@@ -213,10 +194,7 @@ impl Interp {
                     },
                 ))))
             }
-            // A user-declared resource method (4.5): the receiver is the first
-            // (or sole) argument; unwrap its handle to the rep so the method's
-            // `self` parameter is bound to the rep (decision 2b), then run the
-            // body.
+
             Value::ResourceMethod(rm) => {
                 let arg = unwrap_receiver(&rm.name, arg)?;
                 self.apply_step(&Value::Closure(rm.method.clone()), arg, env)
@@ -319,21 +297,12 @@ impl Interp {
                 env.define(format!("{n}-MACRO"), mac);
                 Step::Done(unit())
             }
-            // `The` is a pure static ascription (checked in `crate::check`);
-            // at runtime it evaluates to its expression's value, unchecked
-            // (3.11: the total checker runs first, so the old runtime
-            // conformance path was unreachable on every checked path).
+
             "the-MACRO" => {
                 let [_ty, expr] = args2(args, "The")?;
                 Step::Jump(arena.clone(), expr, env.clone())
             }
-            // `DefType` declares a nominal type; evaluating it binds the
-            // declaration's *case constructors* (4.1): each nullary case of a
-            // variant/enum becomes a payload-less `Variant` value (like
-            // `none`), each payloaded case a `CaseCtor`. Record/flags/alias
-            // declarations bind nothing. The static side (checking, WIT
-            // synthesis) reads the declaration separately (`crate::check`,
-            // `crate::wit`).
+
             "deftype-MACRO" => {
                 let [name_id, decl] = args2(args, "DefType")?;
                 let Node::Sym(_) = arena.node(name_id) else {
@@ -365,14 +334,7 @@ impl Interp {
                 }
                 Step::Done(unit())
             }
-            // `DefResource <name> { … }` declares a resource type (4.5).
-            // Evaluating it binds the resource's use-site names into the module
-            // env: the bare type name to the constructor (`counter(5)`), and
-            // each method/static under its qualified key (`counter/next`,
-            // `counter/sum`). The destructor `Drop` is recorded by the checker
-            // and run by the backend at handle-drop; it is not user-callable, so
-            // the interpreter binds nothing for it. The static/WIT side reads the
-            // declaration separately (`crate::check`, `crate::wit`).
+
             "defresource-MACRO" => {
                 let [name_id, members_id] = args2(args, "DefResource")?;
                 let Node::Sym(rname) = arena.node(name_id) else {
@@ -406,14 +368,9 @@ impl Interp {
                                 })),
                             );
                         }
-                        // The destructor is not user-callable; running its body
-                        // at handle-drop is a backend concern (staged, 4c).
+
                         "Drop" => {}
                         other => {
-                            // A `Static Fn {…}` member reads as
-                            // `Tup[static-MACRO, <fn-form>]`; strip the marker and
-                            // bind the closure directly (statics take no `self`).
-                            // Any other member is an instance method.
                             let (is_static, fn_id) = match arena.node(*val) {
                                 Node::Tup(items)
                                     if items.len() == 2
@@ -437,7 +394,7 @@ impl Interp {
                                     method: c,
                                 }))
                             };
-                            env.define(format!("{rname}/{other}"), value);
+                            env.define(format!("{rname}-{other}"), value);
                         }
                     }
                 }
@@ -454,8 +411,6 @@ impl Interp {
         Ok(Some(step))
     }
 
-    /// Expand a user macro: bind argument *forms* (as data) to the macro's
-    /// parameters, evaluate its body, and jump into the resulting form (§6.3).
     fn expand_macro(
         &self,
         mac: &Rc<Closure>,
@@ -467,9 +422,6 @@ impl Interp {
         Ok(Step::Jump(out, root, use_env.clone()))
     }
 
-    /// One macro expansion step: bind the argument *forms* to the macro's
-    /// parameters, evaluate the body, and return the resulting form in a fresh
-    /// arena. Also used by the ahead-of-time expander (`crate::expand`).
     pub fn expand_once(
         &self,
         mac: &Rc<Closure>,
@@ -483,8 +435,6 @@ impl Interp {
                 env.define(param.name.clone(), form_to_value(arena, arg));
             }
         } else if n == 1 {
-            // A 1-param macro receiving several explicit args gets them as a
-            // tuple form (rare, but well-defined).
             let tup = Value::Tup(args.iter().map(|&a| form_to_value(arena, a)).collect());
             env.define(mac.params[0].name.clone(), tup);
         } else {
@@ -496,16 +446,8 @@ impl Interp {
         Ok((Rc::new(out), root))
     }
 
-    /// `Quasi`: build a form, evaluating `Unquote` holes and splicing
-    /// `Splice` holes into the enclosing sequence.
-    /// `depth` counts enclosing Quasis: Unquote/Splice fire at depth 1 and are
-    /// rebuilt as data (one level shallower) at greater depths; a nested Quasi
-    /// is rebuilt with its contents processed one level deeper.
     fn quasi(&self, arena: &Rc<Arena>, id: NodeId, env: &Env, depth: u32) -> R<Value> {
         match arena.node(id) {
-            // Calls are tuples now. Treat the Unquote/Splice/Quasi heads
-            // specially (all arity 1, so a 2-element tuple); every other tuple
-            // is rebuilt element-wise as a tuple value.
             Node::Tup(items) => {
                 if items.len() == 2
                     && let Node::Sym(name) = arena.node(items[0])
@@ -550,24 +492,22 @@ impl Interp {
     ) -> R<Vec<Value>> {
         let mut out = Vec::with_capacity(items.len());
         for &item in items {
-            if depth == 1 {
-                // A splice is `(Splice expr)` ⇒ the tuple `[splice-MACRO, expr]`.
-                if let Node::Tup(tup) = arena.node(item)
-                    && tup.len() == 2
-                    && let Node::Sym(s) = arena.node(tup[0])
-                    && s == "splice-MACRO"
-                {
-                    match self.eval(arena, tup[1], env)? {
-                        Value::Lst(vs) => out.extend(vs),
-                        v => {
-                            return err(format!(
-                                "Splice expects a list, got {}",
-                                crate::value::print_value(&v)
-                            ));
-                        }
+            if depth == 1
+                && let Node::Tup(tup) = arena.node(item)
+                && tup.len() == 2
+                && let Node::Sym(s) = arena.node(tup[0])
+                && s == "splice-MACRO"
+            {
+                match self.eval(arena, tup[1], env)? {
+                    Value::Lst(vs) => out.extend(vs),
+                    v => {
+                        return err(format!(
+                            "Splice expects a list, got {}",
+                            crate::value::print_value(&v)
+                        ));
                     }
-                    continue;
                 }
+                continue;
             }
             out.push(self.quasi(arena, item, env, depth)?);
         }
@@ -575,12 +515,6 @@ impl Interp {
     }
 }
 
-/// Unwrap a resource method's receiver so `self` binds to the rep, not the
-/// handle (decision 2b, 4.5). The receiver is the first element of a multi-arg
-/// payload, or the sole argument for a one-parameter method. A live handle of
-/// the method's own type is unwrapped to its rep; a consumed handle traps; a
-/// value that is already a rep (e.g. a sibling call passing `self` straight
-/// through) is left untouched.
 fn unwrap_receiver(res_name: &str, arg: Value) -> R<Value> {
     fn unwrap_one(res_name: &str, v: Value) -> R<Value> {
         match v {
@@ -592,8 +526,7 @@ fn unwrap_receiver(res_name: &str, arg: Value) -> R<Value> {
                 }
                 Ok(inst.rep.clone())
             }
-            // Already a rep (sibling call) or a foreign value: pass through; the
-            // checker guarantees well-typed receivers.
+
             other => Ok(other),
         }
     }
@@ -607,14 +540,10 @@ fn unwrap_receiver(res_name: &str, arg: Value) -> R<Value> {
     }
 }
 
-/// §4.2 parameter binding: record payloads bind by name, list/tuple payloads
-/// by order, and a sole parameter receives the payload directly.
 fn bind_params(c: &Closure, arg: Value) -> R<Env> {
     let env = c.env.child();
     let n = c.params.len();
     match (n, &arg) {
-        // Only the empty tuple `()` denotes "no arguments"; an empty list,
-        // record, or flags value is a value in its own right (2.1 proposal 1).
         (0, Value::Tup(v)) if v.is_empty() => return Ok(env),
         (0, _) => return err("function takes no arguments"),
         _ => {}
@@ -639,9 +568,6 @@ fn bind_params(c: &Closure, arg: Value) -> R<Env> {
         return Ok(env);
     }
     match arg {
-        // A tuple destructures positionally across parameters; a list is one
-        // value (bound above when n == 1) and never fills multiple parameters
-        // (2.1 proposal 1).
         Value::Tup(vs) if vs.len() == n => {
             for (p, v) in c.params.iter().zip(vs) {
                 bind_one(&env, p, v)?;
@@ -656,9 +582,6 @@ fn bind_params(c: &Closure, arg: Value) -> R<Env> {
     }
 }
 
-// Parameter conformance is checked statically (`crate::check`); binding is
-// unconditional (3.11 — the wasm backend never emitted these checks either,
-// so deleting them also removes an interpreter/backend divergence).
 fn bind_one(env: &Env, p: &Param, v: Value) -> R<()> {
     let value = if let (Some((name, borrow)), Value::Resource(instance)) = (&p.resource_type, &v) {
         if *name != instance.name {
@@ -730,16 +653,11 @@ fn parse_params(arena: &Arena, id: NodeId) -> R<Vec<Param>> {
     }
 }
 
-/// §4.2 patterns: literals match by equality, a bare name binds (unless it is
-/// bound to a payload-less variant case, which matches by equality), call
-/// shapes destructure variant cases, sequences destructure their counterparts.
 fn match_pattern(arena: &Rc<Arena>, pat: NodeId, v: &Value, binds: &Env, scope: &Env) -> R<bool> {
     match arena.node(pat) {
         Node::Bool(b) => Ok(matches!(v, Value::Bool(x) if x == b)),
         Node::Int(n) => Ok(matches!(v, Value::Int(x) if x == n)),
-        // Float literals are rejected as patterns at check time (2.1 proposal
-        // 2); the interpreter refuses them too so it stays a faithful oracle
-        // when run standalone. Int/bool/char/string literals are exact and fine.
+
         Node::Dec(_) => err("a float literal cannot be a Match pattern"),
         Node::Char(c) => Ok(matches!(v, Value::Char(x) if x == c)),
         Node::Str(s) => Ok(matches!(v, Value::Str(x) if x == s)),
@@ -753,10 +671,7 @@ fn match_pattern(arena: &Rc<Arena>, pat: NodeId, v: &Value, binds: &Env, scope: 
             binds.define(name.clone(), v.clone());
             Ok(true)
         }
-        Node::Qsym(..) => err("qualified names cannot appear in patterns"),
-        // A tuple pattern is disambiguated by the scrutinee value: against a
-        // variant it is a variant-case pattern `(case …rest)`; against a tuple
-        // value it destructures element-wise.
+
         Node::Tup(pats) => match v {
             Value::Variant(cval, payload)
                 if !pats.is_empty() && matches!(arena.node(pats[0]), Node::Sym(c) if c == cval) =>

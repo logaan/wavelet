@@ -1,11 +1,3 @@
-//! 4.3 — a local export signature can name dep-defined types.
-//!
-//! The synthesized WIT brings each referenced dep type into scope with
-//! `use <pkg>/<iface>@<ver>.{name};`, versioned from the resolved dependency
-//! (never the hardcoded wasi fallback). Covers records, enums, variants, and
-//! aliases, referenced directly and inside type constructors, plus a local
-//! record whose field type is dep-defined.
-
 fn build(tag: &str, wit: &str, app: &str) -> Vec<u8> {
     let dir = std::env::temp_dir().join(format!("wvl-xpkg-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -53,8 +45,7 @@ fn local_export_signatures_name_dep_types() {
         Export {name: pair params: {p: point} result: track}\n\
         Def pair Fn {p} [p p]\n";
     let bytes = build("sigs", WIT, app);
-    // The component re-encodes and validates (build_files already ran
-    // wit-component); check the synthesized `use` is present and versioned.
+
     let text = String::from_utf8_lossy(&bytes);
     assert!(
         text.contains("acme:pts/types@0.3.1"),

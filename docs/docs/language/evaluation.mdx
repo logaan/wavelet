@@ -10,7 +10,7 @@ There are four evaluation rules. That's the whole model.
 
 1. **Atoms** — booleans, numbers, chars, strings, flags — evaluate to themselves.
 2. **A bare name** evaluates to its binding in the current lexical environment. Wavelet is a **Lisp-1**: one namespace for everything. Unbound names are errors. Enum cases, imported functions, and constructors are all just bindings.
-3. **A call form** — a tuple `(head arg…)` in evaluation position — evaluates its arguments, **bundles** them (0 ⇒ the empty tuple, 1 ⇒ that value, ≥2 ⇒ a tuple), and applies the value bound to `head`. Heads are names or qualified names; a tuple **value** comes from the fixed-arity constructors [`tuple0` … `tuple16`](../stdlib#tuples), from `Quote`, or from another builtin like `zip`. To call a *computed* function value, bind it to a name with `Let`.
+3. **A call form** — a tuple `(head arg…)` in evaluation position — evaluates its arguments, **bundles** them (0 ⇒ the empty tuple, 1 ⇒ that value, ≥2 ⇒ a tuple), and applies the value bound to `head`. Heads are names (with `/` normalized to `-`); a tuple **value** comes from the fixed-arity constructors [`tuple0` … `tuple16`](../stdlib#tuples), from `Quote`, or from another builtin like `zip`. Callbacks must resolve statically; runtime data cannot contain function values.
 4. **Special forms and macros** are recognised before evaluation and follow their own rules — see [Special forms](./special-forms) and [Macros](./macros).
 
 ## Functions take exactly one value
@@ -33,13 +33,13 @@ A sole parameter receives a scalar directly:
 
 ## One namespace
 
-Because Wavelet is a Lisp-1, a function and a value live in the same namespace. You can pass functions around as ordinary bindings and apply them by name:
+Functions and data share a namespace. A macro can receive a function name and generate direct calls at compile time:
 
 <Playground id="eval-twice" />
 
-## Calling a computed function
+## Choosing an operation at runtime
 
-A call head must be a *name*. To call a function you computed (e.g. one pulled out of a list), bind it to a name, then call that name:
+Runtime collections contain WIT data. Store variant cases and use `Match` to select a direct call; function-valued lists, records, tuples, cells, and returned closures are rejected:
 
 <Playground id="eval-apply-list" />
 

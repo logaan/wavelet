@@ -67,16 +67,29 @@ As data, a call is just a tuple: `log("hi")` is the WAVE tuple `(log, "hi")`. In
 
 ## 3. Qualified calls
 
-A `/` between two names is a qualified reference: the name after the slash, taken from the import aliased by the name before it. WIT identifiers contain no slash, so this is a Wavelet-only token, and it heads a call exactly like an ordinary identifier:
+A `/` inside a name is spelling sugar for `-`. `kv/get`, `kv-get`, and a
+local binding named `kv-get` all refer to the same symbol. Multiple segments work
+as well: `service/cache/get` becomes `service-cache-get`. There is no qualified
+symbol node in the form tree or macro wire format.
 
 | You write | Canonical WAVE form | |
 |---|---|---|
-| `kv/get({...})` | `(kv/get, {...})` | name `get` from the import aliased `kv` |
+| `kv/get({...})` | `(kv-get, {...})` | ordinary call of `kv-get` |
 
 ```console
 $ echo 'kv/get({bucket: b})' | wavelet read
-(kv/get, {bucket: b})
+(kv-get, {bucket: b})
 ```
+
+Imports bind their functions under `alias-name`; slash spelling is optional.
+Variant constructors can also be aliased normally:
+
+```wavelet
+DefType ttl [days(u32) forever]
+Def ttl-days days
+ttl/days(5)
+```
+
 
 ## 4. Call chaining
 
@@ -101,7 +114,7 @@ This is **pure rewriting**, not method dispatch: there are no methods and nothin
 
 ## 5. TitleCase macro sugar
 
-A **TitleCase** identifier — its first hyphen-separated word starts with a capital and contains at least one lower-case letter (`If`, `DefMacro`, `Try-let`) — is reader sugar for a macro call. This can't collide with ordinary identifiers: a WIT label word is all-lower or all-UPPER, so a Title-case *leading* word is syntactically free (`parse-JSON` and `HTTP-get` stay ordinary names). The token is **lower-cased whole** — interior capitals are *not* split into hyphens, and existing hyphens are kept — then gains a `-MACRO` suffix: `If` ↦ `if-MACRO`, `DefMacro` ↦ `defmacro-MACRO`, `Try-let` ↦ `try-let-MACRO`. A multi-word macro may be spelled either as one word or hyphenated, and is invoked exactly as it was defined, lower-cased: `DefMacro try-let …` ↦ `Try-let …`, `DefMacro trylet …` ↦ `TryLet …`.
+A **TitleCase** identifier — one of its hyphen- or slash-separated words starts with a capital and contains at least one lower-case letter (`If`, `DefMacro`, `Try-let`) — is reader sugar for a macro call. This can't collide with ordinary identifiers: a WIT label word is all-lower or all-UPPER, so a TitleCase word is syntactically free (`parse-JSON` and `HTTP-get` stay ordinary names). The token is **lower-cased whole** — interior capitals are *not* split into hyphens, and existing hyphens are kept — then gains a `-MACRO` suffix: `If` ↦ `if-MACRO`, `DefMacro` ↦ `defmacro-MACRO`, `Try-let` ↦ `try-let-MACRO`, `lib/Identity` and `lib-Identity` ↦ `lib-identity-MACRO`. A multi-word macro may be spelled either as one word or hyphenated, and is invoked exactly as it was defined, lower-cased: `DefMacro try-let …` ↦ `Try-let …`, `DefMacro trylet …` ↦ `TryLet …`.
 
 A TitleCase head does **not** require parentheses. The reader looks up the macro's declared **arity** and consumes exactly that many following forms, folding the head and those forms into a tuple:
 
@@ -132,7 +145,7 @@ Every reader-sugar form, in one table:
 |---|---|---|---|
 | 1 | `[1 2 3]` | `[1, 2, 3]` | commas are whitespace |
 | 2 | `f(x y)` | `(f, x, y)` | attachment rule — calls are tuples |
-| 3 | `kv/get({...})` | `(kv/get, {...})` | qualified call |
+| 3 | `kv/get({...})` | `(kv-get, {...})` | qualified call |
 | 4 | `x.f(y)` | `(f, x, y)` | call chaining — receiver first |
 | 5 | `If c t e` | `(if-MACRO, c, t, e)` | TitleCase macro |
 

@@ -1,11 +1,3 @@
-//! f32 at the compiled boundary (goal 5 / 5.2): `f32` is a BOUNDARY-ONLY
-//! representation — one f32 flat, 4 bytes in memory — carried internally as
-//! the interpreter's f64 `Value::Dec` (promote on lift, demote on lower),
-//! because the interpreter models every float as f64. These tests pin flat
-//! params/results, record fields (memory layout), list elements, and option
-//! payloads. Restores the conformance queue's f32-rt / every-primitive-rt
-//! coverage in-tree.
-
 use wavelet::host::{HostComponent, Val};
 
 fn component() -> HostComponent {

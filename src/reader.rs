@@ -3,39 +3,18 @@ use std::collections::HashMap;
 use crate::form::{Arena, Node, NodeId};
 use crate::lexer::{ReadError, Tok, Token, lex};
 
-/// Where a macro arity registration came from, so the table can tell a benign
-/// re-registration (same origin) from a genuine *collision* (two different
-/// origins claiming one bare name). Core special forms and file-local
-/// `DefMacro`s share the [`Origin::Local`] namespace; each `macros: true` import
-/// is its own [`Origin::Import`] keyed by the import's `as:` alias (§6.3).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Origin {
-    /// A core special form or a file-local `DefMacro`.
     Local,
-    /// A macro exported by the import bound to this alias.
+
     Import(String),
 }
 
-/// Arity table for TitleCase heads: core special forms plus macros registered by
-/// `DefMacro` or by `macros: true` imports as the reader moves top to bottom
-/// (§2.4, §6.3).
-///
-/// Bare `Name` lookups consult [`MacroTable::arity`]; qualified `Alias/Name`
-/// lookups consult [`MacroTable::arity_qualified`]. When two different origins
-/// register the same bare name the bare name becomes *ambiguous* — bare use is a
-/// read-time error pointing the author at aliasing/qualifying — while each
-/// origin's qualified key keeps resolving (collision policy (a), see the Step 8
-/// notes).
 pub struct MacroTable {
-    /// Bare name → (arity, the single origin that owns it). A name present here
-    /// resolves unambiguously by its bare spelling.
     map: HashMap<String, (usize, Origin)>,
-    /// `(alias, name)` → arity for every import-provided macro, registered
-    /// regardless of collisions so a qualified `Alias/Name` head always resolves.
+
     qualified: HashMap<(String, String), usize>,
-    /// Bare name → the set of import aliases that provide it, recorded once a
-    /// bare name has been claimed by more than one origin. A name in this map is
-    /// dropped from `map`, so bare use errors actionably.
+
     ambiguous: HashMap<String, Vec<String>>,
 }
 
@@ -46,14 +25,10 @@ impl MacroTable {
             ("package-MACRO", 1),
             ("import-MACRO", 1),
             ("instantiate-MACRO", 1),
+            ("deffunctor-MACRO", 3),
             ("export-MACRO", 1),
             ("deftype-MACRO", 2),
-            // `DefResource <name> { … }` — a user-declared resource type (4.5).
-            // Arity 2: the type name and the member braces.
             ("defresource-MACRO", 2),
-            // `Static Fn {…} body` — the static-member marker inside a
-            // DefResource (4.5). Arity 1: it wraps the member's whole `Fn` form.
-            // Not a real evaluator macro; the DefResource handlers destructure it.
             ("static-MACRO", 1),
             ("def-MACRO", 2),
             ("fn-MACRO", 2),
@@ -78,49 +53,36 @@ impl MacroTable {
         }
     }
 
-    /// Arity of an unambiguous bare TitleCase head. Returns `None` for an unknown
-    /// name *and* for an ambiguous one — the read path tells the two apart via
-    /// [`MacroTable::is_ambiguous`] to produce the right error.
     pub fn arity(&self, name: &str) -> Option<usize> {
         self.map.get(name).map(|(a, _)| *a)
     }
 
-    /// Arity of a qualified `Alias/Name` head, looked up by the import alias and
-    /// the (already `-MACRO`-suffixed) name. Independent of bare-name collisions.
     pub fn arity_qualified(&self, alias: &str, name: &str) -> Option<usize> {
         self.qualified
             .get(&(alias.to_string(), name.to_string()))
             .copied()
     }
 
-    /// Whether a bare name has been claimed by more than one origin (so a bare
-    /// use is an error). If so, returns the aliases that provide it.
     pub fn is_ambiguous(&self, name: &str) -> Option<&[String]> {
         self.ambiguous.get(name).map(|v| v.as_slice())
     }
 
-    /// Register a core special form or file-local `DefMacro` under its bare name
-    /// (origin [`Origin::Local`]). A local `DefMacro` that collides with an
-    /// already-registered macro of a *different* origin makes the bare name
-    /// ambiguous, exactly like two imports colliding.
     pub fn register(&mut self, name: String, arity: usize) {
         self.register_with_origin(name, arity, Origin::Local);
     }
 
-    /// Register an import-provided macro: always under its qualified `(alias,
-    /// name)` key, and — subject to collision detection — under its bare name.
     pub fn register_foreign(&mut self, alias: &str, name: String, arity: usize) {
         self.qualified
             .insert((alias.to_string(), name.clone()), arity);
+        self.register_with_origin(
+            format!("{}-{name}", alias.to_ascii_lowercase()),
+            arity,
+            Origin::Import(alias.to_string()),
+        );
         self.register_with_origin(name, arity, Origin::Import(alias.to_string()));
     }
 
-    /// Shared bare-name registration with collision tracking. Re-registering a
-    /// name under the *same* origin (e.g. the same package resolved twice) is a
-    /// harmless update; a *different* origin makes the bare name ambiguous.
     fn register_with_origin(&mut self, name: String, arity: usize, origin: Origin) {
-        // Already ambiguous: just record this origin's alias (if an import) and
-        // keep the bare name out of `map`.
         if let Some(aliases) = self.ambiguous.get_mut(&name) {
             if let Origin::Import(alias) = &origin
                 && !aliases.contains(alias)
@@ -131,13 +93,9 @@ impl MacroTable {
         }
         match self.map.get(&name) {
             Some((_, existing)) if *existing == origin => {
-                // Same origin re-registering — update the arity in place.
                 self.map.insert(name, (arity, origin));
             }
             Some((_, existing)) => {
-                // Genuine collision: drop the bare name and mark it ambiguous,
-                // collecting both contributing import aliases (a local origin
-                // contributes no alias but still makes the name ambiguous).
                 let existing = existing.clone();
                 self.map.remove(&name);
                 let mut aliases = Vec::new();
@@ -158,24 +116,8 @@ impl MacroTable {
     }
 }
 
-/// A hook the reader runs after each top-level form is parsed, given the form's
-/// node id, so a caller can register *foreign* macro arities into the table as
-/// the reader moves top-to-bottom — exactly when a local `DefMacro` would be
-/// registered. This is how `Import {… macros: true}` arities become known
-/// (§6.3): the native compiler supplies a hook that resolves the import's macro
-/// component and registers its `manifest()` pairs (see
-/// [`crate::macrodep::register_macro_imports`]).
-///
-/// The hook is a plain closure over reader/`form` types only, so `reader.rs`
-/// keeps compiling for the `wasm32` playground — where there is no component
-/// runtime and thus no hook is supplied, and foreign registration is simply
-/// absent. An `Err` returned by the hook aborts the read with that error (e.g.
-/// a macro component that fails to instantiate, tied to the import's span).
 pub type FormHook<'a> = dyn FnMut(&Arena, NodeId, &mut MacroTable) -> Result<(), ReadError> + 'a;
 
-/// Recover a TitleCase flag entry's spelling from the macro-name token the lexer
-/// produced for it: `"eq-MACRO"` → `"Eq"`. Used for derive-class flags
-/// (`Derive {Eq Ord Show}`), which are single TitleCase words.
 fn title_flag_name(macro_name: &str) -> String {
     let bare = macro_name.trim_end_matches("-MACRO");
     let mut chars = bare.chars();
@@ -190,19 +132,10 @@ pub fn read_file(src: &str) -> Result<(Arena, Vec<NodeId>), ReadError> {
     read_with(src, &mut macros)
 }
 
-/// Like [`read_file`] but with a caller-owned arity table, so `DefMacro`
-/// registrations persist across inputs (used by the REPL).
 pub fn read_with(src: &str, macros: &mut MacroTable) -> Result<(Arena, Vec<NodeId>), ReadError> {
     read_with_hook(src, macros, None)
 }
 
-/// The full read entry point: a caller-owned arity table plus an optional
-/// per-form [`FormHook`]. After each top-level form is parsed (and after the
-/// built-in local-`DefMacro` registration), the hook — if any — runs against
-/// that form, letting the native compiler register foreign macro arities from a
-/// `macros: true` import *before* later forms that use those macros are read.
-/// Passing `None` reproduces [`read_with`] exactly, so the wasm playground and
-/// the REPL are unchanged.
 pub fn read_with_hook(
     src: &str,
     macros: &mut MacroTable,
@@ -229,7 +162,8 @@ pub fn read_with_hook(
         Ok(())
     })();
     *macros = p.macros;
-    result.map(|()| (p.arena, roots))
+    result?;
+    crate::templates::instantiate(p.arena, roots)
 }
 
 struct Parser {
@@ -237,9 +171,7 @@ struct Parser {
     pos: usize,
     arena: Arena,
     macros: MacroTable,
-    /// One-shot flag: set while reading Derive's first argument so `parse_braces`
-    /// accepts TitleCase derive-class flag entries (`{Eq Ord Show}`) there, and
-    /// nowhere else. Consumed (taken) at the top of `parse_braces`.
+
     allow_title_flags: bool,
 }
 
@@ -277,10 +209,6 @@ impl Parser {
         })
     }
 
-    /// §2.2: only `(` attaches to an identifier to form a call. An attached
-    /// `[` or `{` (no whitespace) is a read error — the list/record call sugar
-    /// was removed; it points the user at the new `name([…])` / `name({…})`
-    /// spelling. Free-standing `[…]`/`{…}` (with whitespace) are unaffected.
     fn attached_paren(&self, end: u32) -> Result<bool, ReadError> {
         match self.peek() {
             Some((Tok::LParen, span)) if span.start == end => Ok(true),
@@ -296,15 +224,11 @@ impl Parser {
         }
     }
 
-    /// Parse one form, then fold any attached call chain onto it (§2.5):
-    /// `recv.name(args)` reads as the call `(name, recv, …args)`, left-to-right.
     fn parse_form(&mut self) -> Result<NodeId, ReadError> {
         let recv = self.parse_primary()?;
         self.maybe_chain(recv)
     }
 
-    /// Parse a single primary form (atom, name, call, parens, list, record,
-    /// macro form) — the chain receiver, before any `.name(...)` suffix.
     fn parse_primary(&mut self) -> Result<NodeId, ReadError> {
         let (tok, span) = self.next()?;
         let sp = (span.start, span.end);
@@ -317,15 +241,6 @@ impl Parser {
             Tok::Ident(name) => {
                 let head = self.arena.add(Node::Sym(name), sp);
                 self.maybe_call(head, span)
-            }
-            Tok::QIdent(alias, name, is_title) => {
-                if is_title {
-                    let head = self.arena.add(Node::Qsym(alias, name), sp);
-                    self.title_form(head, span)
-                } else {
-                    let head = self.arena.add(Node::Qsym(alias, name), sp);
-                    self.maybe_call(head, span)
-                }
             }
             Tok::Title(name) => {
                 let head = self.arena.add(Node::Sym(name), sp);
@@ -348,11 +263,6 @@ impl Parser {
         }
     }
 
-    /// §2.5: fold a chain of attached `.name(args)` calls onto `recv`, turning
-    /// the receiver into the call's first argument. `recv.name(a b)` reads as
-    /// `(name, recv, a, b)`; chains nest left-to-right. The `.`, the name, and
-    /// the `(` must each abut the preceding token with no whitespace — this is
-    /// pure reader rewriting, not method dispatch.
     fn maybe_chain(&mut self, mut recv: NodeId) -> Result<NodeId, ReadError> {
         loop {
             let (recv_start, recv_end) = self.arena.span(recv);
@@ -360,7 +270,7 @@ impl Parser {
                 Some((Tok::Dot, span)) if span.start == recv_end => {}
                 _ => return Ok(recv),
             }
-            let (_, dot) = self.next()?; // the attached `.`
+            let (_, dot) = self.next()?;
             let (tok, name_span) = self.next()?;
             if name_span.start != dot.end {
                 return self.err(
@@ -371,14 +281,13 @@ impl Parser {
             let nsp = (name_span.start, name_span.end);
             let head = match tok {
                 Tok::Ident(name) => self.arena.add(Node::Sym(name), nsp),
-                Tok::QIdent(alias, name, _) => self.arena.add(Node::Qsym(alias, name), nsp),
                 _ => return self.err("expected a call name after `.`", name_span.start),
             };
             if !self.attached_paren(name_span.end)? {
                 return self.err("a chained call needs `(...)` after the name", name_span.end);
             }
             let (items, end) = self.parse_paren_items()?;
-            // `(name, recv, …items)` — the receiver spliced in as the first arg.
+
             let mut all = Vec::with_capacity(items.len() + 2);
             all.push(head);
             all.push(recv);
@@ -387,8 +296,6 @@ impl Parser {
         }
     }
 
-    /// Identifier head: a call (`Tup[head, …items]`) if `(` is attached,
-    /// otherwise a plain variable reference.
     fn maybe_call(&mut self, head: NodeId, span: Token) -> Result<NodeId, ReadError> {
         if self.attached_paren(span.end)? {
             let (items, end) = self.parse_paren_items()?;
@@ -398,30 +305,13 @@ impl Parser {
         }
     }
 
-    /// TitleCase head: explicit payload overrides arity-driven reading (§2.4).
-    /// Either way the head is prepended into a flat `Tup`.
     fn title_form(&mut self, head: NodeId, span: Token) -> Result<NodeId, ReadError> {
         if self.attached_paren(span.end)? {
             let (items, end) = self.parse_paren_items()?;
             return Ok(self.call_tup(head, items, span.start, end));
         }
-        // A qualified head (`Alias/Name`) resolves arity via the import bound to
-        // its alias; a bare head resolves via the unambiguous bare table (§2.4,
-        // §6.3). An ambiguous bare name is a distinct, actionable error.
+
         let arity = match self.arena.node(head).clone() {
-            Node::Qsym(alias, name) => match self.macros.arity_qualified(&alias, &name) {
-                Some(a) => a,
-                None => {
-                    let pretty = name.trim_end_matches("-MACRO");
-                    return self.err(
-                        format!(
-                            "unknown qualified macro `{alias}/{pretty}` \
-                             (no `macros: true` import aliased `{alias}` provides `{pretty}`)"
-                        ),
-                        span.start,
-                    );
-                }
-            },
             Node::Sym(name) => {
                 if let Some(aliases) = self.macros.is_ambiguous(&name) {
                     let pretty = name.trim_end_matches("-MACRO");
@@ -455,9 +345,6 @@ impl Parser {
         let derive = matches!(self.arena.node(head), Node::Sym(n) if n == "derive-MACRO");
         let mut items = Vec::with_capacity(arity);
         for i in 0..arity {
-            // Only Derive's first argument is the derive-class flags literal
-            // `{Eq Ord Show}`; TitleCase flag entries are valid there and nowhere
-            // else (WIT flags are all-lowercase).
             self.allow_title_flags = derive && i == 0;
             items.push(self.parse_form()?);
         }
@@ -469,7 +356,6 @@ impl Parser {
         Ok(self.call_tup(head, items, span.start, end))
     }
 
-    /// Build a call form `Tup[head, …items]` (the head spliced in front).
     fn call_tup(&mut self, head: NodeId, items: Vec<NodeId>, start: u32, end: u32) -> NodeId {
         let mut all = Vec::with_capacity(items.len() + 1);
         all.push(head);
@@ -477,22 +363,16 @@ impl Parser {
         self.arena.add(Node::Tup(all), (start, end))
     }
 
-    /// Consume an attached `(`, parse items up to `)`, return `(items, close_end)`.
     fn parse_paren_items(&mut self) -> Result<(Vec<NodeId>, u32), ReadError> {
-        self.next()?; // the attached `(`
+        self.next()?;
         self.parse_paren_body()
     }
 
-    /// Free-standing parens: every `( … )` is a tuple/call form.
-    /// `()` ⇒ `Tup[]` (errors only at eval time); `(a)` ⇒ `Tup[a]` (0-arg call,
-    /// not transparent grouping); `(a b …)` ⇒ `Tup[a, b, …]`.
     fn parse_parens(&mut self, span: Token) -> Result<NodeId, ReadError> {
         let (items, end) = self.parse_paren_body()?;
         Ok(self.arena.add(Node::Tup(items), (span.start, end)))
     }
 
-    /// Parse items up to the closing `)` (already past the `(`), returning the
-    /// items and the closing paren's end offset.
     fn parse_paren_body(&mut self) -> Result<(Vec<NodeId>, u32), ReadError> {
         let mut items = Vec::new();
         loop {
@@ -508,8 +388,6 @@ impl Parser {
         }
     }
 
-    /// Parse list items up to `]`, returning the items and the `]`'s end offset
-    /// (so the `Lst` node spans the whole literal, e.g. for chain adjacency).
     fn parse_until_bracket(&mut self) -> Result<(Vec<NodeId>, u32), ReadError> {
         let mut items = Vec::new();
         loop {
@@ -525,11 +403,9 @@ impl Parser {
         }
     }
 
-    /// `{…}`: record if the first name is followed by `:`, otherwise flags.
     fn parse_braces(&mut self, span: Token) -> Result<NodeId, ReadError> {
         let start = span.start;
-        // Take the one-shot flag so a nested/other `{…}` deeper in the same
-        // argument does not inherit Derive's TitleCase-flag allowance.
+
         let allow_titles = std::mem::take(&mut self.allow_title_flags);
         if let Some((Tok::RBrace, close)) = self.peek() {
             let sp = (start, close.end);
@@ -554,12 +430,7 @@ impl Parser {
                         let value = self.parse_form()?;
                         fields.push((name, value));
                     }
-                    // A TitleCase record key: the lexer turns e.g. `New` into a
-                    // `Title("new-MACRO")` token. Recover its spelling so
-                    // capitalized member keys — the `New:`/`Drop:` markers a
-                    // `DefResource` uses (4.5) — parse as ordinary record fields.
-                    // The reader stays context-free; the checker enforces where
-                    // capitalized keys are meaningful.
+
                     (Tok::Title(name), _) => {
                         match self.next()? {
                             (Tok::Colon, _) => {}
@@ -581,11 +452,7 @@ impl Parser {
                         return Ok(self.arena.add(Node::Flg(names), (start, close.end)));
                     }
                     (Tok::Ident(name), _) => names.push(name),
-                    // TitleCase flag entries (e.g. `Derive {Eq Ord Show}`): the
-                    // lexer turns each into a `Title` macro-name token, so recover
-                    // the original spelling from it. WIT flags are all-lowercase,
-                    // so this is only valid in Derive's flags argument, gated by
-                    // `allow_titles`; elsewhere it falls through to the error below.
+
                     (Tok::Title(name), _) if allow_titles => names.push(title_flag_name(&name)),
                     (_, s) => return self.err("expected a flag name", s.start),
                 }
@@ -593,11 +460,7 @@ impl Parser {
         }
     }
 
-    /// After a top-level `DefMacro name {params} body`, register the macro's
-    /// arity so later TitleCase uses in this file can be read (§2.4).
     fn register_if_def_macro(&mut self, id: NodeId) {
-        // A top-level `DefMacro name {params} body` reads as the 4-element
-        // tuple `Tup[defmacro-MACRO, name, params, body]`.
         let Node::Tup(items) = self.arena.node(id) else {
             return;
         };
@@ -640,7 +503,7 @@ mod macro_table_tests {
         let mut t = MacroTable::core();
         t.register_foreign("dsl", "unless-MACRO".into(), 2);
         t.register_foreign("web", "unless-MACRO".into(), 2);
-        // Bare name now ambiguous, both qualified keys resolve.
+
         assert_eq!(t.arity("unless-MACRO"), None);
         let aliases = t.is_ambiguous("unless-MACRO").expect("ambiguous");
         assert!(aliases.contains(&"dsl".to_string()));
@@ -653,18 +516,16 @@ mod macro_table_tests {
     fn local_defmacro_collides_with_import() {
         let mut t = MacroTable::core();
         t.register_foreign("dsl", "thing-MACRO".into(), 1);
-        // A local DefMacro of the same bare name collides → ambiguous.
+
         t.register("thing-MACRO".into(), 1);
         assert_eq!(t.arity("thing-MACRO"), None);
         assert!(t.is_ambiguous("thing-MACRO").is_some());
-        // The import's qualified key still resolves.
+
         assert_eq!(t.arity_qualified("dsl", "thing-MACRO"), Some(1));
     }
 
     #[test]
     fn same_package_two_aliases_via_repeated_register_is_collision() {
-        // The resolver registers the same package's macros under each alias;
-        // the second alias collides on the bare name.
         let mut t = MacroTable::core();
         t.register_foreign("dsl", "identity-MACRO".into(), 1);
         t.register_foreign("html", "identity-MACRO".into(), 1);
@@ -676,7 +537,7 @@ mod macro_table_tests {
     fn core_special_forms_unaffected_by_foreign_macros() {
         let mut t = MacroTable::core();
         t.register_foreign("dsl", "unless-MACRO".into(), 2);
-        // Core forms stay unambiguous and resolvable by their bare names.
+
         assert_eq!(t.arity("if-MACRO"), Some(3));
         assert!(t.is_ambiguous("if-MACRO").is_none());
     }
@@ -686,14 +547,12 @@ mod macro_table_tests {
 mod title_flags_scope_tests {
     use super::*;
 
-    /// Derive's first argument is the one place TitleCase flag entries are
-    /// allowed: `Derive {Eq Ord Show} point` must still read successfully.
     #[test]
     fn derive_flags_literal_accepts_titlecase() {
         let (arena, roots) =
             read_file("Derive {Eq Ord Show} point").expect("Derive flags literal should read");
         assert_eq!(roots.len(), 1);
-        // `Tup[derive-MACRO, Flg[Eq, Ord, Show], Sym(point)]`.
+
         let Node::Tup(items) = arena.node(roots[0]) else {
             panic!("expected a Tup for the Derive form");
         };
@@ -707,9 +566,6 @@ mod title_flags_scope_tests {
         );
     }
 
-    /// A TitleCase token in any *other* flags literal (here a free-standing
-    /// `{…}`, outside Derive's first argument) is rejected: WIT flags are
-    /// all-lowercase, so the recovery must not fire and the read must error.
     #[test]
     fn non_derive_flags_literal_rejects_titlecase() {
         let err = read_file("{Foo bar}").expect_err("a TitleCase flag name must be rejected");
@@ -720,9 +576,6 @@ mod title_flags_scope_tests {
         );
     }
 
-    /// A `DefResource` form reads as `Tup[defresource-MACRO, Sym(name), Rec{…}]`
-    /// with capitalized `New`/`Drop` keys recovered and `Static Fn {…}` wrapped
-    /// (4.5).
     #[test]
     fn defresource_reads_members() {
         let src = "DefResource counter {
@@ -743,7 +596,7 @@ mod title_flags_scope_tests {
         };
         let keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
         assert_eq!(keys, ["New", "next", "sum", "Drop"]);
-        // The `sum` value is `Tup[static-MACRO, Tup[fn-MACRO, params, body]]`.
+
         let sum = fields.iter().find(|(k, _)| k == "sum").unwrap().1;
         let Node::Tup(st) = arena.node(sum) else {
             panic!("expected the static marker tuple");

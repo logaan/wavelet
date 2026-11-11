@@ -16,51 +16,37 @@ pub enum Value {
     Lst(Vec<Value>),
     Rec(Vec<(String, Value)>),
     Flg(Vec<String>),
-    /// variant case; payload-less cases double as symbols under quote
+
     Variant(String, Option<Rc<Value>>),
-    /// constructor of a payloaded `DefType` variant case (4.1): applying it
-    /// wraps the bundled argument as `Variant(case, Some(payload))`
+
     CaseCtor(String),
     Closure(Rc<Closure>),
     Macro(Rc<Closure>),
     Builtin(&'static str),
     Cell(Rc<RefCell<Value>>),
-    /// A live handle to a user-declared resource (`DefResource`, 4.5). Two
-    /// handles are equal iff they are the same instance (identity equality);
-    /// it prints opaquely as `<name>` and is not form-serializable.
+
     Resource(Rc<ResourceInstance>),
-    /// The constructor of a user-declared resource: applying it runs the `New`
-    /// member and wraps the resulting rep in a fresh handle.
+
     ResourceCtor(Rc<ResourceCtor>),
-    /// An instance method of a user-declared resource: applying it unwraps the
-    /// receiver handle to its rep, binds `self`, and runs the method body.
+
     ResourceMethod(Rc<ResourceMethod>),
 }
 
-/// A live user-declared resource instance (4.5). `rep` is the value the `New`
-/// member returned (e.g. a `cell` for the counter). Inside the defining
-/// component the resource type denotes this rep; the handle wrapper carries the
-/// nominal type name (for opaque printing) and identity.
 pub struct ResourceInstance {
     pub name: String,
     pub rep: Value,
-    /// Set once the handle has been moved through an `own`-typed parameter; a
-    /// later use traps (reserved for own-consumption modelling).
+
     pub consumed: std::cell::Cell<bool>,
     pub identity: Rc<()>,
     pub borrowed: bool,
 }
 
-/// The constructor of a user-declared resource: the `New` member's closure plus
-/// the resource type name to stamp onto each fresh handle.
 pub struct ResourceCtor {
     pub name: String,
     pub ctor: Rc<Closure>,
     pub destructor: Option<Rc<Closure>>,
 }
 
-/// An instance method of a user-declared resource: the method's closure (whose
-/// first parameter is `self`) plus the resource type name it belongs to.
 pub struct ResourceMethod {
     pub name: String,
     pub method: Rc<Closure>,
@@ -82,16 +68,6 @@ pub fn unit() -> Value {
     Value::Rec(vec![])
 }
 
-/// Whether the integer `n` fits within the WIT integer type named `type_name`.
-///
-/// This is the single source of truth for the per-width integer bounds: the
-/// compile-time checks ([`crate::check`]'s `int_in_range` and the `to-*`
-/// builtin signatures) delegate here.
-///
-/// Returns `None` when `type_name` is not one of the eight integer types, and
-/// `Some(in_range)` otherwise. Note `u64` is the only unsigned type without an
-/// upper bound in this `i64` representation — it merely rejects negatives,
-/// matching the `to-u64` builtin's `n >= 0` check — and `s64` accepts any `i64`.
 pub fn int_fits(type_name: &str, n: i64) -> Option<bool> {
     let fits = match type_name {
         "u8" => (0..=u8::MAX as i64).contains(&n),
@@ -124,8 +100,7 @@ impl PartialEq for Value {
             (Builtin(a), Builtin(b)) => a == b,
             (CaseCtor(a), CaseCtor(b)) => a == b,
             (Cell(a), Cell(b)) => Rc::ptr_eq(a, b),
-            // Resources are identity-equal: same instance (4.5). Constructors
-            // and methods compare by closure identity like other callables.
+
             (Resource(a), Resource(b)) => Rc::ptr_eq(&a.identity, &b.identity),
             (ResourceCtor(a), ResourceCtor(b)) => Rc::ptr_eq(a, b),
             (ResourceMethod(a), ResourceMethod(b)) => Rc::ptr_eq(a, b),
@@ -175,8 +150,6 @@ impl Env {
     }
 }
 
-/// `Quote`: a form, as data. Calls are tuples whose first element is the head,
-/// bare names payload-less variant cases (symbols) (§2.3).
 pub fn form_to_value(arena: &Arena, id: NodeId) -> Value {
     match arena.node(id) {
         Node::Bool(b) => Value::Bool(*b),
@@ -197,7 +170,6 @@ pub fn form_to_value(arena: &Arena, id: NodeId) -> Value {
     }
 }
 
-/// Inverse of `form_to_value`: turn macro output back into nodes.
 pub fn value_to_form(value: &Value, arena: &mut Arena) -> Result<NodeId, String> {
     let sp = (0, 0);
     let node = match value {
@@ -208,8 +180,6 @@ pub fn value_to_form(value: &Value, arena: &mut Arena) -> Result<NodeId, String>
         Value::Str(s) => Node::Str(s.clone()),
         Value::Variant(name, None) => sym_node(name),
         Value::Variant(name, Some(p)) => {
-            // A payloaded runtime variant serializes back to a 1-argument call
-            // form: `ok(x)` ⇒ `Tup[Sym(ok), value_to_form(x)]`.
             let head = arena.add(sym_node(name), sp);
             let payload = value_to_form(p, arena)?;
             Node::Tup(vec![head, payload])
@@ -224,9 +194,7 @@ pub fn value_to_form(value: &Value, arena: &mut Arena) -> Result<NodeId, String>
             Node::Rec(out)
         }
         Value::Flg(names) => Node::Flg(names.clone()),
-        // An unapplied case constructor serializes as its bare case name, so a
-        // macro can emit a constructor reference (it re-reads as the same
-        // constructor when the DefType is in scope).
+
         Value::CaseCtor(name) => sym_node(name),
         Value::Closure(_)
         | Value::Macro(_)
@@ -249,7 +217,6 @@ fn sym_node(name: &str) -> Node {
     Node::Sym(name.replace('/', "-"))
 }
 
-/// Canonical WAVE text for a runtime value.
 pub fn print_value(v: &Value) -> String {
     let mut out = String::new();
     write_value(v, &mut out);
@@ -280,9 +247,7 @@ fn write_value(v: &Value, out: &mut String) {
         Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
         Value::Int(n) => out.push_str(&n.to_string()),
         Value::Dec(f) => out.push_str(&format_dec(*f)),
-        // `{c:?}` emits WAVE-valid escapes except for NUL, which Rust spells
-        // `\0` — not an escape in WAVE (or in our own reader); spell it
-        // `\u{0}` so every printed char reads back.
+
         Value::Char('\0') => out.push_str("'\\u{0}'"),
         Value::Char(c) => out.push_str(&format!("{c:?}")),
         Value::Str(s) => write_string(s, out),
@@ -334,11 +299,7 @@ fn write_value(v: &Value, out: &mut String) {
             write_value(&c.borrow(), out);
             out.push(')');
         }
-        // A resource handle prints opaquely as `<name>` (4.6): the nominal type
-        // only, following the closure/case-constructor angle-bracket convention.
-        // A resource type is not `Show`-derivable, so well-typed code never
-        // reaches this; it is here for the repl/debug and to stay a faithful
-        // oracle.
+
         Value::Resource(r) => {
             out.push('<');
             out.push_str(&r.name);
@@ -357,18 +318,6 @@ fn write_value(v: &Value, out: &mut String) {
     }
 }
 
-/// Indicative float text: six significant decimal digits, not
-/// shortest-round-trip.
-///
-/// Values print in fixed notation when the decimal exponent is in `-4..=5`
-/// (`0.0001`, `3.14159`, `123457.0`) and as `d.de±x` scientific outside it
-/// (`1e6`, `2.5e-7`), with `nan`/`inf`/`-inf` spelled out and a fractional
-/// part always present in fixed notation so a float never reads as an int.
-/// Exact digits are traded away deliberately (5.6/0.2): the emitted `to_str`
-/// helper in `src/emit/helpers.rs` hand-implements this same algorithm over
-/// the same IEEE-754 double ops in the same order, so both pipelines produce
-/// identical text without shipping a shortest-round-trip formatter in every
-/// component. Any change here must be mirrored there.
 pub fn format_dec(f: f64) -> String {
     if f.is_nan() {
         return "nan".into();
@@ -388,8 +337,7 @@ pub fn format_dec(f: f64) -> String {
         out.push_str("0.0");
         return out;
     }
-    // Normalize into [1, 10), tracking the decimal exponent. Loop count is
-    // bounded by the f64 exponent range (~640 for the deepest subnormal).
+
     let mut e: i32 = 0;
     while x >= 10.0 {
         x /= 10.0;
@@ -399,8 +347,7 @@ pub fn format_dec(f: f64) -> String {
         x *= 10.0;
         e -= 1;
     }
-    // Seven digits: six significant plus one to round by. The subtraction of
-    // the integer part is exact, so each step stays in [0, 10).
+
     let mut d = [0u8; 7];
     for digit in d.iter_mut() {
         let t = x as u8;
@@ -411,7 +358,6 @@ pub fn format_dec(f: f64) -> String {
         let mut k = 5i32;
         loop {
             if k < 0 {
-                // 9.99999x rounds up a magnitude: 1.00000 with e + 1.
                 d[0] = 1;
                 e += 1;
                 break;
@@ -523,8 +469,6 @@ mod tests {
 
     #[test]
     fn char_nul_prints_the_wave_escape_not_rusts() {
-        // WAVE (and our reader) has no `\0` escape, so NUL must not follow
-        // Rust's `{c:?}` spelling. Everything else `{c:?}` emits is WAVE.
         assert_eq!(super::print_value(&super::Value::Char('\0')), r"'\u{0}'");
         assert_eq!(super::print_value(&super::Value::Char('\n')), r"'\n'");
         assert_eq!(super::print_value(&super::Value::Char('\'')), r"'\''");
@@ -536,8 +480,6 @@ mod tests {
 
     #[test]
     fn format_dec_reads_back_close() {
-        // Not round-trip, but the printed text must lex as a Wavelet float
-        // and stay within 6-significant-digit relative error.
         for &x in &[
             0.1, 2.5, 1234.5678, 1e-8, 7.25e120, -3.9e-200, 123456.7, 0.00001,
         ] {

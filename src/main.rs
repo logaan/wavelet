@@ -2,13 +2,9 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    // `--strict` (3.9): Type::Unknown is a compile error rather than a gradual
-    // top. Opt-in while the burn-down runs; accepted plan flips it to the
-    // default (and deletes gradual mode) once the example + conformance suites
-    // pass under it.
+
     if let Some(i) = args.iter().position(|a| a == "--strict") {
         args.remove(i);
-        wavelet::check::set_strict(true);
     }
     match args.as_slice() {
         [cmd] if cmd == "--version" || cmd == "-V" || cmd == "version" => {
@@ -30,12 +26,7 @@ fn main() -> ExitCode {
         [cmd, rest @ ..] if cmd == "run" && !rest.is_empty() => run_cmd(rest),
         [cmd, rest @ ..] if cmd == "build" && !rest.is_empty() => build_cmd(rest),
         [cmd, rest @ ..] if cmd == "compose" && !rest.is_empty() => compose_cmd(rest),
-        // Bare `wavelet <file> [args...]` runs the script directly — the
-        // invocation a `#!/usr/bin/env wavelet` shebang produces for an
-        // executable script (7.2), which is commonly extensionless. Any trailing
-        // arguments are the script's own; `run` ignores them today, exactly as
-        // `wavelet run` does. `is_script_path` requires an existing, non-
-        // subcommand file, so this can't shadow the bare-word subcommands above.
+
         [first, ..] if is_script_path(first) => run_cmd(&args[..1]),
         _ => {
             eprintln!("usage: wavelet read [file.wlt]");
@@ -48,34 +39,18 @@ fn main() -> ExitCode {
             eprintln!("       wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]");
             eprintln!("       wavelet <file> [args...]       (run a script; also via #! shebang)");
             eprintln!("       wavelet --version");
-            eprintln!("options: --strict   (typecheck with Unknown as an error)");
+            eprintln!(
+                "options: --strict   (accepted for compatibility; static checking is always enabled)"
+            );
             ExitCode::from(2)
         }
     }
 }
 
-/// Project root for a source file: the parent of the `src/` dir it lives in
-/// (so foreign macro imports resolve their `.wasm` the same way `wavelet
-/// build` does); `.` when there is no parent.
-/// The bare-word subcommands `wavelet` dispatches on. A first CLI argument that
-/// is one of these is a command, never a script to run — this keeps
-/// `is_script_path` from stealing e.g. `wavelet repl` even if a file named
-/// `repl` happens to sit in the working directory.
 const KNOWN_SUBCOMMANDS: &[&str] = &[
     "version", "read", "expand", "repl", "wit", "new", "run", "build", "compose",
 ];
 
-/// Whether a first CLI argument should be taken as a script path to run rather
-/// than a subcommand. This is what backs shebang execution (`#!/usr/bin/env
-/// wavelet`): for an *executable* script the kernel invokes `wavelet
-/// /path/to/script [script-args...]`, and Unix scripts are commonly
-/// extensionless (an executable named `deploy`, no suffix), so matching only
-/// `.wlt` would silently drop them.
-///
-/// An argument is a script when it names an existing file *and* is not one of
-/// the bare-word subcommands. `.wlt` stays a fast-path so a `wavelet
-/// missing.wlt` still reaches `run` (and its "cannot read" error) rather than
-/// the usage message.
 fn is_script_path(arg: &str) -> bool {
     arg.ends_with(".wlt")
         || (!KNOWN_SUBCOMMANDS.contains(&arg) && std::path::Path::new(arg).is_file())
@@ -98,11 +73,7 @@ fn wit_cmd(path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // Expand macros (`Derive`, foreign macros) before synthesizing WIT, using the
-    // same foreign-macro-aware pipeline `wavelet build`/`wavelet expand` use, so
-    // `wavelet wit` agrees with `wavelet build` about the same source. Project
-    // root = parent of the `src/` dir the file lives in; default to `.` when
-    // there is no parent.
+
     let root = project_root_of(path);
     let result = wavelet::macrodep::read_file_with_macros(&src, &root)
         .map_err(|e| e.to_string())
@@ -117,9 +88,6 @@ fn wit_cmd(path: &str) -> ExitCode {
             )
         })
         .and_then(|(arena, roots)| {
-            // Type-check the expanded program before synthesizing its WIT, so an
-            // ill-typed program is a `wit` error too — the static guarantee holds
-            // on this path as well, not only the playground.
             wavelet::check::check_program(&arena, &roots)?;
             wavelet::wit::synthesize(&arena, &roots)
         });
@@ -217,7 +185,6 @@ fn new_cmd(rest: &[String]) -> ExitCode {
         }
     };
 
-    // `cli` is the default when `--type` is omitted.
     let kind = match kind_str {
         Some(s) => match ProjectKind::parse(s) {
             Ok(k) => k,
@@ -236,9 +203,6 @@ fn new_cmd(rest: &[String]) -> ExitCode {
                 println!("  {}", f.display());
             }
 
-            // Vendor the new project's dependency WIT into `wit/deps` and write
-            // `wkg.lock`, so a fresh project's deps are pinned. Best-effort: a
-            // missing `wkg` or no network just leaves `wit/` unfetched.
             let srcs: Vec<std::path::PathBuf> = files
                 .iter()
                 .filter(|f| f.extension().and_then(|e| e.to_str()) == Some("wlt"))
@@ -263,9 +227,6 @@ fn new_cmd(rest: &[String]) -> ExitCode {
 }
 
 fn run_cmd(rest: &[String]) -> ExitCode {
-    // Everything before a `--` separator is treated as files; anything after is
-    // ignored (the removed `args` builtin used to read it). Keep accepting the
-    // `--` form so existing invocations don't error.
     let files: Vec<String> = match rest.iter().position(|a| a == "--") {
         Some(i) => rest[..i].to_vec(),
         None => rest.to_vec(),
@@ -287,9 +248,7 @@ fn expand_cmd(path: &str) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    // Project root = parent of the `src/` dir the file lives in, so foreign
-    // macro imports (`Import {… macros: true}`) resolve their `.wasm` the same
-    // way `wavelet build` does. Default to `.` when there is no parent.
+
     let root = project_root_of(path);
     let result = wavelet::macrodep::read_file_with_macros(&src, &root)
         .map_err(|e| e.to_string())

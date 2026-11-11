@@ -1,11 +1,3 @@
-//! 4.1 — variant/enum case constructors are bound values.
-//!
-//! A `DefType name [case case(t) …]` declaration binds each case in the value
-//! namespace: nullary cases as payload-less variant values (like `none`),
-//! payloaded cases as constructor functions. Dep-declared cases are reachable
-//! through the import alias (`alias/case`). The interpreter is the semantics
-//! oracle; the wasm-backend agreement is exercised by the sibling emit tests.
-
 use wavelet::eval_snippet;
 
 fn ok_value(src: &str) -> String {
@@ -90,8 +82,6 @@ fn constructor_payload_is_type_checked() {
     assert!(e.contains("type"), "{e}");
 }
 
-/// Dep-defined cases are reachable through the import alias: build a two-file
-/// module set on disk and run it through the interpreter's compose stand-in.
 #[test]
 fn dep_cases_bind_under_the_import_alias() {
     let dir = std::env::temp_dir().join(format!("wvl-dep-cases-{}", std::process::id()));
@@ -124,10 +114,6 @@ fn dep_cases_bind_under_the_import_alias() {
     wavelet::runner::run_files(&paths).expect("dep cases resolve through the alias");
     std::fs::remove_dir_all(&dir).ok();
 }
-
-// ---------------------------------------------------------------------------
-// Backend agreement: the same constructions compile and cross the boundary.
-// ---------------------------------------------------------------------------
 
 use wavelet::host::{HostComponent, Val};
 

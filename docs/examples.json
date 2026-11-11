@@ -107,13 +107,13 @@
     "output": ""
   },
   "eval-fn-by-name": {
-    "code": "Def delete-file Fn {path force}\n  [path force]\n// by name…\ndelete-file({path: \"foo.md\" force: true})",
-    "value": "[\"foo.md\", true]",
+    "code": "Def delete-file Fn {path: string force: bool}\n  tuple2(path force)\n// by name…\ndelete-file({path: \"foo.md\" force: true})",
+    "value": "(\"foo.md\", true)",
     "output": ""
   },
   "eval-fn-by-order": {
-    "code": "Def delete-file Fn {path force}\n  [path force]\n// …and by order\ndelete-file(\"foo.md\" true)",
-    "value": "[\"foo.md\", true]",
+    "code": "Def delete-file Fn {path: string force: bool}\n  tuple2(path force)\n// …and by order\ndelete-file(\"foo.md\" true)",
+    "value": "(\"foo.md\", true)",
     "output": ""
   },
   "eval-fn-scalar": {
@@ -122,12 +122,12 @@
     "output": ""
   },
   "eval-twice": {
-    "code": "Def twice Fn {f x} f(f(x))\nDef inc Fn {n} add(n 1)\ntwice(inc 10)",
+    "code": "DefMacro twice {f x} Quasi (Unquote(f) (Unquote(f) Unquote(x)))\nDef inc Fn {n: s64} add(n 1)\nTwice inc 10",
     "value": "12",
     "output": ""
   },
   "eval-apply-list": {
-    "code": "Def ops [Fn {n} add(n 1)  Fn {n} mul(n 2)]\nLet {op: get(ops 1)} op(21)",
+    "code": "DefType operation [increment double]\nDef ops [increment double]\nMatch get(ops 1) [(increment add(21 1)) (double mul(21 2))]",
     "value": "42",
     "output": ""
   },
@@ -142,7 +142,7 @@
     "output": ""
   },
   "sf-fn-adder": {
-    "code": "Def adder Fn {by}\n  Fn {n} add(n by)\nDef add5 adder(5)\nadd5(10)",
+    "code": "Def add5 Fn {n: s64} add(n 5)\nadd5(10)",
     "value": "15",
     "output": ""
   },
@@ -215,12 +215,12 @@
     "output": ""
   },
   "pm-describe": {
-    "code": "Def describe Fn {r}\n  Match r [\n    (ok(v)   str-cat(\"got \" to-string(v)))\n    (err(e)  str-cat(\"failed: \" e))\n  ]\ndescribe(ok(42))",
+    "code": "Def describe Fn {r: result(s64 string)}\n  Match r [\n    (ok(v)   str-cat(\"got \" to-string(v)))\n    (err(e)  str-cat(\"failed: \" e))\n  ]\ndescribe(ok(42))",
     "value": "\"got 42\"",
     "output": ""
   },
   "pm-none": {
-    "code": "Match none [\n  (none     \"nothing\")\n  (some(v)  to-string(v))\n]",
+    "code": "Match The option(string) none [\n  (none     \"nothing\")\n  (some(v)  to-string(v))\n]",
     "value": "\"nothing\"",
     "output": ""
   },
@@ -264,7 +264,7 @@
     "output": ""
   },
   "macro-trylet": {
-    "code": "DefMacro try-let {binding body}\n  Let {name: rec-key(binding) expr: rec-val(binding)}\n    Quasi Match Unquote(expr) [\n      (ok(Unquote(name))  Unquote(body))\n      (err(e)             err(e))\n    ]\nDef parse Fn {x}\n  Try-let {n: ok(x)}\n  ok(add(n 1))\nparse(41)",
+    "code": "DefMacro try-let {binding body}\n  Let {name: rec-key(binding) expr: rec-val(binding)}\n    Quasi Match Unquote(expr) [\n      (ok(Unquote(name))  Unquote(body))\n      (err(e)             err(e))\n    ]\nDef parse Fn {x: s64}\n  Try-let {n: The result(s64 string) ok(x)}\n  ok(add(n 1))\nparse(41)",
     "value": "ok(42)",
     "output": ""
   },
@@ -417,5 +417,15 @@
   "ty-mixed-add": {
     "code": "// 'add' has no overload mixing an s32 and a string, so this is a\n// compile-time type error even though 'bad' is never called.\nDef bad Fn {x: s32} add(x \"y\")",
     "error": "eval error: `add` requires numeric operands"
+  },
+  "ty-user-functor": {
+    "code": "DefFunctor \"demo:pair\" {left right} [\n  DefType pair tuple(left right)\n  Def make Fn {x: left y: right} The pair tuple2(x y)\n]\nInstantiate {pkg: \"demo:pair\" with: {left: s64 right: string} as: mixed}\nmixed-make(7 \"seven\")",
+    "value": "(7, \"seven\")",
+    "output": ""
+  },
+  "res-counter": {
+    "code": "DefResource counter {\n  New: Fn {start: u32} cell-new(start)\n  next: Fn {self: counter} The u32\n    Let {value: cell-get(self)} Do [cell-set(self add(value 1)) value]\n  value: Fn {self: counter} The u32 cell-get(self)\n}\nLet {c: counter(10)} Do [counter-next(c) counter-next(c) counter-value(c)]",
+    "value": "12",
+    "output": ""
   }
 }

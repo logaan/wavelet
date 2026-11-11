@@ -1,13 +1,3 @@
-//! Backend regression: `to-string` of floats and chars (5.6/0.2).
-//!
-//! The emitted `to_str` helper used to handle every tag except `TAG_DEC` and
-//! `TAG_CHAR`, so `to-string` of any float or char — bare or inside a
-//! compound — hit a wasm `unreachable`. Both arms now exist: the char arm
-//! ports the common `{c:?}` escapes, and the float arm hand-implements the
-//! interpreter's `format_dec` (six significant digits) op-for-op. These
-//! vectors drive the compiled arms across the boundary and assert the exact
-//! text against `print_value`, the reference the differential suite trusts.
-
 use wavelet::host::{HostComponent, Val};
 use wavelet::value::{Value, print_value};
 
@@ -65,10 +55,6 @@ fn call(c: &mut HostComponent, f: &str, args: &[Val]) -> String {
     }
 }
 
-/// Vectors spanning every branch of the float arm: specials, signed zero,
-/// fixed notation across its whole exponent window, rounding (including the
-/// carry that steps a magnitude), scientific at both extremes, and
-/// subnormals.
 const FLOATS: &[f64] = &[
     0.0,
     -0.0,
@@ -109,11 +95,6 @@ fn compiled_float_to_string_matches_the_interpreter() {
     }
 }
 
-/// Chars whose `{c:?}` text the backend must reproduce exactly: the named
-/// escapes, the `\u{..}` escapes through Latin-1 (C0/C1 controls, DEL,
-/// NBSP, soft hyphen), and 1–4-byte UTF-8 passthrough. (Non-printable
-/// codepoints above Latin-1 — `\u{200b}`, unassigned planes — are a
-/// documented divergence, like exotic escapes in the string branch.)
 const CHARS: &[char] = &[
     'a', 'Z', '0', ' ', '"', '\'', '\\', '\n', '\r', '\t', '\0', '\u{1}', '\u{f}', '\u{10}',
     '\u{1b}', '\u{7f}', '\u{80}', '\u{9f}', '\u{a0}', '\u{ad}', 'é', 'ß', '☃', '😀',
