@@ -1,16 +1,6 @@
-//! `wavelet new` — scaffold a fresh Wavelet project.
-//!
-//! A project is just a directory of `.wlt` files plus the small amount of glue
-//! (a `.gitignore`, build/run scripts, a README) that makes it pleasant to work
-//! on. Two templates exist: `cli` (the default) lays down a `wasi:cli/command`
-//! program plus the domain model it imports; `http` lays down a web app whose
-//! front end implements the `wasi:http/incoming-handler` interface. Either way
-//! the entry point calls a separate domain-model component across the boundary.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Which template to lay down. `Cli` is the default; `--type` selects another.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ProjectKind {
     #[default]
@@ -19,8 +9,6 @@ pub enum ProjectKind {
 }
 
 impl ProjectKind {
-    /// Parse the `--type` value. The empty/absent case is handled by the caller,
-    /// which defaults to [`ProjectKind::Cli`].
     pub fn parse(s: &str) -> Result<Self, String> {
         match s {
             "cli" => Ok(ProjectKind::Cli),
@@ -32,17 +20,12 @@ impl ProjectKind {
     }
 }
 
-/// Scaffold project `name` (a directory of that name in the current directory).
-///
-/// Returns the project root and every file written, so the CLI can report what
-/// it created. Fails rather than overwrite if the directory already exists.
 pub fn create(name: &str, kind: ProjectKind) -> Result<(PathBuf, Vec<PathBuf>), String> {
     let root = PathBuf::from(name);
     if root.exists() {
         return Err(format!("`{name}` already exists"));
     }
-    // The directory name is whatever the user typed; the WIT package namespace
-    // has to be a valid label, so derive a slug from it.
+
     let slug = slugify(name)?;
 
     let mut written = Vec::new();
@@ -60,7 +43,6 @@ pub fn create(name: &str, kind: ProjectKind) -> Result<(PathBuf, Vec<PathBuf>), 
         Ok(())
     };
 
-    // The .gitignore is the same for every template; the rest depends on kind.
     write(".gitignore", GITIGNORE.to_string(), false)?;
     match kind {
         ProjectKind::Cli => {
@@ -82,11 +64,7 @@ pub fn create(name: &str, kind: ProjectKind) -> Result<(PathBuf, Vec<PathBuf>), 
     Ok((root, written))
 }
 
-/// Turn an arbitrary project name into a WIT label usable as a package
-/// namespace: lowercase, words of letters/digits separated by single hyphens,
-/// starting with a letter.
 fn slugify(name: &str) -> Result<String, String> {
-    // Only the final path component names the package (e.g. `tmp/my-app` -> `my-app`).
     let base = Path::new(name)
         .file_name()
         .and_then(|s| s.to_str())
@@ -105,8 +83,6 @@ fn slugify(name: &str) -> Result<String, String> {
     }
     let slug = out.trim_matches('-').to_string();
 
-    // WIT labels must start with a letter; prefix one if the name was all digits
-    // or punctuation.
     let slug = match slug.chars().next() {
         Some(c) if c.is_ascii_alphabetic() => slug,
         Some(_) => format!("app-{slug}"),
@@ -138,24 +114,16 @@ const GITIGNORE: &str = "# Build artifacts (scripts/build.sh writes here).\n/out
 
 const SERVE_SH: &str = "\
 #!/usr/bin/env bash
-# Build the project, then serve it locally with `wasmtime serve`.
-# Open http://localhost:8080 and click \"+1\".
 set -euo pipefail
 here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
 cd \"$here\"
 
 scripts/build.sh
-exec wasmtime serve out/app.wasm
+exec wasmtime serve \"$@\" out/app.wasm
 ";
-
-// ---------------------------------------------------------------------------
-// cli template
-// ---------------------------------------------------------------------------
 
 const RUN_SH: &str = "\
 #!/usr/bin/env bash
-# Build the project, then run it with `wasmtime`. Any extra arguments are passed
-# through to the program (try `scripts/run.sh Ada`).
 set -euo pipefail
 here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
 cd \"$here\"
@@ -167,11 +135,6 @@ exec wasmtime run out/app.wasm \"$@\"
 fn cli_build_sh(_slug: &str) -> String {
     "\
 #!/usr/bin/env bash
-# Compile every component in src/ into the (git-ignored) out/ directory and link
-# them into a single runnable component, out/app.wasm. `wavelet build` composes
-# the project's components (wiring each cross-component import to the component
-# that exports it) into one artifact via a generated out/app.wac + `wac`; the
-# individual out/<pkg>.wasm components are left alongside it.
 set -euo pipefail
 here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
 cd \"$here\"
@@ -220,14 +183,8 @@ documentation at <https://logaan.github.io/wavelet/>.
 fn greeting_wlt(slug: &str) -> String {
     format!(
         "\
-// greeting.wlt — the domain model.
-//
-// Pure logic with no knowledge of the command line: just how to phrase a
-// greeting. Keeping it in its own component means main.wlt is only plumbing, and
-// the same logic could back an HTTP front end, a test, or a library unchanged.
 Package \"{slug}:greeting@0.1.0\"
 
-// A friendly greeting for `name`.
 Export greet
 Def greet Fn {{name: string}}
   str-cat(\"Hello, \" name \"!\")
@@ -238,17 +195,6 @@ Def greet Fn {{name: string}}
 fn main_wlt(slug: &str) -> String {
     format!(
         "\
-// main.wlt — the command-line entry point.
-//
-// This component implements the `wasi:cli/run` interface: a CLI host (here,
-// `wasmtime`) calls `run` on startup. The interface is exported by name via
-// `Export {{iface: …}}` — `run: func() -> result` — with no compiler-special-cased
-// `wasi:cli/command` target.
-//
-// Output and arguments are ordinary calls into imported WASI interfaces, lowered
-// through the generic WIT bridge: `wasi:cli/stdout` for the output stream,
-// `wasi:io/streams` to write it, and `wasi:cli/environment` for the argument
-// vector. Their WIT is fetched into `wit/` by `wkg`.
 Package \"{slug}:main@0.1.0\"
 
 Import {{pkg: \"{slug}:greeting/api\" as: greeting}}
@@ -256,14 +202,10 @@ Import {{pkg: \"wasi:cli/stdout@0.2.0\" as: stdout}}
 Import {{pkg: \"wasi:cli/environment@0.2.0\" as: env}}
 Import {{pkg: \"wasi:io/streams@0.2.0\" as: streams}}
 
-// The first *user* argument, or \"world\" when none was given. `get-arguments`
-// includes the program name as `argv[0]`, so the user's first word is `argv[1]`.
 Def who Fn {{}}
   Let {{a: env/get-arguments()}}
     If gt(len(a) 1) head(tail(a)) \"world\"
 
-// Write a line to stdout, then drop the stream (a child resource that must be
-// released). A Wavelet string lowers to the `list<u8>` the stream expects.
 Def say Fn {{line: string}}
   Let {{out: stdout/get-stdout()}}
     Do [streams/blocking-write-and-flush(out line)
@@ -277,18 +219,9 @@ Def run Fn {{}}
     )
 }
 
-// ---------------------------------------------------------------------------
-// http template
-// ---------------------------------------------------------------------------
-
 fn http_build_sh(_slug: &str) -> String {
     "\
 #!/usr/bin/env bash
-# Compile every component in src/ into the (git-ignored) out/ directory and link
-# them into a single deployable component, out/app.wasm. `wavelet build` composes
-# the project's components (wiring each cross-component import to the component
-# that exports it) into one artifact via a generated out/app.wac + `wac`; the
-# individual out/<pkg>.wasm components are left alongside it.
 set -euo pipefail
 here=\"$(cd \"$(dirname \"$0\")/..\" && pwd)\"
 cd \"$here\"
@@ -328,6 +261,14 @@ the component with [`wasmtime serve`](https://docs.wasmtime.dev/).
 - `src/greeting.wlt` — the domain model. The pure `greet` function, with no
   knowledge of HTTP, imported by `app.wlt` across the component boundary.
 
+## Deployment
+
+Deploy `out/app.wasm` to a host that supports the component's WASI 0.2 imports
+and the `wasi:http/incoming-handler` export. Check the host's supported interface
+versions and configure request routing, capabilities, and TLS for that environment.
+Packaging and upload commands depend on the host. Validate the component and
+run the local smoke test before deploying.
+
 ## Learn more
 
 Wavelet is a homoiconic language for the WebAssembly Component Model. See the
@@ -339,63 +280,52 @@ documentation at <https://logaan.github.io/wavelet/>.
 fn app_wlt(slug: &str) -> String {
     format!(
         "\
-// app.wlt — the HTTP front end.
-//
-// This component implements the `wasi:http/incoming-handler` interface: an HTTP
-// host (here, `wasmtime serve`) calls `handle` for every request. The interface
-// is exported by name via `Export {{iface: …}}`, and the response pipeline is
-// driven by ordinary calls into the imported `wasi:http/types` and
-// `wasi:io/streams` interfaces — no compiler-special-cased `http/*` magic. The
-// WIT for those interfaces is fetched into `wit/` by `wkg`.
-//
-// The page is stateless: it greets the world (wording from the greeting
-// component, across the boundary) and echoes the path you requested.
 Package \"{slug}:app@0.1.0\"
 
 Import {{pkg: \"wasi:http/types@0.2.0\" as: http}}
 Import {{pkg: \"wasi:io/streams@0.2.0\" as: streams}}
 Import {{pkg: \"{slug}:greeting/api\" as: greeting}}
 
-// The path-and-query of a request, defaulting to \"/\". Several wasi:http
-// resources share a `path-with-query` op, so the resource-qualified name picks
-// the one on `incoming-request`.
-Def path-of Fn {{request: incoming-request}}
+Def path-of Fn {{request: borrow(incoming-request)}}
   Match http/incoming-request-path-with-query(request)
     [(some(p)  p)
      (none     \"/\")]
 
-// The HTML page: a greeting from the domain component, plus the request path.
+Def html-escape Fn {{text: string}}
+  Let {{amp: join(split(text \"&\") \"&amp;\")
+       lt: join(split(amp \"<\") \"&lt;\")}}
+    join(split(lt \">\") \"&gt;\")
+
 Def page Fn {{path: string}}
   str-cat(
     \"<!doctype html>\\n\"
     \"<title>{slug}</title>\\n\"
     \"<h1>\" greeting/greet(\"world\") \"</h1>\\n\"
-    \"<p>You requested: \" path \"</p>\\n\"
+    \"<p>You requested: \" html-escape(path) \"</p>\\n\"
   )
 
-// Write the page bytes into a body's stream, then drop the stream (a child
-// resource that must be released before the body is finished). Resource ops are
-// reached by their bare name when unique, or resource-qualified when not.
-Def write-page Fn {{body: outgoing-body, html: string}}
+Def write-page Fn {{body: borrow(outgoing-body), html: string}}
   Match http/outgoing-body-write(body)
     [(ok(stream)
        Do [streams/blocking-write-and-flush(stream html)
            streams/drop-output-stream(stream)])
-     (err(e)  0)]
+     (err() drop(0))]
 
-// wasi:http/incoming-handler: build the response, hand it to the outparam, write
-// the page, then finish the body. Each step is a plain call into the imported
-// wasi:http / wasi:io interfaces, lowered through the generic WIT bridge.
 Export {{iface: \"wasi:http/incoming-handler\" name: handle
          params: {{request: incoming-request response-out: response-outparam}}}}
 Def handle Fn {{request: incoming-request, response-out: response-outparam}}
-  Let {{response: http/outgoing-response(http/fields())}}
+  Let {{headers: http/fields()
+        header-result: http/fields-append(headers \"content-type\" \"text/html; charset=utf-8\")
+        response: http/outgoing-response(headers)
+        path: path-of(request)
+        dropped: http/drop-incoming-request(request)}}
     Match http/outgoing-response-body(response)
       [(ok(body)
          Do [http/response-outparam-set(response-out ok(response))
-             write-page(body page(path-of(request)))
-             http/outgoing-body-finish(body none)])
-       (err(e)  0)]
+             write-page(body page(path))
+             http/outgoing-body-finish(body none)
+             drop(0)])
+       (err() drop(0))]
 "
     )
 }
@@ -422,7 +352,6 @@ mod tests {
         assert!(ProjectKind::parse("grpc").is_err());
     }
 
-    /// A fresh temp directory unique to this test, cleaned on entry and exit.
     fn scratch(tag: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("wavelet-scaffold-{}-{tag}", std::process::id()));
@@ -451,10 +380,9 @@ mod tests {
         }
         assert_eq!(files.len(), 6);
 
-        // The slug derived from the directory name lands in the package ids.
         let main = fs::read_to_string(root.join("src/main.wlt")).unwrap();
         assert!(main.contains("Package \"widgets:main@0.1.0\""), "{main}");
-        // The cli entry exports wasi:cli/run generically and drops `Target`.
+
         assert!(main.contains("wasi:cli/run"), "{main}");
         assert!(
             !main.contains("Target"),
@@ -467,7 +395,6 @@ mod tests {
             "{greeting}"
         );
 
-        // The run script is executable.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -478,7 +405,6 @@ mod tests {
             assert_eq!(mode & 0o111, 0o111, "run.sh not executable");
         }
 
-        // Refuses to clobber an existing directory.
         assert!(create(name_str, ProjectKind::Cli).is_err());
 
         let _ = fs::remove_dir_all(&dir);
@@ -507,8 +433,7 @@ mod tests {
 
         let app = fs::read_to_string(root.join("src/app.wlt")).unwrap();
         assert!(app.contains("Package \"widgets:app@0.1.0\""), "{app}");
-        // The http front end exports the handler interface generically and
-        // imports wasi:http/types + wasi:io/streams directly — no `Target`.
+
         assert!(app.contains("wasi:http/incoming-handler"), "{app}");
         assert!(app.contains("wasi:http/types"), "{app}");
         assert!(app.contains("wasi:io/streams"), "{app}");

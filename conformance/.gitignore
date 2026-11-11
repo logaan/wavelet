@@ -3,3 +3,4 @@ dist/
 */src/bindings.rs
 out-res/
 out-values/
+out-matrix/

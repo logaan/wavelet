@@ -1,12 +1,3 @@
-//! The two hard-coded seed tables. The `seed-b` cargo feature selects the
-//! second one; the build script produces one wasm file per table so a callee
-//! cannot hard-code responses. Seed A sticks to unremarkable values, seed B
-//! leans on edges: type maxima that must wrap, empty strings and lists,
-//! `none`/`err` sides, and supplementary-plane characters.
-//!
-//! Counter starts stay below 2^31 in both tables so `counter-to-point`'s
-//! `value as s32` never has to reinterpret.
-
 #[cfg(not(feature = "seed-b"))]
 pub use seed_a::*;
 #[cfg(feature = "seed-b")]

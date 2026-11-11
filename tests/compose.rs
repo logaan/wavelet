@@ -1,35 +1,15 @@
-//! End-to-end composition tests (Step 12 of the WASI-decoupling plan).
-//!
-//! `wavelet build` now produces **one** final composed artifact: it emits each
-//! component, generates a `.wac` wiring file, and runs `wac compose` (via the
-//! Step 0 wrapper) into `<out>/app.wasm`, leaving host (`wasi:*`) imports
-//! unsatisfied for the runtime. These tests scaffold the `cli` and `http`
-//! templates, build them, and then actually **run** (`wasmtime run`) / **serve**
-//! (`wasmtime serve` + a request) the composed component, asserting on real
-//! output — not just template text. A third test composes a multi-component
-//! (`demo:main` + `demo:shout`) project entirely from local interfaces and
-//! checks it collapses to a single component.
-//!
-//! Because the build needs the real host WIT under `wit/deps` (fetched by `wkg`)
-//! and the composed artifact is produced by `wac`, the template tests are gated
-//! on `wkg`/`wac`/`wasmtime` being installed *and* a registry fetch succeeding —
-//! they skip cleanly in toolless/offline CI rather than failing. The
-//! local-interface multi-component test needs only `wac`.
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use wavelet::scaffold::{self, ProjectKind};
 use wavelet::tools;
 
-/// A fresh temp directory unique to this test, cleaned on entry and exit.
 fn scratch(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("wavelet-compose-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
 }
 
-/// Is `bin` runnable (`<bin> --version` succeeds)?
 fn have(bin: &str) -> bool {
     Command::new(bin)
         .arg("--version")
@@ -38,9 +18,6 @@ fn have(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Can this environment reach the registry `wkg` fetches from? Probes with a
-/// throwaway world so an offline CI skips rather than fails. `world_export` is a
-/// concrete host interface to pull (`wasi:cli/run@0.2.0`, …).
 fn registry_reachable(dir: &Path, world_export: &str) -> bool {
     let probe = dir.join("probe/wit");
     if std::fs::create_dir_all(&probe).is_err() {
@@ -53,8 +30,6 @@ fn registry_reachable(dir: &Path, world_export: &str) -> bool {
     tools::wkg_wit_fetch(&probe).is_ok()
 }
 
-/// Scaffold `kind` into `proj`, fetch its host WIT (as `wavelet new` does), then
-/// build — yielding the composed `<out>/app.wasm`. Returns its path.
 fn scaffold_and_build(proj: &Path, kind: ProjectKind, entry: &str) -> PathBuf {
     scaffold::create(proj.to_str().unwrap(), kind).expect("scaffold project");
 
@@ -69,8 +44,6 @@ fn scaffold_and_build(proj: &Path, kind: ProjectKind, entry: &str) -> PathBuf {
     let outputs =
         wavelet::build::build_files(&sources, out.to_str().unwrap()).expect("build components");
 
-    // The headline output is one composed artifact, alongside the per-component
-    // wasm the build still emits.
     let app = out.join("app.wasm");
     assert!(
         app.is_file(),
@@ -79,16 +52,22 @@ fn scaffold_and_build(proj: &Path, kind: ProjectKind, entry: &str) -> PathBuf {
     app
 }
 
-/// The `cli` template builds to one composed component that `wasmtime run`
-/// executes, greeting the world and the name given on the command line.
 #[test]
 fn cli_template_builds_and_runs() {
     if !have("wkg") || !have("wac") || !have("wasmtime") {
+        assert!(
+            std::env::var_os("WAVELET_REQUIRE_HOST_TOOLS").is_none(),
+            "wkg/wac/wasmtime must be installed for required host tests"
+        );
         eprintln!("skipping: wkg/wac/wasmtime not all on PATH");
         return;
     }
     let dir = scratch("cli");
     if !registry_reachable(&dir, "wasi:cli/run@0.2.0") {
+        assert!(
+            std::env::var_os("WAVELET_REQUIRE_HOST_TOOLS").is_none(),
+            "registry must be reachable for required host tests"
+        );
         eprintln!("skipping: registry unreachable");
         let _ = std::fs::remove_dir_all(&dir);
         return;
@@ -117,16 +96,22 @@ fn cli_template_builds_and_runs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The `http` template builds to one composed component that `wasmtime serve`
-/// answers requests with, rendering the greeting and echoing the request path.
 #[test]
 fn http_template_builds_and_serves() {
     if !have("wkg") || !have("wac") || !have("wasmtime") {
+        assert!(
+            std::env::var_os("WAVELET_REQUIRE_HOST_TOOLS").is_none(),
+            "wkg/wac/wasmtime must be installed for required host tests"
+        );
         eprintln!("skipping: wkg/wac/wasmtime not all on PATH");
         return;
     }
     let dir = scratch("http");
     if !registry_reachable(&dir, "wasi:http/incoming-handler@0.2.0") {
+        assert!(
+            std::env::var_os("WAVELET_REQUIRE_HOST_TOOLS").is_none(),
+            "registry must be reachable for required host tests"
+        );
         eprintln!("skipping: registry unreachable");
         let _ = std::fs::remove_dir_all(&dir);
         return;
@@ -134,11 +119,6 @@ fn http_template_builds_and_serves() {
 
     let app = scaffold_and_build(&dir.join("web"), ProjectKind::Http, "src/app.wlt");
 
-    // The composed component is a real wasi:http proxy: it exports the handler
-    // and imports wasi:http/types (the greeting dep is composed *in*, so it is no
-    // longer an import of the final artifact).
-    // Decode the component's WIT and assert on the world's import/export lines
-    // (a raw-byte search would false-match the *embedded* greeting package text).
     let wit = component_wit(&app);
     assert!(
         wit.contains("export wasi:http/incoming-handler"),
@@ -153,22 +133,38 @@ fn http_template_builds_and_serves() {
         "greeting dep was not composed in (still imported):\n{wit}"
     );
 
-    // Serve it on an unprivileged port and make one request.
-    let addr = "127.0.0.1:8753";
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    drop(listener);
     let mut child = Command::new("wasmtime")
-        .args(["serve", "--addr", addr])
+        .args(["serve", "--addr", &addr])
         .arg(&app)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("spawn wasmtime serve");
 
-    // Poll until the server answers (or give up).
     let body = poll_get(&format!("http://{addr}/hello/path"));
+    let escaped = poll_get(&format!("http://{addr}/hello?a=1&b=2"));
     let _ = child.kill();
     let _ = child.wait();
 
     let body = body.expect("server never answered");
+    let escaped = escaped.expect("server never answered second request");
+    assert!(escaped.contains("/hello?a=1&amp;b=2"), "{escaped}");
+    assert!(
+        body.to_lowercase()
+            .contains("content-type: text/html; charset=utf-8"),
+        "{body}"
+    );
+    assert!(
+        body.starts_with("HTTP/1.0 200") || body.starts_with("HTTP/1.1 200"),
+        "{body}"
+    );
+    assert!(
+        escaped.starts_with("HTTP/1.0 200") || escaped.starts_with("HTTP/1.1 200"),
+        "{escaped}"
+    );
     assert!(
         body.contains("Hello, world!"),
         "missing greeting in page: {body}"
@@ -181,10 +177,6 @@ fn http_template_builds_and_serves() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A multi-component project of two local-interface components (`demo:main`
-/// imports `demo:shout/api`, exported by `demo:shout`) composes to a single
-/// component: `wac` embeds `demo:shout` and leaves only `demo:main`'s own export
-/// on the final artifact. Needs only `wac` (no host WIT to fetch).
 #[test]
 fn multi_component_composes_to_one() {
     if !have("wac") {
@@ -224,8 +216,6 @@ fn multi_component_composes_to_one() {
         "multi-component build produced no app.wasm: {outputs:?}"
     );
 
-    // The composed component must embed demo:shout (no longer an import) and keep
-    // demo:main's own interface as its export.
     let wit = String::from_utf8_lossy(&std::fs::read(&app).unwrap()).into_owned();
     assert!(
         wit.contains("demo:main"),
@@ -239,8 +229,6 @@ fn multi_component_composes_to_one() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Decode a composed component back into its WIT text (the world plus its
-/// imports/exports), so tests can assert on real wiring rather than raw bytes.
 fn component_wit(path: &Path) -> String {
     use wit_component::WitPrinter;
     let bytes = std::fs::read(path).expect("read component");
@@ -252,9 +240,6 @@ fn component_wit(path: &Path) -> String {
     printer.output.to_string()
 }
 
-/// Issue a GET to `url`, retrying briefly while the freshly-spawned server comes
-/// up. Returns the response body on the first success, `None` if it never
-/// answered. Uses a tiny hand-rolled HTTP/1.0 client to avoid a dependency.
 fn poll_get(url: &str) -> Option<String> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
@@ -269,15 +254,15 @@ fn poll_get(url: &str) -> Option<String> {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
         if let Ok(mut stream) = TcpStream::connect(&authority) {
+            stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+            stream
+                .set_write_timeout(Some(Duration::from_secs(2)))
+                .ok()?;
             let req =
                 format!("GET {path} HTTP/1.0\r\nHost: {authority}\r\nConnection: close\r\n\r\n");
             if stream.write_all(req.as_bytes()).is_ok() {
                 let mut buf = String::new();
                 if stream.read_to_string(&mut buf).is_ok() && !buf.is_empty() {
-                    // Strip headers; return the body.
-                    if let Some(idx) = buf.find("\r\n\r\n") {
-                        return Some(buf[idx + 4..].to_string());
-                    }
                     return Some(buf);
                 }
             }

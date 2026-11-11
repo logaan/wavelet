@@ -1,8 +1,3 @@
-//! The documented transforms, shared by the exported implementation (the
-//! callee role) and the runner's expected values (the caller role). The WIT
-//! package docs in `wit/world.wit` are the normative description; this module
-//! is their Rust rendering.
-
 use crate::bindings::roundtrip::suite::types::{
     Awkward, Direction, EveryPrimitive, Permissions, Point, Shape,
 };

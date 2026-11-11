@@ -1,5 +1,7 @@
 package conformance:wavelet@0.1.0;
 
 world wavelet {
+  export roundtrip:suite/values@0.2.0;
+  export roundtrip:suite/resources@0.2.0;
   export roundtrip:suite/runner@0.2.0;
 }

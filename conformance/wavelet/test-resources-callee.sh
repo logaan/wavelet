@@ -1,17 +1,5 @@
 #!/usr/bin/env bash
-# Wavelet as the CALLEE for the roundtrip:suite `resources` interface (4.5).
-#
-# `src/roundtrip-resources.wlt` exports the whole `counter` resource plus the
-# own/borrow free functions, but NOT `values` (goal-5 representation gaps). The
-# full `roundtrip` world is therefore not exportable yet, so this drives the
-# `resources` slice directly: compose a rust caller with our resources export and
-# terminate the caller's `values` import with the exports-only stub, then invoke
-# `run-resources()`.
-#
-#   caller(rust-a/b) ∘ resources(wavelet) ∘ values(stub)
-#
-# Prereqs: `dist/{roundtrip-a,roundtrip-b,stub}.wasm` (built by `../test.sh`),
-# `wac`, `wasmtime`, and the `wavelet` CLI on PATH (or set $WAVELET).
+
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -29,8 +17,7 @@ CALLEE=out-res/conformance-wavelet.wasm
 run_pair() {
   local caller=$1 label=$2 tmp out
   tmp=$(mktemp -d)
-  # Plug our `resources` export into the caller, then satisfy its remaining
-  # `values` import with the stub (whose `resources` export is now unused).
+
   wac plug "$caller" --plug "$CALLEE" -o "$tmp/step1.wasm"
   wac plug "$tmp/step1.wasm" --plug "$DIST/stub.wasm" -o "$tmp/composed.wasm"
   if out=$(wasmtime run --invoke 'run-resources()' "$tmp/composed.wasm" 2>&1) \

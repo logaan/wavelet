@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-# Selects the second hard-coded seed table. Two builds are shipped so a
-# callee cannot hard-code responses.
+
 seed-b = []
 
 [dependencies]

@@ -1,10 +1,3 @@
-//! The symmetric round-trip artifact.
-//!
-//! As a callee it exports `values` and `resources`, applying the documented
-//! transform to whatever it receives. As a caller it exports `runner`, whose
-//! `run` drives every function of the *imported* `values` and `resources`
-//! with this build's seed table and reports mismatches.
-
 #[allow(warnings)]
 mod bindings;
 mod seeds;
@@ -26,8 +19,6 @@ use bindings::roundtrip::suite::values as imported_values;
 use transform::*;
 
 struct Component;
-
-// --- callee role: apply the documented transform to whatever arrives ---
 
 impl ValuesGuest for Component {
     fn bool_rt(v: bool) -> bool {
@@ -184,8 +175,6 @@ impl ResourcesGuest for Component {
         Point { x: v, y: v.wrapping_add(1) }
     }
 }
-
-// --- caller role: drive the imported suite with this build's seeds ---
 
 fn check<T: PartialEq + Debug>(fails: &mut Vec<String>, name: &str, want: T, got: T) {
     if want != got {

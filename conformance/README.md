@@ -24,7 +24,7 @@ The WIT package (`wit/world.wit`, package `roundtrip:suite@0.1.0`) defines:
 Every function has the same contract: apply the **documented transform** to
 the argument and return it (integers +1 wrapping, bool negated, string
 appends `"!"`, enums rotate, flags toggle, compounds recurse, …). The
-normative transform table lives in the doc comments of `wit/world.wit`.
+normative transform table lives in [transforms.md](transforms.md).
 
 An artifact is **symmetric**: it exports `values` and `resources` (so it can
 be tested) and imports them while exporting `runner` (so it can test). Which

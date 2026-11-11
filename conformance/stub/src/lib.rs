@@ -1,10 +1,3 @@
-//! The exports-only terminator for composition chains.
-//!
-//! A symmetric round-trip artifact both imports and exports the suite, so a
-//! composed caller/callee pair still has the callee's imports dangling. This
-//! component satisfies them. When the callee is only ever exercised *as* a
-//! callee its own imports are never called, so every function here traps.
-
 #[allow(warnings)]
 mod bindings;
 

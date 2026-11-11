@@ -1,37 +1,7 @@
 Package "conformance:wavelet@0.1.0"
 
-// Wavelet as the CALLEE for the roundtrip:suite `values` interface (5.12).
-// Exports every `*-rt` data-type round-trip plus the four function-shape
-// functions, so a rust caller's `run-values()` can drive them. The `resources`
-// interface is out of scope here (built by roundtrip-resources.wlt); the harness
-// terminates the caller's `resources` import with the exports-only stub and
-// invokes `run-values()`.
-//
-// Semantics mirror the suite's documented transforms (wit/deps/.../world.wit).
-// Every exported function is signature-annotated (typed params + `The` result)
-// so WIT synthesis derives exactly the interface's declared shape.
-//
-// STATUS (0.1): BUILDS AND PASSES. All 35 exported functions type-check,
-// WIT-synthesize, and compile on the wasm backend; `test-values-callee.sh`
-// composes this callee with both rust seeds and `run-values()` → `ok` for
-// each. The last blocker — tuple CONSTRUCTION — closed with the fixed-arity
-// constructors `tuple0`..`tuple16` (decision lot:033lMg3lFvO9LLepj3efMs):
-// `tuple-rt`, `tuple-nested-rt`, and the `ok` side of
-// `result-tuple-direction-rt` rebuild their tuples with `tuple2`/`tuple3`
-// below, constructed in place on the backend's canonical path.
-//
-// Residual spelling notes, kept from earlier revisions: `permissions-rt`
-// expresses the flags complement (`v ^ all()`) with zero language surface as
-// a Match over the 16 declaration-order flags literals (each result ascribed
-// `The permissions` so the arms unify to the imported flags type); the
-// `none` side of the option round-trips uses the BARE `none` symbol — the
-// parenthesized `none()` is not lowered by the backend, bare `none` is.
-
 Import {pkg: "roundtrip:suite/types" as: t}
 
-// --- transform helpers (the documented transforms) ---
-
-// Integer bumps wrap at each width; Wavelet ints are s64 so wrapping is per type.
 Def wrap-u8 Fn {n} If eq(n 255) 0 add(n 1)
 Def wrap-u16 Fn {n} If eq(n 65535) 0 add(n 1)
 Def wrap-u32 Fn {n} If eq(n 4294967295) 0 add(n 1)
@@ -41,35 +11,30 @@ Def wrap-s16 Fn {n} If eq(n 32767) -32768 add(n 1)
 Def wrap-s32 Fn {n} If eq(n 2147483647) -2147483648 add(n 1)
 Def wrap-s64 Fn {n} If eq(n 9223372036854775807) -9223372036854775808 add(n 1)
 
-Def bump-str Fn {s} str-cat(s "!")
+Def bump-str Fn {s: string} The string str-cat(s "!")
 
-// Next Unicode scalar value: skip the surrogate gap (U+D7FF -> U+E000),
-// U+10FFFF wraps to U+0000.
 Def next-char Fn {v: char}
   Let {n: to-u32(v)}
     If eq(n 1114111) to-char(0)
     If eq(n 55295)   to-char(57344)
     to-char(add(n 1))
 
-Def bump-point Fn {p}
+Def bump-point Fn {p: point} The point
   Match p [({x: a y: b} {x: wrap-s32(a) y: wrap-s32(b)})]
 
-Def bump-shape Fn {s}
-  If eq(s t/dot)
-     t/circle(1.0)
-     Match s [
-       (circle(r)   t/circle(add(r 1.0)))
+Def bump-shape Fn {s: shape} The shape
+  Match s [
+       (dot() t/circle(1.0))
+       (circle(radius)   t/circle(add(radius 1.0)))
        (rect(p)     t/rect(bump-point(p)))
        (labelled(x) t/labelled(bump-str(x)))
      ]
 
-Def bump-direction Fn {d}
+Def bump-direction Fn {d: direction} The direction
   If eq(d t/north) t/east
   If eq(d t/east)  t/south
   If eq(d t/south) t/west
   t/north
-
-// --- primitives ---
 
 Export {name: bool-rt iface: "roundtrip:suite/values"}
 Def bool-rt Fn {v: bool} The bool not(v)
@@ -109,8 +74,6 @@ Def char-rt Fn {v: char} The char next-char(v)
 
 Export {name: string-rt iface: "roundtrip:suite/values"}
 Def string-rt Fn {v: string} The string bump-str(v)
-
-// --- built-in compounds ---
 
 Export {name: list-u8-rt iface: "roundtrip:suite/values"}
 Def list-u8-rt Fn {v: list(u8)} The list(u8) map(wrap-u8 v)
@@ -180,8 +143,6 @@ Export {name: tuple-nested-rt iface: "roundtrip:suite/values"}
 Def tuple-nested-rt Fn {v: tuple(point list(u8))} The tuple(point list(u8))
   Match v [((p xs) tuple2(bump-point(p) map(wrap-u8 xs)))]
 
-// --- user-defined types ---
-
 Export {name: point-rt iface: "roundtrip:suite/values"}
 Def point-rt Fn {v: point} The point bump-point(v)
 
@@ -205,15 +166,7 @@ Export {name: direction-rt iface: "roundtrip:suite/values"}
 Def direction-rt Fn {v: direction} The direction bump-direction(v)
 
 Export {name: permissions-rt iface: "roundtrip:suite/values"}
-// The suite transform is the flags COMPLEMENT (`v ^ all()`, toggle every
-// member — transform.rs bump_permissions). Wavelet has no runtime flags
-// constructor or membership test, so we express the complement by matching the
-// runtime value against every declaration-order flags literal (2^4 = 16) and
-// returning its complement literal. Each pattern/result is a duplicate-free
-// declaration-order subsequence of {read write exec admin}, so both the oracle
-// (order-sensitive Flg equality) and the canonical ABI (declaration-order
-// bitset) agree on it. The tested seeds are {read} -> {write exec admin} and
-// {read write exec admin} -> {}.
+
 Def permissions-rt Fn {v: permissions} The permissions
   Match v [
     ({}                      The permissions {read write exec admin})
@@ -236,8 +189,6 @@ Def permissions-rt Fn {v: permissions} The permissions
 
 Export {name: points-rt iface: "roundtrip:suite/values"}
 Def points-rt Fn {v: points} The points map(bump-point v)
-
-// --- function shapes ---
 
 Export {name: no-params iface: "roundtrip:suite/values"}
 Def no-params Fn {} The u32 42

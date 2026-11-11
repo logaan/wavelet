@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-# Round-trip conformance harness.
-#
-#   ./test.sh                          self-test: rust-a <-> rust-b, both directions
-#   ./test.sh CALLER.wasm CALLEE.wasm  one directed pairing of two symmetric artifacts
-#
-# Artifacts are symmetric (they import *and* export the suite), so a pairing
-# is composed as a chain: the callee's own imports are terminated by the
-# exports-only stub (never called), then the caller is plugged onto the
-# callee, and the caller's exported `run` drives every check.
+
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -25,7 +17,6 @@ build() {
   cp target/wasm32-wasip1/release/roundtrip_stub.wasm dist/stub.wasm
 }
 
-# run_pair CALLER CALLEE LABEL — compose the chain and drive the caller's runner.
 run_pair() {
   local caller=$1 callee=$2 label=$3 tmp out status=0
   tmp=$(mktemp -d)

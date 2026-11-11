@@ -1,35 +1,20 @@
 Package "conformance:wavelet@0.1.0"
 
-// Wavelet as the CALLER of the roundtrip:suite conformance world: imports
-// values + resources, exports the runner. Seeds and expected responses are
-// both literals (chosen within wavelet's expressible range).
-//
-// Every check the suite defines for the caller role is present below.
-//
-// All present checks pass against a correct callee. (list-u8-rt, option-u8-rt
-// some, and result-tuple-direction-rt ok used to fail to a backend bug —
-// byte-width payloads corrupted on lift — fixed in emit.rs and pinned by
-// tests/backend_byte_width.rs. Goal 4 made dep variant/enum cases
-// constructible (t/circle(1.0), t/north — 4.1) and payload-less results
-// spellable and constructible (result-rt, the err side of result-u32-rt,
-// the ok side of result-string-err-rt — 4.2).)
-
 Import {pkg: "roundtrip:suite/types" as: t}
 Import {pkg: "roundtrip:suite/values" as: iv}
 Import {pkg: "roundtrip:suite/resources" as: ir}
 
-// A check yields "" on pass or its name on failure; collect keeps the names.
-Def check Fn {name pass}
+Def check Fn {name: string pass: bool} The string
   If pass "" name
 
-Def collect Fn {xs acc}
+Def collect Fn {xs: list(string) acc: string} The string
   If eq(xs [])
      acc
      Let {h: head(xs)
           acc2: If eq(h "") acc str-cat(str-cat(acc " ") h)}
        collect(tail(xs) acc2)
 
-Def values-fails Fn {}
+Def values-fails Fn {} The string
   Let {u1: iv/no-result(5)
        u2: iv/no-params-no-result()}
     collect([check("bool-rt" eq(iv/bool-rt(true) false))
@@ -102,7 +87,7 @@ Def values-fails Fn {}
              check("multi-param" eq(iv/multi-param(1 2 3 4) 11))]
             "")
 
-Def resources-fails Fn {}
+Def resources-fails Fn {} The string
   Let {c: ir/counter(5)
        n1: ir/next(c)
        n2: ir/next(c)
@@ -124,7 +109,7 @@ Def resources-fails Fn {}
                    eq(ir/counter-to-point(ir/counter(5)) {x: 5 y: 6}))]
             "")
 
-Def report Fn {fails}
+Def report Fn {fails: string} The result(_ list(string))
   If eq(fails "") ok() err([fails])
 
 Export {name: run iface: "roundtrip:suite/runner" params: {} result: result(_ list(string))}
