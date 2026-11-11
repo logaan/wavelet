@@ -1,5 +1,6 @@
 pub mod builtins;
 pub mod check;
+pub mod compiler;
 pub mod expand;
 pub mod form;
 pub mod interp;
@@ -13,17 +14,14 @@ pub mod value;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod build;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod emit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod host;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod macrobuild;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod macrodep;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod macros;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod meta;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
@@ -37,7 +35,6 @@ pub mod staging;
 pub mod tools;
 
 pub mod wit;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod witdep;
 
 #[cfg(all(target_arch = "wasm32", feature = "playground"))]

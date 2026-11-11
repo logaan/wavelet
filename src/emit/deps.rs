@@ -241,3 +241,29 @@ pub(crate) fn validate_dependency_versions(
     }
     Ok(())
 }
+
+pub(crate) fn import_signatures(
+    info: &crate::wit::FileInfo,
+    dependencies: &HashMap<String, Dep>,
+) -> crate::check::ImportSigs {
+    let mut signatures = crate::check::ImportSigs::new();
+    for import in &info.imports {
+        if crate::wit::is_macro_only(import) {
+            continue;
+        }
+        if let Some(dependency) = dependencies.get(&import.package) {
+            let interface = import
+                .path
+                .split_once('/')
+                .map(|(_, name)| name)
+                .unwrap_or("api");
+            signatures.extend(crate::wit::import_sigs_for(
+                &import.alias,
+                &dependency.funcs,
+                interface,
+            ));
+        }
+    }
+    signatures.extend(crate::wit::functor_import_sigs(&info.functors));
+    signatures
+}

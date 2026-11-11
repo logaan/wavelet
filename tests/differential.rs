@@ -1,81 +1,21 @@
-use wavelet::form::{Arena, Node, NodeId};
 use wavelet::host::{HostComponent, Val};
-use wavelet::printer::print;
-use wavelet::reader::read_file;
 
-const EXPAND: &str = "`expand` is only available inside a macro library when building (6.1.8)";
-
-const SKIP: &[(&str, &str)] = &[("macro-expand", EXPAND)];
-
-const PACKAGE: &str = "docs:snippet@0.1.0";
-const IFACE: &str = "docs:snippet/api@0.1.0";
-const MAIN: &str = "differential-main";
-
-const DECL_HEADS: &[&str] = &[
-    "package-MACRO",
-    "target-MACRO",
-    "import-MACRO",
-    "export-MACRO",
-    "def-MACRO",
-    "defmacro-MACRO",
-    "deftype-MACRO",
-    "defresource-MACRO",
-    "derive-MACRO",
-];
-
-fn is_decl(arena: &Arena, root: NodeId) -> bool {
-    let Node::Tup(items) = arena.node(root) else {
-        return false;
-    };
-    let Some(&head) = items.first() else {
-        return false;
-    };
-    matches!(arena.node(head), Node::Sym(s) if DECL_HEADS.contains(&s.as_str()))
-}
-
-fn wrap_snippet(code: &str) -> Result<String, String> {
-    let (arena, roots) = read_file(code).map_err(|e| format!("read: {e}"))?;
-    let mut decls = Vec::new();
-    let mut exprs = Vec::new();
-    for &root in &roots {
-        if is_decl(&arena, root) {
-            decls.push(print(&arena, root));
-            if let Node::Tup(items) = arena.node(root)
-                && matches!(arena.node(items[0]), Node::Sym(head) if head == "defresource-MACRO")
-                && let Some(name) = items.get(1)
-            {
-                decls.push(format!("Export {}", print(&arena, *name)));
-            }
-        } else {
-            exprs.push(print(&arena, root));
-        }
-    }
-    let ends_in_expr = roots.last().is_some_and(|&r| !is_decl(&arena, r));
-
-    let mut out = format!("Package \"{PACKAGE}\"\n\n");
-    for d in &decls {
-        out.push_str(d);
-        out.push('\n');
-    }
-    out.push_str(&format!("\nExport {{name: {MAIN} result: string}}\n"));
-    out.push_str(&format!("Def {MAIN} Fn {{}}\n"));
-    let body = if ends_in_expr {
-        format!("to-string(Do [{}])", exprs.join("\n    "))
-    } else if exprs.is_empty() {
-        "\"\"".to_string()
-    } else {
-        format!("Do [{}\n    \"\"]", exprs.join("\n    "))
-    };
-    out.push_str(&format!("  {body}\n"));
-    Ok(out)
-}
-
-fn compiled_eval(_id: &str, program: &str) -> Result<(String, String), String> {
-    let bytes = wavelet::staging::Project::compile(program).map_err(|e| e.to_string())?;
+fn compiled_eval(code: &str) -> Result<(String, String), String> {
+    let compilation = wavelet::compiler::native::compile(
+        &wavelet::compiler::Request::snippet(code),
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+    )
+    .map_err(wavelet::compiler::native::display_diagnostics)?;
+    let artifact = compilation.entry_artifact().ok_or("no entry artifact")?;
+    let invocation = compilation
+        .invocation
+        .as_ref()
+        .ok_or("no snippet invocation")?;
     let mut component =
-        HostComponent::from_bytes(&bytes).map_err(|e| format!("instantiate: {e}"))?;
+        HostComponent::from_bytes(&artifact.bytes).map_err(|e| format!("instantiate: {e}"))?;
     wavelet::output_capture_start();
-    let result = component.call_instance(IFACE, MAIN, &[]);
+    let result =
+        component.call_instance(&invocation.interface_name, &invocation.function_name, &[]);
     let output = wavelet::output_capture_take();
     let vals = result.map_err(|e| format!("call: {e}"))?;
     match vals.as_slice() {
@@ -98,7 +38,7 @@ fn run_example(id: &str, code: &str, expect_error: bool) -> Outcome {
          tests/examples.rs should be failing too"
     );
 
-    let compiled = wrap_snippet(code).and_then(|program| compiled_eval(id, &program));
+    let compiled = compiled_eval(code);
 
     match (expect_error, compiled) {
         (true, Err(_)) => Outcome::Agree,
@@ -145,41 +85,16 @@ fn every_documented_example_agrees_with_the_compiled_artifact() {
     ids.sort();
 
     let mut divergences = Vec::new();
-    let mut ratchet = Vec::new();
     for id in ids {
         let entry = &map[id.as_str()];
-        let code = entry["code"].as_str().unwrap_or_else(|| {
-            panic!("example `{id}` has no string `code`");
-        });
-        let expect_error = entry.get("error").is_some();
-        let skip = SKIP.iter().find(|(s, _)| s == id).map(|(_, why)| *why);
-
-        match (run_example(id, code, expect_error), skip) {
-            (Outcome::Agree, None) => {}
-            (Outcome::Agree, Some(_)) => ratchet.push(id.clone()),
-            (Outcome::Disagree(_), Some(_)) => {}
-            (Outcome::Disagree(how), None) => {
-                divergences.push(format!("`{id}`: {how}"));
-            }
+        let code = entry["code"]
+            .as_str()
+            .unwrap_or_else(|| panic!("example `{id}` has no string `code`"));
+        if let Outcome::Disagree(how) = run_example(id, code, entry.get("error").is_some()) {
+            divergences.push(format!("`{id}`: {how}"));
         }
     }
-
-    let mut report = String::new();
-    if !divergences.is_empty() {
-        report.push_str(&format!(
-            "\n{} example(s) diverged between the interpreter and the compiled artifact:\n\n{}\n",
-            divergences.len(),
-            divergences.join("\n\n"),
-        ));
-    }
-    if !ratchet.is_empty() {
-        report.push_str(&format!(
-            "\n{} SKIP-listed example(s) now agree — remove them from SKIP in {}:\n  {}\n",
-            ratchet.len(),
-            file!(),
-            ratchet.join("\n  "),
-        ));
-    }
+    let report = divergences.join("\n\n");
     assert!(report.is_empty(), "{report}");
 }
 

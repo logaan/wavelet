@@ -15,6 +15,8 @@ playground = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 
 [dependencies]
 wac-graph = "0.10.0"
+sha2 = "0.10"
+wat = "1"
 wasm-encoder = "0.251.0"
 wit-component = "0.251.0"
 wit-parser = { version = "0.251.0", features = ["wat"] }

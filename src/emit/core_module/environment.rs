@@ -7,17 +7,7 @@ pub(super) fn initialize_emitter<'a>(
     deps: &'a HashMap<String, Dep>,
 ) -> Result<(Emitter<'a>, Vec<ResForm>), String> {
     let node_types_tbl = {
-        let mut import_sigs = crate::check::ImportSigs::new();
-        for imp in &info.imports {
-            if crate::wit::is_macro_only(imp) {
-                continue;
-            }
-            if let Some(dep) = deps.get(&imp.package) {
-                let iface = imp.path.split_once('/').map(|(_, i)| i).unwrap_or("api");
-                import_sigs.extend(crate::wit::import_sigs_for(&imp.alias, &dep.funcs, iface));
-            }
-        }
-        import_sigs.extend(crate::wit::functor_import_sigs(&info.functors));
+        let import_sigs = import_signatures(info, deps);
         crate::check::node_types_with_dependencies(arena, roots, &import_sigs, deps, &info.imports)?
     };
 

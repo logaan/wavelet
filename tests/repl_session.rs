@@ -80,3 +80,10 @@ fn repeated_expressions_reexecute_and_definitions_invalidate_cached_components()
     assert_eq!(stdout, "{}\n2\n2\n{}\n7\n");
     assert!(!stderr.contains("error:"), "{stderr}");
 }
+
+#[test]
+fn failing_value_definitions_execute_and_do_not_enter_the_session() {
+    let (stdout, stderr) = repl("Def bad div(1 0)\nadd(20 22)\n");
+    assert_eq!(stdout, "42\n");
+    assert!(stderr.contains("error:"), "{stderr}");
+}

@@ -45,7 +45,7 @@ impl MacroResolver {
         Ok(self.cache.get_mut(&key).expect("just inserted"))
     }
 
-    fn locate(&self, import: &ImportInfo) -> Result<PathBuf, String> {
+    pub(crate) fn locate(&self, import: &ImportInfo) -> Result<PathBuf, String> {
         let mut tried = Vec::new();
 
         if let Some(from) = &import.from {

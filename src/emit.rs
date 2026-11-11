@@ -26,6 +26,7 @@ mod type_scope;
 mod wit_synth;
 mod witty;
 
+pub(crate) use deps::import_signatures;
 pub use deps::{dep_non_record_types, dep_record_types};
 pub use macro_component::emit_macro_component;
 pub use resources::ResourceFns;

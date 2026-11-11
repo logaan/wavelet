@@ -1,10 +1,15 @@
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
-use wit_parser::{Function, Handle, Resolve, Type, TypeDefKind, UnresolvedPackageGroup};
+#[cfg(not(target_arch = "wasm32"))]
+use wit_parser::UnresolvedPackageGroup;
+
+use wit_parser::{Function, Handle, Resolve, Type, TypeDefKind};
 
 use crate::emit::{Dep, TypeDef};
 use crate::wit::FuncSig;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String> {
     if !deps_dir.is_dir() {
         return Ok(None);
@@ -49,6 +54,10 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
             .map_err(|e| format!("{}: {e:#}", deps_dir.display()))?;
     }
 
+    resolve_package(&resolve, package)
+}
+
+pub(crate) fn resolve_package(resolve: &Resolve, package: &str) -> Result<Option<Dep>, String> {
     let (base, requested_version) = package
         .split_once('@')
         .map_or((package, None), |(base, version)| (base, Some(version)));
@@ -89,9 +98,9 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
         for (type_name, &type_id) in &iface.types {
             let tdef = &resolve.types[type_id];
 
-            let internal_name = named_type(&resolve, type_id)?;
+            let internal_name = named_type(resolve, type_id)?;
             type_ifaces.push((internal_name.clone(), iface_name.clone(), type_name.clone()));
-            collected.collect(&resolve, type_id)?;
+            collected.collect(resolve, type_id)?;
             if matches!(tdef.kind, TypeDefKind::Resource) {
                 funcs.push(FuncSig {
                     name: format!("[resource-drop]{type_name}"),
@@ -103,11 +112,11 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
         }
 
         for (_fname, func) in &iface.functions {
-            funcs.push(func_sig(&resolve, iface_name, func)?);
+            funcs.push(func_sig(resolve, iface_name, func)?);
         }
     }
 
-    let package_wit = package_wit_text(&resolve, pkg_id)?;
+    let package_wit = package_wit_text(resolve, pkg_id)?;
 
     Ok(Some(Dep {
         package: full_package,

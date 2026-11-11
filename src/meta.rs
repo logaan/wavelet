@@ -74,6 +74,45 @@ fn push(tree: &mut Tree, node: Node, span: (u32, u32)) -> NodeId {
     id
 }
 
+pub fn validate_tree(tree: &Tree) -> Result<(), String> {
+    if tree.nodes.len() != tree.spans.len() {
+        return Err("macro tree nodes and spans have different lengths".into());
+    }
+    if tree.root as usize >= tree.nodes.len() {
+        return Err("macro tree root is out of bounds".into());
+    }
+    let mut states = vec![0u8; tree.nodes.len()];
+    let mut pending = vec![(tree.root, false)];
+    while let Some((id, leaving)) = pending.pop() {
+        let index = id as usize;
+        let Some(node) = tree.nodes.get(index) else {
+            return Err("macro tree contains an out-of-bounds node reference".into());
+        };
+        if leaving {
+            states[index] = 2;
+            continue;
+        }
+        if states[index] == 1 {
+            return Err("macro tree contains a cycle".into());
+        }
+        if states[index] == 2 {
+            continue;
+        }
+        states[index] = 1;
+        pending.push((id, true));
+        match node {
+            Node::Tup(children) | Node::Lst(children) => {
+                pending.extend(children.iter().rev().map(|child| (*child, false)));
+            }
+            Node::Rec(fields) => {
+                pending.extend(fields.iter().rev().map(|(_, child)| (*child, false)));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 pub fn tree_to_arena(tree: &Tree) -> (Arena, NodeId) {
     let mut arena = Arena::new();
     for (node, span) in tree.nodes.iter().zip(tree.spans.iter()) {

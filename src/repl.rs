@@ -1,144 +1,115 @@
-use std::rc::Rc;
-
-use crate::form::{Arena, Node, NodeId};
-use crate::interp::Interp;
+use crate::compiler::snippet::value_definition_name;
+use crate::form::{Arena, NodeId};
 use crate::printer::print;
 use crate::reader::MacroTable;
-use crate::value::{Env, print_value};
-
-const PACKAGE: &str = "repl:session@0.0.0";
-const IFACE: &str = "repl:session/api@0.0.0";
-const MAIN: &str = "repl-eval";
-
-const DECL_HEADS: &[&str] = &[
-    "package-MACRO",
-    "target-MACRO",
-    "import-MACRO",
-    "export-MACRO",
-    "def-MACRO",
-    "defmacro-MACRO",
-    "deftype-MACRO",
-    "derive-MACRO",
-];
-
-fn is_decl(arena: &Arena, root: NodeId) -> bool {
-    let Node::Tup(items) = arena.node(root) else {
-        return false;
-    };
-    let Some(&head) = items.first() else {
-        return false;
-    };
-    matches!(arena.node(head), Node::Sym(s) if DECL_HEADS.contains(&s.as_str()))
-}
-
-fn synth_program(defs: &[String], expr_src: &str) -> String {
-    let mut out = format!("Package \"{PACKAGE}\"\n\n");
-    for d in defs {
-        out.push_str(d);
-        out.push('\n');
-    }
-    out.push_str(&format!("\nExport {{name: {MAIN} result: string}}\n"));
-    out.push_str(&format!("Def {MAIN} Fn {{}}\n  to-string({expr_src})\n"));
-    out
-}
 
 #[derive(Default)]
 struct CompiledSession {
-    entries: std::collections::HashMap<String, crate::host::HostComponent>,
+    entries: std::collections::HashMap<String, CompiledEntry>,
+}
+
+struct CompiledEntry {
+    component: crate::host::HostComponent,
+    invocation: crate::compiler::Invocation,
 }
 
 impl CompiledSession {
-    fn evaluate(&mut self, program: &str) -> Result<String, String> {
-        use crate::host::{HostComponent, Val};
-        if !self.entries.contains_key(program) {
-            let bytes = crate::staging::Project::compile(program).map_err(|e| e.to_string())?;
-            let component =
-                HostComponent::from_bytes(&bytes).map_err(|e| format!("instantiate: {e}"))?;
-            if self.entries.len() >= 32 {
-                self.entries.clear();
-            }
-            self.entries.insert(program.to_owned(), component);
+    fn prepare(&mut self, source: &str) -> Result<(), String> {
+        if self.entries.contains_key(source) {
+            return Ok(());
         }
-        let component = self.entries.get_mut(program).unwrap();
-        let result = component.call_instance(IFACE, MAIN, &[]);
+        let request = crate::compiler::Request::snippet(source);
+        let compilation = crate::compiler::native::compile(&request, std::path::Path::new("."))
+            .map_err(crate::compiler::native::display_diagnostics)?;
+        let artifact = compilation
+            .entry_artifact()
+            .ok_or("compiler produced no entry artifact")?;
+        let component = crate::host::HostComponent::from_bytes(&artifact.bytes)
+            .map_err(|e| format!("instantiate: {e}"))?;
+        let invocation = compilation
+            .invocation
+            .ok_or("compiler produced no snippet invocation")?;
+        if self.entries.len() >= 32 {
+            self.entries.clear();
+        }
+        self.entries.insert(
+            source.to_owned(),
+            CompiledEntry {
+                component,
+                invocation,
+            },
+        );
+        Ok(())
+    }
+
+    fn evaluate(&mut self, source: &str) -> Result<String, String> {
+        self.prepare(source)?;
+        let entry = self.entries.get_mut(source).unwrap();
+        let result = entry.component.call_instance(
+            &entry.invocation.interface_name,
+            &entry.invocation.function_name,
+            &[],
+        );
         match result {
             Ok(vals) => match vals.as_slice() {
-                [Val::String(s)] => Ok(s.to_string()),
+                [crate::host::Val::String(value)] => Ok(value.to_string()),
                 other => Err(format!("call: unexpected result shape {other:?}")),
             },
-            Err(e) => {
-                self.entries.remove(program);
-                Err(format!("call: {e}"))
+            Err(error) => {
+                self.entries.remove(source);
+                Err(format!("call: {error}"))
             }
         }
-    }
-}
-
-fn value_definition_name(arena: &Arena, root: NodeId) -> Option<&str> {
-    let Node::Tup(items) = arena.node(root) else {
-        return None;
-    };
-    if items.len() != 3 || !matches!(arena.node(items[0]), Node::Sym(s) if s == "def-MACRO") {
-        return None;
-    }
-    if let Node::Tup(body) = arena.node(items[2])
-        && body
-            .first()
-            .is_some_and(|head| matches!(arena.node(*head), Node::Sym(s) if s == "fn-MACRO"))
-    {
-        return None;
-    }
-    match arena.node(items[1]) {
-        Node::Sym(name) => Some(name),
-        _ => None,
     }
 }
 
 fn eval_forms(
-    arena: &Rc<Arena>,
+    arena: &Arena,
     roots: &[NodeId],
     defs: &mut Vec<String>,
-    interp: &Interp,
-    env: &Env,
     compiled: &mut CompiledSession,
 ) {
     for &root in roots {
-        if is_decl(arena, root) {
-            match interp.eval(arena, root, env) {
-                Ok(v) => {
-                    if let Some(name) = value_definition_name(arena, root) {
-                        defs.retain(|source| {
-                            crate::reader::read_file(source).ok().is_none_or(
-                                |(old_arena, old_roots)| {
-                                    old_roots
-                                        .first()
-                                        .and_then(|root| value_definition_name(&old_arena, *root))
-                                        != Some(name)
-                                },
-                            )
-                        });
-                    }
-                    defs.push(print(arena, root));
-                    compiled.entries.clear();
-                    println!("{}", print_value(&v));
-                }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    break;
-                }
-            }
+        let result = if crate::compiler::snippet::is_declaration(arena, root) {
+            add_definition(arena, root, defs, compiled).map(|()| "{}".to_owned())
         } else {
-            let expr_src = print(arena, root);
-            let program = synth_program(defs, &expr_src);
-            match compiled.evaluate(&program) {
-                Ok(s) => println!("{s}"),
-                Err(compiled_err) => {
-                    eprintln!("error: {compiled_err}");
-                    break;
-                }
+            let source = format!("{}\n{}", defs.join("\n"), print(arena, root));
+            compiled.evaluate(&source)
+        };
+        match result {
+            Ok(value) => println!("{value}"),
+            Err(error) => {
+                eprintln!("error: {error}");
+                break;
             }
         }
     }
+}
+
+fn add_definition(
+    arena: &Arena,
+    root: NodeId,
+    defs: &mut Vec<String>,
+    compiled: &mut CompiledSession,
+) -> Result<(), String> {
+    let mut candidate = defs.clone();
+    if let Some(name) = value_definition_name(arena, root) {
+        candidate.retain(|source| {
+            crate::reader::read_file(source)
+                .ok()
+                .is_none_or(|(old_arena, old_roots)| {
+                    old_roots
+                        .first()
+                        .and_then(|root| value_definition_name(&old_arena, *root))
+                        != Some(name)
+                })
+        });
+    }
+    candidate.push(print(arena, root));
+    compiled.evaluate(&candidate.join("\n"))?;
+    *defs = candidate;
+    compiled.entries.clear();
+    Ok(())
 }
 
 fn history_path() -> Option<std::path::PathBuf> {
@@ -161,9 +132,6 @@ pub fn repl() -> Result<(), String> {
 fn repl_interactive() -> Result<(), String> {
     use rustyline::error::ReadlineError;
 
-    let interp = Interp::new();
-    let env = Env::root();
-    crate::builtins::install(&env);
     let mut macros = MacroTable::core();
     let mut defs: Vec<String> = Vec::new();
     let mut compiled = CompiledSession::default();
@@ -195,8 +163,7 @@ fn repl_interactive() -> Result<(), String> {
                     Ok((arena, roots)) => {
                         let _ = rl.add_history_entry(buf.trim_end());
                         buf.clear();
-                        let arena = Rc::new(arena);
-                        eval_forms(&arena, &roots, &mut defs, &interp, &env, &mut compiled);
+                        eval_forms(&arena, &roots, &mut defs, &mut compiled);
                     }
                 }
             }
@@ -221,9 +188,6 @@ fn repl_interactive() -> Result<(), String> {
 fn repl_piped() -> Result<(), String> {
     use std::io::{BufRead, Write};
 
-    let interp = Interp::new();
-    let env = Env::root();
-    crate::builtins::install(&env);
     let mut macros = MacroTable::core();
     let mut defs: Vec<String> = Vec::new();
     let mut compiled = CompiledSession::default();
@@ -252,8 +216,7 @@ fn repl_piped() -> Result<(), String> {
             }
             Ok((arena, roots)) => {
                 buf.clear();
-                let arena = Rc::new(arena);
-                eval_forms(&arena, &roots, &mut defs, &interp, &env, &mut compiled);
+                eval_forms(&arena, &roots, &mut defs, &mut compiled);
             }
         }
     }

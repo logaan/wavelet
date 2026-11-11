@@ -461,7 +461,6 @@ pub fn node_types_with_imports(
     Ok(checker.node_types.into_inner())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn check_program_with_dependencies(
     arena: &Arena,
     roots: &[NodeId],
@@ -476,7 +475,6 @@ pub fn check_program_with_dependencies(
     checker.check_roots(roots)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn node_types_with_dependencies(
     arena: &Arena,
     roots: &[NodeId],
@@ -492,7 +490,6 @@ pub fn node_types_with_dependencies(
     Ok(checker.node_types.into_inner())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 impl Checker<'_> {
     fn add_dependency_types(
         &mut self,
