@@ -55,11 +55,12 @@ def measure():
             print(text, file=sys.stderr)
         raise SystemExit(result.returncode)
     warnings = collections.Counter(key[0] for key in diagnostics)
+    sources = [*(ROOT / 'src').rglob('*.rs'), ROOT / 'build.rs']
     sizes = {str(path.relative_to(ROOT)): len(path.read_text().splitlines())
-             for path in (ROOT / 'src').rglob('*.rs')}
+             for path in sources}
     functions = {}
     complexity = {}
-    for path in (ROOT / 'src').rglob('*.rs'):
+    for path in sources:
         for function in lizard.analyze_file(str(path)).function_list:
             name = f'{path.relative_to(ROOT)}::{function.name}'
             if function.nloc > 200:

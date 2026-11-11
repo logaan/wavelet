@@ -5,6 +5,7 @@ mod collections;
 mod numeric;
 mod persistence;
 mod printing;
+mod unicode_case;
 
 pub(crate) fn emit_substr(
     em: &mut Emitter,
@@ -731,7 +732,7 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
     collections::emit_head(em);
     collections::emit_tail(em);
     collections::emit_concat(em);
-    collections::emit_case(em);
+    unicode_case::emit_case(em);
     printing::emit_string(em);
     collections::emit_record_get(em);
     numeric::emit_as_float(em);

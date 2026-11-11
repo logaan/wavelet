@@ -134,7 +134,7 @@ Each constructor takes exactly its stated number of arguments. Its result type f
 | Function | Shape | Result |
 |---|---|---|
 | `str-cat` | `str-cat(a b …)` | concatenate string arguments; use `join` for a list |
-| `upper` `lower` | `upper(s)` | ASCII case conversion |
+| `upper` `lower` | `upper(s)` | Unicode case conversion, including expansions and contextual lowercase sigma |
 | `split` | `split(s sep)` | split on a separator → list of strings |
 | `join` | `join(parts sep)` | join a list of strings with a separator |
 | `contains` | `contains(s sub)` | does `s` contain `sub`? |

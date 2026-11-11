@@ -27,7 +27,7 @@ npm --prefix docs run build
 ## Structural and coverage gates
 
 The quality gate checks formatting, Clippy diagnostics, function complexity,
-and module size. A separate Lizard analyzer measures cyclomatic complexity
+and module size, including the root `build.rs` generator. A separate Lizard analyzer measures cyclomatic complexity
 and non-comment function length; its pinned dependency installs automatically
 into a private environment under `target/quality-venv`. No function may reach
 1,000 code lines. New modules have a 1,000-line limit; existing large modules
@@ -106,6 +106,37 @@ coupled pair does not fail the build: inspect the corresponding code and commits
 to decide whether a refactor is useful. Bulk refactors, recent file moves, a small
 sample, or a reached history cap can distort the ranking. Only failure to produce
 a valid report fails the history-analysis job.
+
+## Unicode casing data
+
+The root `build.rs` derives uppercase and lowercase mappings from Rust's standard
+library during each toolchain build. It also probes lowercase sigma contexts to
+classify scalars as cased, case-ignorable, or boundaries. This keeps compiled
+`upper` and `lower` aligned with the interpreter's Rust Unicode version without
+external Unicode downloads or locale-dependent behavior.
+
+Cargo stores the generated `unicode-case.bin` under `OUT_DIR`; it is embedded in
+the native compiler and compiler component, then copied into each emitted core
+module's static data. The format is little-endian: five 32-bit header fields
+(uppercase row count, lowercase row count, context row count, final-sigma
+mapping descriptor, maximum UTF-8 expansion factor), followed by the three
+sorted tables and a UTF-8 mapping blob. Each table row contains an inclusive
+scalar range and a value. Mapping values pack a blob offset above four length
+bits; context values are 1 for cased and 2 for case-ignorable, with missing
+entries representing boundaries. A zero mapping denotes the original bytes.
+
+The emitted helpers decode UTF-8, binary-search these tables, and copy mapped
+bytes, including multi-character expansions. Lowercasing retains preceding
+context and scans forward through ignorable scalars only when a sigma needs it;
+each such run is visited at most once by lookahead, so long combining sequences
+do not cause quadratic scans. All helper slots are reserved centrally for
+ordinary, macro, and resource components. No runtime interpreter or Unicode
+service is imported.
+
+`cargo test --test backend_unicode_case` compares dynamic compiled calls with
+Rust for every Unicode scalar and sigma contexts on either side of every scalar,
+plus expansions, empty input, embedded NUL, and long combining sequences.
+Regenerating the compiler component also regenerates its embedded tables.
 
 ## Cross-language conformance
 

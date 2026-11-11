@@ -16,7 +16,7 @@ from a local checkout.
 | `check.sh` | Runs quality limits, advisory history analysis, coverage-backed native tests, language-server tests, grammar checks, and the documentation build. | Before merging compiler changes; requires the documented host tools. |
 | `code-maat.py` | Downloads checksum-pinned Code Maat and reports revision frequency, churn, and co-change coupling from bounded Git history under `target/code-maat/reports`. Requires Java (tested with Java 17), Git, Python, and curl. | Run directly or through `check.sh`; use `--since YYYY-MM-DD` and `--max-commits N` to adjust the history window. Metrics are advisory; tool and incomplete-history errors fail explicitly. |
 | `check-duplication.py` | Runs pinned jscpd on implementation Rust and JavaScript/TypeScript, rejects new copy/paste clones, and writes `target/duplication/jscpd-report.json`. Automatically installs the locked detector under `tooling/quality/node_modules`. | Run directly or through `check.sh`; use `--update-baseline` only after reviewing clone removals or deliberate exceptions. |
-| `check-quality.py` | Checks formatting, Clippy, Lizard function size/cyclomatic complexity and module-size ratchets. Automatically installs its Python analyzer into `target/quality-venv`. | Run directly for a quick structural gate; use `--update-baseline` only for reviewed baseline changes. |
+| `check-quality.py` | Checks formatting, Clippy, Lizard function size/cyclomatic complexity (including root `build.rs`) and module-size ratchets. Automatically installs its Python analyzer into `target/quality-venv`. | Run directly for a quick structural gate; use `--update-baseline` only for reviewed baseline changes. |
 | `build.sh` | Full local build: native binary → `regen-examples.sh` → language server (`ci/build-lsp.sh`) → docs site (`ci/build-docs.sh`). The "everything" entry point that mirrors the coverage CI gives you. | Before a release, or whenever you want to catch drift across every surface. Needs the Rust toolchain, `wasm-pack`, and `node`/`npm`. |
 | `regen-examples.sh` | Rebuilds the interpreter reference artifact and compiler component, regenerates `docs/examples.json`, and runs runtime and Rust tests. | **After any change to language behaviour or the example set** (see [the docs pipeline](#the-docs--examples-pipeline)). Needs `wasm-pack` and `node`. |
 | `coverage.sh` | Measures native test coverage with `cargo-llvm-cov`. Prints a summary table; `--html` opens a report, `--lcov` writes `target/coverage/lcov.info`; `--check` enforces the checked-in minimum coverage. | Checking which lines the tests exercise. Bootstraps `cargo-llvm-cov` + `llvm-tools` on first run. |
@@ -77,3 +77,14 @@ constructor as `globalThis.Set`. Jco 1.41 otherwise resolves that constructor to
 an exported resource class named `Set`, which breaks set-functor components.
 The tour runtime tests exercise this case. Recheck the normalization when
 updating Jco; the component's exported names remain unchanged.
+
+## Generated Unicode casing tables
+
+Cargo runs root `build.rs` to derive Unicode casing mappings and sigma-context
+classes from the same Rust toolchain as the interpreter. The generated binary
+stays under Cargo's `OUT_DIR` and is embedded in both native and browser compiler
+builds; no download or separate regeneration command is needed. The format and
+runtime contract are documented in
+[`Development and validation`](../docs/docs/development.mdx#unicode-casing-data).
+Run `cargo test --test backend_unicode_case` to check every Unicode scalar and
+contextual sigma against Rust through dynamic compiled exports.
