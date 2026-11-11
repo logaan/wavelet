@@ -249,7 +249,7 @@
     "output": ""
   },
   "macro-expand": {
-    "code": "DefMacro and {a b}\n  Quasi If Unquote(a) Unquote(b) false\nexpand(Quote And(p q))",
+    "code": "DefMacro and {a b}\n  Quasi If Unquote(a) Unquote(b) false\nDefMacro inspect {form}\n  Quasi Quote Unquote(expand(form))\nInspect And(p q)",
     "value": "(if-MACRO, p, q, false)",
     "output": ""
   },

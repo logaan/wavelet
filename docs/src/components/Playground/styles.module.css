@@ -136,3 +136,19 @@
   color: var(--ifm-color-emphasis-500);
   font-style: italic;
 }
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cancelButton {
+  border: 1px solid var(--ifm-color-emphasis-400);
+  border-radius: var(--ifm-button-border-radius);
+  background: transparent;
+  color: var(--ifm-font-color-base);
+  cursor: pointer;
+  padding: 0.2rem 0.7rem;
+  font-size: 0.8rem;
+}

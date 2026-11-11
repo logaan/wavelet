@@ -1,0 +1,32 @@
+package wavelet:meta@0.1.0;
+
+interface code {
+  type node-id = u32;
+
+  variant node {
+    bool-val(bool),
+    int-val(s64),
+    dec-val(f64),
+    char-val(char),
+    str-val(string),
+    sym(string),
+    tup(list<node-id>),
+    lst(list<node-id>),
+    rec(list<tuple<string, node-id>>),
+    flg(list<string>),
+  }
+
+  record tree {
+    nodes: list<node>,
+    root: node-id,
+    spans: list<tuple<u32, u32>>,
+  }
+}
+
+interface macros {
+  use code.{tree};
+
+  manifest: func() -> list<tuple<string, u32>>;
+
+  expand: func(name: string, args: tree) -> result<tree, string>;
+}

@@ -47,8 +47,8 @@ first; a wasm-backend change that diverges from the interpreter is a bug.
 
 Every runnable documentation example is authored once in
 `docs/scripts/gen-examples.mjs`, which generates `docs/examples.json`. That file
-is consumed by **both** the docs `<Playground>` (in the browser, via the
-wasm-compiled interpreter) and the `tests/examples.rs` suite (native target). A
+is consumed by **both** the docs `<Playground>` (compiled and executed in a browser
+worker) and the `tests/examples.rs` suite (native target). A
 language change that alters any documented example's behaviour will break
 `cargo test`.
 
@@ -61,9 +61,13 @@ and re-lock the tests:
 
 This runs
 `wasm-pack build --target web --out-dir docs/src/wasm --out-name wavelet`, then
-`node docs/scripts/gen-examples.mjs`, then `cargo test`. The wasm artifact under
-`docs/src/wasm` is committed (CI builds the docs with Node only, no Rust
-toolchain), so it must be regenerated locally when the language changes.
+`scripts/build-compiler-component.sh`, `node docs/scripts/gen-examples.mjs`,
+the browser runtime tests, and `cargo test`. The interpreter artifact under
+`docs/src/wasm` supplies reference results to the example generator. The compiler
+component under `docs/src/compiler` powers browser execution. Both are committed
+and must be regenerated when the language changes. The docs build generates the
+Worker bundle with Node only. Run `npm --prefix docs run test:browser` against a
+built docs site to check every example through the compiled browser runtime.
 
 ## CHANGELOG.md drives the GitHub release notes — keep it current
 

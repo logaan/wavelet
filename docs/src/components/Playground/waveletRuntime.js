@@ -1,13 +1,13 @@
-let runtimePromise = null;
+import {createWorkerClient} from '../../runtime/workerClient.mjs';
 
-export function loadWavelet() {
-  if (!runtimePromise) {
-    runtimePromise = (async () => {
-      const mod = await import('@site/src/wasm/wavelet.js');
+let client;
+let workerUrl;
 
-      await mod.default();
-      return (src) => JSON.parse(mod._eval(src));
-    })();
+export function loadWavelet(url) {
+  if (!client || workerUrl !== url) {
+    client?.dispose();
+    workerUrl = url;
+    client = createWorkerClient(() => new Worker(url, {type: 'module', name: 'wavelet-compiler'}));
   }
-  return runtimePromise;
+  return client;
 }

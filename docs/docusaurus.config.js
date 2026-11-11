@@ -66,6 +66,7 @@ const config = {
           src: 'img/Logo.png',
         },
         items: [
+          {to: '/repl', label: 'REPL', position: 'left'},
           {
             type: 'docSidebar',
             sidebarId: 'docsSidebar',

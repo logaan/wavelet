@@ -1,0 +1,99 @@
+package wavelet:compiler@0.1.0;
+
+interface macro-host {
+  use wavelet:meta/code@0.1.0.{tree};
+
+  resource library {
+    manifest: func() -> result<list<tuple<string, u32>>, string>;
+    expand: func(name: string, args: tree) -> result<tree, string>;
+  }
+}
+
+interface compiler {
+  use macro-host.{library};
+
+  record source-file {
+    name: string,
+    contents: string,
+  }
+
+  record dependency-file {
+    name: string,
+    contents: list<u8>,
+  }
+
+  enum mode { project, snippet }
+
+  record request {
+    sources: list<source-file>,
+    dependencies: list<dependency-file>,
+    entry: option<string>,
+    mode: mode,
+  }
+
+  enum phase { input, read, expand, check, wit, emit, compose }
+
+  record source-span {
+    start: u32,
+    end: u32,
+  }
+
+  record diagnostic {
+    phase: phase,
+    source: option<string>,
+    span: option<source-span>,
+    message: string,
+  }
+
+  record macro-import {
+    package-id: string,
+    source-path: option<string>,
+  }
+
+  variant macro-source {
+    component(list<u8>),
+    imported(macro-import),
+  }
+
+  record macro-request {
+    key: string,
+    source: macro-source,
+  }
+
+  record macro-binding {
+    key: string,
+    library: own<library>,
+  }
+
+  enum artifact-kind { component, macro-component, application }
+
+  record artifact {
+    name: string,
+    package-id: string,
+    kind: artifact-kind,
+    bytes: list<u8>,
+  }
+
+  record invocation {
+    interface-name: string,
+    function-name: string,
+  }
+
+  record compilation {
+    artifacts: list<artifact>,
+    entry: option<string>,
+    invocation: option<invocation>,
+  }
+
+  variant step {
+    needs-macros(list<macro-request>),
+    complete(compilation),
+  }
+
+  compile: func(request: request, macros: list<macro-binding>) -> result<step, list<diagnostic>>;
+}
+
+world compiler-component {
+  import macro-host;
+  export compiler;
+}

@@ -1,12 +1,19 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
+import {createCompilerRuntime, formatError} from '../src/runtime/compilerRuntime.mjs';
+import {instantiateComponent} from '../src/runtime/componentLoader.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const WASM = join(here, '..', 'src', 'wasm');
 const OUT = join(here, '..', 'examples.json');
 const { initSync, _eval } = await import(pathToFileURL(join(WASM, 'wavelet.js')).href);
 initSync({ module: readFileSync(join(WASM, 'wavelet_bg.wasm')) });
+
+const importModule = (source) => import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+const compiler = await createCompilerRuntime(readFileSync(join(here, '..', 'src/compiler/wavelet_compiler.wasm')), {
+  instantiate: (bytes, imports) => instantiateComponent(bytes, imports, importModule),
+});
 
 const E = {};
 E['hello-shout'] = `str-cat(upper("hello") ", world!")`;
@@ -159,7 +166,9 @@ Let {x: 5}
   And lt(x 10) gt(x 0)`;
 E['macro-expand'] = `DefMacro and {a b}
   Quasi If Unquote(a) Unquote(b) false
-expand(Quote And(p q))`;
+DefMacro inspect {form}
+  Quasi Quote Unquote(expand(form))
+Inspect And(p q)`;
 E['macro-gensym-three'] = `[gensym() gensym() gensym()]`;
 E['macro-gensym'] = `Def fresh-pair Fn {}
   eq(gensym() gensym())
@@ -256,6 +265,15 @@ const out = {};
 let errCount = 0;
 for (const [id, code] of Object.entries(E)) {
   const r = JSON.parse(_eval(code));
+  let compiled;
+  try {
+    compiled = await compiler.evaluate({source: code});
+  } catch (error) {
+    compiled = {ok: false, error: formatError(error)};
+  }
+  if (compiled.ok !== r.ok || (r.ok && (compiled.value !== r.value || compiled.output !== r.output))) {
+    throw new Error(`${id}: compiled example disagrees with interpreter\n${JSON.stringify({interpreter: r, compiled})}`);
+  }
   if (r.ok) {
     out[id] = { code, value: r.value, output: r.output };
   } else {

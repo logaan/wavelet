@@ -1,0 +1,19 @@
+[package]
+name = "wavelet-compiler-component"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wavelet = { path = "../..", default-features = false }
+wit-bindgen = { version = "0.63.0", default-features = false, features = ["macros", "realloc"] }
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = true

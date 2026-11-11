@@ -12,9 +12,15 @@
     "clear": "docusaurus clear",
     "serve": "docusaurus serve",
     "write-translations": "docusaurus write-translations",
-    "write-heading-ids": "docusaurus write-heading-ids"
+    "write-heading-ids": "docusaurus write-heading-ids",
+    "build:runtime": "node scripts/build-browser-runtime.mjs",
+    "prestart": "npm run build:runtime",
+    "prebuild": "npm run build:runtime",
+    "test:runtime": "node --test tests/runtime*.test.mjs",
+    "test:browser": "playwright test"
   },
   "dependencies": {
+    "@bytecodealliance/jco": "1.41.0",
     "@docusaurus/core": "3.10.1",
     "@docusaurus/faster": "3.10.1",
     "@docusaurus/preset-classic": "3.10.1",
@@ -26,7 +32,9 @@
   },
   "devDependencies": {
     "@docusaurus/module-type-aliases": "3.10.1",
-    "@docusaurus/types": "3.10.1"
+    "@docusaurus/types": "3.10.1",
+    "@playwright/test": "1.65.0",
+    "esbuild": "0.27.4"
   },
   "browserslist": {
     "production": [
