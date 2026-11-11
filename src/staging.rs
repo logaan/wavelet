@@ -77,6 +77,18 @@ impl Project {
         self.write(Path::new(name), &source)
     }
 
+    pub fn copy_dependencies(&self, source_root: &Path) -> Result<(), StageError> {
+        let wit = source_root.join("wit");
+        if wit.exists() {
+            copy_tree(&wit, &self.path().join("wit"))?;
+        }
+        let lock = source_root.join("wkg.lock");
+        if lock.is_file() {
+            std::fs::copy(lock, self.path().join("wkg.lock"))?;
+        }
+        Ok(())
+    }
+
     pub fn build(&self) -> Result<Vec<String>, StageError> {
         crate::build::build_files(&self.paths, utf8_path(&self.output())?)
             .map_err(StageError::Build)
@@ -96,4 +108,24 @@ impl Project {
 pub fn utf8_path(path: &Path) -> Result<&str, StageError> {
     path.to_str()
         .ok_or_else(|| StageError::InvalidPath(path.to_path_buf()))
+}
+
+fn copy_tree(source: &Path, destination: &Path) -> Result<(), StageError> {
+    if std::fs::symlink_metadata(source)?.file_type().is_symlink() {
+        return Err(StageError::InvalidPath(source.to_path_buf()));
+    }
+    std::fs::create_dir_all(destination)?;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), target)?;
+        } else {
+            return Err(StageError::InvalidPath(entry.path()));
+        }
+    }
+    Ok(())
 }

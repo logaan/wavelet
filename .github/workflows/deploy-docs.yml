@@ -1,14 +1,5 @@
 name: Deploy docs
 
-# Builds the Docusaurus site in docs/ and publishes it to GitHub Pages
-# (https://logaan.github.io/wavelet/). The wasm-compiled interpreter that powers
-# the live playground is committed under docs/src/wasm, so this job needs only
-# Node — no Rust toolchain. Regenerate that artifact and docs/examples.json
-# locally (see scripts/regen-examples.sh) when the language changes.
-#
-# The build itself lives in scripts/ci/build-docs.sh so it can be run identically
-# from a local checkout.
-
 on:
   push:
     tags: ['v*']
@@ -19,7 +10,6 @@ permissions:
   pages: write
   id-token: write
 
-# Allow one concurrent deployment; don't cancel an in-progress production deploy.
 concurrency:
   group: pages
   cancel-in-progress: false

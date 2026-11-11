@@ -1,25 +1,5 @@
 name: Release
 
-# On a version tag (e.g. v0.1.0):
-#   * build the Wavelet CLI (`wavelet`) and language server (`wavelet-lsp`) for
-#     the common desktop platforms, publishing them standalone and bundled
-#     per-platform into wavelet-<target>.tar.gz for the Homebrew formula, and
-#   * package the VS Code extension (tooling/vscode) into a zip,
-# then publish all of them as assets on a GitHub release. Assets use stable,
-# unversioned names so install instructions can always point at
-# .../releases/latest/download/<asset>.
-#
-# Partial builds still ship: the matrix does not fail-fast, and the release job
-# runs even if some target legs fail, publishing whatever artifacts exist. So a
-# flaky platform never blocks the whole release.
-#
-# The release body is the curated CHANGELOG.md section for the tag, extracted by
-# scripts/ci/changelog-section.sh; keep CHANGELOG.md up to date before tagging.
-#
-# The build/packaging steps live in scripts/ci/build-cli.sh, scripts/ci/build-lsp.sh
-# and scripts/ci/package-tooling.sh so they can be run identically from a local
-# checkout.
-
 on:
   push:
     tags: ['v*']
@@ -28,10 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  # Build both binaries per target. Each platform builds natively on its own
-  # runner; the one exception is macOS x86_64, cross-built on the arm runner
-  # (pure-Rust crate, links fine) so we don't depend on the flaky Intel runners.
-  # fail-fast is off so one target's failure never cancels the others.
+
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -67,8 +44,7 @@ jobs:
 
   release:
     needs: build
-    # Run even if some build legs failed, so a partial set of binaries still
-    # ships a release.
+
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -91,19 +67,13 @@ jobs:
         env:
           STAGED_BINS: staged-bins
 
-      # Use the curated CHANGELOG.md section for this tag as the release body.
-      # Fails the release if the tag has no section, so we never publish empty
-      # or stale notes. generate_release_notes appends the auto "Full Changelog"
-      # compare link beneath the curated notes.
       - name: Extract changelog section for ${{ github.ref_name }}
         run: scripts/ci/changelog-section.sh "${{ github.ref_name }}" > release-notes.md
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          # One glob covers the vscode zip, the standalone CLI/LSP binaries, and
-          # the per-platform tarballs. Don't fail on missing files: a partial
-          # build legitimately produces a subset.
+
           files: dist/wavelet-*
           fail_on_unmatched_files: false
           body_path: release-notes.md

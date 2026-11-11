@@ -7,14 +7,8 @@ import styles from './styles.module.css';
 import examples from '@site/examples.json';
 import {registerWavelet} from '@site/src/prism/wavelet';
 
-// Teach prism-react-renderer's bundled Prism about Wavelet (the same grammar the
-// static ```wavelet code blocks use). Done once, at module load.
 registerWavelet(Prism);
 
-// Highlighted, non-interactive mirror of the editor text. It sits directly
-// behind a transparent-text textarea so the caret and selection still work
-// while the colours come from Prism. Both layers share the `.editor` class, so
-// their font metrics, padding, and wrapping match exactly and stay aligned.
 function Highlighted({code, theme}) {
   return (
     <Highlight prism={Prism} theme={theme} code={code} language="wavelet">
@@ -34,34 +28,15 @@ function Highlighted({code, theme}) {
   );
 }
 
-// A live, editable Wavelet example. The code runs in the reader's browser via
-// the WebAssembly-compiled interpreter (see waveletRuntime.js).
-//
-//   <Playground id="std-arith" />          // code from docs/examples.json
-//   <Playground id="gs-hello" autoRun />
-//   <Playground code={`add[2 3]`} />        // inline (not test-backed)
-//
-// Prefer `id`: those snippets are the single source of truth in
-// docs/examples.json and are verified by the Rust test suite, so they cannot
-// drift from the language. `code` is an escape hatch for ad-hoc examples.
-//
-// Props:
-//   id       key into docs/examples.json (test-backed)
-//   code     inline source, used when `id` is absent
-//   autoRun  evaluate once as soon as the interpreter loads
-//   rows     textarea height in rows (defaults to the line count of the code)
-
 function Editor({initial, autoRun, rows}) {
   const [src, setSrc] = useState(initial.replace(/\s+$/, ''));
   const [result, setResult] = useState(null);
-  const [status, setStatus] = useState('loading'); // loading | ready | error
+  const [status, setStatus] = useState('loading');
   const runRef = useRef(null);
   const preRef = useRef(null);
   const {colorMode} = useColorMode();
   const theme = colorMode === 'dark' ? themes.dracula : themes.github;
 
-  // Keep the highlighted layer scrolled in lock-step with the textarea so long
-  // or wide snippets stay aligned.
   const syncScroll = (e) => {
     if (!preRef.current) return;
     preRef.current.scrollTop = e.target.scrollTop;
@@ -100,14 +75,14 @@ function Editor({initial, autoRun, rows}) {
     return () => {
       live = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   const lineCount = src.split('\n').length;
   const height = rows || Math.max(2, Math.min(lineCount, 20));
 
   const onKeyDown = (e) => {
-    // Cmd/Ctrl-Enter runs; Tab inserts two spaces.
+
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
       e.preventDefault();
       doRun();

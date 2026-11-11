@@ -1,7 +1,3 @@
-//! Shared runtime helper-function bodies (`emit_helpers`: alloc, eq_raw,
-//! to_str, persist, arithmetic/comparison, …) and the inline substring and
-//! sequence-join emitters they and the builtins share.
-
 use super::*;
 
 mod allocation;
@@ -10,9 +6,6 @@ mod numeric;
 mod persistence;
 mod printing;
 
-/// Copy `sublen` bytes from `src[8 + start ..]` into a fresh `[TAG_STR, sublen,
-/// bytes…]` box left in `out`. `start`/`sublen` are locals; `j` is a scratch
-/// loop local.
 pub(crate) fn emit_substr(
     em: &mut Emitter,
     fx: &mut FnCtx,
@@ -41,13 +34,13 @@ pub(crate) fn emit_substr(
     fx.op(I::LocalGet(sublen));
     fx.op(I::I32GeU);
     fx.op(I::BrIf(1));
-    // dst = out + 8 + j
+
     fx.op(I::LocalGet(out));
     fx.op(I::I32Const(8));
     fx.op(I::I32Add);
     fx.op(I::LocalGet(j));
     fx.op(I::I32Add);
-    // byte = src[8 + start + j]
+
     fx.op(I::LocalGet(src));
     fx.op(I::I32Const(8));
     fx.op(I::I32Add);
@@ -66,11 +59,6 @@ pub(crate) fn emit_substr(
     fx.op(I::End);
 }
 
-/// Emit an in-place `to_str` join loop for a sequence-shaped box (list, tuple,
-/// or flags): `open` + elements joined by `comma` + `close`. Elements sit at
-/// `box+8 + stride*i` for `i` in `0..load(box+4)`; when `recurse` each element
-/// box is run through `to_str`, otherwise it is a `str` box appended verbatim
-/// (the flags-name case). Emits its own `return`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn to_str_seq(
     fx: &mut FnCtx,
@@ -141,20 +129,6 @@ pub(crate) fn to_str_seq(
     fx.op(I::Return);
 }
 
-/// Emit the float arm of `to_str`: `value::format_dec` transcribed
-/// op-for-op.
-///
-/// Six significant digits, fixed notation for decimal exponents `-4..=5`,
-/// `d.de±x` scientific outside, `nan`/`inf`/`-inf` interned. Every f64
-/// operation (and its order) matches the Rust reference exactly — IEEE-754
-/// doubles are deterministic, so the two pipelines produce identical text.
-/// Change `format_dec` and this together or the differential suite catches
-/// the drift.
-///
-/// `buf` holds the output bytes; the seven extracted digits live at
-/// `buf + 40..47` (output never exceeds 14 bytes). `xf` is an F64 local;
-/// the rest are I32 scratch. Leaves nothing on the stack: every path
-/// returns the built str box.
 #[allow(clippy::too_many_arguments)]
 fn to_str_dec(
     fx: &mut FnCtx,
@@ -171,7 +145,6 @@ fn to_str_dec(
     buf: u32,
     oi: u32,
 ) {
-    // out[oi] = <const byte>; oi += 1
     let put_c = |fx: &mut FnCtx, b: i32| {
         fx.op(I::LocalGet(buf));
         fx.op(I::LocalGet(oi));
@@ -183,7 +156,7 @@ fn to_str_dec(
         fx.op(I::I32Add);
         fx.op(I::LocalSet(oi));
     };
-    // out[oi] = '0' + digits[k]; oi += 1
+
     let put_digit = |fx: &mut FnCtx| {
         fx.op(I::LocalGet(buf));
         fx.op(I::LocalGet(oi));
@@ -209,7 +182,7 @@ fn to_str_dec(
     fx.op(I::LocalGet(0));
     fx.op(I::F64Load(ma(8, 3)));
     fx.op(I::LocalSet(xf));
-    // nan / inf / -inf: interned, exactly the interpreter's spellings
+
     fx.op(I::LocalGet(xf));
     fx.op(I::LocalGet(xf));
     fx.op(I::F64Ne);
@@ -236,7 +209,7 @@ fn to_str_dec(
     fx.op(I::LocalSet(buf));
     fx.op(I::I32Const(0));
     fx.op(I::LocalSet(oi));
-    // sign bit (not `< 0.0`) so `-0.0` prints "-0.0" like the interpreter
+
     fx.op(I::LocalGet(xf));
     fx.op(I::I64ReinterpretF64);
     fx.op(I::I64Const(0));
@@ -259,7 +232,7 @@ fn to_str_dec(
     fx.op(I::Call(box_str));
     fx.op(I::Return);
     fx.op(I::End);
-    // normalize into [1, 10): e tracks the decimal exponent
+
     fx.op(I::I32Const(0));
     fx.op(I::LocalSet(e));
     fx.op(I::Block(BlockType::Empty));
@@ -290,8 +263,7 @@ fn to_str_dec(
     fx.op(I::Br(0));
     fx.op(I::End);
     fx.op(I::End);
-    // seven digits (six significant + one to round by) at buf+40..46;
-    // subtracting the integer part is exact, so xf stays in [0, 10)
+
     fx.op(I::I32Const(0));
     fx.op(I::LocalSet(k));
     fx.op(I::Block(BlockType::Empty));
@@ -319,8 +291,7 @@ fn to_str_dec(
     fx.op(I::Br(0));
     fx.op(I::End);
     fx.op(I::End);
-    // round to six digits; a carry off the top is a magnitude step
-    // (9.99999x -> 1.00000, e + 1)
+
     fx.op(I::LocalGet(buf));
     fx.op(I::I32Load8U(ma(46, 0)));
     fx.op(I::I32Const(5));
@@ -369,7 +340,7 @@ fn to_str_dec(
     fx.op(I::End);
     fx.op(I::End);
     fx.op(I::End);
-    // lastd = index of the last significant digit in 0..=5
+
     fx.op(I::I32Const(5));
     fx.op(I::LocalSet(lastd));
     fx.op(I::Block(BlockType::Empty));
@@ -387,7 +358,7 @@ fn to_str_dec(
     fx.op(I::Br(0));
     fx.op(I::End);
     fx.op(I::End);
-    // fixed for e in -4..=5, scientific outside
+
     fx.op(I::LocalGet(e));
     fx.op(I::I32Const(-4));
     fx.op(I::I32GeS);
@@ -400,7 +371,7 @@ fn to_str_dec(
     fx.op(I::I32Const(0));
     fx.op(I::I32GeS);
     fx.op(I::If(BlockType::Empty));
-    // ddd.d — integer digits 0..=e, then the trimmed fraction (or "0")
+
     fx.op(I::I32Const(0));
     fx.op(I::LocalSet(k));
     fx.op(I::Block(BlockType::Empty));
@@ -438,7 +409,7 @@ fn to_str_dec(
     put_c(fx, b'0' as i32);
     fx.op(I::End);
     fx.op(I::Else);
-    // 0.000d — (-e - 1) zeros, then all significant digits
+
     put_c(fx, b'0' as i32);
     put_c(fx, b'.' as i32);
     fx.op(I::LocalGet(e));
@@ -471,7 +442,7 @@ fn to_str_dec(
     fx.op(I::End);
     fx.op(I::End);
     fx.op(I::Else);
-    // d.de±x — exponent is at most three digits (|e| <= 324)
+
     fx.op(I::I32Const(0));
     fx.op(I::LocalSet(k));
     put_digit(fx);
@@ -554,17 +525,6 @@ fn to_str_dec(
     fx.op(I::Return);
 }
 
-/// Emit the char arm of `to_str`: single quotes plus Rust's `{c:?}` escapes.
-///
-/// Exact for `\'` `\\` `\n` `\r` `\t`, `\u{..}` for the remaining
-/// non-printables through Latin-1 (C0/C1 controls incl. NUL, DEL, NBSP,
-/// soft hyphen — `0x00..=0x1f`, `0x7f..=0xa0`, `0xad`), and raw UTF-8 for
-/// everything else. This is `print_value`'s escape set: `{c:?}` plus the
-/// NUL carve-out (`\u{0}`, since WAVE and our reader have no `\0` escape). Rust additionally `\u{..}`-escapes non-printable and
-/// grapheme-extending codepoints above Latin-1 (`'\u{200b}'`, combining
-/// marks); such chars diverge from the oracle — the same policy as the
-/// string branch above, where only the common escapes agree and exotic
-/// examples stay on SKIP.
 #[allow(clippy::too_many_arguments)]
 fn to_str_char(fx: &mut FnCtx, alloc: u32, box_str: u32, cp: u32, t: u32, buf: u32, oi: u32) {
     let put_c = |fx: &mut FnCtx, b: i32| {
@@ -578,7 +538,7 @@ fn to_str_char(fx: &mut FnCtx, alloc: u32, box_str: u32, cp: u32, t: u32, buf: u
         fx.op(I::I32Add);
         fx.op(I::LocalSet(oi));
     };
-    // out[oi] = t; oi += 1
+
     let put_t = |fx: &mut FnCtx| {
         fx.op(I::LocalGet(buf));
         fx.op(I::LocalGet(oi));
@@ -590,7 +550,7 @@ fn to_str_char(fx: &mut FnCtx, alloc: u32, box_str: u32, cp: u32, t: u32, buf: u
         fx.op(I::I32Add);
         fx.op(I::LocalSet(oi));
     };
-    // out[oi] = lowercase hex digit for t in 0..=15; oi += 1
+
     let put_t_hex = |fx: &mut FnCtx| {
         fx.op(I::LocalGet(t));
         fx.op(I::I32Const(10));
@@ -621,8 +581,7 @@ fn to_str_char(fx: &mut FnCtx, alloc: u32, box_str: u32, cp: u32, t: u32, buf: u
     fx.op(I::I32Const(0));
     fx.op(I::LocalSet(oi));
     put_c(fx, b'\'' as i32);
-    // the named escapes, then \u{..} for the remaining non-printables
-    // (incl. NUL: WAVE has no \0 escape), then raw UTF-8
+
     let named: [(u32, u8); 5] = [
         (0x27, b'\''),
         (0x5c, b'\\'),
@@ -659,7 +618,7 @@ fn to_str_char(fx: &mut FnCtx, alloc: u32, box_str: u32, cp: u32, t: u32, buf: u
     fx.op(I::I32Eq);
     fx.op(I::I32Or);
     fx.op(I::If(BlockType::Empty));
-    // \u{..}: cp <= 0xad here, so at most two hex digits, no leading zeros
+
     put_c(fx, b'\\' as i32);
     put_c(fx, b'u' as i32);
     put_c(fx, b'{' as i32);
@@ -680,7 +639,7 @@ fn to_str_char(fx: &mut FnCtx, alloc: u32, box_str: u32, cp: u32, t: u32, buf: u
     put_t_hex(fx);
     put_c(fx, b'}' as i32);
     fx.op(I::Else);
-    // raw UTF-8, 1-4 bytes by codepoint range
+
     fx.op(I::LocalGet(cp));
     fx.op(I::I32Const(0x80));
     fx.op(I::I32LtU);

@@ -5,15 +5,11 @@ edition = "2024"
 license = "MIT"
 
 [lib]
-# `cdylib` so the interpreter can be compiled to wasm (the docs playground);
-# `rlib` so the native `wavelet` binary can still link against it.
+
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# The browser-playground bindings (`src/wasm.rs` + `wasm-bindgen`). ON by
-# default so `wasm-pack build` and the docs pipeline are unchanged. Turn it OFF
-# (`default-features = false`) for any other `wasm32` consumer that must link the
-# interpreter with NO `wasm-bindgen` imports.
+
 default = ["playground"]
 playground = ["dep:wasm-bindgen", "dep:console_error_panic_hook"]
 
@@ -23,33 +19,17 @@ wasm-encoder = "0.251.0"
 wit-component = "0.251.0"
 wit-parser = "0.251.0"
 
-# Native-only: the compile-time component runtime (`src/host.rs`) that
-# instantiates and calls macro-library components. `wasmtime` is heavy and must
-# never reach the `wasm32` (`cdylib`) playground build, so it lives under a
-# `cfg(not(target_arch = "wasm32"))` target table alongside the gated module.
-# `component-model` enables the Component-Model + dynamic `component::Val` API;
-# default features are kept off to trim the build (no `cranelift`-driven extras
-# we don't use, no `wat`, no `parallel-compilation` heaviness beyond defaults
-# we need) — `cranelift` is re-enabled explicitly because component lifting
-# needs a compiler backend.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wasmtime = { version = "45", default-features = false, features = ["runtime", "cranelift", "component-model"] }
 
-# Native-only: line editing + input history for the interactive `wavelet repl`
-# (7.1). Used only when stdin is a terminal; piped input keeps the plain
-# line-reader. Kept off the `wasm32` playground build with the rest of the
-# native table.
 rustyline = "14"
 tempfile = "3"
 
-# wasm-only: the browser playground bindings (see `src/wasm.rs`). Optional and
-# gated behind the `playground` feature, so a `default-features = false` `wasm32`
-# build omits `wasm-bindgen` entirely.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { version = "0.2", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 
 [dev-dependencies]
-# parses docs/examples.json for the documentation-example test suite
+
 serde_json = "1"
 wasm-wave = "0.251.0"
