@@ -21,7 +21,7 @@ Building and composing components shells out to two [Bytecode Alliance](https://
 - [**`wkg`**](https://github.com/bytecodealliance/wasm-pkg-tools) fetches dependency WIT (e.g. `wasi:cli`, `wasi:http`) into a project's `wit/` tree and maintains a `wkg.lock` lock file.
 - [**`wac`**](https://github.com/bytecodealliance/wac) composes the project's components into a single artifact.
 
-The Homebrew formula declares both as dependencies, so `brew install` brings them along. Installing by hand: `cargo install wkg wac-cli`. Neither is needed for `wavelet run` or the in-browser interpreter, which evaluate pure programs and don't emit components.
+The Homebrew formula declares both as dependencies, so `brew install` brings them along. Installing by hand: `cargo install wkg wac-cli`. `wavelet run` and the REPL also compile components and use the build toolchain; the in-browser interpreter needs no external tools.
 
 ## Installing with Homebrew
 
@@ -146,16 +146,20 @@ hello/
 
 ## Run vs. build
 
-Wavelet has two execution paths, and understanding the split is the key to the workflow:
+Both commands compile components, but serve different workflows:
 
 | | `wavelet run` | `wavelet build` |
 |---|---|---|
-| What it does | Interprets the files directly | Emits real `.wasm` components and composes them |
-| Speed | Instant — no codegen | Slower; produces a deployable artifact |
-| Output | The value of the program | One `out/app.wasm` you can ship and run on any host |
-| Role | The semantics oracle; fastest iteration | Production artifacts |
+| What it does | Compiles, composes, and calls the first file's `api.run` | Emits `.wasm` components and composes sibling dependencies |
+| Artifacts | Temporary files cleaned up after execution | Files retained in `out/` |
+| Host imports | None provided by the embedded runner | Supplied by your chosen runtime or later composition |
+| Role | Exercise fully composed program logic | Produce artifacts for deployment or external execution |
 
-The interpreter exists so the language's semantics can be validated independently of code generation — the wasm backend is checked against it. It evaluates **pure** programs: calls into host interfaces (`wasi:*`) only run in a built component on a wasm runtime, so `run` is for the logic, `build` for anything that touches the world.
+The browser interpreter defines the reference semantics independently of code
+generation. The compiled backend is tested against it. CLI execution reports
+compilation errors and traps directly, without falling back to interpretation.
+A deployment host must support the artifact's remaining WIT imports and exported
+entry interface; WASI is one set of such interfaces.
 
 ## A two-component program
 

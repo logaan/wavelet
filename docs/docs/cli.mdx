@@ -111,7 +111,7 @@ world shout {
 
 ## `repl`
 
-An interactive read-eval-print loop. Enter forms; multi-line input continues until a form is complete; `Ctrl-D` exits. Because values print as WAVE and code *is* WAVE, the REPL's output is always valid input.
+An interactive read-eval-print loop. Enter forms; multi-line input continues until a form is complete; `Ctrl-D` exits. Expressions compile to components and execute locally. Results use Wavelet's WAVE-style printer; see the [serialization limits](./development#wave-output-compliance) for values without a round-trippable text representation.
 
 On a terminal the REPL supports arrow-key line editing and a persistent input history (stored under `$XDG_STATE_HOME/wavelet/history`, or `~/.local/state/wavelet/history`); `Ctrl-C` abandons the line you are typing and `Ctrl-D` exits. Piped input (a here-doc or a pipeline) is read plainly, unchanged.
 
@@ -124,19 +124,19 @@ wavelet repl — enter forms, Ctrl-D to exit
 [1, 4, 9]
 ```
 
-:::tip[This is what the playground runs]
-The [in-browser playgrounds](./intro.mdx#try-it) throughout these docs are this same evaluator, compiled to WebAssembly. Anything that works in a playground works in `repl` and `run`.
+:::note[Reference semantics]
+The [in-browser playgrounds](./intro.mdx#try-it) use the reference interpreter. The REPL uses compiled components, tested against that interpreter. Compilation errors and runtime traps are reported directly; there is no interpreter fallback. Repeated expressions reuse a bounded cache until a definition changes; new expressions still compile with the current definitions.
 :::
 
 ## `run`
 
-Interpret a set of files together — **no code generation**. Resolves `Import`s by package id, honours `Export`/`as:`/`open:`, and calls the entry file's exported `run`. The fastest way to exercise a program's logic.
+Compile a set of files in a temporary project, compose their imports, and execute the entry file's `api.run` export with no arguments. The first file is the entry component. Build errors and runtime traps are returned without interpreter fallback.
 
 ```console
 $ wavelet run main.wlt shout.wlt
 ```
 
-The interpreter evaluates **pure** programs: it has no host interfaces, so a `run` that calls into `wasi:*` only works in a built component on a wasm runtime. Use `run` to validate cross-component logic; build the component for anything that touches the world. The first file listed is the entry component. (Anything after `--` is still accepted and ignored, for compatibility with the build flow.)
+The embedded runner provides no host imports. Use `run` for programs whose dependencies are fully composed; use `build` and a compatible host for programs requiring external interfaces, including WASI. Arguments after `--` are accepted but ignored. For command-line arguments and side effects, use the CLI scaffold's build/run scripts.
 
 ## Running a script directly
 
@@ -159,7 +159,7 @@ The file does not need a `.wlt` extension — an executable script is commonly e
 
 ## `build`
 
-Compile each file to a real `.wasm` component — core wasm (linear-memory value boxes, `return_call` tail calls) wrapped with canonical-ABI lift/lower and componentized via `wasm-tools` — **and compose them into a single `out/app.wasm`**. Each cross-component import is wired to the sibling that exports it via a generated `out/app.wac` run through `wac`; host imports (`wasi:*`) are left unsatisfied for the runtime. Output goes to `out/` by default, or `-o <dir>`.
+Compile each file to a real `.wasm` component — core wasm (linear-memory value boxes, `return_call` tail calls) wrapped with canonical-ABI lift/lower and componentized via `wasm-tools` — **and compose them into a single `out/app.wasm`**. Each cross-component import is wired to the sibling that exports it via a generated `out/app.wac` run through `wac`; imports not provided by sibling components are left for the runtime or a later composition step. Output goes to `out/` by default, or `-o <dir>`.
 
 ```console
 $ wavelet build src/*.wlt -o out

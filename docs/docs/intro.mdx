@@ -17,7 +17,7 @@ The consequence that ties these together: **there is no FFI.** Wavelet has no na
 
 ## Try it
 
-The examples in these docs are live. The Wavelet interpreter has been compiled to WebAssembly and runs in your browser — the very same tree-walking evaluator that backs `wavelet run`. Edit the code and press **Run** (or `Cmd`/`Ctrl`+`Enter`).
+The examples in these docs are live. The Wavelet interpreter has been compiled to WebAssembly and runs in your browser — the reference evaluator used to validate the compiled backend. `wavelet run` and the REPL execute compiled components. Edit the code and press **Run** (or `Cmd`/`Ctrl`+`Enter`).
 
 <Playground id="hello-shout" autoRun />
 
@@ -30,7 +30,7 @@ Pattern matching over a `result`:
 <Playground id="match-result-inc" />
 
 :::note[Browser interpreter scope]
-The in-browser playground runs a single component's worth of code with the standard library in scope. File- and component-level forms — `Package`, `Import`, `Export`, `DefType` — only make sense across files and are shown as static snippets. Everything else is editable and runnable.
+The in-browser playground runs a single component's worth of code with the standard library in scope. Module linking forms such as `Package`, `Import`, and `Export` are shown as static snippets. Runnable examples can define local types and resources, but cannot call external host interfaces.
 :::
 
 ## A taste of components

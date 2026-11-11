@@ -57,15 +57,15 @@ Import {pkg: "wasi:keyvalue/store@0.2.0" as: kv}     // explicit alias
 Import {pkg: "demo:text/api" open: true}             // splat names in unqualified
 ```
 
-Imported names are used qualified: `kv/open`, `kv/get`. With `open: true`, the names are also bound unqualified.
+Imported names are ordinary prefixed bindings: `kv-open` and `kv-get`. Slash spelling (`kv/open`, `kv/get`) is equivalent. With `open: true`, the names are also bound without the prefix.
 
-When you run a set of files together with [`wavelet run`](./cli#run), imports are resolved **by package id** against the other files on the command line — an interpreter stand-in for the composer:
+When you run a set of files together with [`wavelet run`](./cli#run), imports are resolved **by package id** against the other files on the command line and compiled components are composed before execution:
 
 ```console
 $ wavelet run main.wlt shout.wlt
 ```
 
-`main.wlt` imports `demo:shout/api`; because `shout.wlt` declares `Package "demo:shout@…"`, the runner wires them together and calls `main`'s exported `run`. The interpreter evaluates **pure** logic only — calls into host interfaces (`wasi:*`) run only in a built component on a wasm runtime — so `run` is for exercising your cross-component logic, while output and side effects happen under `wavelet build` + a runtime.
+`main.wlt` imports `demo:shout/api`; because `shout.wlt` declares `Package "demo:shout@…"`, the runner wires them together and calls `main`'s exported `api.run`. The embedded runner provides no host imports. Use `wavelet build` and a compatible runtime when the composed artifact requires external interfaces. WASI interfaces follow the same WIT import/export rules as other packages.
 
 ## Exports
 
@@ -130,7 +130,7 @@ The compiler vendors **no** WASI WIT of its own. Any host interface a component 
 
 ## Composition
 
-[`wavelet build`](./cli#build) turns each file into a component **and composes them into one artifact**, `out/app.wasm`, wiring every cross-component import to the sibling that exports it via a generated `out/app.wac` run through [**`wac`**](https://github.com/bytecodealliance/wac). Host imports (`wasi:*`) are left unsatisfied for the runtime to provide.
+[`wavelet build`](./cli#build) turns each file into a component **and composes them into one artifact**, `out/app.wasm`, wiring every cross-component import to the sibling that exports it via a generated `out/app.wac` run through [**`wac`**](https://github.com/bytecodealliance/wac). Imports not supplied by sibling components remain in the artifact for a runtime or a later composition step to provide. Their namespace does not determine how they are linked.
 
 ```console
 $ wavelet build src/*.wlt -o out
