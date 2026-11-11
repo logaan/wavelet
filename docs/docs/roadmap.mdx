@@ -26,7 +26,7 @@ These are implemented and exercised — most of them power the [live playgrounds
 | **WIT world synthesis** ([`wavelet wit`](./cli#wit)) | ✅ |
 | **wasm backend** — scalars (`f32` included), lists, records, variants, tuples (patterns *and* the [`tuple0` … `tuple16` constructors](./stdlib#tuples)), flags, closures, option/result, including across component boundaries via the canonical ABI | ✅ |
 | **[`build`](./cli#build) + [`compose`](./cli#compose)** producing components that run on wasmtime | ✅ |
-| **[`run`](./cli#run)** interpreting multiple files, resolving imports by package id | ✅ |
+| **[`run`](./cli#run)** compiling and composing files, then executing `api.run` | ✅ |
 
 ## Not yet implemented
 
@@ -43,7 +43,7 @@ Everything below is part of the [design](./philosophy) but **does not work yet**
 
 ### `wavelet add`
 
-- A command to fetch WIT from a registry, pin a version, and feed editor completion is **not implemented**.
+- A command to fetch WIT from a registry, pin a version, and feed editor completion is **not implemented**. This concerns interface definitions only. Automatic fetching of executable macro components is not a goal; projects supply macro artifacts through explicit paths or `wit/macros/`.
 
 ### Macro hygiene
 
@@ -60,7 +60,7 @@ Everything below is part of the [design](./philosophy) but **does not work yet**
 
 ## A note on the convenience macros
 
-`And`, `Or`, and `TryLet` appear throughout the design as examples. They are **not shipped** — the standard library provides [builtins](./stdlib) but no pre-defined macros beyond the sixteen core forms. Define them yourself with [`DefMacro`](./language/macros), as shown in the docs, or ship them as a [macro component](./language/macros#macros-as-components) and import them.
+`And`, `Or`, and `TryLet` appear throughout the design as examples. They are **not shipped** — the standard library provides [builtins](./stdlib) and the `If` and `Do` convenience macros. Define them yourself with [`DefMacro`](./language/macros), as shown in the docs, or ship them as a [macro component](./language/macros#macros-as-components) and import them.
 
 ## Self-hosting
 

@@ -236,6 +236,6 @@ A `cell` is the standard library's mutable reference — the one place mutation 
 | `cell-new` | `cell-new(v)` | a new cell holding `v` |
 | `cell-get` | `cell-get(c)` | read the current value |
 | `cell-set` | `cell-set(c v)` | overwrite the value (returns unit) |
-| `drop` | `drop(h)` | release a resource handle |
+| `drop` | `drop(value)` | discard a value and return unit; does not invoke a resource destructor |
 
 <Playground id="std-cells" />

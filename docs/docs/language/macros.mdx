@@ -112,6 +112,12 @@ Import {pkg: "acme:html/dsl" macros: true from: "vendor/dsl.wasm"}
 Import {pkg: "acme:html/dsl" macros: true}    // resolves wit/macros/acme-html.wasm
 ```
 
+Macro artifacts are supplied explicitly by the project. Automatic registry
+fetching of executable macro components is not a goal; `wkg` resolution of WIT
+interface definitions is a separate concern. Build or obtain the component
+through your chosen workflow, then use `from:` or the conventional local path.
+
+
 ### The `wavelet:meta/macros` interface
 
 A macro library is any component that exports `wavelet:meta/macros@0.1.0`:
@@ -150,7 +156,7 @@ Drop `out/acme-html.wasm` at `wit/macros/acme-html.wasm` (or point `from:` at it
 
 ### Qualifying and aliasing
 
-Imported macros are available **bare** (`Element`) and **qualified** (`dsl/Element`, using the import's alias). When a bare TitleCase name is provided by two imports — or by an import *and* a local `DefMacro` — using it bare is an error that tells you to qualify or alias; the qualified spelling always resolves:
+Imported macros are available **bare** (`Element`) and **prefixed** (`dsl/Element` or `dsl-Element`, using the import's alias). Both prefixed spellings become the ordinary symbol `dsl-element-MACRO`. When a bare TitleCase name is provided by two imports — or by an import *and* a local `DefMacro` — using it bare is an error that tells you to qualify or alias; the qualified spelling always resolves:
 
 ```wavelet
 Import {pkg: "acme:html/dsl" as: dsl macros: true}
@@ -165,3 +171,5 @@ The ambiguity is only reported when the colliding bare name is actually **used**
 :::note[Browser playground]
 The live `<Playground>` here runs the wasm-compiled interpreter, which has **no component runtime** — it can't instantiate a foreign macro library. The examples on this page are therefore shown as static code; foreign-macro expansion is exercised by the native build (`wavelet build`) and the test suite. Local `DefMacro`s, above, run live.
 :::
+
+The macro `node` wire variant uses `sym` for every name. Rebuild macro-library components produced before slash normalization; the former `qsym` variant has been removed.

@@ -92,9 +92,21 @@ Export {iface: "wasi:cli/run" name: run result: result}
 
 The interface's WIT comes from `wit/deps/` (fetched by `wkg`, see [below](#project-layout-and-external-wit)), so the compiler treats `wasi:cli/run` exactly as it would any third-party interface.
 
+The same mechanism applies to a resource-only external interface: declare the
+matching `DefResource` and use `Export {iface: "acme:counter/api@1.0.0" name: counter}`.
+Its constructor, methods, statics and resource identity are exported under that
+interface's WIT contract.
+
+Wavelet currently implements synchronous WIT interfaces with primitive and
+compound values and resources. Async functions, futures, streams, error contexts,
+map types and fixed-size lists are unsupported. Canonical memory paths also
+reject variants/enums above 256 cases and flags above 32 members. Namespace-neutral
+resolution does not imply support for every Component Model proposal or host.
+
+
 ## Resources
 
-Resources come along for free in the design, because WIT canonicalizes methods as functions whose first parameter is the handle: `kv/open({name: "default"})` returns a handle, and `kv/get(bucket "greeting")` calls a method on it. Owned handles are dropped when their binding scope ends; `drop(h)` forces it.
+Resources come along for free in the design, because WIT canonicalizes methods as functions whose first parameter is the handle: `kv/open({name: "default"})` returns a handle, and `kv/get(bucket "greeting")` calls a method on it. Use the imported resource-specific destructor binding, such as `streams-drop-output-stream(handle)`, to release an imported owned handle. The generic `drop(value)` only discards a value; it does not invoke a resource destructor.
 
 That is the *consumer* side — calling an imported resource. To declare a resource of your own, use [`DefResource`](./language/type-system#user-declared-resources): a `DefResource counter { … }` form maps one-to-one onto a WIT `resource` block, with a constructor (`New:`), an optional destructor (`Drop:`), instance methods, and statics. Exporting it is like exporting anything else — a bare `Export counter` publishes the whole resource block into `api`, and the record form (`Export {iface: "counters" name: counter}`) groups it into a named interface:
 

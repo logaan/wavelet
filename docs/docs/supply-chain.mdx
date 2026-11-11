@@ -64,6 +64,11 @@ You can still write a `Re` macro that compiles a regex to a DFA at build time, o
 Macro **components** — compile-time instantiation, the `macros: true` flag, and routing expansion through a foreign component — are implemented (see [Macros as components](./language/macros#macros-as-components)). One caveat: today the macro library runs inside the wasm sandbox but is **trusted with whatever the build runtime grants it**; the per-library *capability wiring* shown above (handing a macro a filesystem interface only when you choose to) is the next refinement. The isolation boundary is real — a macro can't reach beyond the component — but fine-grained grants are still coarse.
 :::
 
+Macro artifacts are project-supplied files, selected with `from:` or placed in
+`wit/macros/`. The compiler does not automatically fetch executable macros from
+a registry, and adding that behavior is not a project goal. Fetching WIT
+interface definitions with `wkg` does not fetch or run macro implementations.
+
 ## Other surface reductions
 
 A few of Wavelet's other commitments quietly help:
