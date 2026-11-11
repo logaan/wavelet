@@ -115,23 +115,7 @@ classify scalars as cased, case-ignorable, or boundaries. This keeps compiled
 `upper` and `lower` aligned with the interpreter's Rust Unicode version without
 external Unicode downloads or locale-dependent behavior.
 
-Cargo stores the generated `unicode-case.bin` under `OUT_DIR`; it is embedded in
-the native compiler and compiler component, then copied into each emitted core
-module's static data. The format is little-endian: five 32-bit header fields
-(uppercase row count, lowercase row count, context row count, final-sigma
-mapping descriptor, maximum UTF-8 expansion factor), followed by the three
-sorted tables and a UTF-8 mapping blob. Each table row contains an inclusive
-scalar range and a value. Mapping values pack a blob offset above four length
-bits; context values are 1 for cased and 2 for case-ignorable, with missing
-entries representing boundaries. A zero mapping denotes the original bytes.
-
-The emitted helpers decode UTF-8, binary-search these tables, and copy mapped
-bytes, including multi-character expansions. Lowercasing retains preceding
-context and scans forward through ignorable scalars only when a sigma needs it;
-each such run is visited at most once by lookahead, so long combining sequences
-do not cause quadratic scans. All helper slots are reserved centrally for
-ordinary, macro, and resource components. No runtime interpreter or Unicode
-service is imported.
+Cargo stores the generated tables under `OUT_DIR` and embeds them in the native compiler and compiler component. Emitted programs use those tables for Unicode mappings, including multi-character expansions and contextual lowercase sigma, without a runtime interpreter or external Unicode service.
 
 `cargo test --test backend_unicode_case` compares dynamic compiled calls with
 Rust for every Unicode scalar and sigma contexts on either side of every scalar,

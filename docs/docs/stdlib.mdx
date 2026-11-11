@@ -84,9 +84,9 @@ A float operand promotes the result to a float:
 
 | Function | Shape | Result |
 |---|---|---|
-| `len` | `len(seq)` | list length or string length in UTF-8 bytes |
+| `len` | `len(seq)` | number of list or tuple elements, or Unicode scalars in a string |
 | `empty` | `empty(seq)` | is it empty? |
-| `get` | `get(seq i)` | list element at index `i` |
+| `get` | `get(seq i)` | list or tuple element at index `i` |
 | `put` | `put(list i v)` | list with index `i` replaced by `v` |
 | `push` | `push(list v)` | list with `v` appended |
 | `concat` | `concat(a b)` | two lists joined |
@@ -99,13 +99,15 @@ A float operand promotes the result to a float:
 | `fold` | `fold(f init list)` | left fold; callback parameters receive accumulator and element |
 | `zip` | `zip(a b)` | list of `(a-elem, b-elem)` tuples |
 
+A string's length counts Unicode scalar values, not encoded bytes or visual characters. Combining marks count separately.
+
 <Playground id="std-seq-basics" />
 
 `get`, `put`, `push`, `concat`:
 
 <Playground id="std-seq-mutate" />
 
-`map`, `filter`, and `fold` take statically resolved callbacks. Use an explicit callback such as `Fn {acc n} add(acc n)` when folding with a built-in operation. `zip` pairs elements from two lists:
+`map`, `filter`, and `fold` take statically resolved callbacks. You can pass a function, a compatible built-in such as `add` in `fold(add 0 [1 2 3])`, or an explicit `Fn`. Normal lexical bindings determine which function a name refers to. `zip` pairs elements from two lists:
 
 <Playground id="std-map" />
 
@@ -116,7 +118,7 @@ A float operand promotes the result to a float:
 <Playground id="std-zip" />
 
 :::note[`get` is for sequences]
-Use `get` for lists. Destructure tuples and records with [pattern matching](./language/pattern-matching).
+`get` indexes from zero. A tuple containing different element types requires an integer literal index, such as `get(tuple2(1 "a") 1)`. A runtime index works when the tuple elements share a common type. Destructure records with [pattern matching](./language/pattern-matching).
 :::
 
 ## Tuples
@@ -133,8 +135,8 @@ Each constructor takes exactly its stated number of arguments. Its result type f
 
 | Function | Shape | Result |
 |---|---|---|
-| `str-cat` | `str-cat(a b …)` | concatenate string arguments; use `join` for a list |
-| `upper` `lower` | `upper(s)` | Unicode case conversion, including expansions and contextual lowercase sigma |
+| `str-cat` | `str-cat(a b …)` | concatenate strings and characters, passed as arguments or as one list or tuple |
+| `upper` `lower` | `upper(s)` | Unicode uppercase or lowercase conversion |
 | `split` | `split(s sep)` | split on a separator → list of strings |
 | `join` | `join(parts sep)` | join a list of strings with a separator |
 | `contains` | `contains(s sub)` | does `s` contain `sub`? |
@@ -143,7 +145,9 @@ Each constructor takes exactly its stated number of arguments. Its result type f
 
 <Playground id="std-strings" />
 
-Pass strings to `str-cat`. Convert other data with [`to-string`](#conversion) when you want its printed representation:
+Case conversion follows Unicode rules without a locale setting. A character can expand into several characters, as in `upper("Straße")` producing `"STRASSE"`. Lowercasing handles context-sensitive Greek sigma.
+
+`str-cat` accepts strings and characters. A single list must contain one of those element types; a tuple can mix them. Convert other data with [`to-string`](#conversion) when you want its printed representation:
 
 <Playground id="std-strcat-tostring" />
 

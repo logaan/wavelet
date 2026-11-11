@@ -28,7 +28,7 @@ The runnable documentation examples are checked against the reference evaluator 
 - **Inference:** annotations are required when expression and call-site constraints do not determine a type. Inference is not a promise that every definition can omit its signature.
 - **Resources:** local free functions and callbacks must borrow existing handles. Persisted resource state supports plain data or one outer cell containing plain data.
 - **Macros:** expansion is unhygienic, and binding keys must be literal identifiers. Executable macro artifacts are supplied by the project; automatic registry fetching is not a goal.
-- **Derivation:** `Derive` parses but emits placeholder operation bodies; write those operations explicitly.
+- **Derivation:** `Derive` is not implemented and is rejected during compilation. Write those operations explicitly.
 - **Templates:** user-defined templates are local to the source file that instantiates them.
 - **WIT:** async functions, futures, streams, maps, fixed-size lists, and error contexts are unsupported. Canonical memory paths reject variants or enums above 256 cases and flags above 32 members.
 - **Package resolution:** supplying multiple versions of the same package is rejected. Resolve the dependency graph to one version before compiling.

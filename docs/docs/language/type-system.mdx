@@ -75,7 +75,7 @@ A function cannot cross a component boundary as a WIT value. To expose callable 
 
 ## Derive
 
-`Derive` syntax is recognized, but its generated equality, ordering, display, and hash bodies are placeholders. Do not rely on it for data operations. Write the required functions explicitly; `eq` already compares plain data structurally.
+`Derive` is not implemented and is rejected during compilation. Write equality, ordering, hashing, and display functions explicitly when needed; the built-in `eq` already compares plain data structurally.
 
 ## Functors
 

@@ -26,7 +26,6 @@ These forms define the structure of a Wavelet program. They use [TitleCase synta
 | `DefType` | name, type form | Declare a data type. |
 | `DefResource` | name, member record | Declare a resource. |
 | `Static` | function | Mark a static resource member. |
-| `Derive` | deriver flags, type | Recognized derivation syntax; operation bodies are placeholders. |
 | `DefFunctor` | package string, parameters, body | Declare a file-local template. |
 | `Instantiate` | record | Specialize a functor for concrete types. |
 
@@ -166,7 +165,7 @@ Variant and enum declarations bind their case constructors in the value namespac
 
 ### `Derive`
 
-`Derive` syntax is recognized, but the generated operation bodies are placeholders. Write the operations explicitly. See [Derive](./type-system#derive).
+`Derive` is not implemented. The compiler rejects it with a diagnostic; write the operations explicitly. See [Derive](./type-system#derive).
 
 ### `DefFunctor`
 
