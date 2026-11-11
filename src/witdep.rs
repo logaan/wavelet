@@ -15,15 +15,24 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
     let mut groups: Vec<UnresolvedPackageGroup> = Vec::new();
     let entries =
         std::fs::read_dir(deps_dir).map_err(|e| format!("{}: {e}", deps_dir.display()))?;
+    let mut entries = entries
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("{}: {e}", deps_dir.display()))?;
+    entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
-        let entry = entry.map_err(|e| format!("{}: {e}", deps_dir.display()))?;
         let path = entry.path();
         let group = if path.is_dir() {
             UnresolvedPackageGroup::parse_dir(&path)
                 .map_err(|e| format!("{}: {e:#}", path.display()))?
         } else {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if !matches!(ext, "wit" | "wasm" | "wat") {
+            if matches!(ext, "wasm" | "wat") {
+                resolve
+                    .push_file(&path)
+                    .map_err(|e| format!("{}: {e:#}", path.display()))?;
+                continue;
+            }
+            if ext != "wit" {
                 continue;
             }
             let contents =
@@ -33,14 +42,12 @@ pub fn resolve_dep(deps_dir: &Path, package: &str) -> Result<Option<Dep>, String
         };
         groups.push(group);
     }
-    if groups.is_empty() {
-        return Ok(None);
+    if !groups.is_empty() {
+        let main = groups.remove(0);
+        resolve
+            .push_groups(main, groups)
+            .map_err(|e| format!("{}: {e:#}", deps_dir.display()))?;
     }
-
-    let main = groups.remove(0);
-    resolve
-        .push_groups(main, groups)
-        .map_err(|e| format!("{}: {e:#}", deps_dir.display()))?;
 
     let (base, requested_version) = package
         .split_once('@')

@@ -10,7 +10,7 @@ use crate::wit::ImportInfo;
 #[derive(Default)]
 pub struct MacroResolver {
     root: PathBuf,
-    cache: HashMap<String, MacroComponent>,
+    cache: HashMap<(String, Option<String>, PathBuf), MacroComponent>,
 }
 
 impl MacroResolver {
@@ -26,9 +26,12 @@ impl MacroResolver {
             import.macros,
             "resolve() is only for `macros: true` imports"
         );
-        let key = import.package.clone();
+        let path = self.locate(import)?;
+        let identity = path
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let key = (import.package.clone(), import.version.clone(), identity);
         if !self.cache.contains_key(&key) {
-            let path = self.locate(import)?;
             let comp = MacroComponent::from_file(&path).map_err(|e| {
                 format!(
                     "import `{}` (macros): {} ({})",
@@ -398,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn caches_one_instance_per_package() {
+    fn caches_one_instance_per_package_version_and_artifact() {
         let mut r = MacroResolver::new(".");
         let import = macros_import(Some(fixture_path().to_str().unwrap()));
         r.resolve(&import).expect("first resolve");
@@ -408,6 +411,32 @@ mod tests {
         second.alias = "html".to_string();
         r.resolve(&second).expect("second resolve");
         assert_eq!(r.cache.len(), 1, "same package must not re-instantiate");
+    }
+
+    #[test]
+    fn cache_distinguishes_explicit_artifacts_and_requested_versions() {
+        let directory = tempfile::tempdir().unwrap();
+        let first_path = directory.path().join("first.wasm");
+        let second_path = directory.path().join("second.wasm");
+        std::fs::copy(fixture_path(), &first_path).unwrap();
+        let (arena, roots) =
+            crate::read_file("Package \"test:other@1.0.0\" DefMacro alternate {x} x").unwrap();
+        let bytes = crate::emit::emit_macro_component(&arena, &roots).unwrap();
+        std::fs::write(&second_path, bytes).unwrap();
+        let mut resolver = MacroResolver::new(directory.path());
+        let first = macros_import(Some("first.wasm"));
+        resolver.resolve(&first).unwrap();
+        let second = macros_import(Some("second.wasm"));
+        let manifest = resolver.resolve(&second).unwrap().manifest().unwrap();
+        assert_eq!(manifest, vec![("alternate".to_owned(), 1)]);
+        assert_eq!(resolver.cache.len(), 2);
+        let mut versioned = macros_import(Some("first.wasm"));
+        versioned.version = Some("2.0.0".into());
+        resolver.resolve(&versioned).unwrap();
+        assert_eq!(resolver.cache.len(), 3);
+        let absolute = macros_import(Some(first_path.to_str().unwrap()));
+        resolver.resolve(&absolute).unwrap();
+        assert_eq!(resolver.cache.len(), 3);
     }
 
     #[test]

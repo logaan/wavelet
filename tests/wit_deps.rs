@@ -189,3 +189,47 @@ fn wit_deps_is_sibling_of_src() {
         .join("deps");
     assert_eq!(derived, expected);
 }
+
+#[test]
+fn encoded_wit_dependency_resolves_alone_and_from_text_dependents() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut resolve = wit_parser::Resolve::default();
+    let package = resolve.push_str("encoded.wit", "package test:encoded@1.0.0; interface api { record item { value: u32 } inspect: func(value: item) -> u32; }").unwrap();
+    let bytes = wit_component::encode(&resolve, package).unwrap();
+    std::fs::write(directory.path().join("encoded.wasm"), bytes).unwrap();
+    let encoded = witdep::resolve_dep(directory.path(), "test:encoded@1.0.0")
+        .unwrap()
+        .unwrap();
+    assert_eq!(encoded.funcs[0].name, "inspect");
+    assert_eq!(encoded.types.len(), 1);
+    std::fs::write(directory.path().join("consumer.wit"), "package test:consumer; interface api { use test:encoded/api@1.0.0.{item}; inspect: func(value: item) -> u32; }").unwrap();
+    let consumer = witdep::resolve_dep(directory.path(), "test:consumer")
+        .unwrap()
+        .unwrap();
+    assert_eq!(consumer.funcs[0].name, "inspect");
+    assert_eq!(consumer.types.len(), 1);
+}
+
+#[test]
+fn text_encoded_wit_dependency_resolves() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::write(
+        directory.path().join("encoded.wat"),
+        r#"(component
+        (type (component
+            (type (instance
+                (type (func (result u32)))
+                (export "inspect" (func (type 0)))
+            ))
+            (export "test:encoded/api@1.0.0" (instance (type 0)))
+        ))
+        (export "api" (type 0))
+    )"#,
+    )
+    .unwrap();
+    let dependency = witdep::resolve_dep(directory.path(), "test:encoded@1.0.0")
+        .unwrap()
+        .unwrap();
+    assert_eq!(dependency.funcs[0].name, "inspect");
+    assert_eq!(dependency.funcs[0].result.as_deref(), Some("u32"));
+}

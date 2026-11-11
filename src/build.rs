@@ -6,170 +6,224 @@ use crate::form::{Arena, NodeId};
 use crate::tools;
 use crate::wit::{self, FileInfo, ImportInfo};
 
-struct Unit {
+mod wit_fetch;
+
+struct PreparedUnit {
     path: String,
     arena: Arena,
     roots: Vec<NodeId>,
     info: FileInfo,
 }
 
-pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, String> {
-    let root = project_root(paths).unwrap_or_else(|| PathBuf::from("."));
-    std::fs::create_dir_all(out_dir).map_err(|e| format!("{out_dir}: {e}"))?;
-    let mut units = Vec::new();
-    let mut macro_outputs = Vec::new();
-    for path in paths {
-        let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-        let (arena, roots) = crate::macrodep::read_file_with_macros(&src, &root)
+impl PreparedUnit {
+    fn load(path: &str, root: &Path) -> Result<(Self, bool), String> {
+        let source = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        let (arena, roots) = crate::macrodep::read_file_with_macros(&source, root)
             .map_err(|e| format!("{path}: {e}"))?;
-
-        if crate::macrobuild::is_macro_library(&arena, &roots) {
-            let out = build_macro_library(path, &src, out_dir)?;
-            macro_outputs.push(out);
-            continue;
-        }
-
-        let mut foreign = crate::macrodep::FileExpander::for_file(&root, &arena, &roots);
-        let (arena, roots) = crate::expand::expand_file(
-            arena,
-            &roots,
-            foreign
-                .as_mut()
-                .map(|f| f as &mut dyn crate::expand::ForeignExpander),
-        )
-        .map_err(|e| format!("{path}: {e}"))?;
-
-        let exported = wit::export_names(&arena, &roots);
-        let (arena, roots) = crate::check::resolve_overloads_excluding(arena, &roots, &exported)
+        let is_macro = crate::macrobuild::is_macro_library(&arena, &roots);
+        let (arena, roots) = if is_macro {
+            (arena, roots)
+        } else {
+            let mut foreign = crate::macrodep::FileExpander::for_file(root, &arena, &roots);
+            let (arena, roots) = crate::expand::expand_file(
+                arena,
+                &roots,
+                foreign
+                    .as_mut()
+                    .map(|f| f as &mut dyn crate::expand::ForeignExpander),
+            )
             .map_err(|e| format!("{path}: {e}"))?;
+            let exported = wit::export_names(&arena, &roots);
+            crate::check::resolve_overloads_excluding(arena, &roots, &exported)
+                .map_err(|e| format!("{path}: {e}"))?
+        };
         let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
-        units.push(Unit {
-            path: path.clone(),
-            arena,
-            roots,
-            info,
-        });
+        Ok((
+            Self {
+                path: path.to_owned(),
+                arena,
+                roots,
+                info,
+            },
+            is_macro,
+        ))
     }
 
-    let index: HashMap<String, usize> = units
-        .iter()
-        .enumerate()
-        .map(|(i, u)| (u.info.package_path.clone(), i))
-        .collect();
+    fn dependency(&self) -> Result<Dep, String> {
+        let (type_defs, aliases) = emit::dep_non_record_types(&self.arena, &self.info);
+        Ok(Dep {
+            package: self.info.package.clone(),
+            funcs: self.info.exports.clone(),
+            package_wit: emit::dep_package_wit(&self.arena, &self.info)?,
+            types: emit::dep_record_types(&self.arena, &self.info),
+            type_defs,
+            aliases,
+            type_ifaces: self
+                .info
+                .types
+                .iter()
+                .map(|(name, _)| (name.clone(), "api".to_owned(), name.clone()))
+                .collect(),
+        })
+    }
 
-    let wit_deps_dir = wit_deps_dir(paths);
-
-    let mut outputs = macro_outputs;
-    for u in &units {
-        let mut deps = HashMap::new();
-        for imp in &u.info.imports {
-            if wit::is_macro_only(imp) {
+    fn compile(&self, dependencies: &HashMap<String, Dep>) -> Result<Vec<u8>, String> {
+        let dependencies = emit::scope_dependency_types(&self.info, dependencies);
+        let mut signatures = crate::check::ImportSigs::new();
+        for import in &self.info.imports {
+            if wit::is_macro_only(import) {
                 continue;
             }
-
-            if let Some(&di) = index.get(&imp.package) {
-                let d = &units[di];
-                validate_import_version(imp, &d.info.package)?;
-                let (type_defs, aliases) = emit::dep_non_record_types(&d.arena, &d.info);
-
-                let type_ifaces = d
-                    .info
-                    .types
-                    .iter()
-                    .map(|(n, _)| (n.clone(), "api".to_string(), n.clone()))
-                    .collect();
-                deps.insert(
-                    imp.package.clone(),
-                    Dep {
-                        package: d.info.package.clone(),
-                        funcs: d.info.exports.clone(),
-                        package_wit: emit::dep_package_wit(&d.arena, &d.info)?,
-                        types: emit::dep_record_types(&d.arena, &d.info),
-                        type_defs,
-                        aliases,
-                        type_ifaces,
-                    },
-                );
-                continue;
+            if let Some(dependency) = dependencies.get(&import.package) {
+                let interface = import.path.split_once('/').map(|(_, i)| i).unwrap_or("api");
+                signatures.extend(wit::import_sigs_for(
+                    &import.alias,
+                    &dependency.funcs,
+                    interface,
+                ));
             }
+        }
+        signatures.extend(wit::functor_import_sigs(&self.info.functors));
+        crate::check::check_program_with_dependencies(
+            &self.arena,
+            &self.roots,
+            &signatures,
+            &dependencies,
+            &self.info.imports,
+        )
+        .map_err(|e| format!("{}: {e}", self.path))?;
+        emit::emit_component(&self.arena, &self.roots, &self.info, &dependencies)
+            .map_err(|e| format!("{}: {e}", self.path))
+    }
 
-            if let Some(dir) = &wit_deps_dir
-                && let Some(dep) = crate::witdep::resolve_dep(dir, &requested_package(imp))?
-            {
-                deps.insert(imp.package.clone(), dep);
-                continue;
-            }
+    fn output_name(&self) -> String {
+        format!("{}.wasm", self.info.package_path.replace(':', "-"))
+    }
+}
+
+pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, String> {
+    if paths.is_empty() {
+        return Err("no input files".into());
+    }
+    let root = project_root(paths).unwrap_or_else(|| PathBuf::from("."));
+    let mut units = Vec::new();
+    let mut macro_units = Vec::new();
+    let mut packages = HashMap::new();
+    let mut artifacts = HashMap::new();
+    for path in paths {
+        let (unit, is_macro) = PreparedUnit::load(path, &root)?;
+        let name = unit.output_name();
+        if Path::new(&name).components().count() != 1 {
             return Err(format!(
-                "{}: import `{}` is not satisfied by any file in the build set or `wit/deps`",
-                u.path, imp.path
+                "{path}: package `{}` produces an unsupported output path",
+                unit.info.package
             ));
         }
 
-        for interface in u.info.exports.iter().map(|sig| sig.iface.as_str()).chain(
-            u.info
-                .resources
-                .iter()
-                .filter_map(|resource| resource.iface.as_deref()),
-        ) {
-            let Some((pkg, iface)) = interface.split_once('/') else {
-                continue;
-            };
-            if !pkg.contains(':') || deps.contains_key(pkg) {
-                continue;
-            }
-            if let Some(dir) = &wit_deps_dir
-                && let Some(dep) = crate::witdep::resolve_dep(
-                    dir,
-                    &match iface.split_once('@') {
-                        Some((_, version)) => format!("{pkg}@{version}"),
-                        None => pkg.to_owned(),
-                    },
-                )?
-            {
-                deps.insert(pkg.to_string(), dep);
-            }
+        if let Some(previous) = packages.insert(unit.info.package_path.clone(), path) {
+            return Err(format!(
+                "duplicate package `{}` in `{previous}` and `{path}`",
+                unit.info.package_path
+            ));
         }
-
-        let deps = emit::scope_dependency_types(&u.info, &deps);
-        let mut import_sigs = crate::check::ImportSigs::new();
-        for imp in &u.info.imports {
-            if wit::is_macro_only(imp) {
-                continue;
-            }
-            if let Some(dep) = deps.get(&imp.package) {
-                let iface = imp.path.split_once('/').map(|(_, i)| i).unwrap_or("api");
-                import_sigs.extend(wit::import_sigs_for(&imp.alias, &dep.funcs, iface));
-            }
+        if let Some(previous) = artifacts.insert(unit.output_name(), path) {
+            return Err(format!(
+                "output filename `{}` collides for `{previous}` and `{path}`",
+                unit.output_name()
+            ));
         }
-        import_sigs.extend(wit::functor_import_sigs(&u.info.functors));
-        crate::check::check_program_with_dependencies(
-            &u.arena,
-            &u.roots,
-            &import_sigs,
-            &deps,
-            &u.info.imports,
-        )
-        .map_err(|e| format!("{}: {e}", u.path))?;
-        let bytes = emit::emit_component(&u.arena, &u.roots, &u.info, &deps)
-            .map_err(|e| format!("{}: {e}", u.path))?;
-        let out = format!("{out_dir}/{}.wasm", u.info.package_path.replace(':', "-"));
-        std::fs::write(&out, &bytes).map_err(|e| format!("{out}: {e}"))?;
+        if is_macro {
+            macro_units.push(unit);
+        } else {
+            units.push(unit);
+        }
+    }
+    let index: HashMap<String, usize> = units
+        .iter()
+        .enumerate()
+        .map(|(i, unit)| (unit.info.package_path.clone(), i))
+        .collect();
+    let deps_dir = root.join("wit/deps");
+    let mut artifacts = Vec::new();
+    for unit in &macro_units {
+        let bytes = crate::macrobuild::build_macro_component(&unit.arena, &unit.roots)
+            .map_err(|e| format!("{}: {e}", unit.path))?;
+        artifacts.push((unit.output_name(), bytes));
+    }
+    for unit in &units {
+        let dependencies = resolve_dependencies(unit, &units, &index, &deps_dir)?;
+        artifacts.push((unit.output_name(), unit.compile(&dependencies)?));
+    }
+    std::fs::create_dir_all(out_dir).map_err(|e| format!("{out_dir}: {e}"))?;
+    let mut outputs = Vec::new();
+    for (name, bytes) in artifacts {
+        let out = format!("{out_dir}/{name}");
+        std::fs::write(&out, bytes).map_err(|e| format!("{out}: {e}"))?;
         outputs.push(out);
     }
-
-    if let Some(root) = project_root(paths)
-        && let Err(e) = populate_wit(&root, &units)
-    {
+    if let Err(e) = populate_wit(&root, &units) {
         eprintln!("warning: could not populate wit/ via wkg: {e}");
     }
-
     match compose_units(&units, &index, out_dir) {
         Ok(Some(app)) => outputs.push(app),
         Ok(None) => {}
         Err(e) => eprintln!("warning: could not compose components via wac: {e}"),
     }
-
     Ok(outputs)
+}
+
+fn resolve_dependencies(
+    unit: &PreparedUnit,
+    units: &[PreparedUnit],
+    index: &HashMap<String, usize>,
+    directory: &Path,
+) -> Result<HashMap<String, Dep>, String> {
+    let mut dependencies = HashMap::new();
+    for import in &unit.info.imports {
+        if wit::is_macro_only(import) {
+            continue;
+        }
+        let dependency = if let Some(&position) = index.get(&import.package) {
+            let dependency = &units[position];
+            validate_import_version(import, &dependency.info.package)?;
+            dependency.dependency()?
+        } else {
+            crate::witdep::resolve_dep(directory, &requested_package(import))?.ok_or_else(|| {
+                format!(
+                    "{}: import `{}` is not satisfied by any file in the build set or `wit/deps`",
+                    unit.path, import.path
+                )
+            })?
+        };
+        dependencies.insert(import.package.clone(), dependency);
+    }
+    for interface in unit
+        .info
+        .exports
+        .iter()
+        .map(|sig| sig.iface.as_str())
+        .chain(
+            unit.info
+                .resources
+                .iter()
+                .filter_map(|resource| resource.iface.as_deref()),
+        )
+    {
+        let Some((package, interface)) = interface.split_once('/') else {
+            continue;
+        };
+        if !package.contains(':') || dependencies.contains_key(package) {
+            continue;
+        }
+        let requested = match interface.split_once('@') {
+            Some((_, version)) => format!("{package}@{version}"),
+            None => package.to_owned(),
+        };
+        if let Some(dependency) = crate::witdep::resolve_dep(directory, &requested)? {
+            dependencies.insert(package.to_owned(), dependency);
+        }
+    }
+    Ok(dependencies)
 }
 
 fn requested_package(imp: &ImportInfo) -> String {
@@ -190,20 +244,8 @@ fn validate_import_version(imp: &ImportInfo, resolved: &str) -> Result<(), Strin
     Ok(())
 }
 
-fn build_macro_library(path: &str, src: &str, out_dir: &str) -> Result<String, String> {
-    let (arena, roots) = crate::read_file(src).map_err(|e| format!("{path}: {e}"))?;
-    let info = wit::collect(&arena, &roots).map_err(|e| format!("{path}: {e}"))?;
-
-    let bytes = crate::macrobuild::build_macro_component(&arena, &roots)
-        .map_err(|e| format!("{path}: {e}"))?;
-
-    let out = format!("{out_dir}/{}.wasm", info.package_path.replace(':', "-"));
-    std::fs::write(&out, &bytes).map_err(|e| format!("{out}: {e}"))?;
-    Ok(out)
-}
-
 fn compose_units(
-    units: &[Unit],
+    units: &[PreparedUnit],
     index: &HashMap<String, usize>,
     out_dir: &str,
 ) -> Result<Option<String>, String> {
@@ -327,68 +369,33 @@ fn versioned_iface(iface_path: &str, package_versioned: &str) -> String {
 }
 
 pub fn populate_project_wit(root: &Path, src_paths: &[PathBuf]) -> Result<(), String> {
-    let mut units = Vec::new();
-    for path in src_paths {
-        let path_str = path.display().to_string();
-        let src = std::fs::read_to_string(path).map_err(|e| format!("{path_str}: {e}"))?;
-        let (arena, roots) = crate::macrodep::read_file_with_macros(&src, root)
-            .map_err(|e| format!("{path_str}: {e}"))?;
-        let mut foreign = crate::macrodep::FileExpander::for_file(root, &arena, &roots);
-        let (arena, roots) = crate::expand::expand_file(
-            arena,
-            &roots,
-            foreign
-                .as_mut()
-                .map(|f| f as &mut dyn crate::expand::ForeignExpander),
-        )
-        .map_err(|e| format!("{path_str}: {e}"))?;
-        let info = wit::collect(&arena, &roots).map_err(|e| format!("{path_str}: {e}"))?;
-        units.push(Unit {
-            path: path_str,
-            arena,
-            roots,
-            info,
-        });
-    }
+    let units = src_paths
+        .iter()
+        .map(|path| {
+            PreparedUnit::load(
+                crate::staging::utf8_path(path).map_err(|e| e.to_string())?,
+                root,
+            )
+            .map(|(unit, _)| unit)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     populate_wit(root, &units)
 }
 
-fn populate_wit(root: &Path, units: &[Unit]) -> Result<(), String> {
+fn populate_wit(root: &Path, units: &[PreparedUnit]) -> Result<(), String> {
     let local_packages: Vec<_> = units.iter().map(|u| u.info.package_path.clone()).collect();
-    let host_units: Vec<&Unit> = units
+    let worlds = units
         .iter()
-        .filter(|u| wit::has_external_deps(&u.info, &local_packages))
-        .collect();
-    if host_units.is_empty() {
-        return Ok(());
-    }
-
-    let wit_dir = root.join("wit");
-    std::fs::create_dir_all(&wit_dir).map_err(|e| format!("{}: {e}", wit_dir.display()))?;
-
-    tools::version(tools::Tool::Wkg)?;
-
-    for u in &host_units {
-        let world = wit::synthesize_fetch_world_excluding(&u.arena, &u.roots, &local_packages)
-            .map_err(|e| format!("{}: {e}", u.path))?;
-
-        clear_root_wit(&wit_dir)?;
-        let file = wit_dir.join(format!("{}.wit", u.info.world));
-        std::fs::write(&file, world).map_err(|e| format!("{}: {e}", file.display()))?;
-        tools::wkg_wit_fetch(&wit_dir)?;
-    }
-    Ok(())
-}
-
-fn clear_root_wit(wit_dir: &Path) -> Result<(), String> {
-    for entry in std::fs::read_dir(wit_dir).map_err(|e| format!("{}: {e}", wit_dir.display()))? {
-        let entry = entry.map_err(|e| format!("{}: {e}", wit_dir.display()))?;
-        let path = entry.path();
-        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("wit") {
-            std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        }
-    }
-    Ok(())
+        .filter(|unit| wit::has_external_deps(&unit.info, &local_packages))
+        .map(|unit| {
+            wit::synthesize_fetch_world_excluding(&unit.arena, &unit.roots, &local_packages)
+                .map(|world| (format!("{}.wit", unit.info.world), world))
+                .map_err(|e| format!("{}: {e}", unit.path))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    wit_fetch::fetch(root, &worlds, |directory| {
+        tools::wkg_wit_fetch(directory).map(|_| ())
+    })
 }
 
 fn project_root(paths: &[String]) -> Option<PathBuf> {
@@ -403,13 +410,12 @@ fn project_root(paths: &[String]) -> Option<PathBuf> {
     })
 }
 
-fn wit_deps_dir(paths: &[String]) -> Option<std::path::PathBuf> {
-    Some(project_root(paths)?.join("wit").join("deps"))
-}
-
 pub fn compose_files(paths: &[String], out: &str) -> Result<(), String> {
     use wac_graph::{CompositionGraph, EncodeOptions, types::Package};
 
+    if paths.is_empty() {
+        return Err("no input files".into());
+    }
     let mut graph = CompositionGraph::new();
     let mut ids = Vec::new();
     for path in paths {

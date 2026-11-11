@@ -12,7 +12,7 @@ pub struct Module {
     pub roots: Vec<NodeId>,
     pub package: Option<String>,
     pub env: Env,
-    /// (iface, name) — `api` unless the Export record form groups otherwise
+
     pub exports: Vec<(String, String)>,
     pub state: ModState,
 }
@@ -24,16 +24,14 @@ pub enum ModState {
     Done,
 }
 
-/// Load and evaluate a set of `.wlt` files; the first is the entry component.
-/// Imports are resolved by package id against the other files — an
-/// interpreter stand-in for `wavelet compose` (§6.5).
 pub fn run_files(paths: &[String]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Err("no input files".into());
+    }
     let interp = Interp::new();
     let std_env = Env::root();
     builtins::install(&std_env);
 
-    // Foreign macro arities (`Import {… macros: true}`) resolve against the
-    // project root — the parent of the `src/` the entry file lives in.
     let root = project_root(paths);
     let mut modules = Vec::new();
     let mut by_package = HashMap::new();
@@ -41,15 +39,7 @@ pub fn run_files(paths: &[String]) -> Result<(), String> {
         let src = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
         let (arena, roots) = crate::macrodep::read_file_with_macros(&src, &root)
             .map_err(|e| format!("{path}: {e}"))?;
-        // Run the tree→tree expander before checking/evaluation, exactly as
-        // `wavelet wit`/`wavelet build` do. Lazy macro expansion inside the
-        // interpreter handles *user* (`DefMacro`) and *foreign* macro calls, but
-        // the stdlib `Derive` macro is a tree→tree pass that `expand_file` owns:
-        // it splices a concrete monomorphic def (and export) per derived class,
-        // and is never reached by the interpreter's call dispatch (there is no
-        // `derive-MACRO` value to look up). Running it here keeps `run` in step
-        // with `wit`/`build` and lets functor programs — which lean on `Derive`d
-        // ops over their element type — evaluate.
+
         let mut foreign = crate::macrodep::FileExpander::for_file(&root, &arena, &roots);
         let (arena, roots) = crate::expand::expand_file(
             arena,
@@ -59,12 +49,7 @@ pub fn run_files(paths: &[String]) -> Result<(), String> {
                 .map(|f| f as &mut dyn crate::expand::ForeignExpander),
         )
         .map_err(|e| format!("{path}: {e}"))?;
-        // Static type checking + overload resolution before evaluation, exactly
-        // as the playground (`eval_snippet`) does: an ill-typed module is a
-        // compile error even when the bad code is never reached at runtime, and
-        // overloaded calls are rewritten to uniquely-named defs so the
-        // interpreter dispatches to the correct member rather than relying on
-        // last-wins shadowing. With no overload set the rewrite is an identity.
+
         let (arena, roots) =
             crate::check::resolve_overloads(arena, &roots).map_err(|e| format!("{path}: {e}"))?;
         let arena = Rc::new(arena);
@@ -89,8 +74,6 @@ pub fn run_files(paths: &[String]) -> Result<(), String> {
     match entry.env.lookup("run") {
         Some(run @ Value::Closure(_)) => {
             interp
-                // The empty tuple `()` is the "no arguments" payload (2.1
-                // proposal 1); an empty list is a value in its own right.
                 .apply(&run, Value::Tup(vec![]))
                 .map_err(|e| format!("{}: {e}", entry.path))?;
         }
@@ -130,8 +113,6 @@ fn eval_module(
     let path = modules[idx].path.clone();
 
     for root in roots {
-        // Top-level forms are tuples `Tup[head, …args]`. The arity-1 special
-        // heads (Package/Target/Import/Export) take `items[1]` as their payload.
         let Node::Tup(items) = arena.node(root) else {
             interp
                 .eval(&arena, root, &modules[idx].env)
@@ -147,26 +128,19 @@ fn eval_module(
         };
         let payload = items.get(1).copied();
         match (head_name, payload) {
-            // `DefType` is NOT skipped: evaluating it binds the declaration's
-            // variant case constructors into the module env (4.1).
             ("package-MACRO" | "target-MACRO", _) => {}
             ("export-MACRO", Some(payload)) => {
                 let entry =
                     export_entry(&arena, payload).ok_or(format!("{path}: malformed Export"))?;
                 modules[idx].exports.push(entry);
             }
-            // `Instantiate {pkg: … with: {…} as: alias}` (4.6): a functor
-            // instantiation is not backed by a sibling module — the compiler
-            // knows the template intrinsically. Bind its ops (`alias/new`,
-            // `alias/add`, …) directly and move on.
+
             ("instantiate-MACRO", Some(payload)) => {
                 let functor = builtins::parse_functor_import(&arena, payload)
                     .ok_or(format!("{path}: malformed Instantiate (unknown functor)"))?;
                 builtins::bind_functor(&modules[idx].env, &functor);
             }
             ("import-MACRO", Some(payload)) => {
-                // Functor application moved to `Instantiate` (4.6.1): importing
-                // a functor package is an actionable error.
                 if builtins::parse_functor_import(&arena, payload).is_some() {
                     return Err(format!(
                         "{path}: functor packages are applied with \
@@ -205,19 +179,17 @@ fn eval_module(
                     ))?;
                     modules[idx]
                         .env
-                        .define(format!("{}/{name}", spec.alias), v.clone());
+                        .define(format!("{}-{name}", spec.alias), v.clone());
                     if spec.open {
                         modules[idx].env.define(name, v);
                     }
                 }
-                // The dep's `DefType` variant cases are part of its type
-                // surface: bind each case constructor under the import alias
-                // (`alias/case`) so dep-defined cases are constructible (4.1).
+
                 for case in deftype_case_names(&modules[dep].arena, &modules[dep].roots) {
                     if let Some(v) = dep_env.lookup(&case) {
                         modules[idx]
                             .env
-                            .define(format!("{}/{case}", spec.alias), v.clone());
+                            .define(format!("{}-{case}", spec.alias), v.clone());
                         if spec.open {
                             modules[idx].env.define(case, v);
                         }
@@ -235,9 +207,6 @@ fn eval_module(
     Ok(())
 }
 
-/// The project root: the parent of the `src/` directory the entry file lives in
-/// (so foreign macro components under `wit/macros/` resolve beside `src/`).
-/// Mirrors `build::project_root`; defaults to `.` when there is no parent.
 fn project_root(paths: &[String]) -> std::path::PathBuf {
     let Some(first) = paths.first() else {
         return std::path::PathBuf::from(".");
@@ -250,7 +219,6 @@ fn project_root(paths: &[String]) -> std::path::PathBuf {
     }
 }
 
-/// Every variant/enum case name declared by a module's `DefType`s (4.1).
 fn deftype_case_names(arena: &Arena, roots: &[NodeId]) -> Vec<String> {
     let mut out = Vec::new();
     for &root in roots {
@@ -294,7 +262,6 @@ fn find_package(arena: &Arena, roots: &[NodeId]) -> Option<String> {
     None
 }
 
-/// `"demo:shout@0.1.0"` -> `"demo:shout"`
 fn strip_version(s: &str) -> String {
     s.split('@').next().unwrap_or(s).to_string()
 }
@@ -325,9 +292,8 @@ fn export_entry(arena: &Arena, payload: NodeId) -> Option<(String, String)> {
 }
 
 struct ImportSpec {
-    /// full interface path as written, e.g. `demo:shout/api`
     path: String,
-    /// package id, e.g. `demo:shout`
+
     package: String,
     alias: String,
     open: bool,
@@ -372,24 +338,6 @@ fn parse_import(arena: &Arena, payload: NodeId) -> Option<ImportSpec> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Compiled `wavelet run` (goal 6.5)
-// ---------------------------------------------------------------------------
-
-/// Run a program on the **compiled** path: build every file through the real
-/// emitter (`build::build_files`), compose the runtime imports into one
-/// self-contained artifact (build does this via `wac` for a multi-file
-/// program), instantiate it in the capability-free `wasmtime` host, and call the
-/// exported `run` entry — the wasm analogue of the interpreter's "look up `run`,
-/// apply it". The result is discarded, exactly as the interpreter path does; a
-/// program's only observable is its exit status and any error text.
-///
-/// Everything is staged into a private temp project so the build's side effects
-/// (synthesised `wit/`, `.wasm` artifacts) never touch the user's tree, and is
-/// removed afterwards. `Err` carries the failing stage; the CLI's [`run`]
-/// wrapper falls back to the interpreter on any such failure (an unbuildable
-/// program, a program with no exported `run`, or a runtime trap on a
-/// decision-gated backend hole).
 pub fn run_files_compiled(paths: &[String]) -> Result<(), String> {
     use std::path::Path;
 
@@ -401,11 +349,13 @@ pub fn run_files_compiled(paths: &[String]) -> Result<(), String> {
     for path in paths {
         project.copy(Path::new(path)).map_err(|e| e.to_string())?;
     }
+    project
+        .copy_dependencies(&project_root(paths))
+        .map_err(|e| e.to_string())?;
     project.build().map_err(|e| e.to_string())?;
     let staged = project.paths();
     let out_dir = project.output();
-    // The entry's package fixes both the runnable artifact's name and the
-    // exported interface `run` lives in.
+
     let entry_src = std::fs::read_to_string(&staged[0]).map_err(|e| format!("read: {e}"))?;
     let (arena, roots) = crate::read_file(&entry_src).map_err(|e| format!("read: {e}"))?;
     let pkg = find_package_full(&arena, &roots)
@@ -419,9 +369,6 @@ pub fn run_files_compiled(paths: &[String]) -> Result<(), String> {
         None => format!("{pkg_path}/api"),
     };
 
-    // A multi-file program with a runtime import is composed into
-    // `app.wasm`; a self-contained one is its own single component named for
-    // its package. Prefer the composed artifact when present.
     let app = out_dir.join("app.wasm");
     let entry_component = out_dir.join(format!("{}.wasm", pkg_path.replace(':', "-")));
     let artifact = if app.exists() {
@@ -437,8 +384,7 @@ pub fn run_files_compiled(paths: &[String]) -> Result<(), String> {
 
     let mut component =
         crate::host::HostComponent::from_file(&artifact).map_err(|e| format!("load: {e}"))?;
-    // Call `run` for its effects/exit status; the returned value is
-    // discarded, mirroring the interpreter path.
+
     component
         .call_instance(&iface, "run", &[])
         .map_err(|e| format!("{entry}: {e}"))?;
@@ -449,8 +395,6 @@ pub fn run(paths: &[String]) -> Result<(), String> {
     run_files_compiled(paths)
 }
 
-/// The entry's full package string including version, e.g. `demo:main@0.1.0`
-/// (unlike [`find_package`], which strips the version).
 fn find_package_full(arena: &Arena, roots: &[NodeId]) -> Option<String> {
     for &root in roots {
         if let Node::Tup(items) = arena.node(root)

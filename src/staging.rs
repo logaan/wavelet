@@ -110,7 +110,7 @@ pub fn utf8_path(path: &Path) -> Result<&str, StageError> {
         .ok_or_else(|| StageError::InvalidPath(path.to_path_buf()))
 }
 
-fn copy_tree(source: &Path, destination: &Path) -> Result<(), StageError> {
+pub(crate) fn copy_tree(source: &Path, destination: &Path) -> Result<(), StageError> {
     if std::fs::symlink_metadata(source)?.file_type().is_symlink() {
         return Err(StageError::InvalidPath(source.to_path_buf()));
     }
