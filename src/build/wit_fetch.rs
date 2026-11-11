@@ -25,11 +25,6 @@ pub(super) fn fetch(
         crate::staging::copy_tree(&dependencies, &root.join("wit/deps"))
             .map_err(|e| e.to_string())?;
     }
-    let lock = workspace.path().join("wkg.lock");
-    if lock.is_file() {
-        std::fs::copy(&lock, root.join("wkg.lock"))
-            .map_err(|e| format!("{}: {e}", lock.display()))?;
-    }
     Ok(())
 }
 
@@ -76,7 +71,7 @@ mod tests {
                 "dependency",
             )
             .unwrap();
-            std::fs::write(directory.parent().unwrap().join("wkg.lock"), "new lock").unwrap();
+            std::fs::write(root.path().join("wkg.lock"), "new lock").unwrap();
             Ok(())
         })
         .unwrap();
@@ -100,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_fetch_does_not_publish_partial_dependencies_or_lock() {
+    fn failed_fetch_does_not_publish_partial_dependencies() {
         let root = tempfile::tempdir().unwrap();
         let wit = root.path().join("wit");
         std::fs::create_dir_all(wit.join("deps")).unwrap();
@@ -112,8 +107,6 @@ mod tests {
             &[("generated.wit".into(), "generated".into())],
             |directory| {
                 std::fs::write(directory.join("deps/partial.wit"), "partial").unwrap();
-                std::fs::write(directory.parent().unwrap().join("wkg.lock"), "partial lock")
-                    .unwrap();
                 Err("registry unavailable".into())
             },
         );
@@ -132,5 +125,52 @@ mod tests {
             std::fs::read(root.path().join("wkg.lock")).unwrap(),
             b"old lock"
         );
+    }
+
+    #[test]
+    fn fetch_preserves_relative_overrides_and_inherited_manifests() {
+        for inherited in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().join("project");
+            let wit = root.join("wit");
+            let local = root.join("local");
+            std::fs::create_dir_all(&wit).unwrap();
+            std::fs::create_dir_all(&local).unwrap();
+            let authored = "package review-only:authored; world authored {}";
+            std::fs::write(wit.join("authored.wit"), authored).unwrap();
+            let dependency =
+                "package review-only:local@1.0.0; interface api { answer: func() -> u32; }";
+            std::fs::write(local.join("package.wit"), dependency).unwrap();
+            let manifest_root = if inherited {
+                directory.path()
+            } else {
+                root.as_path()
+            };
+            let manifest = "[overrides.\"review-only:local\"]\npath = \"local\"\n";
+            std::fs::write(manifest_root.join("wkg.toml"), manifest).unwrap();
+            let worlds = [("generated.wit".into(), "package review-only:consumer; world consumer { import review-only:local/api@1.0.0; }".into())];
+            fetch(&root, &worlds, |staged| {
+                crate::tools::wkg_wit_fetch_from(staged, &root).map(|_| ())
+            })
+            .unwrap();
+            let resolved = crate::witdep::resolve_dep(&wit.join("deps"), "review-only:local@1.0.0")
+                .unwrap()
+                .unwrap();
+            assert_eq!(resolved.funcs[0].name, "answer");
+            assert_eq!(
+                std::fs::read_to_string(wit.join("authored.wit")).unwrap(),
+                authored
+            );
+            assert_eq!(
+                std::fs::read_to_string(local.join("package.wit")).unwrap(),
+                dependency
+            );
+            assert_eq!(
+                std::fs::read_to_string(manifest_root.join("wkg.toml")).unwrap(),
+                manifest
+            );
+            assert!(manifest_root.join("wkg.lock").is_file());
+            assert!(!wit.join("generated.wit").exists());
+        }
     }
 }

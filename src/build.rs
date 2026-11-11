@@ -394,7 +394,7 @@ fn populate_wit(root: &Path, units: &[PreparedUnit]) -> Result<(), String> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     wit_fetch::fetch(root, &worlds, |directory| {
-        tools::wkg_wit_fetch(directory).map(|_| ())
+        tools::wkg_wit_fetch_from(directory, root).map(|_| ())
     })
 }
 
