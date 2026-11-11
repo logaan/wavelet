@@ -1,45 +1,13 @@
-//! The static type checker (Phases A and C of the monomorphic type system).
-//!
-//! `dd-type-system.typ` defines two rules: every function's signature is a WIT
-//! function type, and every expression has a WIT type. This module enforces
-//! them as far as the phases below reach. It runs over the form arena
-//! (`Node`/`NodeId`) BEFORE evaluation in [`crate::eval_snippet`], so an
-//! ill-typed program is a compile error even when the bad code is never reached
-//! at runtime.
-//!
-//! The checker is **gradual, bidirectional, and monomorphic**. It models only
-//! as much of the language as it needs to reject genuine, provable type
-//! conflicts; everything it does not model yields [`Type::Unknown`] (a gradual
-//! top that unifies with anything and is never an error). This is what keeps the
-//! existing example suite green: the checker must never preempt an existing
-//! runtime error with a different message.
-//!
-//! Where the phases stand:
-//! - **Phase A** (per-form gradual checking) is this module's core:
-//!   [`check_program`] and the `Checker::check`/`infer` walk.
-//! - **Phase B** (WIT synthesis from inference) is implemented in
-//!   [`crate::wit`] (`infer_sig`, `infer_param_from_use`), which also
-//!   implements compile-time functors (Steps 10–11).
-//! - **Phase C** (overload resolution, Steps 6–8) is implemented here too:
-//!   same-named `Fn` defs form overload sets, call sites resolve by static
-//!   argument types then return-type-directed inference, and
-//!   [`resolve_overloads`] rewrites the program so the interpreter needs no
-//!   overload awareness. Boundary name-mangling for exported overloads
-//!   (Step 8) lives in [`crate::wit`].
-//! - **Phase D** (derivers; overloaded names as first-class values) remains
-//!   future work, building on the [`Type`] lattice here.
+mod builtins;
+mod local_ownership;
+mod parameter_inference;
+mod resource_state;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::form::{Arena, Node, NodeId};
 
-/// A WIT type, plus the gradual/inference extensions the checker needs.
-///
-/// `Unknown` is the gradual top — it unifies with anything and is never the
-/// cause of an error. `IntLit`/`FloatLit` are unresolved numeric literals that
-/// are compatible with a range of concrete numeric types (see [`Type::numeric`]
-/// and [`unify`]); they default to `S64`/`F64` when nothing constrains them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Bool,
@@ -56,49 +24,34 @@ pub enum Type {
     Char,
     String,
     List(Box<Type>),
-    /// `option<T>`.
+
     Option(Box<Type>),
-    /// `result<O, E>`.
+
     Result(Box<Type>, Box<Type>),
-    /// `tuple<…>`.
+
     Tuple(Vec<Type>),
-    /// A structural (anonymous) record literal's type: its fields and their
-    /// types, in literal order. Unifies with a nominal `Named` record whose
-    /// declared fields match (see [`unify`]).
+
     Record(Vec<(String, Type)>),
-    /// A `DefType` record/variant, named nominally.
+
     Named(String),
-    /// A form — the meta layer's WIT interchange type (the `wavelet:meta`
-    /// `tree` record). `Quote`/`Quasi` produce it; macro templates map it to
-    /// itself; the form accessors consume it (3.7).
+
     Tree,
-    /// A flags literal `{read write}`: its member names. Unifies with itself
-    /// and with a nominal flags `DefType` declaring the same members.
+
     Flags(Vec<String>),
-    /// The unit type (`{}`), e.g. the result of a `Def`.
+
     Unit,
-    /// A function (arrow) type `(T1 … Tn) -> R` (5.8, Phase D). The value type
-    /// of a `Fn` literal with concretely-typed parameters, of a bare reference
-    /// to such a function `Def`, and the thing an indirect application consumes.
-    /// A function value whose arrow cannot be made concrete stays `Unknown`
-    /// (gradual); this variant only ever carries concrete parameter/result
-    /// types. Function types are not (yet) spellable at component boundaries, so
-    /// they never reach the synthesized WIT (`wit_of_check_type` rejects them).
+
     Fn(Vec<Type>, Box<Type>),
-    /// An unconstrained integer literal: compatible with any int or float type
-    /// (an int type only when the carried literal value, if known, fits its
-    /// range — 3.4). `None` for int-typed results whose value is not a literal
-    /// (e.g. `len`).
+    Cell(Box<Type>),
+
     IntLit(Option<i64>),
-    /// An unconstrained float literal: compatible with `f32`/`f64` only.
+
     FloatLit,
-    /// Gradual top: unifies with anything, never an error. The result of
-    /// anything the checker does not (yet) model.
+
     Unknown,
 }
 
 impl Type {
-    /// Whether this type is a concrete integer type.
     fn is_int(&self) -> bool {
         matches!(
             self,
@@ -113,22 +66,16 @@ impl Type {
         )
     }
 
-    /// Whether this type is a concrete float type.
     fn is_float(&self) -> bool {
         matches!(self, Type::F32 | Type::F64)
     }
 
-    /// Whether this type is numeric in the operand sense: a concrete int/float,
-    /// an unresolved numeric literal, or gradual `Unknown`.
     fn numeric(&self) -> bool {
         self.is_int()
             || self.is_float()
             || matches!(self, Type::IntLit(_) | Type::FloatLit | Type::Unknown)
     }
 
-    /// Parse a WIT type form (a `Sym` like `u8`/`s32`, or a constructor tuple
-    /// like `list(s32)`). Returns `Unknown` for anything not modelled, so an
-    /// unrecognized annotation never causes a false positive.
     fn from_form(arena: &Arena, id: NodeId) -> Type {
         match arena.node(id) {
             Node::Sym(s) => Type::from_name(s),
@@ -142,10 +89,7 @@ impl Type {
                 match (ctor.as_str(), args) {
                     ("list", [elem]) => Type::List(Box::new(Type::from_form(arena, *elem))),
                     ("option", [elem]) => Type::Option(Box::new(Type::from_form(arena, *elem))),
-                    // A result arm can be absent — spelled `_` (4.2): `result(t)`
-                    // has no err payload, `result(_ e)` no ok payload. An absent
-                    // arm is carried as `Type::Unit` (the language has no unit
-                    // value, so Unit-in-a-result-arm is unambiguous: no payload).
+
                     ("result", [ok]) => {
                         Type::Result(Box::new(Self::result_arm(arena, *ok)), Box::new(Type::Unit))
                     }
@@ -156,13 +100,7 @@ impl Type {
                     ("tuple", elems) => {
                         Type::Tuple(elems.iter().map(|&e| Type::from_form(arena, e)).collect())
                     }
-                    // `own(<resource>)` / `borrow(<resource>)` are the boundary
-                    // ownership spellings for a user-declared resource (4.5).
-                    // For inference both reduce to the underlying type — bare
-                    // `<resource>` already means `own` — so the checker sees the
-                    // resource type either way. The `borrow`-position restriction
-                    // and member discipline are enforced structurally by
-                    // `validate_defresources`, not here.
+
                     ("own", [inner]) | ("borrow", [inner]) => Type::from_form(arena, *inner),
                     _ => Type::Unknown,
                 }
@@ -171,8 +109,6 @@ impl Type {
         }
     }
 
-    /// One arm of a `result(…)` type form: `_` means the arm carries no
-    /// payload (encoded `Type::Unit`); anything else parses normally (4.2).
     fn result_arm(arena: &Arena, id: NodeId) -> Type {
         if matches!(arena.node(id), Node::Sym(s) if s == "_") {
             return Type::Unit;
@@ -180,13 +116,10 @@ impl Type {
         Type::from_form(arena, id)
     }
 
-    /// Parse a primitive WIT type name. Unknown names (including user `DefType`
-    /// names we cannot resolve here) become `Named`/`Unknown` so they stay
-    /// gradual.
     fn from_name(s: &str) -> Type {
         match s {
             "bool" => Type::Bool,
-            // A bare `result` type is the double-payload-less result (4.2).
+
             "result" => Type::Result(Box::new(Type::Unit), Box::new(Type::Unit)),
             "tree" => Type::Tree,
             "u8" => Type::U8,
@@ -201,46 +134,32 @@ impl Type {
             "f64" => Type::F64,
             "char" => Type::Char,
             "string" => Type::String,
-            // A bare identifier we don't recognize is a nominal name (a
-            // `DefType` record/variant). It unifies only with itself.
+
             other => Type::Named(other.to_string()),
         }
     }
 }
 
-/// A module's `DefType` declarations: how a nominal [`Type::Named`] resolves to
-/// structure. Shared by unification (nominal-vs-structural records), variant
-/// constructor typing, and pattern binding.
 #[derive(Debug, Clone)]
 pub enum TypeDef {
-    /// `DefType name {x: t …}` — a nominal record.
+    Resource,
     Record(Vec<(String, Type)>),
-    /// `DefType name [case case(t) …]` — a nominal variant: each case's name
-    /// and payload types (empty = nullary case).
+
     Variant(Vec<(String, Vec<Type>)>),
-    /// `DefType name {a b c}` — flags.
+
     Flags(Vec<String>),
-    /// `DefType name <type>` — a transparent type alias.
+
     Alias(Type),
 }
 
-/// The nominal type table, keyed by `DefType` name.
 type TypeTable = HashMap<String, TypeDef>;
 
-/// Unify two types, gradually. `Unknown` absorbs anything. Numeric literals
-/// unify with compatible concrete numeric types (and default toward the
-/// concrete one). A structural record unifies with a nominal record whose
-/// declared fields match (resolved through `tbl`). Two known, incompatible
-/// concrete types fail.
 fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
     use Type::*;
     match (a, b) {
         (Unknown, t) | (t, Unknown) => Some(t.clone()),
         (x, y) if x == y => Some(x.clone()),
 
-        // An integer literal unifies with any concrete int type whose range
-        // admits its (known) value, resolving to that concrete type (3.4), and
-        // with any float type.
         (IntLit(v), t) | (t, IntLit(v)) if t.is_int() => {
             if v.is_none_or(|n| int_in_range(n, t)) {
                 Some(t.clone())
@@ -250,23 +169,17 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
         }
         (IntLit(_), t) | (t, IntLit(_)) if t.is_float() => Some(t.clone()),
         (IntLit(a), IntLit(b)) => Some(IntLit(if a == b { *a } else { None })),
-        // An int literal and a float literal together are still a float literal.
+
         (IntLit(_), FloatLit) | (FloatLit, IntLit(_)) => Some(FloatLit),
 
-        // A float literal unifies only with a concrete float type.
         (FloatLit, t) | (t, FloatLit) if t.is_float() => Some(t.clone()),
         (FloatLit, FloatLit) => Some(FloatLit),
 
-        // A quoted form (`tree`) where a tuple or list is expected: the docs
-        // bless `Quote (1 2)` as the literal-tuple spelling ("a literal tuple
-        // value comes from Quote"), and a quoted tuple/list IS a runtime
-        // tuple/list, so this unifies gradually toward the concrete side
-        // rather than falsely rejecting a boundary call.
         (Tree, t @ Tuple(_)) | (t @ Tuple(_), Tree) => Some(t.clone()),
         (Tree, t @ List(_)) | (t @ List(_), Tree) => Some(t.clone()),
 
-        // Containers unify element-wise.
         (List(x), List(y)) => Some(List(Box::new(unify(tbl, x, y)?))),
+        (Cell(x), Cell(y)) => Some(Cell(Box::new(unify(tbl, x, y)?))),
         (Option(x), Option(y)) => Some(Option(Box::new(unify(tbl, x, y)?))),
         (Result(xo, xe), Result(yo, ye)) => Some(Result(
             Box::new(unify(tbl, xo, yo)?),
@@ -283,8 +196,6 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             Some(Tuple(elems?))
         }
 
-        // A nominal alias is transparent: unify the other side against its
-        // target, keeping the nominal name in the result.
         (Named(n), t) | (t, Named(n)) if matches!(tbl.get(n), Some(TypeDef::Alias(_))) => {
             let Some(TypeDef::Alias(target)) = tbl.get(n) else {
                 unreachable!("guard matched an alias")
@@ -293,8 +204,10 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             Some(Named(n.clone()))
         }
 
-        // A flags literal against a nominal flags type declaring a superset
-        // of members.
+        (Named(left), Named(right)) if left.starts_with("wit-x") || right.starts_with("wit-x") => {
+            unify_dependency_types(tbl, left, right)
+        }
+
         (Named(n), Flags(ms)) | (Flags(ms), Named(n)) => match tbl.get(n) {
             Some(TypeDef::Flags(decl)) => {
                 if ms.iter().all(|m| decl.contains(m)) {
@@ -307,14 +220,8 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             None => Some(Named(n.clone())),
         },
 
-        // An unresolved nominal name (declared by a dependency, not in this
-        // module's table) stays gradual against ANY type — it may be an alias
-        // of anything (`points = list<point>`, 4.4) — rather than falsely
-        // rejecting. Resolved names keep the strict arms below.
         (Named(n), _) | (_, Named(n)) if !tbl.contains_key(n) => Some(Named(n.clone())),
 
-        // A structural record literal against a nominal record type: resolve
-        // the name and unify field-wise; the nominal name wins.
         (Named(n), Record(fs)) | (Record(fs), Named(n)) => match tbl.get(n) {
             Some(TypeDef::Record(dfs)) => {
                 unify_fields(tbl, dfs, fs)?;
@@ -323,7 +230,7 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
             Some(_) => None,
             None => Some(Named(n.clone())),
         },
-        // Two structural records unify field-wise over the same field-name set.
+
         (Record(xs), Record(ys)) => {
             let fields = unify_fields(tbl, xs, ys)?;
             Some(Record(fields))
@@ -333,8 +240,27 @@ fn unify(tbl: &TypeTable, a: &Type, b: &Type) -> Option<Type> {
     }
 }
 
-/// Unify two field lists by name: the field-name *sets* must be equal, and each
-/// same-named pair must unify. Result fields keep `a`'s order.
+fn unify_dependency_types(tbl: &TypeTable, left: &str, right: &str) -> Option<Type> {
+    match (tbl.get(left)?, tbl.get(right)?) {
+        (TypeDef::Record(left), TypeDef::Record(right)) => {
+            unify_fields(tbl, left, right)?;
+        }
+        (TypeDef::Variant(left), TypeDef::Variant(right)) if left.len() == right.len() => {
+            for ((left_case, left_payload), (right_case, right_payload)) in left.iter().zip(right) {
+                if left_case != right_case || left_payload.len() != right_payload.len() {
+                    return None;
+                }
+                for (left, right) in left_payload.iter().zip(right_payload) {
+                    unify(tbl, left, right)?;
+                }
+            }
+        }
+        (TypeDef::Flags(left), TypeDef::Flags(right)) if left == right => {}
+        _ => return None,
+    }
+    Some(Type::Named(left.to_owned()))
+}
+
 fn unify_fields(
     tbl: &TypeTable,
     a: &[(String, Type)],
@@ -351,34 +277,10 @@ fn unify_fields(
     Some(out)
 }
 
-/// Whether a value of type `actual` is acceptable where `expected` is required.
-/// Gradual: `Unknown` on either side always passes; numeric literals are
-/// class-compatible; otherwise it is unifiability.
-///
-/// This is the *strict* relation used for overload argument filtering
-/// ([`args_match`]), where admitting integer width-widening would spuriously
-/// enlarge candidate sets into ambiguity. The boundary check in
-/// [`Checker::check`] and return-type-directed result filtering use
-/// [`compatible_widening`] instead, which additionally admits Option-A int
-/// widening.
 fn compatible(tbl: &TypeTable, expected: &Type, actual: &Type) -> bool {
     unify(tbl, expected, actual).is_some()
 }
 
-/// [`compatible`] plus the boundary coercions a declared *result*/ascription
-/// type legitimately performs on the value flowing into it — the relation used
-/// where such a type validates an expression (not for overload argument
-/// filtering, which stays strict):
-///
-/// - **Option-A integer widening**: a narrower integer value may flow into a
-///   wider declared type of the **same** signedness (`s32` body -> `s64`
-///   result). Mixed signedness and any narrowing stay rejected.
-/// - **Payload-less result-arm dropping**: a value carrying a result payload
-///   (`ok(0)`) may flow into a declared `result` whose arm is *absent* (WIT
-///   `_`), because the ABI drops the payload at the boundary — the idiomatic
-///   `wasi:cli/run` shape (`run: func() -> result` with an `ok(0)` body). A
-///   *present* declared arm still requires the actual arm be compatible; a
-///   value missing a payload a present arm needs is still rejected.
 fn compatible_widening(tbl: &TypeTable, expected: &Type, actual: &Type) -> bool {
     if int_widens(actual, expected) {
         return true;
@@ -392,9 +294,6 @@ fn compatible_widening(tbl: &TypeTable, expected: &Type, actual: &Type) -> bool 
     compatible(tbl, expected, actual)
 }
 
-/// The `(signed, width-rank)` of a concrete integer type; `None` for anything
-/// that is not one of the eight concrete int types. Rank orders widths within a
-/// signedness class (`8 < 16 < 32 < 64`).
 fn int_class(t: &Type) -> Option<(bool, u8)> {
     match t {
         Type::U8 => Some((false, 0)),
@@ -409,9 +308,6 @@ fn int_class(t: &Type) -> Option<(bool, u8)> {
     }
 }
 
-/// Whether an integer value of type `from` may safely widen into a declared
-/// `to` (Option A): both are concrete ints of the same signedness and `from` is
-/// no wider than `to`. Rejects signed<->unsigned mixing and any narrowing.
 fn int_widens(from: &Type, to: &Type) -> bool {
     match (int_class(from), int_class(to)) {
         (Some((fs, fr)), Some((ts, tr))) => fs == ts && fr <= tr,
@@ -419,10 +315,6 @@ fn int_widens(from: &Type, to: &Type) -> bool {
     }
 }
 
-/// Whether an overload candidate with parameters `params` is applicable to a
-/// positional call whose static argument types are `arg_tys`: the arity must
-/// match and each parameter type must be compatible with its argument. (The
-/// single-bundled-payload form `f(x)` to a one-parameter `f` also matches.)
 fn args_match(tbl: &TypeTable, params: &[(String, Type)], arg_tys: &[Type]) -> bool {
     if params.len() != arg_tys.len() {
         return false;
@@ -433,14 +325,30 @@ fn args_match(tbl: &TypeTable, params: &[(String, Type)], arg_tys: &[Type]) -> b
         .all(|((_n, pt), at)| compatible(tbl, pt, at))
 }
 
-/// Whether a type is fully concrete: it contains no gradual `Unknown`. A
-/// function's arrow type (5.8) is only formed from fully-concrete parameter and
-/// result types; anything gradual keeps the value at `Unknown` (which under
-/// strict is the "function values" error the flip gate tracks).
+fn mutable_type(ty: &Type) -> Type {
+    match ty {
+        Type::IntLit(_) => Type::S64,
+        Type::FloatLit => Type::F64,
+        Type::List(inner) => Type::List(Box::new(mutable_type(inner))),
+        Type::Option(inner) => Type::Option(Box::new(mutable_type(inner))),
+        Type::Tuple(items) => Type::Tuple(items.iter().map(mutable_type).collect()),
+        Type::Record(fields) => Type::Record(
+            fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), mutable_type(ty)))
+                .collect(),
+        ),
+        Type::Result(ok, err) => {
+            Type::Result(Box::new(mutable_type(ok)), Box::new(mutable_type(err)))
+        }
+        other => other.clone(),
+    }
+}
+
 fn fully_concrete(t: &Type) -> bool {
     match t {
         Type::Unknown => false,
-        Type::List(e) | Type::Option(e) => fully_concrete(e),
+        Type::List(e) | Type::Option(e) | Type::Cell(e) => fully_concrete(e),
         Type::Result(o, e) => fully_concrete(o) && fully_concrete(e),
         Type::Tuple(ts) => ts.iter().all(fully_concrete),
         Type::Record(fs) => fs.iter().all(|(_, t)| fully_concrete(t)),
@@ -449,15 +357,10 @@ fn fully_concrete(t: &Type) -> bool {
     }
 }
 
-/// Whether a type contains a function (arrow) type anywhere (5.8). Function
-/// types cannot cross component boundaries in the first defunctionalization
-/// cut, so an exported signature carrying one is rejected with an explicit
-/// diagnostic (in [`Checker::check_roots`] for the run path and via
-/// [`InferredWit::Func`] for WIT synthesis).
 pub(crate) fn contains_fn(t: &Type) -> bool {
     match t {
         Type::Fn(..) => true,
-        Type::List(e) | Type::Option(e) => contains_fn(e),
+        Type::List(e) | Type::Option(e) | Type::Cell(e) => contains_fn(e),
         Type::Result(o, e) => contains_fn(o) || contains_fn(e),
         Type::Tuple(ts) => ts.iter().any(contains_fn),
         Type::Record(fs) => fs.iter().any(|(_, t)| contains_fn(t)),
@@ -465,112 +368,71 @@ pub(crate) fn contains_fn(t: &Type) -> bool {
     }
 }
 
-/// The static signature of a module-level `Def name Fn {params} body`.
+#[derive(Clone)]
 struct Sig {
-    /// Parameters in order: their name and declared type (`Unknown` if untyped).
     params: Vec<(String, Type)>,
-    /// The Fn body, for return-type-directed overload resolution. `None` for a
-    /// definition whose body we did not capture (it never happens for Fn defs).
+
     body: Option<NodeId>,
 }
 
-/// A lexical scope mapping bound names to their static types. It is a flat
-/// stack so nested scopes can be unwound by truncation; inner bindings shadow
-/// outer ones because lookup walks from the top.
 type Scope = Vec<(String, Type)>;
 
 struct Checker<'a> {
     arena: &'a Arena,
-    /// Module-level `Def name Fn {…} …` signatures, by name. A name with more
-    /// than one signature is an *overload set* (Phase C): calls to it resolve
-    /// per call site by static argument and expected types.
+
     sigs: HashMap<String, Vec<Sig>>,
-    /// Module-level `Def` names (functions and values both bind a name).
+
     defs: std::collections::HashSet<String>,
-    /// Module-level *value* defs (`Def name expr` where expr is not an Fn):
-    /// name -> expr, for typing references to them.
+
     value_defs: HashMap<String, NodeId>,
-    /// Memoised value-def types, with an in-progress guard for recursion.
+
     value_def_types: RefCell<HashMap<String, Type>>,
     value_defs_in_progress: RefCell<std::collections::HashSet<String>>,
-    /// `DefType` declarations: nominal name -> structure (3.3).
+
     types: TypeTable,
-    /// Variant-case index: case name -> (owning `DefType` name, payload types).
-    /// Lets a constructor call like `days(30)` (or a bare nullary case) type as
-    /// its nominal variant.
+
     variant_cases: HashMap<String, (String, Vec<Type>)>,
-    /// Resolved import signatures, keyed by the qualified spelling
-    /// `alias/name` (3.1). Empty on paths with no import resolution.
+
     import_sigs: ImportSigs,
-    /// For each *overloaded* call site (keyed by the call `Tup`'s `NodeId`), the
-    /// index of the chosen candidate within its overload set. Filled in while
-    /// checking; read back by [`resolve_overloads`] to rewrite the program.
+    resource_sigs: ImportSigs,
+    resource_types: std::collections::HashSet<String>,
+    imports_resolved: bool,
+    import_aliases: std::collections::HashSet<String>,
+
     resolved: RefCell<HashMap<NodeId, usize>>,
-    /// Memoised result types from [`Self::infer_sig_result`], keyed by the Fn
-    /// body's `NodeId`. The inferred result depends only on the body (inference
-    /// builds its own scope from the sig's params and ignores the caller's), and
-    /// its side effects on `resolved` are throwaway, so re-running it for the
-    /// same body is pure redundant work during return-type-directed resolution.
+
     sig_result_cache: RefCell<HashMap<NodeId, Type>>,
-    /// Bodies currently being inferred by [`Self::infer_sig_result`]: the
-    /// recursion guard. A (mutually) recursive def re-entering its own result
-    /// inference gets `Unknown` for the recursive call, exactly like the
-    /// `visiting` guard in [`crate::wit`]'s inference.
+
     sig_in_progress: RefCell<std::collections::HashSet<NodeId>>,
     node_types: RefCell<NodeTypes>,
     speculative_node_types: RefCell<Vec<NodeTypes>>,
-    /// Declared result type of each exported def, keyed by export `name` (which
-    /// is the def name). Threaded as the `expected` type when checking that
-    /// def's body so canonical records/variants/flags/lists are built at their
-    /// declared shape and Option-A int widening at the boundary is admitted
-    /// (5-threading). Only concrete (non-`Unknown`) results are recorded.
+
     export_results: HashMap<String, Type>,
 }
 
-/// A per-node static-type table: expression `NodeId` -> inferred [`Type`],
-/// produced by [`node_types_with_imports`] and consumed by the wasm backend
-/// (goal 5, ABI-native representation). Nodes the checker cannot type stay
-/// absent or map to `Type::Unknown` — the backend treats both as "use the
-/// boxed fallback".
 pub type NodeTypes = HashMap<NodeId, Type>;
 
-/// Strict mode (3.9): when set, `Type::Unknown` is an **error** rather than a
-/// gradual top — every expression must have a concrete static type. Shipped
-/// opt-in (`--strict` on the CLI); the failure list under strict is the
-/// burn-down backlog toward flipping the default, after which the gradual
-/// mode is deleted (accepted option-1 gate: flip when the documented example
-/// suite and the conformance suite pass under strict).
-static STRICT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Turn strict mode on or off for subsequent checks (process-wide).
-pub fn set_strict(on: bool) {
-    STRICT.store(on, std::sync::atomic::Ordering::Relaxed);
+thread_local! {
+    static STRICT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
-/// Whether strict mode is on.
+pub(crate) fn set_strict(on: bool) {
+    STRICT.with(|state| state.set(on));
+}
+
 pub fn strict() -> bool {
-    STRICT.load(std::sync::atomic::Ordering::Relaxed)
+    STRICT.with(std::cell::Cell::get)
 }
 
-/// The checker-facing signature of one imported function: its parameters
-/// (name, type) and result type (`Type::Unit` for none). Keyed in an import
-/// table by the qualified call spelling `alias/name` (3.1).
 pub type ImportSig = (Vec<(String, Type)>, Type);
 
-/// An import-signature table: `alias/name` -> signature.
 pub type ImportSigs = HashMap<String, ImportSig>;
 
-/// Check a whole program (the top-level roots). Returns `Err(msg)` on the first
-/// type error, where `msg` is already in the `eval error: …` surface form so it
-/// can be returned directly as [`crate::EvalOutcome::error`].
 pub fn check_program(arena: &Arena, roots: &[NodeId]) -> Result<(), String> {
     let checker = Checker::collect(arena, roots);
     checker.check_roots(roots)
 }
 
-/// [`check_program`] with the WIT signatures of the file's resolved imports
-/// (3.1): qualified calls (`alias/fn`) are checked against — and typed by —
-/// their declared signatures instead of staying gradual.
 pub fn check_program_with_imports(
     arena: &Arena,
     roots: &[NodeId],
@@ -578,21 +440,14 @@ pub fn check_program_with_imports(
 ) -> Result<(), String> {
     let mut checker = Checker::collect(arena, roots);
     checker.import_sigs = imports.clone();
+    checker.imports_resolved = true;
     checker.check_roots(roots)
 }
 
-/// Parse WIT type text into a checker [`Type`] — the bridge used when feeding
-/// declared import signatures into the checker (3.1).
 pub fn type_from_wit(text: &str) -> Type {
     type_from_wit_text(text)
 }
 
-/// Type-check a program and return the per-node static-type table (goal 5).
-///
-/// Runs exactly the checking of [`check_program_with_imports`]; on success the
-/// returned table maps each checked expression node to its settled type. The
-/// wasm backend calls this on the same (possibly overload-rewritten) arena it
-/// emits from, so the `NodeId` keys line up with the nodes it walks.
 pub fn node_types_with_imports(
     arena: &Arena,
     roots: &[NodeId],
@@ -600,27 +455,125 @@ pub fn node_types_with_imports(
 ) -> Result<NodeTypes, String> {
     let mut checker = Checker::collect(arena, roots);
     checker.import_sigs = imports.clone();
+    checker.imports_resolved = true;
     checker.check_roots(roots)?;
     Ok(checker.node_types.into_inner())
 }
 
-/// A WIT-rendered inference outcome, for [`infer_wit_result`]. Mirrors the
-/// shape `wit::infer` reports: a concrete WIT type text, unit, or unknown.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn check_program_with_dependencies(
+    arena: &Arena,
+    roots: &[NodeId],
+    imports: &ImportSigs,
+    deps: &HashMap<String, crate::emit::Dep>,
+    source_imports: &[crate::wit::ImportInfo],
+) -> Result<(), String> {
+    let mut checker = Checker::collect(arena, roots);
+    checker.import_sigs = imports.clone();
+    checker.imports_resolved = true;
+    checker.add_dependency_types(deps, source_imports);
+    checker.check_roots(roots)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn node_types_with_dependencies(
+    arena: &Arena,
+    roots: &[NodeId],
+    imports: &ImportSigs,
+    deps: &HashMap<String, crate::emit::Dep>,
+    source_imports: &[crate::wit::ImportInfo],
+) -> Result<NodeTypes, String> {
+    let mut checker = Checker::collect(arena, roots);
+    checker.import_sigs = imports.clone();
+    checker.imports_resolved = true;
+    checker.add_dependency_types(deps, source_imports);
+    checker.check_roots(roots)?;
+    Ok(checker.node_types.into_inner())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Checker<'_> {
+    fn add_dependency_types(
+        &mut self,
+        deps: &HashMap<String, crate::emit::Dep>,
+        source_imports: &[crate::wit::ImportInfo],
+    ) {
+        for (package, dep) in deps {
+            for (name, fields) in &dep.types {
+                self.types.entry(name.clone()).or_insert_with(|| {
+                    TypeDef::Record(
+                        fields
+                            .iter()
+                            .map(|(name, ty)| (name.clone(), type_from_wit(ty)))
+                            .collect(),
+                    )
+                });
+            }
+            for (name, ty) in &dep.aliases {
+                if name == ty {
+                    continue;
+                }
+                self.types
+                    .entry(name.clone())
+                    .or_insert_with(|| TypeDef::Alias(type_from_wit(ty)));
+            }
+            for (name, ty) in &dep.type_defs {
+                let ty = match ty {
+                    crate::emit::TypeDef::Resource => {
+                        self.resource_types.insert(name.clone());
+                        TypeDef::Resource
+                    }
+                    crate::emit::TypeDef::Flags(members) => TypeDef::Flags(members.clone()),
+                    crate::emit::TypeDef::Enum(cases) => TypeDef::Variant(
+                        cases
+                            .iter()
+                            .map(|name| (name.clone(), Vec::new()))
+                            .collect(),
+                    ),
+                    crate::emit::TypeDef::Variant(cases) => TypeDef::Variant(
+                        cases
+                            .iter()
+                            .map(|(name, payload)| {
+                                (
+                                    name.clone(),
+                                    payload.iter().map(|ty| type_from_wit(ty)).collect(),
+                                )
+                            })
+                            .collect(),
+                    ),
+                };
+                if let TypeDef::Variant(cases) = &ty {
+                    for import in source_imports.iter().filter(|import| {
+                        import.package == *package
+                            && dep.type_ifaces.iter().any(|(internal, iface, _)| {
+                                internal == name
+                                    && import.path.split_once('/').is_some_and(|(_, imported)| {
+                                        imported.split('@').next() == Some(iface.as_str())
+                                    })
+                            })
+                    }) {
+                        for (case, payload) in cases {
+                            self.variant_cases.insert(
+                                format!("{}-{case}", import.alias),
+                                (name.clone(), payload.clone()),
+                            );
+                        }
+                    }
+                }
+                self.types.entry(name.clone()).or_insert(ty);
+            }
+        }
+    }
+}
+
 pub enum InferredWit {
     Known(String),
     Unit,
     Unknown,
-    /// The result is (or contains) a function value (5.8): statically known,
-    /// but unspellable at a component boundary — WIT has no function type.
-    /// Synthesis reports the deliberate boundary diagnostic, not the generic
-    /// cannot-infer one.
+
     Func,
 }
 
-/// Phase B bridge (3.8): infer a def's *result* WIT type using the full Phase
-/// A/C checker (which models lists, options, results, tuples, records, and
-/// nominal `DefType`s), rendering the inferred [`Type`] as WIT text.
-/// `params` are the def's parameters as `(name, wit-type-text)` pairs.
 pub fn infer_wit_result(
     arena: &Arena,
     roots: &[NodeId],
@@ -645,12 +598,15 @@ pub fn infer_wit_result(
     }
 }
 
-/// Parse WIT type *text* (`list<s32>`, `option<string>`, `result<a, b>`,
-/// `tuple<a, b>`, or a bare name) into a checker [`Type`]. Anything
-/// unrecognized is gradual `Unknown`-free `Named`, exactly like
-/// [`Type::from_name`].
 fn type_from_wit_text(text: &str) -> Type {
     let text = text.trim();
+    if let Some(inner) = text
+        .strip_prefix("own<")
+        .or_else(|| text.strip_prefix("borrow<"))
+        .and_then(|text| text.strip_suffix('>'))
+    {
+        return Type::Named(inner.to_owned());
+    }
     if let Some(inner) = text.strip_prefix("list<").and_then(|t| t.strip_suffix('>')) {
         return Type::List(Box::new(type_from_wit_text(inner)));
     }
@@ -664,7 +620,6 @@ fn type_from_wit_text(text: &str) -> Type {
         .strip_prefix("result<")
         .and_then(|t| t.strip_suffix('>'))
     {
-        // An absent arm (WIT `_`, or a missing err arm) is `Type::Unit` (4.2).
         let arm = |s: &str| {
             if s.trim() == "_" {
                 Type::Unit
@@ -696,7 +651,6 @@ fn type_from_wit_text(text: &str) -> Type {
     Type::from_name(text)
 }
 
-/// Split `a, b, c` at top-level commas (respecting `<…>` nesting).
 fn split_wit_args(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut depth = 0usize;
@@ -724,10 +678,6 @@ fn split_wit_args(s: &str) -> Vec<String> {
     out
 }
 
-/// Render a checker [`Type`] as WIT type text, if it names a concrete WIT
-/// type. Numeric literals default to their WIT widths (`s64`/`f64` — the
-/// defaulting rule). `None` for anything without a boundary spelling
-/// (gradual `Unknown`, structural records, half-known results).
 pub(crate) fn type_to_wit(t: &Type) -> Option<String> {
     match t {
         Type::Bool => Some("bool".into()),
@@ -747,7 +697,7 @@ pub(crate) fn type_to_wit(t: &Type) -> Option<String> {
         Type::FloatLit => Some("f64".into()),
         Type::List(e) => Some(format!("list<{}>", type_to_wit(e)?)),
         Type::Option(e) => Some(format!("option<{}>", type_to_wit(e)?)),
-        // Absent arms (`Type::Unit`) render in WIT's elided forms (4.2).
+
         Type::Result(o, e) => Some(match (&**o, &**e) {
             (Type::Unit, Type::Unit) => "result".to_string(),
             (Type::Unit, _) => format!("result<_, {}>", type_to_wit(e)?),
@@ -760,14 +710,60 @@ pub(crate) fn type_to_wit(t: &Type) -> Option<String> {
         }
         Type::Named(n) => Some(n.clone()),
         Type::Tree => None,
-        Type::Flags(_) | Type::Record(_) | Type::Unit | Type::Unknown | Type::Fn(..) => None,
+        Type::Flags(_)
+        | Type::Record(_)
+        | Type::Unit
+        | Type::Unknown
+        | Type::Fn(..)
+        | Type::Cell(_) => None,
     }
 }
 
 impl<'a> Checker<'a> {
-    /// First pass: collect every module-level Def name and Fn signature so
-    /// forward and mutual references resolve. Same-named Fn defs accumulate into
-    /// an overload set (a `Vec<Sig>`), in file order.
+    fn apply_export_params(arena: &Arena, roots: &[NodeId], sigs: &mut HashMap<String, Vec<Sig>>) {
+        for &root in roots {
+            let Node::Tup(items) = arena.node(root) else {
+                continue;
+            };
+            if items.len() != 2
+                || !matches!(arena.node(items[0]), Node::Sym(head) if head == "export-MACRO")
+            {
+                continue;
+            }
+            let Node::Rec(fields) = arena.node(items[1]) else {
+                continue;
+            };
+            let Some(name) = fields.iter().find_map(|(key, value)| {
+                if key == "name"
+                    && let Node::Sym(name) = arena.node(*value)
+                {
+                    return Some(name);
+                }
+                None
+            }) else {
+                continue;
+            };
+            let Some(params) = fields
+                .iter()
+                .find_map(|(key, value)| (key == "params").then(|| parse_params(arena, *value)))
+            else {
+                continue;
+            };
+            if let Some(signatures) = sigs.get_mut(name) {
+                for signature in signatures {
+                    if signature.params.len() != params.len() {
+                        continue;
+                    }
+                    for ((_, ty), (_, declared)) in signature.params.iter_mut().zip(&params) {
+                        if *ty == Type::Unknown {
+                            *ty = declared.clone()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn collect(arena: &'a Arena, roots: &[NodeId]) -> Self {
         let mut sigs: HashMap<String, Vec<Sig>> = HashMap::new();
         let mut defs = std::collections::HashSet::new();
@@ -775,6 +771,7 @@ impl<'a> Checker<'a> {
         let mut variant_cases: HashMap<String, (String, Vec<Type>)> = HashMap::new();
         let mut value_defs: HashMap<String, NodeId> = HashMap::new();
         let mut export_results: HashMap<String, Type> = HashMap::new();
+        let mut resource_sigs = ImportSigs::new();
         for &root in roots {
             if let Some((name, expr)) = as_def(arena, root) {
                 defs.insert(name.to_string());
@@ -801,7 +798,97 @@ impl<'a> Checker<'a> {
                 export_results.insert(name, result);
             }
         }
-        Checker {
+        Self::apply_export_params(arena, roots, &mut sigs);
+        for &root in roots {
+            if let Some((resource, members)) = as_defresource(arena, root) {
+                for (name, node) in members {
+                    if name == "Drop" {
+                        continue;
+                    }
+                    let (_, function) = strip_static(arena, *node);
+                    let Some(params) = fn_params(arena, function) else {
+                        continue;
+                    };
+                    let result = if name == "New" {
+                        Type::Named(resource.to_owned())
+                    } else if let Some(body) = fn_body(arena, function) {
+                        match arena.node(body) {
+                            Node::Tup(items)
+                                if items.len() == 3
+                                    && matches!(arena.node(items[0]), Node::Sym(head) if head == "the-MACRO") =>
+                            {
+                                Type::from_form(arena, items[1])
+                            }
+                            _ => Type::Unknown,
+                        }
+                    } else {
+                        Type::Unknown
+                    };
+                    let exposed = if name == "New" {
+                        resource.to_owned()
+                    } else {
+                        format!("{resource}-{name}")
+                    };
+                    resource_sigs.insert(exposed, (params, result));
+                }
+            }
+        }
+        parameter_inference::infer(arena, &mut sigs);
+        let mut import_aliases = std::collections::HashSet::new();
+        for &root in roots {
+            let Node::Tup(items) = arena.node(root) else {
+                continue;
+            };
+            if items.len() < 2 {
+                continue;
+            }
+            if matches!(arena.node(items[0]), Node::Sym(head) if head == "import-MACRO" || head == "instantiate-MACRO")
+            {
+                match arena.node(items[1]) {
+                    Node::Rec(fields) => {
+                        let alias = fields.iter().find_map(|(key, value)| {
+                            match (key.as_str(), arena.node(*value)) {
+                                ("as", Node::Sym(name)) => Some(name.clone()),
+                                _ => None,
+                            }
+                        });
+                        let package = fields.iter().find_map(|(key, value)| {
+                            match (key.as_str(), arena.node(*value)) {
+                                ("pkg", Node::Str(name)) => Some(name.clone()),
+                                _ => None,
+                            }
+                        });
+                        if let Some(alias) = alias.or_else(|| {
+                            package.map(|p| {
+                                p.split('@')
+                                    .next()
+                                    .unwrap()
+                                    .rsplit('/')
+                                    .next()
+                                    .unwrap()
+                                    .to_owned()
+                            })
+                        }) {
+                            import_aliases.insert(alias);
+                        }
+                    }
+                    Node::Str(package) => {
+                        import_aliases.insert(
+                            package
+                                .split('@')
+                                .next()
+                                .unwrap()
+                                .rsplit('/')
+                                .next()
+                                .unwrap()
+                                .to_owned(),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut checker = Checker {
             arena,
             sigs,
             defs,
@@ -811,50 +898,90 @@ impl<'a> Checker<'a> {
             value_def_types: RefCell::new(HashMap::new()),
             value_defs_in_progress: RefCell::new(std::collections::HashSet::new()),
             import_sigs: HashMap::new(),
+            resource_sigs,
+            resource_types: resource_names(arena, roots),
+            imports_resolved: import_aliases.is_empty(),
+            import_aliases,
             resolved: RefCell::new(HashMap::new()),
             sig_result_cache: RefCell::new(HashMap::new()),
             sig_in_progress: RefCell::new(std::collections::HashSet::new()),
             node_types: RefCell::new(HashMap::new()),
             speculative_node_types: RefCell::new(Vec::new()),
             export_results,
+        };
+        for &root in roots {
+            if let Some((resource, members)) = as_defresource(arena, root) {
+                let state = members
+                    .iter()
+                    .find(|(name, _)| name == "New")
+                    .and_then(|(_, function)| {
+                        let mut scope = fn_params(arena, *function)?;
+                        checker
+                            .infer_speculative(fn_body(arena, *function)?, &mut scope)
+                            .ok()
+                    })
+                    .unwrap_or(Type::Unknown);
+                for (name, function) in members {
+                    if name == "New" || name == "Drop" {
+                        continue;
+                    }
+                    let (is_static, function) = strip_static(arena, *function);
+                    let exposed = format!("{resource}-{name}");
+                    if checker
+                        .resource_sigs
+                        .get(&exposed)
+                        .is_some_and(|(_, result)| *result != Type::Unknown)
+                    {
+                        continue;
+                    }
+                    let Some(mut scope) = fn_params(arena, function) else {
+                        continue;
+                    };
+                    if !is_static && let Some((_, receiver)) = scope.first_mut() {
+                        *receiver = state.clone()
+                    }
+                    let result = checker
+                        .infer_speculative(fn_body(arena, function).unwrap(), &mut scope)
+                        .unwrap_or(Type::Unknown);
+                    if let Some((_, output)) = checker.resource_sigs.get_mut(&exposed) {
+                        *output = result
+                    }
+                }
+            }
         }
+        checker
     }
 
-    /// Second pass: check every top-level form's body.
     fn check_roots(&self, roots: &[NodeId]) -> Result<(), String> {
         let arena = self.arena;
-        // DefResource member discipline and the borrow-position restriction are
-        // structural checks over the declarations, independent of expression
-        // typing (4.5).
+
         validate_variant_payloads(arena, roots)?;
         validate_defresources(arena, roots)?;
-        // Exported names, for the 5.8 boundary rule below.
+        resource_state::validate(arena, roots)?;
+        local_ownership::validate(self, roots)?;
+
         let exported = crate::wit::export_names(arena, roots);
         for &root in roots {
             if let Some((name, expr)) = as_def(arena, root) {
-                // Check the bound expression. For an `Fn`, check its body with
-                // the parameters in scope; otherwise check the value expression.
-                // An exported def's declared result type is threaded down as the
-                // body's `expected` type (5-threading): construction sites build
-                // at their declared shape (canonical record/variant/flags/list
-                // field order and flags bit positions) and Option-A int widening
-                // at the boundary is admitted.
                 let expected = self.export_results.get(name).cloned();
                 let ret = if let Some(params) = fn_params(arena, expr) {
-                    let mut scope: Scope = params.clone();
                     let body = fn_body(arena, expr).expect("fn with params has a body");
+                    let mut scope: Scope = self
+                        .sigs
+                        .get(name)
+                        .and_then(|sigs| sigs.iter().find(|sig| sig.body == Some(body)))
+                        .map(|sig| sig.params.clone())
+                        .unwrap_or(params);
                     self.check(body, expected.as_ref(), &mut scope)?
                 } else {
                     let mut scope: Scope = Vec::new();
                     self.check(expr, expected.as_ref(), &mut scope)?
                 };
-                // Boundary rule (5.8, first cut): a function value cannot cross
-                // a component boundary — an exported def whose (inferred) result
-                // carries a function type is a deliberate compile error, in the
-                // interpreter/runner exactly as in the wasm build (oracle
-                // parity). Gradual (`Unknown`) results are untouched: they
-                // already fail WIT synthesis with the cannot-infer diagnostic.
-                if contains_fn(&ret) && exported.contains(name) {
+
+                if contains_fn(&ret)
+                    && (exported.contains(name)
+                        || (strict() && !matches!(arena.node(expr), Node::Sym(_))))
+                {
                     return Err(format!(
                         "eval error: export `{name}`: function types cannot cross \
                          component boundaries yet; import the combinator as a macro \
@@ -862,7 +989,6 @@ impl<'a> Checker<'a> {
                     ));
                 }
             } else {
-                // A bare top-level expression (the playground evaluates these).
                 let mut scope: Scope = Vec::new();
                 self.check(root, None, &mut scope)?;
             }
@@ -870,7 +996,6 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// The names that form an overload set: module-level Fn names with ≥2 defs.
     fn overload_names(&self) -> std::collections::HashSet<String> {
         self.sigs
             .iter()
@@ -880,42 +1005,10 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// Type-check a program and resolve its overload sets, returning a possibly
-/// rewritten `(Arena, roots)` the interpreter can evaluate with **no** overload
-/// awareness of its own.
-///
-/// This is the run-path overload mechanism (Phase C, Steps 6–7). It runs after
-/// reading and is the single place static argument-directed and return-type-
-/// directed resolution happens:
-///
-/// 1. Build the checker (collecting overload sets) and check every body — an
-///    ill-typed program is an `Err` exactly as [`check_program`] reports.
-/// 2. While checking, each overloaded call site records which member it
-///    resolves to (or the check fails with an ambiguity/no-match error).
-/// 3. If the program has **no** overload set, return the input arena unchanged —
-///    the pass is an exact identity, so non-overloaded programs are untouched.
-/// 4. Otherwise rewrite into a fresh arena: give the k-th `Def name …` of an
-///    overloaded `name` the unique internal symbol `name$k`, and re-point every
-///    resolved call head to its chosen member. The result has no overloaded
-///    names left, so the interpreter's ordinary by-name dispatch is correct.
-///
-/// Only overloaded names *in call position* are re-pointed; using an overloaded
-/// name as a first-class value (passing the unapplied function) has no single
-/// meaning under overloading and is out of scope here — it would survive
-/// unrenamed and fail at runtime as an unbound name. No current program does
-/// this; Phase D should revisit it if derived/functor ops are ever passed by
-/// value.
 pub fn resolve_overloads(arena: Arena, roots: &[NodeId]) -> Result<(Arena, Vec<NodeId>), String> {
     resolve_overloads_excluding(arena, roots, &std::collections::HashSet::new())
 }
 
-/// [`resolve_overloads`] for the **build** path (3.14): overload sets whose
-/// name is in `keep` (the file's exported names) are left intact — their
-/// members are emitted per-member through `wit::collect`'s boundary mangling
-/// (`info.overload_bodies`), which keys on the un-rewritten sets. Every
-/// *other* (non-exported) overload set is resolved and rewritten exactly as on
-/// the run path, so internal calls dispatch to the member the checker chose
-/// rather than to the last definition.
 pub fn resolve_overloads_excluding(
     arena: Arena,
     roots: &[NodeId],
@@ -927,7 +1020,6 @@ pub fn resolve_overloads_excluding(
     let mut overloads = checker.overload_names();
     overloads.retain(|n| !keep.contains(n));
     if overloads.is_empty() {
-        // Identity: nothing to rewrite, hand the program back as-is.
         return Ok((arena, roots.to_vec()));
     }
 
@@ -943,26 +1035,20 @@ pub fn resolve_overloads_excluding(
     Ok((rw.out, new_roots))
 }
 
-/// The unique internal name for the k-th `Def name …` of an overloaded `name`.
 fn mangled_def_name(name: &str, k: usize) -> String {
     format!("{name}${k}")
 }
 
-/// Rewrites a program so each overload-set member has a unique name and every
-/// resolved call head points at its chosen member. Mirrors the copy/descend
-/// style of [`crate::expand`].
 struct Rewriter<'a> {
     arena: &'a Arena,
     overloads: &'a std::collections::HashSet<String>,
     resolved: &'a HashMap<NodeId, usize>,
     out: Arena,
-    /// Running count of `Def`s seen per overloaded name, to assign `name$k`.
+
     def_counts: HashMap<String, usize>,
 }
 
 impl<'a> Rewriter<'a> {
-    /// Rewrite a top-level form. A `Def name Fn …` whose `name` is overloaded is
-    /// renamed to `name$k` (k counting in file order); everything else descends.
     fn rewrite_root(&mut self, id: NodeId) -> NodeId {
         if let Some((name, _expr)) = as_def(self.arena, id)
             && self.overloads.contains(name)
@@ -976,7 +1062,7 @@ impl<'a> Rewriter<'a> {
             let unique = mangled_def_name(&name, *k);
             *k += 1;
             let span = self.arena.span(id);
-            // items = [def-MACRO, name_sym, expr]; replace name_sym, rewrite expr.
+
             let head = self.rewrite(items[0]);
             let new_name = self.out.add(Node::Sym(unique), self.arena.span(items[1]));
             let expr = self.rewrite(items[2]);
@@ -985,14 +1071,10 @@ impl<'a> Rewriter<'a> {
         self.rewrite(id)
     }
 
-    /// Copy `id` into the output arena, re-pointing a resolved overloaded call
-    /// head to its chosen member.
     fn rewrite(&mut self, id: NodeId) -> NodeId {
         let span = self.arena.span(id);
         match self.arena.node(id).clone() {
             Node::Tup(items) => {
-                // A call whose head is an overloaded name resolved at this site:
-                // rewrite the head symbol to the chosen `name$k`.
                 if let Some(&chosen) = self.resolved.get(&id)
                     && let Some(&head) = items.first()
                     && let Node::Sym(name) = self.arena.node(head)
@@ -1026,7 +1108,6 @@ impl<'a> Rewriter<'a> {
     }
 }
 
-/// If `id` is `Def name expr`, return `(name, expr)`.
 fn as_def(arena: &Arena, id: NodeId) -> Option<(&str, NodeId)> {
     let Node::Tup(items) = arena.node(id) else {
         return None;
@@ -1046,10 +1127,6 @@ fn as_def(arena: &Arena, id: NodeId) -> Option<(&str, NodeId)> {
     Some((name, *expr))
 }
 
-/// If `id` is `Export {name: <sym> params: {..} result: <type>}`, return the
-/// export name and its declared result [`Type`]. Used to thread a def's
-/// declared result type into its body during checking (5-threading). An export
-/// without a `result` field (a unit-returning export) yields no entry.
 fn as_export_result(arena: &Arena, id: NodeId) -> Option<(String, Type)> {
     let Node::Tup(items) = arena.node(id) else {
         return None;
@@ -1082,7 +1159,6 @@ fn as_export_result(arena: &Arena, id: NodeId) -> Option<(String, Type)> {
     Some((name?, result?))
 }
 
-/// If `id` is `DefType name decl`, parse the declaration into a [`TypeDef`].
 fn as_deftype(arena: &Arena, id: NodeId) -> Option<(&str, TypeDef)> {
     let Node::Tup(items) = arena.node(id) else {
         return None;
@@ -1125,17 +1201,12 @@ fn as_deftype(arena: &Arena, id: NodeId) -> Option<(&str, TypeDef)> {
             TypeDef::Variant(out)
         }
         Node::Flg(names) => TypeDef::Flags(names.clone()),
-        // `DefType name <type-form>` — a transparent alias (`DefType nums
-        // list(s32)`). `from_form` yields Unknown for anything unmodelled, so
-        // this stays gradual for exotic targets.
+
         _ => TypeDef::Alias(Type::from_form(arena, *decl)),
     };
     Some((name, def))
 }
 
-/// If `id` is `DefResource name { members }`, return the name and the member
-/// `(key, value)` pairs (4.5). The value of a `Static` member still carries its
-/// `Tup[static-MACRO, <fn>]` wrapper; use [`strip_static`] to peel it.
 fn as_defresource(arena: &Arena, id: NodeId) -> Option<(&str, &[(String, NodeId)])> {
     let Node::Tup(items) = arena.node(id) else {
         return None;
@@ -1158,8 +1229,6 @@ fn as_defresource(arena: &Arena, id: NodeId) -> Option<(&str, &[(String, NodeId)
     Some((name, fields.as_slice()))
 }
 
-/// Peel a `Static` marker off a resource member value: `Tup[static-MACRO, <fn>]`
-/// becomes `(true, <fn>)`; anything else is `(false, value)` (4.5).
 fn strip_static(arena: &Arena, val: NodeId) -> (bool, NodeId) {
     if let Node::Tup(items) = arena.node(val)
         && items.len() == 2
@@ -1170,7 +1239,6 @@ fn strip_static(arena: &Arena, val: NodeId) -> (bool, NodeId) {
     (false, val)
 }
 
-/// The set of resource type names declared in a module (4.5).
 fn resource_names(arena: &Arena, roots: &[NodeId]) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
     for &root in roots {
@@ -1181,21 +1249,14 @@ fn resource_names(arena: &Arena, roots: &[NodeId]) -> std::collections::HashSet<
     out
 }
 
-/// Whether a member's first parameter is `self: <rname>` (4.5, decision 2b): the
-/// field name must be `self` and its annotation must name the enclosing resource.
 fn first_param_is_self(params: &[(String, Type)], rname: &str) -> bool {
     matches!(params.first(), Some((n, t)) if n == "self" && *t == Type::Named(rname.to_string()))
 }
 
-/// Whether a member declares a `self` first parameter at all (any annotation) —
-/// used to reject `self` on a `Static` member (4.5).
 fn declares_self(params: &[(String, Type)]) -> bool {
     matches!(params.first(), Some((n, _)) if n == "self")
 }
 
-/// Validate every `DefResource` in the module (4.5): the `New`/`Drop`/`Static`
-/// marker discipline, the `self: <resource>` requirement on methods, and the
-/// `borrow`-position restriction on the file's exports and stored types.
 fn validate_variant_payloads(arena: &Arena, roots: &[NodeId]) -> Result<(), String> {
     for &root in roots {
         if let Some((name, TypeDef::Variant(cases))) = as_deftype(arena, root) {
@@ -1262,17 +1323,12 @@ fn validate_defresources(arena: &Arena, roots: &[NodeId]) -> Result<(), String> 
                 }
             }
         }
-        // A `borrow(<resource>)` is legal only in parameter position; it must not
-        // appear in a result or stored (DefType / value-def) type (4.5, WIT).
+
         check_no_borrow_in_stored(arena, root, &resources)?;
     }
     Ok(())
 }
 
-/// Reject `borrow(<resource>)` in a result or stored type position (4.5): the
-/// result annotation of an `Export`, and the payload/field/alias types of a
-/// `DefType`. Parameter positions (`Fn`/`Export params:`) are left alone — that
-/// is where `borrow` is allowed.
 fn check_no_borrow_in_stored(
     arena: &Arena,
     root: NodeId,
@@ -1317,10 +1373,6 @@ fn check_no_borrow_in_stored(
     Ok(())
 }
 
-/// Whether a type form contains a `borrow(<resource>)` application anywhere
-/// (4.5). Only a `borrow` whose argument names a known resource counts, so an
-/// unrelated user function literally named `borrow` in a value position is not
-/// mistaken for the type spelling.
 fn form_borrows_resource(
     arena: &Arena,
     id: NodeId,
@@ -1348,18 +1400,15 @@ fn form_borrows_resource(
     }
 }
 
-/// If `id` is `Fn {params} body`, return the parsed parameter list.
 fn fn_params(arena: &Arena, id: NodeId) -> Option<Vec<(String, Type)>> {
     let (params_id, _body) = as_fn(arena, id)?;
     Some(parse_params(arena, params_id))
 }
 
-/// If `id` is `Fn {params} body`, return its body form.
 fn fn_body(arena: &Arena, id: NodeId) -> Option<NodeId> {
     as_fn(arena, id).map(|(_p, body)| body)
 }
 
-/// If `id` is `Fn {params} body`, return `(params_form, body_form)`.
 fn as_fn(arena: &Arena, id: NodeId) -> Option<(NodeId, NodeId)> {
     let Node::Tup(items) = arena.node(id) else {
         return None;
@@ -1376,9 +1425,6 @@ fn as_fn(arena: &Arena, id: NodeId) -> Option<(NodeId, NodeId)> {
     Some((*params, *body))
 }
 
-/// Parse a `Fn` parameter form (`{a: t b …}` record, or `{}` flags). Untyped
-/// parameters get `Unknown`. `pub(crate)`: the wasm backend reads declared
-/// param types to give internal functions typed (unboxed) signatures (5.2).
 pub(crate) fn parse_params(arena: &Arena, id: NodeId) -> Vec<(String, Type)> {
     match arena.node(id) {
         Node::Rec(fields) => fields
@@ -1391,8 +1437,6 @@ pub(crate) fn parse_params(arena: &Arena, id: NodeId) -> Vec<(String, Type)> {
 }
 
 impl<'a> Checker<'a> {
-    /// Infer (and optionally check against `expected`) the type of expression
-    /// `id` in `scope`. On a provable conflict, returns `Err(eval-error-msg)`.
     fn check(
         &self,
         id: NodeId,
@@ -1405,15 +1449,17 @@ impl<'a> Checker<'a> {
         {
             return Err(self.type_error(id, exp, &ty));
         }
-        // Strict mode (3.9): an expression the checker cannot give a concrete
-        // type is an error. Top-level declaration forms and unexpanded macro
-        // calls are exempt — declarations carry no value, and macro output is
-        // checked post-expansion.
-        if matches!(ty, Type::Unknown) && strict() && !self.strict_exempt(id) {
-            return Err(
-                "eval error: cannot infer a static type for this expression (strict mode)"
-                    .to_string(),
-            );
+
+        if matches!(ty, Type::Unknown)
+            && strict()
+            && self.imports_resolved
+            && self.speculative_node_types.borrow().is_empty()
+            && !self.strict_exempt(id)
+        {
+            return Err(format!(
+                "eval error: cannot infer a static type for `{}`; annotate its parameters or result",
+                crate::printer::print(self.arena, id)
+            ));
         }
         if let Some(table) = self.speculative_node_types.borrow_mut().last_mut() {
             table.insert(id, ty.clone());
@@ -1423,8 +1469,6 @@ impl<'a> Checker<'a> {
         Ok(ty)
     }
 
-    /// The inferred type of a module-level value def, memoised. Recursive
-    /// references contribute `Unknown`.
     fn infer_speculative(&self, id: NodeId, scope: &mut Scope) -> Result<Type, String> {
         struct ShadowTable<'a>(&'a RefCell<Vec<NodeTypes>>);
         impl Drop for ShadowTable<'_> {
@@ -1461,8 +1505,6 @@ impl<'a> Checker<'a> {
         t
     }
 
-    /// Forms strict mode does not require a concrete type for: top-level
-    /// declaration heads and (not-yet-expanded) macro calls.
     fn strict_exempt(&self, id: NodeId) -> bool {
         let Node::Tup(items) = self.arena.node(id) else {
             return false;
@@ -1498,9 +1540,6 @@ impl<'a> Checker<'a> {
         format!("eval error: type mismatch: expected {expected:?}, got {actual:?}")
     }
 
-    /// The declared member list of a flags type `t` refers to, if any:
-    /// a structural `Flags`, or a nominal name resolving to a `Flags`
-    /// `DefType`. Used to thread a declared flags type onto a flags literal.
     fn flags_members<'t>(&'t self, t: &'t Type) -> Option<&'t Vec<String>> {
         match t {
             Type::Flags(ms) => Some(ms),
@@ -1524,16 +1563,23 @@ impl<'a> Checker<'a> {
             Node::Dec(_) => Ok(Type::FloatLit),
             Node::Char(_) => Ok(Type::Char),
             Node::Str(_) => Ok(Type::String),
-            Node::Sym(name) => self.infer_name(name, scope),
-            // A qualified name (`alias/fn`) used as a *value* is the imported
-            // function itself, which we do not model (function types are Phase
-            // D); calls through it are typed in `infer_tup`.
-            Node::Qsym(..) => Ok(Type::Unknown),
+            Node::Sym(name) => {
+                if !self.defs.contains(name)
+                    && !self.variant_cases.contains_key(name)
+                    && let Some(Type::Fn(params, _)) = expected
+                    && crate::builtins::tuple_ctor_arity(name)
+                        .is_some_and(|arity| arity == params.len())
+                {
+                    return Ok(Type::Fn(
+                        params.clone(),
+                        Box::new(Type::Tuple(params.clone())),
+                    ));
+                }
+                self.infer_name(name, scope)
+            }
+
             Node::Lst(items) => self.infer_list(items, expected, scope),
-            // A record literal in value position types structurally (3.3): its
-            // fields' types, checked against the expected record's declared
-            // field types when the context supplies one (a nominal `Named`
-            // record resolves through the `DefType` table).
+
             Node::Rec(fields) => {
                 let exp_fields: Option<Vec<(String, Type)>> = match expected {
                     Some(Type::Record(fs)) => Some(fs.clone()),
@@ -1549,21 +1595,14 @@ impl<'a> Checker<'a> {
                         .as_ref()
                         .and_then(|fs| fs.iter().find(|(n, _)| n == k).map(|(_, t)| t.clone()));
                     let t = self.check(*v, exp.as_ref(), scope)?;
+                    if strict() && contains_fn(&t) {
+                        return Err("eval error: runtime records cannot store function values; use statically resolved functions or macros".into());
+                    }
                     out.push((k.clone(), t));
                 }
                 Ok(Type::Record(out))
             }
-            // A flags literal in a context expecting a declared flags type
-            // takes THAT type (its full declared member set), not its own
-            // narrow set of listed members. This threads the declaration's
-            // bit positions to the construction site: a record field
-            // `perms: permissions` set to `{read exec}` must have the node
-            // type `flags{read write exec}` so the canonical layout uses the
-            // declaration's positions (bit for `exec` = index 2), never the
-            // literal's (`exec` = index 1). When the literal is not a subset
-            // of the declared members the compatibility check below still
-            // rejects it. Absent a flags expectation the literal keeps its
-            // own member set (used only for gradual/boxed flags).
+
             Node::Flg(names) => {
                 if let Some(decl) = expected.and_then(|e| self.flags_members(e))
                     && names.iter().all(|m| decl.contains(m))
@@ -1577,24 +1616,15 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Resolve a bare name to its type. A name is bound if it is a parameter, a
-    /// `Let`/`Match` binding (in `scope`), a module-level `Def`, or a builtin.
-    /// Anything else is an unbound-name compile error.
     fn infer_name(&self, name: &str, scope: &Scope) -> Result<Type, String> {
         if let Some((_, t)) = scope.iter().rev().find(|(n, _)| n == name) {
             return Ok(t.clone());
         }
         if self.defs.contains(name) {
-            // A module-level *value* def types as its expression's inferred
-            // type (memoised, recursion-guarded).
             if let Some(&expr) = self.value_defs.get(name) {
                 return Ok(self.value_def_type(name, expr));
             }
-            // A module-level *function* def used as a bare value (5.8, Phase D):
-            // its arrow type `(P…) -> R`, when the def has a single signature
-            // with fully-concrete parameters and result (the zero-capture case
-            // of defunctionalization). An overloaded name, or one whose arrow is
-            // not fully concrete, stays gradual `Unknown`.
+
             if let Some(sigs) = self.sigs.get(name)
                 && sigs.len() == 1
                 && let Some(arrow) = self.arrow_of_sig(&sigs[0])
@@ -1609,16 +1639,30 @@ impl<'a> Checker<'a> {
         if name == "pi" {
             return Ok(Type::F64);
         }
-        if is_builtin(name) {
-            return Ok(Type::Unknown);
-        }
-        // A nullary case of a `DefType` variant used as a value: its nominal
-        // variant type (3.3). A *payloaded* case used as a value is the case's
-        // constructor function — first-class functions are gradual (Phase D).
+
         if let Some((tyname, payload)) = self.variant_cases.get(name) {
             if payload.is_empty() {
                 return Ok(Type::Named(tyname.clone()));
             }
+            return Ok(Type::Fn(
+                payload.clone(),
+                Box::new(Type::Named(tyname.clone())),
+            ));
+        }
+        if is_builtin(name) {
+            return Ok(Type::Unknown);
+        }
+        if let Some((params, result)) = self.import_sigs.get(name) {
+            return Ok(Type::Fn(
+                params.iter().map(|(_, ty)| ty.clone()).collect(),
+                Box::new(result.clone()),
+            ));
+        }
+        if self
+            .import_aliases
+            .iter()
+            .any(|alias| name.starts_with(&format!("{alias}-")))
+        {
             return Ok(Type::Unknown);
         }
         Err(format!("eval error: unbound name `{name}`"))
@@ -1644,21 +1688,18 @@ impl<'a> Checker<'a> {
             } else if let Some(u) = unify(&self.types, &elem, &t) {
                 elem = u;
             } else {
-                // A list has exactly one element type (2.2 drop: no
-                // heterogeneous lists — mixed shapes want a variant, and
-                // code-like data is a quoted tree, which is never checked
-                // here).
                 return Err(format!(
                     "eval error: heterogeneous list: elements must share one \
                      type, got {elem:?} and {t:?}"
                 ));
             }
         }
+        if strict() && contains_fn(&elem) {
+            return Err("eval error: runtime lists cannot store function values; use statically resolved functions or macros".into());
+        }
         Ok(Type::List(Box::new(elem)))
     }
 
-    /// A `Tup` in evaluation position is either a core special form (head is a
-    /// `*-MACRO` symbol) or a call `head(args…)`.
     fn infer_tup(
         &self,
         id: NodeId,
@@ -1673,32 +1714,25 @@ impl<'a> Checker<'a> {
             if h.ends_with("-MACRO") {
                 return self.infer_special(h, args, expected, scope);
             }
-            // An indirect application of a function-typed *local* value (5.8): a
-            // parameter or `Let`/`Match` binding whose static type is an arrow
-            // `(P…) -> R`. Check the arguments against the parameter types and
-            // yield `R`. A local shadows a module-level def, so this takes
-            // precedence over the call path below (which resolves builtins and
-            // module defs). Only a fully-concrete arrow lands here; a gradual
-            // callback stays `Unknown` and flows through `infer_call`.
+
             if let Some((_, Type::Fn(params, ret))) = scope.iter().rev().find(|(n, _)| n == h) {
                 let params = params.clone();
                 let ret = (**ret).clone();
                 return self.check_indirect_apply(&params, ret, args, scope);
             }
-            // A call to a known builtin or module-level def.
+            if scope.iter().any(|(name, _)| name == h) {
+                for &argument in args {
+                    self.check(argument, None, scope)?;
+                }
+                return Ok(Type::Unknown);
+            }
+            if let Some((params, result)) = self.import_sigs.get(h).cloned() {
+                return self.check_call_shape(h, &params, result, args, scope);
+            }
+
             return self.infer_call(id, h, args, expected, scope);
         }
-        // A qualified call `alias/fn(args…)`: when the import's WIT signature
-        // is resolved (3.1), check the call against it and type the result;
-        // otherwise stay gradual.
-        if let Node::Qsym(alias, fname) = self.arena.node(head) {
-            let qname = format!("{alias}/{fname}");
-            if let Some((params, result)) = self.import_sigs.get(&qname).cloned() {
-                return self.check_call_shape(&qname, &params, result, args, scope);
-            }
-        }
-        // Head is not a plain symbol (e.g. a computed head): check the
-        // arguments and yield Unknown.
+
         for &a in args {
             self.check(a, None, scope)?;
         }
@@ -1714,11 +1748,6 @@ impl<'a> Checker<'a> {
     ) -> Result<Type, String> {
         match head {
             "fn-MACRO" => {
-                // A `Fn` literal: check its body with the parameters in scope.
-                // Its value type (5.8, Phase D) is the arrow `(P…) -> R` when
-                // every parameter type and the inferred result are fully
-                // concrete; otherwise it stays gradual `Unknown` (a callback the
-                // checker cannot pin down — the strict "function values" case).
                 if let [params_id, body] = args {
                     let mut params = parse_params(self.arena, *params_id);
                     let result_expected = if let Some(Type::Fn(inputs, result)) = expected {
@@ -1756,6 +1785,13 @@ impl<'a> Checker<'a> {
                 if let Node::Rec(fields) = self.arena.node(bindings) {
                     for (k, v) in fields {
                         let t = self.check(*v, None, scope)?;
+                        if strict()
+                            && contains_fn(&t)
+                            && !matches!(self.arena.node(*v), Node::Sym(_))
+                            && as_fn(self.arena, *v).is_none()
+                        {
+                            return Err("eval error: runtime function selection is unsupported; bind a static function or choose a variant tag".into());
+                        }
                         scope.push((k.clone(), t));
                     }
                 }
@@ -1777,11 +1813,7 @@ impl<'a> Checker<'a> {
                     if pair.len() != 2 {
                         continue;
                     }
-                    // Bind the pattern's variables at the types the scrutinee
-                    // implies (3.3): a variant-case pattern binds its payload at
-                    // the declared payload types, a record pattern binds fields
-                    // at their field types, and so on. Anything the scrutinee
-                    // type doesn't determine binds as Unknown.
+
                     self.reject_float_patterns(pair[0])?;
                     let mark = scope.len();
                     self.bind_pattern(pair[0], &scrut_ty, scope);
@@ -1794,8 +1826,7 @@ impl<'a> Checker<'a> {
                         })?,
                     });
                 }
-                // Exhaustiveness (3.12): wherever the scrutinee's type is
-                // known, the clauses must cover every possible value.
+
                 let pats: Vec<NodeId> = items
                     .iter()
                     .filter_map(|&clause| match self.arena.node(clause) {
@@ -1811,20 +1842,16 @@ impl<'a> Checker<'a> {
                 let ty = Type::from_form(self.arena, ty_form);
                 self.check_the(ty_form, &ty, expr, scope)
             }
-            // `Quote` produces a form: the `tree` interchange type (3.7). Its
-            // contents are data, never value-checked.
+
             "quote-MACRO" => Ok(Type::Tree),
-            // `Quasi` also produces a `tree`, but its `Unquote`/`Splice` holes
-            // contain ordinary expressions — check them (3.7).
+
             "quasi-MACRO" => {
                 if let [form] = args {
                     self.check_quasi(*form, scope, 1)?;
                 }
                 Ok(Type::Tree)
             }
-            // A `DefMacro` template is tree -> tree (3.7): its parameters are
-            // bound forms, and its body is ordinary code evaluated at expansion
-            // time — check it with the parameters in scope at `tree`.
+
             "defmacro-MACRO" => {
                 if let [_name_id, params_id, body] = args {
                     let params = parse_params(self.arena, *params_id);
@@ -1837,16 +1864,10 @@ impl<'a> Checker<'a> {
                 }
                 Ok(Type::Unit)
             }
-            // Top-level file forms (`Package`/`Import`/`Export`/`DefType`)
-            // carry annotations, not value expressions: opaque to the value
-            // checker.
+
             "package-MACRO" | "import-MACRO" | "instantiate-MACRO" | "export-MACRO"
             | "deftype-MACRO" => Ok(Type::Unknown),
-            // Any other `-MACRO` head is a user (or foreign) macro call that
-            // `eval_snippet` expands at runtime. We cannot statically see
-            // through it, so check nothing and stay gradual. Crucially we do NOT
-            // value-check its arguments: a macro receives its arguments as
-            // *forms* (data), so a bare name there is not an unbound use.
+
             _ => {
                 let _ = args;
                 Ok(Type::Unknown)
@@ -1854,10 +1875,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Walk a `Quasi` template's form. Everything is data except the
-    /// `Unquote`/`Splice` holes at depth 1, whose contents are ordinary
-    /// expressions checked in the enclosing scope; nesting mirrors the
-    /// interpreter's depth rules (`interp::quasi`).
     fn check_quasi(&self, id: NodeId, scope: &mut Scope, depth: u32) -> Result<(), String> {
         match self.arena.node(id) {
             Node::Tup(items) => {
@@ -1871,9 +1888,6 @@ impl<'a> Checker<'a> {
                             return Ok(());
                         }
                         "splice-MACRO" if depth == 1 => {
-                            // A splice's expression must be a list (the
-                            // interpreter enforces this at runtime); a `tree`
-                            // can itself be a list form.
                             let t = self.check(arg, None, scope)?;
                             if !matches!(t, Type::List(_) | Type::Tree | Type::Unknown) {
                                 return Err(format!(
@@ -1912,9 +1926,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Check a `The ty expr` ascription. Numeric literals are range-checked at
-    /// compile time, producing the SAME message the interpreter's runtime check
-    /// produces so a locked example keeps matching.
     fn check_the(
         &self,
         ty_form: NodeId,
@@ -1925,12 +1936,6 @@ impl<'a> Checker<'a> {
         let ty_text = type_name(self.arena, ty_form);
         match self.arena.node(expr) {
             Node::Int(n) => {
-                // An int literal ascribed to a concrete non-numeric type is a
-                // static error (`The bool 1`). This is what `If`'s desugaring
-                // (`Match The bool c [(true t) (false e)]`, 5.7) relies on to
-                // keep a non-bool condition a compile-time error. Gradual,
-                // aliased-but-unresolved, `tree`, and numeric targets keep
-                // their existing range-only treatment.
                 let rt = self.resolve_alias(ty);
                 let numeric_or_gradual = rt.is_int()
                     || rt.is_float()
@@ -1950,9 +1955,6 @@ impl<'a> Checker<'a> {
                 Ok(ty.clone())
             }
             Node::Dec(_) => {
-                // A float literal only conforms to a float type (or a gradual /
-                // aliased / `tree` target); anything else — an int type, or a
-                // concrete non-numeric type like `bool` — is a static error.
                 let rt = self.resolve_alias(ty);
                 let ok = rt.is_float()
                     || matches!(
@@ -1968,17 +1970,12 @@ impl<'a> Checker<'a> {
                 Ok(ty.clone())
             }
             _ => {
-                // `The` is a pure static ascription (2.2 drop: no runtime
-                // check survives): the annotated type is the expected type of
-                // the expression, whatever the annotation's shape — a bare
-                // name or a constructor like `list(s32)`.
                 self.check(expr, Some(ty), scope)?;
                 Ok(ty.clone())
             }
         }
     }
 
-    /// Check a call `name(args…)` to a builtin or a module-level def.
     fn infer_call(
         &self,
         id: NodeId,
@@ -1988,26 +1985,37 @@ impl<'a> Checker<'a> {
         scope: &mut Scope,
     ) -> Result<Type, String> {
         if let Some(sigs) = self.sigs.get(name) {
-            // An overload set (≥2 same-named Fn defs): resolve per call site by
-            // static argument types, then by the expected (return) type.
             if sigs.len() > 1 {
                 return self.resolve_overload(id, name, sigs, args, expected, scope);
             }
-            // A single module-level def with a known signature: check arity and
-            // argument types against the parameters (Phase A behaviour).
+
             return self.check_def_call(name, &sigs[0], args, scope);
         }
-        // A constructor call of a `DefType` variant case: `days(30)` types as
-        // its nominal variant (3.3).
+        if let Some((params, result)) = self.resource_sigs.get(name) {
+            return self.check_call_shape(name, params, result.clone(), args, scope);
+        }
+        if let Some(&expr) = self.value_defs.get(name)
+            && let Type::Fn(params, result) = self.value_def_type(name, expr)
+        {
+            return self.check_indirect_apply(&params, *result, args, scope);
+        }
+
         if let Some((tyname, payload)) = self.variant_cases.get(name).cloned() {
             return self.check_variant_ctor(name, &tyname, &payload, args, scope);
         }
-        // A builtin we model, or one we don't (Unknown).
+        if !is_builtin(name)
+            && !self
+                .import_aliases
+                .iter()
+                .any(|alias| name.starts_with(&format!("{alias}-")))
+        {
+            return Err(format!(
+                "eval error: unbound name `{name}` in call position"
+            ));
+        }
         self.check_builtin_call(name, args, scope)
     }
 
-    /// Check a variant-case constructor call `case(args…)` against the case's
-    /// declared payload types; the call's type is the owning nominal variant.
     fn check_variant_ctor(
         &self,
         case: &str,
@@ -2016,8 +2024,6 @@ impl<'a> Checker<'a> {
         args: &[NodeId],
         scope: &mut Scope,
     ) -> Result<Type, String> {
-        // A nullary case is a value, not a function: `north()` is an error the
-        // interpreter also raises ("not callable"); write the bare name.
         if payload.is_empty() {
             return Err(format!(
                 "eval error: variant case `{case}` of `{tyname}` takes no payload \
@@ -2037,14 +2043,6 @@ impl<'a> Checker<'a> {
         Ok(Type::Named(tyname.to_string()))
     }
 
-    /// Resolve an overloaded call `name(args…)` to exactly one member of its
-    /// overload set, recording the chosen index for [`resolve_overloads`].
-    ///
-    /// Step 1: keep every candidate whose arity matches and whose parameter
-    /// types are each compatible with the corresponding static argument type.
-    /// Step 2: if more than one survives, filter by the expected result type
-    /// from context (an enclosing `The`, or any propagated expected type). A
-    /// unique survivor resolves; zero or several is an ambiguity/no-match error.
     fn resolve_overload(
         &self,
         id: NodeId,
@@ -2054,23 +2052,15 @@ impl<'a> Checker<'a> {
         expected: Option<&Type>,
         scope: &mut Scope,
     ) -> Result<Type, String> {
-        // Infer the argument types once (also checks their subexpressions).
         let arg_tys: Vec<Type> = args
             .iter()
             .map(|&a| self.check(a, None, scope))
             .collect::<Result<_, _>>()?;
 
-        // Step 1 — argument-directed filtering.
         let mut candidates: Vec<usize> = (0..sigs.len())
             .filter(|&i| args_match(&self.types, &sigs[i].params, &arg_tys))
             .collect();
 
-        // Step 2 — return-type-directed filtering, only when arguments leave
-        // more than one candidate and the context supplies an expected type.
-        // Keep the narrowed set whenever it is non-empty; if nothing matches the
-        // expected type, fall back to the argument-filtered set so the error
-        // below reports the (still-ambiguous) call rather than a spurious
-        // no-match.
         if candidates.len() > 1
             && let Some(exp) = expected
         {
@@ -2101,10 +2091,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Infer the result type of an overload candidate by checking its Fn body
-    /// with its parameters in scope. Used for return-type-directed resolution.
-    /// The arrow type of a single function signature, when fully concrete
-    /// (5.8). `None` when any parameter or the inferred result is gradual.
     fn arrow_of_sig(&self, sig: &Sig) -> Option<Type> {
         let ptys: Vec<Type> = sig.params.iter().map(|(_, t)| t.clone()).collect();
         if !ptys.iter().all(fully_concrete) {
@@ -2121,23 +2107,16 @@ impl<'a> Checker<'a> {
         let Some(body) = sig.body else {
             return Type::Unknown;
         };
-        // The result depends only on the body, so memoise it: a body can recur
-        // through return-type-directed resolution and is also inferred again for
-        // the chosen winner, all yielding the same type.
+
         if let Some(cached) = self.sig_result_cache.borrow().get(&body) {
             return cached.clone();
         }
-        // Recursion guard: a recursive (or mutually recursive) def re-enters
-        // its own result inference through the call in its body. The recursive
-        // occurrence contributes no constraint (`Unknown`); the non-recursive
-        // branches still determine the result.
+
         if !self.sig_in_progress.borrow_mut().insert(body) {
             return Type::Unknown;
         }
         let mut scope: Scope = sig.params.clone();
-        // Inference errors inside a candidate body don't disqualify it here (the
-        // body is checked properly when its own Def is checked); treat them as
-        // an unconstrained result so resolution stays gradual.
+
         let result = self
             .infer_speculative(body, &mut scope)
             .unwrap_or(Type::Unknown);
@@ -2155,20 +2134,10 @@ impl<'a> Checker<'a> {
         args: &[NodeId],
         scope: &mut Scope,
     ) -> Result<Type, String> {
-        // The call's result type: inferred from the def's body exactly as
-        // return-type-directed overload resolution does (3.2 — calling a def no
-        // longer erases type information).
         let result = self.infer_sig_result(sig);
         self.check_call_shape(name, &sig.params, result, args, scope)
     }
 
-    /// Check an indirect application of a function-typed value against its
-    /// arrow (5.8): positional arity + argument-type match, plus the single
-    /// bundled-payload shape `f(x)` for a one-parameter arrow. The arrow type
-    /// drops parameter *names*, so the by-name record call form is unavailable
-    /// here — a record argument to a one-parameter arrow is an ordinary sole
-    /// value, exactly as the backend's uniform-payload calling convention sees
-    /// it. Returns the arrow's result type.
     fn check_indirect_apply(
         &self,
         params: &[Type],
@@ -2197,9 +2166,6 @@ impl<'a> Checker<'a> {
         Ok(ret)
     }
 
-    /// Check a call against a known signature, in every §4.2 call shape:
-    /// by-name record payload, single bundled payload, and positional.
-    /// Shared by local def calls and resolved qualified imports (3.1).
     fn check_call_shape(
         &self,
         name: &str,
@@ -2208,7 +2174,6 @@ impl<'a> Checker<'a> {
         args: &[NodeId],
         scope: &mut Scope,
     ) -> Result<Type, String> {
-        // First, infer the argument types (also checks their subexpressions).
         let arg_tys: Vec<Type> = args
             .iter()
             .map(|&a| self.check(a, None, scope))
@@ -2216,10 +2181,6 @@ impl<'a> Checker<'a> {
 
         let nparams = sig_params.len();
 
-        // The single-record-arg-by-name form: `f({a: … b: …})` binds by field
-        // name when the field names are exactly the parameter names — check
-        // each field's type against its parameter (3.3). A record whose fields
-        // do NOT match the parameter names is an ordinary single value.
         if args.len() == 1 {
             if let Type::Record(fs) = &arg_tys[0] {
                 let mut fnames: Vec<&str> = fs.iter().map(|(n, _)| n.as_str()).collect();
@@ -2239,13 +2200,10 @@ impl<'a> Checker<'a> {
                     return Ok(result);
                 }
                 if nparams != 1 {
-                    // Field names don't bind the parameters and the record is
-                    // not a single-parameter payload: the interpreter rejects
-                    // this bind at runtime; stay gradual here.
                     return Ok(result);
                 }
             }
-            // A single argument to a single parameter taking the whole payload.
+
             if nparams == 1 {
                 if !self.param_compatible(&sig_params[0].1, &arg_tys[0]) {
                     return Err(self.param_type_error(
@@ -2259,10 +2217,6 @@ impl<'a> Checker<'a> {
             }
         }
 
-        // Several arguments to a sole parameter bundle into a tuple payload
-        // (§4.2, the interpreter's `bind_params`; the wasm backend's
-        // `bind_args` mirrors it). Check the bundle against the parameter's
-        // type instead of preempting a call the interpreter runs (5.10).
         if nparams == 1 && args.len() > 1 {
             let bundle = Type::Tuple(arg_tys.clone());
             if !self.param_compatible(&sig_params[0].1, &bundle) {
@@ -2276,7 +2230,6 @@ impl<'a> Checker<'a> {
             return Ok(result);
         }
 
-        // Positional call: arity must match.
         if args.len() != nparams {
             return Err(format!(
                 "eval error: `{name}` expects {nparams} arguments, got {}",
@@ -2291,24 +2244,16 @@ impl<'a> Checker<'a> {
         Ok(result)
     }
 
-    /// Parameter compatibility for a call shape: ordinary gradual
-    /// compatibility, plus the boundary widening the generic bridge performs —
-    /// a Wavelet `string` lowers as `list<u8>` (see tests/generic_bridge.rs),
-    /// so a `list<u8>` parameter accepts a string.
     fn param_compatible(&self, pt: &Type, at: &Type) -> bool {
         if compatible(&self.types, pt, at) {
             return true;
         }
         matches!(
-            (pt, at),
-            (Type::List(e), Type::String) if **e == Type::U8
+            (self.resolve_alias(pt), self.resolve_alias(at)),
+            (Type::List(e), Type::String) if *e == Type::U8
         )
     }
 
-    /// The error for an argument that does not fit its parameter. An integer
-    /// literal that misses a concrete int parameter's range produces the SAME
-    /// message the interpreter's runtime bind check produces (`bind_one`), so
-    /// moving the check to compile time does not change the reported error.
     fn param_type_error(&self, pname: &str, pt: &Type, at: &Type, fname: &str) -> String {
         if let Type::IntLit(Some(n)) = at
             && pt.is_int()
@@ -2321,281 +2266,34 @@ impl<'a> Checker<'a> {
         format!("eval error: argument `{pname}` to `{fname}` has the wrong type")
     }
 
-    /// Check a builtin call. Every builtin has a typed signature here (3.5):
-    /// its result type is modelled, and operands are constrained wherever the
-    /// runtime is strict about them. Argument subexpressions are always checked.
-    fn check_builtin_call(
-        &self,
-        name: &str,
-        args: &[NodeId],
-        scope: &mut Scope,
-    ) -> Result<Type, String> {
-        if matches!(name, "map" | "filter" | "fold") {
-            let expected_arity = if name == "fold" { 3 } else { 2 };
-            if args.len() != expected_arity {
-                return Err(format!(
-                    "eval error: `{name}` expects {expected_arity} arguments"
-                ));
-            }
-            let sequence = self.check(*args.last().unwrap(), None, scope)?;
-            let element = match self.resolve_alias(&sequence) {
-                Type::List(element) => *element,
-                Type::Unknown => Type::Unknown,
-                _ => return Err(format!("eval error: `{name}` requires a list")),
-            };
-            let accumulator = if name == "fold" {
-                Some(self.check(args[1], None, scope)?)
-            } else {
-                None
-            };
-            let parameters = match &accumulator {
-                Some(initial) => vec![initial.clone(), element.clone()],
-                None => vec![element.clone()],
-            };
-            let result = match name {
-                "filter" => Type::Bool,
-                "fold" => accumulator.clone().unwrap(),
-                _ => Type::Unknown,
-            };
-            let callback = self.check(
-                args[0],
-                Some(&Type::Fn(parameters, Box::new(result))),
-                scope,
-            )?;
-            let Type::Fn(_, result) = callback else {
-                return Ok(if name == "filter" {
-                    sequence
-                } else {
-                    Type::Unknown
-                });
-            };
-            return Ok(match name {
-                "map" => Type::List(result),
-                "filter" => sequence,
-                _ => *result,
-            });
-        }
-        let arg_tys: Vec<Type> = args
-            .iter()
-            .map(|&a| self.check(a, None, scope))
-            .collect::<Result<_, _>>()?;
-
-        match name {
-            // Arithmetic: every operand must be numeric; result is the unified
-            // numeric type (Unknown if any operand is Unknown).
-            "add" | "sub" | "mul" | "div" | "rem" | "neg" | "abs" => {
-                let mut result = Type::Unknown;
-                let mut any_unknown = false;
-                let mut seeded = false;
-                for t in &arg_tys {
-                    if !t.numeric() {
-                        return Err(format!("eval error: `{name}` requires numeric operands"));
-                    }
-                    if matches!(t, Type::Unknown) {
-                        any_unknown = true;
-                    }
-                    if !seeded {
-                        result = t.clone();
-                        seeded = true;
-                    } else if let Some(u) = unify(&self.types, &result, t) {
-                        result = u;
-                    } else {
-                        result = Type::Unknown;
-                    }
-                }
-                if any_unknown {
-                    Ok(Type::Unknown)
-                } else {
-                    Ok(result)
-                }
-            }
-            // `min`/`max` return one of their operands and — via the
-            // interpreter's `compare` — are defined over numbers, strings, and
-            // chars. The result is the unified operand type, gradual when they
-            // disagree.
-            "min" | "max" => {
-                let mut result = Type::Unknown;
-                for t in &arg_tys {
-                    if !comparable(t) {
-                        return Err(format!("eval error: `{name}` requires comparable operands"));
-                    }
-                    result = unify(&self.types, &result, t).unwrap_or(Type::Unknown);
-                }
-                Ok(result)
-            }
-            // str-cat: every arg must be string/char/unknown; result string.
-            "str-cat" => {
-                for t in &arg_tys {
-                    if !matches!(t, Type::String | Type::Char | Type::Unknown) {
-                        return Err(format!("eval error: `{name}` requires string operands"));
-                    }
-                }
-                Ok(Type::String)
-            }
-            "upper" | "lower" => {
-                for t in &arg_tys {
-                    if !matches!(t, Type::String | Type::Unknown) {
-                        return Err(format!("eval error: `{name}` requires a string operand"));
-                    }
-                }
-                Ok(Type::String)
-            }
-            // `eq` is total structural equality over every type; result bool.
-            "eq" => Ok(Type::Bool),
-            // Ordering comparisons are defined over numbers, strings, and chars.
-            "lt" | "le" | "gt" | "ge" => {
-                for t in &arg_tys {
-                    if !comparable(t) {
-                        return Err(format!("eval error: `{name}` requires comparable operands"));
-                    }
-                }
-                Ok(Type::Bool)
-            }
-            "not" => {
-                for t in &arg_tys {
-                    if !matches!(t, Type::Bool | Type::Unknown) {
-                        return Err("eval error: `not` requires a bool operand".to_string());
-                    }
-                }
-                Ok(Type::Bool)
-            }
-            // `empty`/`contains` report a property; result bool.
-            "empty" | "contains" => Ok(Type::Bool),
-            // `len` returns a plain Int that range-checks against any int type
-            // at runtime (and promotes to float), so model it as an
-            // unconstrained int literal — not concrete `s64`, which would
-            // falsely reject e.g. `The u8 len(xs)` that the interpreter accepts.
-            "len" => Ok(Type::IntLit(None)),
-            // Option/result constructors (3.3/3.8): the payload's type flows in;
-            // the other side stays unconstrained until unified against context.
-            // Multiple args bundle to a tuple payload (`some(1 2)`).
-            "some" => Ok(Type::Option(Box::new(ctor_payload(&arg_tys)))),
-            // `ok()`/`err()` with no argument construct the payload-less case
-            // (4.2): the constructed arm is absent (`Unit`); the other arm is
-            // unconstrained until unified against context.
-            "ok" => Ok(Type::Result(
-                Box::new(result_ctor_payload(&arg_tys)),
-                Box::new(Type::Unknown),
-            )),
-            "err" => Ok(Type::Result(
-                Box::new(Type::Unknown),
-                Box::new(result_ctor_payload(&arg_tys)),
-            )),
-            // Sequence ops (3.5/3.8): element types flow through.
-            "get" | "head" => Ok(elem_type(arg_tys.first())),
-            "tail" | "reverse" => Ok(arg_tys.first().cloned().unwrap_or(Type::Unknown)),
-            "put" if arg_tys.len() == 3 => {
-                let elem = unify(&self.types, &elem_type(arg_tys.first()), &arg_tys[2])
-                    .unwrap_or(Type::Unknown);
-                Ok(Type::List(Box::new(elem)))
-            }
-            "push" if arg_tys.len() == 2 => {
-                let elem = unify(&self.types, &elem_type(arg_tys.first()), &arg_tys[1])
-                    .unwrap_or(Type::Unknown);
-                Ok(Type::List(Box::new(elem)))
-            }
-            "concat" if arg_tys.len() == 2 => Ok(unify(&self.types, &arg_tys[0], &arg_tys[1])
-                .unwrap_or(Type::List(Box::new(Type::Unknown)))),
-            "range" => Ok(Type::List(Box::new(Type::S64))),
-            "zip" if arg_tys.len() == 2 => Ok(Type::List(Box::new(Type::Tuple(vec![
-                elem_type(arg_tys.first()),
-                elem_type(arg_tys.get(1)),
-            ])))),
-            // The mapper's result type is not modelled (closures are untyped in
-            // Phase A), so `map` yields list<unknown>; `filter` preserves its
-            // sequence's type; `fold`'s accumulator is unconstrained.
-            "split" => Ok(Type::List(Box::new(Type::String))),
-            "join" => Ok(Type::String),
-            "to-string" | "form-kind" => Ok(Type::String),
-            // `read` produces a form or an error string (3.7).
-            // Meta-layer builtins are ordinary typed functions over `tree`
-            // (3.7): `gensym` mints a fresh symbol form, `expand` maps a form
-            // to a form, `rec-key` projects a record form's first key as a
-            // symbol form. (`rec-val` yields the field's *value*, which on a
-            // runtime record can be anything — it stays gradual.)
-            "gensym" | "expand" | "rec-key" => Ok(Type::Tree),
-            // `rec-val` projects a record's *first field's value*: typed when
-            // the record's static type knows that field.
-            "rec-val" => match arg_tys.first() {
-                Some(Type::Record(fs)) if !fs.is_empty() => Ok(fs[0].1.clone()),
-                _ => Ok(Type::Unknown),
-            },
-            // Numeric conversions: the result is the named concrete type. A
-            // literal argument is range-checked at compile time with the SAME
-            // message the runtime conversion produces (3.4).
-            "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32" | "to-s64" => {
-                let ty = Type::from_name(&name[3..]);
-                if let [arg] = args
-                    && let Node::Int(n) = self.arena.node(*arg)
-                    && !int_in_range(*n, &ty)
-                {
-                    return Err(format!("eval error: `{name}`: {n} out of range"));
-                }
-                Ok(ty)
-            }
-            "to-f32" => Ok(Type::F32),
-            "to-f64" => Ok(Type::F64),
-            "to-char" => {
-                if let [arg] = args
-                    && let Node::Int(n) = self.arena.node(*arg)
-                    && u32::try_from(*n).ok().and_then(char::from_u32).is_none()
-                {
-                    return Err(format!(
-                        "eval error: `to-char`: {n} is not a Unicode scalar value"
-                    ));
-                }
-                Ok(Type::Char)
-            }
-            // Unit-returning effects.
-            "cell-set" | "drop" => Ok(Type::Unit),
-            // Tuple constructors (0.1): `tupleN` takes exactly N arguments and
-            // its result is the tuple of the argument types — no ascription
-            // needed. Arity is static and exact; there is no variadic form.
-            _ if crate::builtins::tuple_ctor_arity(name).is_some() => {
-                let n = crate::builtins::tuple_ctor_arity(name).unwrap();
-                if arg_tys.len() != n {
-                    return Err(format!(
-                        "eval error: `{name}` expects {n} argument(s), got {}",
-                        arg_tys.len()
-                    ));
-                }
-                Ok(Type::Tuple(arg_tys))
-            }
-            // Everything else (apply/gensym/expand/rec-key/rec-val/cell-new/
-            // cell-get, form accessors): result Unknown, args unconstrained
-            // (already checked above). 3.7 types the form accessors as tree.
-            _ => Ok(Type::Unknown),
-        }
-    }
-
-    /// Bind every variable name appearing in a Match pattern, at the type the
-    /// scrutinee's type `ty` implies for its position (3.3); `Unknown` wherever
-    /// the scrutinee type does not determine it.
     fn bind_pattern(&self, pat: NodeId, ty: &Type, scope: &mut Scope) {
+        let resolved = self.resolve_alias(ty);
+        let ty = &resolved;
         match self.arena.node(pat) {
             Node::Sym(name) => {
-                // A bare symbol that names a *bound* nullary case of the
-                // scrutinee's type matches by equality and binds nothing; any
-                // other symbol binds the whole scrutinee.
                 if self.sym_matches_nullary_case(name, ty) {
                     return;
                 }
                 scope.push((name.clone(), ty.clone()));
             }
             Node::Tup(items) => {
-                // A variant-case pattern `(case p…)` against a scrutinee whose
-                // type declares that case: bind the sub-patterns at the payload
-                // types.
                 if let Some((&h, rest)) = items.split_first()
                     && let Node::Sym(case) = self.arena.node(h)
                     && let Some(payload) = self.case_payload(case, ty)
                 {
+                    let payload = if rest.len() > 1 && payload.len() == 1 {
+                        match self.resolve_alias(&payload[0]) {
+                            Type::Tuple(elements) if elements.len() == rest.len() => elements,
+                            _ => payload,
+                        }
+                    } else {
+                        payload
+                    };
                     if rest.len() == payload.len() {
                         for (&p, t) in rest.iter().zip(&payload) {
                             self.bind_pattern(p, t, scope);
                         }
                     } else if rest.len() == 1 && payload.len() > 1 {
-                        // One pattern against a bundled tuple payload.
                         self.bind_pattern(rest[0], &Type::Tuple(payload), scope);
                     } else {
                         for &p in rest {
@@ -2604,7 +2302,7 @@ impl<'a> Checker<'a> {
                     }
                     return;
                 }
-                // An element-wise tuple pattern against a tuple type.
+
                 if let Type::Tuple(ts) = ty
                     && ts.len() == items.len()
                 {
@@ -2643,17 +2341,11 @@ impl<'a> Checker<'a> {
                     self.bind_pattern(*v, &ft, scope);
                 }
             }
-            // Literals in patterns bind nothing.
+
             _ => {}
         }
     }
 
-    /// Reject float-literal patterns (2.1 proposal 2). A `Dec` in pattern
-    /// position would match by f64 equality — a classic footgun (`0.1 + 0.2`
-    /// never matches `0.3`; a `nan` pattern matches nothing, ever) — and no set
-    /// of float literals can ever be exhaustive. Point the author at an explicit
-    /// comparison. Int/bool/char/string literal patterns are unaffected (their
-    /// equality is exact).
     fn reject_float_patterns(&self, pat: NodeId) -> Result<(), String> {
         match self.arena.node(pat) {
             Node::Dec(_) => Err("eval error: a float literal cannot be a Match \
@@ -2676,14 +2368,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Enforce Match exhaustiveness (3.12) for a scrutinee of type `ty` against
-    /// clause patterns `pats`. Where the type cannot be enumerated (numbers,
-    /// strings, chars, lists, trees), an irrefutable catch-all clause is
-    /// required; bools and variant-shaped types (`option`, `result`, nominal
-    /// `DefType` variants) must cover every case. Gradual `Unknown` scrutinees
-    /// are not enforced.
     fn check_exhaustive(&self, ty: &Type, pats: &[NodeId]) -> Result<(), String> {
-        // An irrefutable clause anywhere makes the Match total.
         if pats.iter().any(|&p| self.irrefutable(p, ty)) {
             return Ok(());
         }
@@ -2713,8 +2398,6 @@ impl<'a> Checker<'a> {
                 pats,
             ),
             Type::Result(o, e) => {
-                // An absent arm (`Unit`, 4.2) is a nullary case, covered by the
-                // sub-pattern-less call shape `(ok)` / `(err)`.
                 let arm = |t: &Type| match t {
                     Type::Unit => Vec::new(),
                     t => vec![t.clone()],
@@ -2729,13 +2412,14 @@ impl<'a> Checker<'a> {
                     let cases = cases.clone();
                     self.check_cases_covered(&cases, pats)
                 }
-                // A nominal record: an irrefutable record pattern would have
-                // returned above; anything else does not cover every value.
+
+                Some(TypeDef::Record(fields)) if self.record_patterns_cover(fields, pats) => Ok(()),
                 Some(TypeDef::Record(_)) => Err(non_exhaustive_catch_all()),
-                // Unresolved nominal (imported type) or flags: stay gradual.
+
                 _ => Ok(()),
             },
-            // Enumerable by literals never, so a catch-all is required.
+
+            Type::Record(fields) if self.record_patterns_cover(fields, pats) => Ok(()),
             Type::U8
             | Type::U16
             | Type::U32
@@ -2755,13 +2439,41 @@ impl<'a> Checker<'a> {
             | Type::Record(_)
             | Type::Flags(_)
             | Type::Fn(..)
+            | Type::Cell(_)
             | Type::Tree => Err(non_exhaustive_catch_all()),
-            // Gradual or unenforceable.
+
             Type::Unit | Type::Unknown => Ok(()),
         }
     }
 
-    /// Check that every declared case is covered by some clause pattern.
+    fn record_patterns_cover(&self, fields: &[(String, Type)], patterns: &[NodeId]) -> bool {
+        for (field, ty) in fields {
+            let mut choices = Vec::new();
+            for &pattern in patterns {
+                let Node::Rec(parts) = self.arena.node(pattern) else {
+                    continue;
+                };
+                if !parts.iter().all(|(name, pattern)| {
+                    fields
+                        .iter()
+                        .find(|(declared, _)| declared == name)
+                        .is_some_and(|(_, ty)| name == field || self.irrefutable(*pattern, ty))
+                }) {
+                    continue;
+                }
+                if let Some((_, pattern)) = parts.iter().find(|(name, _)| name == field) {
+                    choices.push(*pattern);
+                } else {
+                    return true;
+                }
+            }
+            if !choices.is_empty() && self.check_exhaustive(ty, &choices).is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
     fn check_cases_covered(
         &self,
         cases: &[(String, Vec<Type>)],
@@ -2785,11 +2497,8 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Whether pattern `p` covers *all* values of variant case `case` with
-    /// payload types `payload`.
     fn covers_case(&self, p: NodeId, case: &str, payload: &[Type]) -> bool {
         match self.arena.node(p) {
-            // A bare symbol naming the (nullary) case.
             Node::Sym(s) => s == case && payload.is_empty(),
             Node::Tup(items) => {
                 let Some((&h, rest)) = items.split_first() else {
@@ -2798,6 +2507,16 @@ impl<'a> Checker<'a> {
                 if !matches!(self.arena.node(h), Node::Sym(s) if s == case) {
                     return false;
                 }
+                let expanded;
+                let payload = if rest.len() > 1 && payload.len() == 1 {
+                    expanded = match self.resolve_alias(&payload[0]) {
+                        Type::Tuple(elements) if elements.len() == rest.len() => elements,
+                        _ => payload.to_vec(),
+                    };
+                    expanded.as_slice()
+                } else {
+                    payload
+                };
                 if rest.len() == payload.len() {
                     rest.iter()
                         .zip(payload)
@@ -2806,9 +2525,6 @@ impl<'a> Checker<'a> {
                     && payload.len() == 1
                     && matches!(payload[0], Type::Unknown)
                 {
-                    // Gradual: a case whose payload type is unknown may be
-                    // payload-less at runtime (`ok()`, 4.2), so the nullary
-                    // call shape `(ok)` counts as covering it.
                     true
                 } else if rest.len() == 1 && payload.len() > 1 {
                     self.irrefutable(rest[0], &Type::Tuple(payload.to_vec()))
@@ -2820,12 +2536,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Whether pattern `p` matches every value of type `ty` (a catch-all for
-    /// that type). A bare symbol binds anything — unless it names a nullary
-    /// case of the scrutinee's variant-shaped type, where it matches by
-    /// equality instead. A record pattern over a known record type is
-    /// irrefutable when its field sub-patterns are; a tuple pattern over a
-    /// same-length tuple type likewise.
     fn irrefutable(&self, p: NodeId, ty: &Type) -> bool {
         match self.arena.node(p) {
             Node::Sym(name) => !self.sym_matches_nullary_case(name, ty),
@@ -2863,8 +2573,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Resolve a nominal alias to its target type (transparently, one level at
-    /// a time up to a small depth bound to tolerate alias cycles).
     fn resolve_alias(&self, ty: &Type) -> Type {
         let mut ty = ty.clone();
         for _ in 0..8 {
@@ -2877,12 +2585,9 @@ impl<'a> Checker<'a> {
         ty
     }
 
-    /// The payload types of variant case `case` under scrutinee type `ty`:
-    /// `Some(payloads)` when `ty` declares that case (a `DefType` variant, an
-    /// `option`, or a `result`), `None` otherwise. A nullary case yields an
-    /// empty payload list.
     fn case_payload(&self, case: &str, ty: &Type) -> Option<Vec<Type>> {
-        match ty {
+        let resolved = self.resolve_alias(ty);
+        match &resolved {
             Type::Named(n) => match self.types.get(n)? {
                 TypeDef::Variant(cases) => cases
                     .iter()
@@ -2896,8 +2601,6 @@ impl<'a> Checker<'a> {
                 _ => None,
             },
             Type::Result(o, e) => match case {
-                // An absent arm (`Unit`, 4.2) makes the case nullary: it is
-                // matched by `(ok)`/`(err)` with no sub-pattern.
                 "ok" => Some(match &**o {
                     Type::Unit => Vec::new(),
                     t => vec![t.clone()],
@@ -2912,13 +2615,6 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Whether a *bare symbol* pattern named `name` matches by equality (rather
-    /// than binding) against a scrutinee of type `ty`. The interpreter's rule
-    /// is "the name is bound in scope to a payload-less variant of itself":
-    /// true for `none` and for the nullary cases of a `DefType` variant (which
-    /// 4.1 binds), but NOT for `ok`/`err` — those names are bound to the
-    /// constructor builtins, so a bare `ok` pattern binds like any other name;
-    /// payload-less result cases are matched with the call shape `(ok)`.
     fn sym_matches_nullary_case(&self, name: &str, ty: &Type) -> bool {
         match self.resolve_alias(ty) {
             Type::Option(_) => name == "none",
@@ -2932,9 +2628,6 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// The element type of a sequence operand: `list<t>` yields `t`; anything else
-/// (including a tuple, whose per-index type a dynamic `get` cannot pin) is
-/// gradual `Unknown`.
 fn elem_type(t: Option<&Type>) -> Type {
     match t {
         Some(Type::List(e)) => (**e).clone(),
@@ -2942,9 +2635,6 @@ fn elem_type(t: Option<&Type>) -> Type {
     }
 }
 
-/// The payload type of an option/result constructor call from its bundled
-/// argument types: no argument is unit-ish `Unknown`, one argument is that
-/// value, several bundle into a tuple.
 fn ctor_payload(arg_tys: &[Type]) -> Type {
     match arg_tys {
         [] => Type::Unknown,
@@ -2953,8 +2643,6 @@ fn ctor_payload(arg_tys: &[Type]) -> Type {
     }
 }
 
-/// [`ctor_payload`] for a *result* arm: `ok()`/`err()` construct the
-/// payload-less case, so no argument means an absent arm (`Type::Unit`, 4.2).
 fn result_ctor_payload(arg_tys: &[Type]) -> Type {
     match arg_tys {
         [] => Type::Unit,
@@ -2962,20 +2650,16 @@ fn result_ctor_payload(arg_tys: &[Type]) -> Type {
     }
 }
 
-/// The catch-all flavour of the non-exhaustive Match error.
 fn non_exhaustive_catch_all() -> String {
     "eval error: non-exhaustive Match: no clause matches every possible value \
      (add a catch-all clause)"
         .to_string()
 }
 
-/// Whether a type is admissible to the ordering builtins (`lt`/`min`/…):
-/// numbers, strings, and chars, plus gradual `Unknown`.
 fn comparable(t: &Type) -> bool {
     t.numeric() || matches!(t, Type::String | Type::Char)
 }
 
-/// The WIT name of a concrete primitive type, for error messages.
 fn wit_name(t: &Type) -> &'static str {
     match t {
         Type::Bool => "bool",
@@ -2995,9 +2679,6 @@ fn wit_name(t: &Type) -> &'static str {
     }
 }
 
-/// Whether `n` fits the integer type `ty`. Delegates to [`crate::value::int_fits`],
-/// the single source of truth shared with the runtime `The` check
-/// (`interp::check_type`), so the compile-time and runtime bounds cannot drift.
 fn int_in_range(n: i64, ty: &Type) -> bool {
     let name = match ty {
         Type::U8 => "u8",
@@ -3008,17 +2689,13 @@ fn int_in_range(n: i64, ty: &Type) -> bool {
         Type::S16 => "s16",
         Type::S32 => "s32",
         Type::S64 => "s64",
-        // A float type accepts any integer literal (int promotes to float). Any
-        // non-numeric ascription target also leaves the literal unconstrained
-        // here; gradual elsewhere.
+
         _ => return true,
     };
-    // `int_fits` returns `Some` for all eight names matched above.
+
     crate::value::int_fits(name, n).unwrap_or(true)
 }
 
-/// The printed name of a type form, for error messages (matches the runtime
-/// `The` message, which uses the raw annotation text like `s8`).
 fn type_name(arena: &Arena, id: NodeId) -> String {
     match arena.node(id) {
         Node::Sym(s) => s.clone(),
@@ -3026,7 +2703,6 @@ fn type_name(arena: &Arena, id: NodeId) -> String {
     }
 }
 
-/// Print a `Dec` literal as the interpreter would.
 fn print_dec(arena: &Arena, id: NodeId) -> String {
     if let Node::Dec(f) = arena.node(id) {
         crate::value::print_value(&crate::value::Value::Dec(*f))
@@ -3035,12 +2711,9 @@ fn print_dec(arena: &Arena, id: NodeId) -> String {
     }
 }
 
-/// Is `name` a builtin? The set is `builtins::NAMES` plus `none` and `pi`.
 fn is_builtin(name: &str) -> bool {
     name == "none" || name == "pi" || crate::builtins::NAMES.contains(&name)
 }
-
-// --- small arity helpers (the checker only ever needs 2..=3) -----------------
 
 fn expect2(args: &[NodeId]) -> Result<[NodeId; 2], String> {
     match args {
