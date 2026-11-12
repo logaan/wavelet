@@ -20,6 +20,9 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- Size builds omit memory, allocator and post-return machinery for direct scalar
+  interfaces when Binaryen proves the resulting module has no runtime state.
+
 - Components without value formatting omit the printer implementation and its
   static strings. Binaryen handles remaining unused-function elimination.
 

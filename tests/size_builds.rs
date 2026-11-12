@@ -116,3 +116,113 @@ fn formatting_through_a_local_callback_keeps_printer_data() {
         vec![Val::String("42".into())]
     );
 }
+
+fn size_component(source: &str) -> Option<Vec<u8>> {
+    if std::process::Command::new("wasm-opt")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        assert!(std::env::var_os("WAVELET_REQUIRE_HOST_TOOLS").is_none());
+        return None;
+    }
+    let mut request = request();
+    request.sources[0].contents = source.into();
+    Some(
+        compiler::native::compile_for_size(&request, Path::new("."))
+            .unwrap()
+            .entry_artifact()
+            .unwrap()
+            .bytes
+            .clone(),
+    )
+}
+
+fn memory_count(bytes: &[u8]) -> u32 {
+    wasmparser::Parser::new(0)
+        .parse_all(bytes)
+        .map(|payload| match payload.unwrap() {
+            wasmparser::Payload::MemorySection(section) => section.count(),
+            _ => 0,
+        })
+        .sum()
+}
+
+#[test]
+fn pure_scalar_size_build_omits_memory_and_cleanup() {
+    let Some(bytes) = size_component("Package \"test:size\" Export run Def run Fn {} add(1 1)")
+    else {
+        return;
+    };
+    assert_eq!(memory_count(&bytes), 0);
+    assert!(!bytes.windows(12).any(|part| part == b"cabi_realloc"));
+    assert!(!bytes.windows(10).any(|part| part == b"cabi_post_"));
+    let mut component = HostComponent::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        component
+            .call_instance("test:size/api", "run", &[])
+            .unwrap(),
+        vec![Val::S64(2)]
+    );
+}
+
+#[test]
+fn unused_string_and_list_parameters_keep_canonical_memory() {
+    for (ty, input) in [
+        ("string", Val::String("hello".into())),
+        ("list(s64)", Val::List(vec![Val::S64(1), Val::S64(2)])),
+    ] {
+        let source = format!("Package \"test:size\" Export run Def run Fn {{value: {ty}}} 42");
+        let Some(bytes) = size_component(&source) else {
+            return;
+        };
+        assert!(memory_count(&bytes) > 0, "{ty} ABI requires memory");
+        let mut component = HostComponent::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            component
+                .call_instance("test:size/api", "run", &[input])
+                .unwrap(),
+            vec![Val::S64(42)]
+        );
+    }
+}
+
+#[test]
+fn allocating_scalar_computation_keeps_cleanup() {
+    let Some(bytes) =
+        size_component("Package \"test:size\" Export run Def run Fn {n: s64} len(range(0 n))")
+    else {
+        return;
+    };
+    assert!(memory_count(&bytes) > 0);
+    assert!(bytes.windows(10).any(|part| part == b"cabi_post_"));
+    let mut component = HostComponent::from_bytes(&bytes).unwrap();
+    for count in [1000, 2, 1000] {
+        assert_eq!(
+            component
+                .call_instance("test:size/api", "run", &[Val::S64(count)])
+                .unwrap(),
+            vec![Val::S64(count)]
+        );
+    }
+}
+
+#[test]
+fn string_results_and_resources_keep_canonical_support() {
+    let Some(bytes) = size_component("Package \"test:size\" Export run Def run Fn {} \"hello\"")
+    else {
+        return;
+    };
+    assert!(memory_count(&bytes) > 0);
+    let mut component = HostComponent::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        component
+            .call_instance("test:size/api", "run", &[])
+            .unwrap(),
+        vec![Val::String("hello".into())]
+    );
+    let source = "Package \"test:size\" DefResource counter {New: Fn {start: u32} cell-new(start) value: Fn {self: counter} The u32 cell-get(self)} Export counter";
+    let bytes = size_component(source).unwrap();
+    assert!(memory_count(&bytes) > 0);
+    assert!(bytes.windows(12).any(|part| part == b"cabi_realloc"));
+}

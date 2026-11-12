@@ -73,7 +73,7 @@ pub fn compile(request: &Request, root: &Path) -> Result<Compilation, Vec<Diagno
 }
 
 pub fn compile_for_size(request: &Request, root: &Path) -> Result<Compilation, Vec<Diagnostic>> {
-    let mut compilation = compile_with_optimizer(request, root, &mut optimization::optimize)?;
+    let mut compilation = compile_with_optimizer(request, root, &mut optimization::SizeOptimizer)?;
     for artifact in &mut compilation.artifacts {
         artifact.bytes = crate::metadata::strip(&artifact.bytes)
             .map_err(|e| vec![Diagnostic::new(Phase::Emit, Some(&artifact.name), e)])?;

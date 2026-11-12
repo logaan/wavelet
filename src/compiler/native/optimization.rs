@@ -1,6 +1,21 @@
 use std::process::Command;
 
-pub(super) fn optimize(module: Vec<u8>) -> Result<Vec<u8>, String> {
+mod scalar;
+
+pub(super) struct SizeOptimizer;
+
+impl crate::emit::CoreOptimizer for SizeOptimizer {
+    fn optimize(&mut self, module: Vec<u8>) -> Result<Vec<u8>, String> {
+        optimize(module)
+    }
+
+    fn optimize_scalar_module(&mut self, module: Vec<u8>) -> Result<Vec<u8>, String> {
+        let optimized = optimize(module)?;
+        scalar::omit_support(optimized)
+    }
+}
+
+fn optimize(module: Vec<u8>) -> Result<Vec<u8>, String> {
     let directory =
         tempfile::tempdir().map_err(|e| format!("optimizer temporary directory: {e}"))?;
     let input = directory.path().join("input.wasm");

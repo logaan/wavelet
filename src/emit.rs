@@ -199,6 +199,10 @@ impl Helpers {
 
 pub trait CoreOptimizer {
     fn optimize(&mut self, module: Vec<u8>) -> Result<Vec<u8>, String>;
+
+    fn optimize_scalar_module(&mut self, module: Vec<u8>) -> Result<Vec<u8>, String> {
+        self.optimize(module)
+    }
 }
 
 impl<F> CoreOptimizer for F

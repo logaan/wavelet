@@ -171,3 +171,18 @@ retain the printer because compile-time symbol generation uses it. The omission
 is conservative: formatting in an unused user definition can still retain the
 printer data. Binaryen performs general function reachability, index rewriting,
 inlining and other code optimisation; Wavelet does not duplicate those passes.
+
+For worlds with no imports and only freestanding functions over direct scalar WIT
+types, native size optimisation can omit compiler-owned memory, allocator and
+post-return exports. Binaryen optimises that candidate; it is accepted only when
+it has no memory, globals, tables, imports, data or start function, preserves
+public function signatures, and is smaller. Otherwise the original optimised
+module is retained. Strings, lists, aggregates, resources and type aliases are
+conservatively excluded even when a parameter is unused: canonical ABI lowering
+may still require memory. Scalar functions that allocate internally keep their
+cleanup unless Binaryen eliminates that allocation entirely.
+
+`CoreOptimizer::optimize_scalar_module` is called only after this WIT boundary
+eligibility check. Its default implementation delegates to `optimize`; custom
+optimisers need not implement it. The candidate transformation is part of native
+size builds, not the default portable/browser pipeline.
