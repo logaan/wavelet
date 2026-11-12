@@ -80,7 +80,10 @@ component metadata.
 
 The baseline was captured before any of the four production changes, using a
 frozen release compiler from commit `2d63b5d`. Later measurements are sequential:
-core size optimisation, final metadata stripping, reachable helper/data emission,
-and conditional allocation machinery. Report marginal savings against the
+core size optimisation, final metadata stripping, conditional printer/data emission,
+and conditional allocation machinery. Binaryen owns general function reachability
+and instruction optimisation; the compiler does not duplicate those passes. Report marginal savings against the
 previous size-enabled checkpoint and cumulative savings against baseline.
 Default-build measurements show improvements masked by an existing optimiser.
+
+See [RESULTS.md](RESULTS.md) for measured sequential and marginal savings.
