@@ -35,7 +35,7 @@ fn variant_declarations_require_one_payload_type() {
 }
 
 #[test]
-fn variants_shadow_builtins_and_unary_overflow_traps() {
+fn variants_shadow_builtins_and_unary_arithmetic_wraps() {
     let mut c = component(
         r#"Package "test:vault@0.1.0"
 DefType choice [not(u32) zip(u32) tuple2(u32) other]
@@ -65,19 +65,20 @@ Def boxed-negate Fn {n: s64} map(Fn {x} neg(x) [n])
             vec![Val::S64(42)]
         );
     }
-    for name in ["negate", "absolute", "boxed-negate"] {
-        assert!(
-            c.call_instance(iface, name, &[Val::S64(i64::MIN)]).is_err(),
-            "{name} must trap"
+    for name in ["negate", "absolute"] {
+        assert_eq!(
+            c.call_instance(iface, name, &[Val::S64(i64::MIN)]).unwrap(),
+            vec![Val::S64(i64::MIN)]
         );
     }
+    assert_eq!(
+        c.call_instance(iface, "boxed-negate", &[Val::S64(i64::MIN)])
+            .unwrap(),
+        vec![Val::List(vec![Val::S64(i64::MIN)])]
+    );
     for name in ["neg", "abs"] {
         let result = wavelet::eval_snippet(&format!("{name}(-9223372036854775808)"));
-        assert!(!result.ok);
-        assert!(
-            result.error.contains("integer overflow"),
-            "{}",
-            result.error
-        );
+        assert!(result.ok, "{}", result.error);
+        assert_eq!(result.value, "-9223372036854775808");
     }
 }

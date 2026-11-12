@@ -31,15 +31,7 @@ pub(super) fn emit_arithmetic(em: &mut Emitter) {
     let xf = fx.local(F64);
     let yf = fx.local(F64);
 
-    fx.op(I::LocalGet(0));
-    fx.op(I::I32Load(ma(0, 2)));
-    fx.op(I::I32Const(TAG_INT));
-    fx.op(I::I32Eq);
-    fx.op(I::LocalGet(1));
-    fx.op(I::I32Load(ma(0, 2)));
-    fx.op(I::I32Const(TAG_INT));
-    fx.op(I::I32Eq);
-    fx.op(I::I32And);
+    both_integers(&mut fx);
     fx.op(I::If(BlockType::Result(I32)));
 
     fx.op(I::LocalGet(0));
@@ -90,14 +82,7 @@ pub(super) fn emit_arithmetic(em: &mut Emitter) {
     fx.op(I::F64Div);
     fx.op(I::Else);
 
-    fx.op(I::LocalGet(xf));
-    fx.op(I::LocalGet(xf));
-    fx.op(I::LocalGet(yf));
-    fx.op(I::F64Div);
-    fx.op(I::F64Trunc);
-    fx.op(I::LocalGet(yf));
-    fx.op(I::F64Mul);
-    fx.op(I::F64Sub);
+    fx.op(I::Unreachable);
     fx.op(I::End);
     fx.op(I::End);
     fx.op(I::End);
@@ -116,6 +101,23 @@ pub(super) fn emit_compare(em: &mut Emitter) {
     let i = fx.local(I32);
     let ca = fx.local(I32);
     let cb = fx.local(I32);
+
+    both_integers(&mut fx);
+    fx.op(I::If(BlockType::Empty));
+    for (instruction, result) in [(I::I64LtS, -1), (I::I64GtS, 1)] {
+        fx.op(I::LocalGet(0));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(I::LocalGet(1));
+        fx.op(I::I64Load(ma(8, 3)));
+        fx.op(instruction);
+        fx.op(I::If(BlockType::Empty));
+        fx.op(I::I32Const(result));
+        fx.op(I::Return);
+        fx.op(I::End);
+    }
+    fx.op(I::I32Const(0));
+    fx.op(I::Return);
+    fx.op(I::End);
 
     fx.op(I::LocalGet(0));
     fx.op(I::I32Load(ma(0, 2)));
@@ -275,145 +277,25 @@ pub(super) fn emit_negate(em: &mut Emitter) {
 
 pub(super) fn emit_integer_arithmetic(em: &mut Emitter) {
     let mut fx = FnCtx::new(3);
-    let ia = fx.local(I64);
-    let ib = fx.local(I64);
-    let r = fx.local(I64);
+    for (code, instruction) in [I::I64Add, I::I64Sub, I::I64Mul, I::I64DivS]
+        .into_iter()
+        .enumerate()
+    {
+        fx.op(I::LocalGet(2));
+        fx.op(I::I32Const(code as i32));
+        fx.op(I::I32Eq);
+        fx.op(I::If(BlockType::Result(I64)));
+        fx.op(I::LocalGet(0));
+        fx.op(I::LocalGet(1));
+        fx.op(instruction);
+        fx.op(I::Else);
+    }
     fx.op(I::LocalGet(0));
-    fx.op(I::LocalSet(ia));
     fx.op(I::LocalGet(1));
-    fx.op(I::LocalSet(ib));
-
-    fx.op(I::LocalGet(2));
-    fx.op(I::I32Const(0));
-    fx.op(I::I32Eq);
-    fx.op(I::If(BlockType::Result(I64)));
-    fx.op(I::LocalGet(ia));
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Add);
-    fx.op(I::LocalSet(r));
-
-    fx.op(I::LocalGet(r));
-    fx.op(I::LocalGet(ia));
-    fx.op(I::I64Xor);
-    fx.op(I::LocalGet(r));
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Xor);
-    fx.op(I::I64And);
-    fx.op(I::I64Const(0));
-    fx.op(I::I64LtS);
-    fx.op(I::If(BlockType::Empty));
-    fx.op(I::Unreachable);
-    fx.op(I::End);
-    fx.op(I::LocalGet(r));
-    fx.op(I::Else);
-
-    fx.op(I::LocalGet(2));
-    fx.op(I::I32Const(1));
-    fx.op(I::I32Eq);
-    fx.op(I::If(BlockType::Result(I64)));
-    fx.op(I::LocalGet(ia));
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Sub);
-    fx.op(I::LocalSet(r));
-
-    fx.op(I::LocalGet(ia));
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Xor);
-    fx.op(I::LocalGet(ia));
-    fx.op(I::LocalGet(r));
-    fx.op(I::I64Xor);
-    fx.op(I::I64And);
-    fx.op(I::I64Const(0));
-    fx.op(I::I64LtS);
-    fx.op(I::If(BlockType::Empty));
-    fx.op(I::Unreachable);
-    fx.op(I::End);
-    fx.op(I::LocalGet(r));
-    fx.op(I::Else);
-
-    fx.op(I::LocalGet(2));
-    fx.op(I::I32Const(2));
-    fx.op(I::I32Eq);
-    fx.op(I::If(BlockType::Result(I64)));
-    fx.op(I::LocalGet(ia));
-    fx.op(I::I64Eqz);
-    fx.op(I::If(BlockType::Result(I64)));
-    fx.op(I::I64Const(0));
-    fx.op(I::Else);
-
-    fx.op(I::LocalGet(ia));
-    fx.op(I::I64Const(-1));
-    fx.op(I::I64Eq);
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Const(i64::MIN));
-    fx.op(I::I64Eq);
-    fx.op(I::I32And);
-    fx.op(I::If(BlockType::Empty));
-    fx.op(I::Unreachable);
-    fx.op(I::End);
-    fx.op(I::LocalGet(ia));
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Mul);
-    fx.op(I::LocalSet(r));
-
-    fx.op(I::LocalGet(r));
-    fx.op(I::LocalGet(ia));
-    fx.op(I::I64DivS);
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Ne);
-    fx.op(I::If(BlockType::Empty));
-    fx.op(I::Unreachable);
-    fx.op(I::End);
-    fx.op(I::LocalGet(r));
-    fx.op(I::End);
-    fx.op(I::Else);
-
-    fx.op(I::LocalGet(2));
-    fx.op(I::I32Const(3));
-    fx.op(I::I32Eq);
-    fx.op(I::If(BlockType::Result(I64)));
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Eqz);
-    fx.op(I::If(BlockType::Empty));
-    fx.op(I::Unreachable);
-    fx.op(I::End);
-    fx.op(I::LocalGet(ia));
-    fx.op(I::I64Const(i64::MIN));
-    fx.op(I::I64Eq);
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Const(-1));
-    fx.op(I::I64Eq);
-    fx.op(I::I32And);
-    fx.op(I::If(BlockType::Empty));
-    fx.op(I::Unreachable);
-    fx.op(I::End);
-    fx.op(I::LocalGet(ia));
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64DivS);
-    fx.op(I::Else);
-
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Eqz);
-    fx.op(I::If(BlockType::Empty));
-    fx.op(I::Unreachable);
-    fx.op(I::End);
-    fx.op(I::LocalGet(ia));
-    fx.op(I::I64Const(i64::MIN));
-    fx.op(I::I64Eq);
-    fx.op(I::LocalGet(ib));
-    fx.op(I::I64Const(-1));
-    fx.op(I::I64Eq);
-    fx.op(I::I32And);
-    fx.op(I::If(BlockType::Empty));
-    fx.op(I::Unreachable);
-    fx.op(I::End);
-    fx.op(I::LocalGet(ia));
-    fx.op(I::LocalGet(ib));
     fx.op(I::I64RemS);
-    fx.op(I::End);
-    fx.op(I::End);
-    fx.op(I::End);
-    fx.op(I::End);
+    for _ in 0..4 {
+        fx.op(I::End);
+    }
     let t = em.ty_idx(vec![I64, I64, I32], vec![I64]);
     em.bodies.push((t, fx.finish()));
 }
@@ -439,10 +321,22 @@ pub(super) fn emit_float_compare(em: &mut Emitter) {
     fx.op(I::I32Const(0));
     fx.op(I::Else);
 
-    fx.op(I::Unreachable);
+    fx.op(I::I32Const(2));
     fx.op(I::End);
     fx.op(I::End);
     fx.op(I::End);
     let t = em.ty_idx(vec![F64, F64], vec![I32]);
     em.bodies.push((t, fx.finish()));
+}
+
+fn both_integers(fx: &mut FnCtx) {
+    fx.op(I::LocalGet(0));
+    fx.op(I::I32Load(ma(0, 2)));
+    fx.op(I::I32Const(TAG_INT));
+    fx.op(I::I32Eq);
+    fx.op(I::LocalGet(1));
+    fx.op(I::I32Load(ma(0, 2)));
+    fx.op(I::I32Const(TAG_INT));
+    fx.op(I::I32Eq);
+    fx.op(I::I32And);
 }

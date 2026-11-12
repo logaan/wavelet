@@ -1,0 +1,10 @@
+Def smaller Fn {a b} min(a b)
+Def larger Fn {a b} max(a b)
+Def smaller-float Fn {a: f64 b: f64} min(a b)
+Def larger-float Fn {a: f64 b: f64} max(a b)
+{minimum: smaller(9223372036854775807 9223372036854775806)
+ maximum: larger(9223372036854775806 9223372036854775807)
+ minimum-nan: smaller-float(nan 1.0)
+ maximum-nan: larger-float(1.0 nan)
+ minimum-zero: div(1.0 smaller-float(0.0 -0.0))
+ maximum-zero: div(1.0 larger-float(-0.0 0.0))}

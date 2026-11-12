@@ -1254,95 +1254,9 @@ impl<'a> Emitter<'a> {
     ) -> Result<Option<Scalar>, String> {
         use Scalar::*;
         match name {
-            "add" | "sub" | "mul" | "div" | "rem" if args.len() == 2 => {
-                let (Some(ka), Some(kb)) = (self.node_scalar(args[0]), self.node_scalar(args[1]))
-                else {
-                    return Ok(None);
-                };
-                if !matches!(ka, Int | Float) || !matches!(kb, Int | Float) {
-                    return Ok(None);
-                }
-                if ka == Float || kb == Float {
-                    self.expr_scalar(fx, args[0], Float)?;
-                    self.expr_scalar(fx, args[1], Float)?;
-                    match name {
-                        "add" => fx.op(I::F64Add),
-                        "sub" => fx.op(I::F64Sub),
-                        "mul" => fx.op(I::F64Mul),
-                        "div" => fx.op(I::F64Div),
-                        _ => {
-                            let y = fx.local(ValType::F64);
-                            let x = fx.local(ValType::F64);
-                            fx.op(I::LocalSet(y));
-                            fx.op(I::LocalSet(x));
-                            fx.op(I::LocalGet(x));
-                            fx.op(I::LocalGet(x));
-                            fx.op(I::LocalGet(y));
-                            fx.op(I::F64Div);
-                            fx.op(I::F64Trunc);
-                            fx.op(I::LocalGet(y));
-                            fx.op(I::F64Mul);
-                            fx.op(I::F64Sub);
-                        }
-                    }
-                    Ok(Some(Float))
-                } else {
-                    self.expr_scalar(fx, args[0], Int)?;
-                    self.expr_scalar(fx, args[1], Int)?;
-                    fx.op(I::I32Const(match name {
-                        "add" => 0,
-                        "sub" => 1,
-                        "mul" => 2,
-                        "div" => 3,
-                        _ => 4,
-                    }));
-                    fx.op(I::Call(self.h.arith_int));
-                    Ok(Some(Int))
-                }
-            }
-            "neg" if args.len() == 1 => match self.node_scalar(args[0]) {
-                Some(Int) => {
-                    fx.op(I::I64Const(0));
-                    self.expr_scalar(fx, args[0], Int)?;
-                    fx.op(I::I32Const(1));
-                    fx.op(I::Call(self.h.arith_int));
-                    Ok(Some(Int))
-                }
-                Some(Float) => {
-                    self.expr_scalar(fx, args[0], Float)?;
-                    fx.op(I::F64Neg);
-                    Ok(Some(Float))
-                }
-                _ => Ok(None),
-            },
-            "lt" | "le" | "gt" | "ge" if args.len() == 2 => {
-                let (Some(ka), Some(kb)) = (self.node_scalar(args[0]), self.node_scalar(args[1]))
-                else {
-                    return Ok(None);
-                };
-                match (ka, kb) {
-                    (Char, Char) => {
-                        self.expr_scalar(fx, args[0], Char)?;
-                        self.expr_scalar(fx, args[1], Char)?;
-                    }
-                    (Int | Float, Int | Float) => {
-                        self.expr_scalar(fx, args[0], Float)?;
-                        self.expr_scalar(fx, args[1], Float)?;
-                        fx.op(I::Call(self.h.cmp_f64));
-                        fx.op(I::I64ExtendI32S);
-                        fx.op(I::I64Const(0));
-                    }
-
-                    _ => return Ok(None),
-                }
-                fx.op(match name {
-                    "lt" => I::I64LtS,
-                    "le" => I::I64LeS,
-                    "gt" => I::I64GtS,
-                    _ => I::I64GeS,
-                });
-                Ok(Some(Bool))
-            }
+            "add" | "sub" | "mul" | "div" | "rem" | "neg" => self.scalar_arithmetic(fx, name, args),
+            "abs" | "min" | "max" => self.scalar_extrema(fx, name, args),
+            "lt" | "le" | "gt" | "ge" => self.scalar_order(fx, name, args),
             "eq" if args.len() == 2 => {
                 let (Some(ka), Some(kb)) = (self.node_scalar(args[0]), self.node_scalar(args[1]))
                 else {

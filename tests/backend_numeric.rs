@@ -15,10 +15,6 @@ Export {name: addf params: {x: f64 y: f64} result: f64}
 Def addf Fn {x: f64 y: f64}
   add(x y)
 
-Export {name: remf params: {x: f64 y: f64} result: f64}
-Def remf Fn {x: f64 y: f64}
-  rem(x y)
-
 Export {name: divf params: {x: f64 y: f64} result: f64}
 Def divf Fn {x: f64 y: f64}
   div(x y)
@@ -89,11 +85,6 @@ fn float_and_string_builtins_run_instead_of_trapping() {
         Val::Float64(4.0)
     );
 
-    assert_eq!(
-        ok(&mut c, "remf", &[Val::Float64(5.5), Val::Float64(2.0)]),
-        Val::Float64(1.5)
-    );
-
     match ok(&mut c, "divf", &[Val::Float64(1.0), Val::Float64(0.0)]) {
         Val::Float64(v) => assert!(
             v.is_infinite() && v > 0.0,
@@ -152,7 +143,7 @@ fn float_and_string_builtins_run_instead_of_trapping() {
 }
 
 #[test]
-fn integer_arithmetic_is_checked_like_the_interpreter() {
+fn integer_arithmetic_matches_wasm_wrapping_and_traps() {
     let mut c = numeric_component();
 
     assert_eq!(
@@ -166,35 +157,25 @@ fn integer_arithmetic_is_checked_like_the_interpreter() {
     assert_eq!(ok(&mut c, "divi", &[Val::S64(7), Val::S64(2)]), Val::S64(3));
     assert_eq!(ok(&mut c, "remi", &[Val::S64(7), Val::S64(2)]), Val::S64(1));
 
-    assert!(
-        call(&mut c, "addi", &[Val::S64(i64::MAX), Val::S64(1)]).is_err(),
-        "add overflow should trap"
+    assert_eq!(
+        ok(&mut c, "addi", &[Val::S64(i64::MAX), Val::S64(1)]),
+        Val::S64(i64::MIN)
     );
-    assert!(
-        call(&mut c, "muli", &[Val::S64(i64::MAX), Val::S64(2)]).is_err(),
-        "mul overflow should trap"
+    assert_eq!(
+        ok(&mut c, "muli", &[Val::S64(i64::MAX), Val::S64(2)]),
+        Val::S64(-2)
     );
-    assert!(
-        call(&mut c, "muli", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(),
-        "MIN*-1 should trap"
-    );
-
-    assert!(
-        call(&mut c, "divi", &[Val::S64(1), Val::S64(0)]).is_err(),
-        "div by zero should trap"
-    );
-    assert!(
-        call(&mut c, "divi", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(),
-        "MIN/-1 should trap"
+    assert_eq!(
+        ok(&mut c, "muli", &[Val::S64(i64::MIN), Val::S64(-1)]),
+        Val::S64(i64::MIN)
     );
 
-    assert!(
-        call(&mut c, "remi", &[Val::S64(i64::MIN), Val::S64(-1)]).is_err(),
-        "MIN %% -1 should trap"
+    assert_eq!(
+        ok(&mut c, "remi", &[Val::S64(i64::MIN), Val::S64(-1)]),
+        Val::S64(0)
     );
-
-    assert!(
-        call(&mut c, "remi", &[Val::S64(1), Val::S64(0)]).is_err(),
-        "rem by zero should trap"
-    );
+    for (operation, a, b) in [("divi", 1, 0), ("divi", i64::MIN, -1), ("remi", 1, 0)] {
+        let mut component = numeric_component();
+        assert!(call(&mut component, operation, &[Val::S64(a), Val::S64(b)]).is_err());
+    }
 }

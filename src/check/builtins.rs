@@ -132,6 +132,9 @@ impl Checker<'_> {
     }
 
     fn check_numeric_builtin(&self, name: &str, arg_tys: &[Type]) -> Result<Type, String> {
+        if name == "rem" && arg_tys.iter().any(Type::is_float) {
+            return Err("eval error: `rem` requires integer operands".into());
+        }
         match name {
             "add" | "sub" | "mul" | "div" | "rem" | "neg" | "abs" => {
                 let mut result = Type::Unknown;

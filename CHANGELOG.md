@@ -13,7 +13,17 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Changed
+
+- Numeric operations follow core WebAssembly semantics: integer addition,
+  subtraction, multiplication, negation, and absolute value wrap; signed remainder
+  of the minimum integer by `-1` returns zero. Division retains Wasm traps.
+- Integer ordering preserves all 64 bits. Floating comparisons with NaN return
+  false, and floating `min`/`max` propagate NaN and preserve Wasm signed-zero rules.
+
 ### Removed
+
+- Floating-point operands to `rem`; remainder now maps to Wasm signed integer remainder.
 
 - The `upper` and `lower` builtins and their Unicode case-conversion tables.
   Unicode strings and characters remain supported.

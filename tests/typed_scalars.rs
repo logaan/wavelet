@@ -29,9 +29,6 @@ Def negf Fn {x: f64} neg(x)
 Export {name: divi params: {a: s64 b: s64} result: s64}
 Def divi Fn {a: s64 b: s64} div(a b)
 
-Export {name: remf params: {x: f64 y: f64} result: f64}
-Def remf Fn {x: f64 y: f64} rem(x y)
-
 Export {name: lti params: {a: s64 b: s64} result: bool}
 Def lti Fn {a: s64 b: s64} lt(a b)
 
@@ -83,7 +80,7 @@ fn ok(c: &mut HostComponent, f: &str, args: &[Val]) -> Val {
 }
 
 #[test]
-fn typed_int_arithmetic_matches_the_interpreter() {
+fn typed_int_arithmetic_matches_wasm() {
     let mut c = component();
     assert_eq!(
         ok(&mut c, "addi", &[Val::S64(40), Val::S64(2)]),
@@ -104,10 +101,16 @@ fn typed_int_arithmetic_matches_the_interpreter() {
 }
 
 #[test]
-fn typed_int_arithmetic_traps_where_the_interpreter_errors() {
-    assert!(call(&mut component(), "negi", &[Val::S64(i64::MIN)]).is_err());
+fn typed_int_arithmetic_wraps_and_keeps_wasm_division_traps() {
+    assert_eq!(
+        ok(&mut component(), "negi", &[Val::S64(i64::MIN)]),
+        Val::S64(i64::MIN)
+    );
 
-    assert!(call(&mut component(), "addi", &[Val::S64(i64::MAX), Val::S64(1)]).is_err());
+    assert_eq!(
+        ok(&mut component(), "addi", &[Val::S64(i64::MAX), Val::S64(1)]),
+        Val::S64(i64::MIN)
+    );
 
     assert!(call(&mut component(), "divi", &[Val::S64(1), Val::S64(0)]).is_err());
 
@@ -128,15 +131,10 @@ fn typed_mixed_arithmetic_widens_to_f64() {
         ok(&mut c, "mixed", &[Val::S64(1), Val::Float64(2.5)]),
         Val::Float64(3.5)
     );
-
-    assert_eq!(
-        ok(&mut c, "remf", &[Val::Float64(5.5), Val::Float64(2.0)]),
-        Val::Float64(1.5)
-    );
 }
 
 #[test]
-fn typed_comparisons_match_the_interpreter() {
+fn typed_comparisons_match_wasm() {
     let mut c = component();
     assert_eq!(
         ok(&mut c, "lti", &[Val::S64(1), Val::S64(2)]),
@@ -146,7 +144,7 @@ fn typed_comparisons_match_the_interpreter() {
     let a = 9_007_199_254_740_993i64;
     let b = 9_007_199_254_740_992i64;
     assert_eq!(ok(&mut c, "lti", &[Val::S64(b), Val::S64(a)]), {
-        Val::Bool((b as f64) < (a as f64))
+        Val::Bool(b < a)
     });
     assert_eq!(
         ok(&mut c, "gef", &[Val::Float64(2.0), Val::Float64(2.0)]),
@@ -162,7 +160,10 @@ fn typed_comparisons_match_the_interpreter() {
         Val::Bool(false)
     );
 
-    assert!(call(&mut c, "gef", &[Val::Float64(f64::NAN), Val::Float64(1.0)]).is_err());
+    assert_eq!(
+        ok(&mut c, "gef", &[Val::Float64(f64::NAN), Val::Float64(1.0)]),
+        Val::Bool(false)
+    );
 }
 
 #[test]

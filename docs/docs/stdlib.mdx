@@ -57,7 +57,7 @@ Do [a b c]   ==>   Match a [(_ Match b [(_ c)])]
 | `lt` `le` `gt` `ge` | `lt(a b)` | ordered comparison (numbers, strings, chars) |
 | `not` | `not(bool)` | boolean negation |
 
-`eq` is structural across all data types. The ordered comparisons work on numbers, strings, and chars.
+`eq` is structural across all data types. The ordered comparisons work on numbers, strings, and chars. Integer comparisons use signed 64-bit values without converting through floating point. Numeric comparisons involving a float use `f64`; comparisons involving `nan` return `false`, including `eq(nan nan)`. Boolean `not` follows Wasm `i32.eqz` on its boolean representation.
 
 <Playground id="std-predicates" />
 
@@ -65,18 +65,23 @@ Do [a b c]   ==>   Match a [(_ Match b [(_ c)])]
 
 | Function | Shape | Notes |
 |---|---|---|
-| `add` `sub` `mul` `div` `rem` | `add(a b)` | int+int stays int (overflow & ÷0 trap); a float operand promotes to float |
+| `add` `sub` `mul` `div` | `add(a b)` | integer operations use Wasm `i64`; a float operand promotes to `f64` |
+| `rem` | `rem(a b)` | signed integer remainder; floating operands are rejected |
 | `neg` | `neg(x)` | negation |
 | `abs` | `abs(x)` | absolute value |
 | `min` `max` | `min(a b)` | smaller / larger of two |
 
 <Playground id="std-arith" />
 
-Integer division by zero (and overflow) is an error, not a silent `NaN`:
+Integer `add`, `sub`, and `mul` wrap modulo 2⁶⁴, as core Wasm does. Integer `neg` and `abs` also wrap: applying either to `-9223372036854775808` returns that same value. Narrow WIT annotations do not change the internal arithmetic width; use explicit conversions for narrowing.
+
+<Playground id="std-wrap" />
+
+Signed integer division truncates toward zero and traps on division by zero or `-9223372036854775808 / -1`. Integer remainder traps only for a zero divisor; `rem(-9223372036854775808 -1)` is `0`. These are Wasm traps, not additional overflow checks:
 
 <Playground id="std-div-zero" />
 
-A float operand promotes the result to a float:
+Floating-point `add`, `sub`, `mul`, `div`, `neg`, and `abs` follow Wasm `f64` behaviour, including infinities and NaNs. `rem` accepts integers only because core Wasm has no floating remainder instruction. Floating `min` and `max` propagate NaN; with opposite signed zeros, `min` returns `-0.0` and `max` returns `0.0`. A float operand promotes numeric arithmetic and extrema to a float:
 
 <Playground id="std-div-float" />
 

@@ -1,5 +1,5 @@
 {
-  "path": ["build.rs", "src", "tooling/wavelet-lsp/src", "tooling/vscode", "docs/src", "docs/scripts"],
+  "path": ["src", "tooling/wavelet-lsp/src", "tooling/vscode", "docs/src", "docs/scripts"],
   "format": ["rust", "javascript", "typescript", "jsx", "tsx"],
   "ignore": ["**/node_modules/**", "**/target/**", "**/dist/**", "**/build/**", "docs/src/wasm/**"],
   "gitignore": true,

@@ -1,5 +1,5 @@
 use super::{R, args_n};
-use crate::interp::{EvalError, err};
+use crate::interp::err;
 use crate::value::{Value, print_value};
 use std::cmp::Ordering::*;
 
@@ -13,10 +13,10 @@ pub(super) fn call(name: &str, arg: Value) -> R<Value> {
             let a = args_n(arg, 2, name)?;
             let ord = compare(name, &a[0], &a[1])?;
             let b = match name {
-                "lt" => ord == Less,
-                "le" => ord != Greater,
-                "gt" => ord == Greater,
-                _ => ord != Less,
+                "lt" => ord == Some(Less),
+                "le" => matches!(ord, Some(Less | Equal)),
+                "gt" => ord == Some(Greater),
+                _ => matches!(ord, Some(Greater | Equal)),
             };
             Ok(Value::Bool(b))
         }
@@ -24,22 +24,52 @@ pub(super) fn call(name: &str, arg: Value) -> R<Value> {
             Value::Bool(b) => Ok(Value::Bool(!b)),
             other => err(format!("`not` expects a bool, got {}", print_value(&other))),
         },
-        "add" => arith(name, arg, i64::checked_add, |x, y| x + y),
-        "sub" => arith(name, arg, i64::checked_sub, |x, y| x - y),
-        "mul" => arith(name, arg, i64::checked_mul, |x, y| x * y),
+        "add" => arith(name, arg, |x, y| Some(x.wrapping_add(y)), |x, y| x + y),
+        "sub" => arith(name, arg, |x, y| Some(x.wrapping_sub(y)), |x, y| x - y),
+        "mul" => arith(name, arg, |x, y| Some(x.wrapping_mul(y)), |x, y| x * y),
         "div" => arith(name, arg, i64::checked_div, |x, y| x / y),
-        "rem" => arith(name, arg, i64::checked_rem, |x, y| x % y),
-        "min" | "max" => {
+        "rem" => {
             let a = args_n(arg, 2, name)?;
-            let replace = if name == "min" { Greater } else { Less };
-            if compare(name, &a[0], &a[1])? == replace {
-                Ok(a[1].clone())
-            } else {
-                Ok(a[0].clone())
+            match (&a[0], &a[1]) {
+                (Value::Int(x), Value::Int(y)) if *y != 0 => Ok(Value::Int(x.wrapping_rem(*y))),
+                (Value::Int(_), Value::Int(_)) => err("`rem`: integer division by zero"),
+                _ => err("`rem` requires integer operands"),
             }
         }
-        "neg" => unary(name, arg, i64::checked_neg, |f| -f),
-        "abs" => unary(name, arg, i64::checked_abs, f64::abs),
+        "min" | "max" => {
+            let a = args_n(arg, 2, name)?;
+            match (&a[0], &a[1]) {
+                (Value::Dec(_), _) | (_, Value::Dec(_)) => {
+                    let x = want_num(&a[0], name)?.as_float();
+                    let y = want_num(&a[1], name)?.as_float();
+                    let result = if x.is_nan() || y.is_nan() {
+                        f64::NAN
+                    } else if x == 0.0 && y == 0.0 {
+                        let bits = if name == "min" {
+                            x.to_bits() | y.to_bits()
+                        } else {
+                            x.to_bits() & y.to_bits()
+                        };
+                        f64::from_bits(bits)
+                    } else if name == "min" {
+                        x.min(y)
+                    } else {
+                        x.max(y)
+                    };
+                    Ok(Value::Dec(result))
+                }
+                _ => {
+                    let replace = if name == "min" { Greater } else { Less };
+                    if compare(name, &a[0], &a[1])? == Some(replace) {
+                        Ok(a[1].clone())
+                    } else {
+                        Ok(a[0].clone())
+                    }
+                }
+            }
+        }
+        "neg" => unary(name, arg, i64::wrapping_neg, |f| -f),
+        "abs" => unary(name, arg, i64::wrapping_abs, f64::abs),
         _ => unreachable!("builtin routed to the wrong family"),
     }
 }
@@ -85,26 +115,22 @@ fn arith(
     }
 }
 
-fn compare(name: &str, a: &Value, b: &Value) -> R<std::cmp::Ordering> {
+fn compare(name: &str, a: &Value, b: &Value) -> R<Option<std::cmp::Ordering>> {
     match (a, b) {
-        (Value::Str(x), Value::Str(y)) => Ok(x.cmp(y)),
-        (Value::Char(x), Value::Char(y)) => Ok(x.cmp(y)),
+        (Value::Str(x), Value::Str(y)) => Ok(Some(x.cmp(y))),
+        (Value::Char(x), Value::Char(y)) => Ok(Some(x.cmp(y))),
+        (Value::Int(x), Value::Int(y)) => Ok(Some(x.cmp(y))),
         _ => {
             let xf = want_num(a, name)?.as_float();
             let yf = want_num(b, name)?.as_float();
-            match xf.partial_cmp(&yf) {
-                Some(o) => Ok(o),
-                None => err(format!("`{name}`: values are not comparable")),
-            }
+            Ok(xf.partial_cmp(&yf))
         }
     }
 }
 
-fn unary(name: &str, arg: Value, fi: fn(i64) -> Option<i64>, fd: fn(f64) -> f64) -> R<Value> {
+fn unary(name: &str, arg: Value, fi: fn(i64) -> i64, fd: fn(f64) -> f64) -> R<Value> {
     match want_num(&arg, name)? {
-        Num::I(n) => fi(n).map(Value::Int).ok_or_else(|| EvalError {
-            msg: format!("`{name}`: integer overflow"),
-        }),
+        Num::I(n) => Ok(Value::Int(fi(n))),
         Num::D(f) => Ok(Value::Dec(fd(f))),
     }
 }

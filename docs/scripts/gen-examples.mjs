@@ -182,6 +182,7 @@ sum-to(10000 0)`;
 E['std-pi'] = `mul(pi 2)`;
 E['std-predicates'] = `[eq([1 2] [1 2])  lt(2 3)  ge("b" "a")  not(false)]`;
 E['std-arith'] = `[add(2 3)  sub(10 4)  mul(6 7)  div(17 5)  rem(17 5)  neg(8)  abs(-3)  min(4 9)  max(4 9)]`;
+E['std-wrap'] = `[add(9223372036854775807 1) sub(-9223372036854775808 1) mul(9223372036854775807 2) rem(-9223372036854775808 -1)]`;
 E['std-div-zero'] = `div(1 0)`;
 E['std-div-float'] = `div(7.0 2)`;
 E['std-seq-basics'] = `{len: len([1 2 3]) head: head([10 20 30]) tail: tail([10 20 30]) reverse: reverse([1 2 3]) range: range(0 5)}`;

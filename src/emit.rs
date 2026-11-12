@@ -16,6 +16,7 @@ mod macro_component;
 mod mem;
 mod pattern;
 mod resources;
+mod scalar_numeric;
 mod scan;
 mod serialization;
 mod type_scope;
