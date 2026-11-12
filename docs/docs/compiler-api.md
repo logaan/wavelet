@@ -164,3 +164,10 @@ composed applications. `metadata::strip` provides the same recursive policy for
 existing components or core modules; it preserves unknown custom sections and
 all public interface contracts. Apply it after component metadata has been
 consumed by componentisation, not to a core module awaiting WIT embedding.
+
+The portable emitter omits the value printer's implementation and static strings
+when expanded application forms contain no formatting operation. Macro libraries
+retain the printer because compile-time symbol generation uses it. The omission
+is conservative: formatting in an unused user definition can still retain the
+printer data. Binaryen performs general function reachability, index rewriting,
+inlining and other code optimisation; Wavelet does not duplicate those passes.

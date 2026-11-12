@@ -20,6 +20,9 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- Components without value formatting omit the printer implementation and its
+  static strings. Binaryen handles remaining unused-function elimination.
+
 - Size builds strip optional name, producer and debug metadata after composition;
   `compose --strip-metadata` applies the same policy to prebuilt components.
 

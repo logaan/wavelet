@@ -84,4 +84,35 @@ fn size_build_preserves_macro_component_exports() {
     let mut component =
         wavelet::macros::MacroComponent::from_bytes(&compiled.artifacts[0].bytes).unwrap();
     assert_eq!(component.manifest().unwrap(), vec![("identity".into(), 1)]);
+    let (arena, roots) = wavelet::read_file("identity(42)").unwrap();
+    let input = wavelet::meta::arena_to_tree(&arena, roots[0]);
+    let output = component.expand("identity", &input).unwrap();
+    assert_eq!(
+        output.nodes[output.root as usize],
+        wavelet::meta::Node::IntVal(42)
+    );
+}
+
+#[test]
+fn components_without_formatting_do_not_embed_printer_data() {
+    let mut optimizer = |bytes: Vec<u8>| {
+        assert!(!bytes.windows(5).any(|part| part == b"cell("));
+        Ok(bytes)
+    };
+    compiler::compile_with_optimizer(&request(), &mut compiler::NoMacros, &mut optimizer).unwrap();
+}
+
+#[test]
+fn formatting_through_a_local_callback_keeps_printer_data() {
+    let mut request = request();
+    request.sources[0].contents = "Package \"test:size\" Export render Def format Fn {n: s64} to-string(n) Def render Fn {n: s64} Let {f: format} f(n)".into();
+    let compiled = compiler::native::compile(&request, Path::new(".")).unwrap();
+    let mut component =
+        HostComponent::from_bytes(&compiled.entry_artifact().unwrap().bytes).unwrap();
+    assert_eq!(
+        component
+            .call_instance("test:size/api", "render", &[Val::S64(42)])
+            .unwrap(),
+        vec![Val::String("42".into())]
+    );
 }

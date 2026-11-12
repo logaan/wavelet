@@ -731,7 +731,7 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
     collections::emit_head(em);
     collections::emit_tail(em);
     collections::emit_concat(em);
-    printing::emit_string(em);
+    emit_printing(em);
     collections::emit_record_get(em);
     numeric::emit_as_float(em);
     numeric::emit_arithmetic(em);
@@ -742,4 +742,18 @@ pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
     persistence::emit_persist_alloc(em);
     persistence::emit_persist(em);
     Ok(())
+}
+
+fn emit_printing(em: &mut Emitter) {
+    let used = em.macro_expand_idx.is_some() || em.arena.nodes.iter().any(
+        |node| matches!(node, Node::Sym(name) if matches!(name.as_str(), "to-string" | "gensym")),
+    );
+    if used {
+        printing::emit_string(em);
+    } else {
+        let mut fx = FnCtx::new(1);
+        fx.op(I::Unreachable);
+        let ty = em.ty_idx(vec![ValType::I32], vec![ValType::I32]);
+        em.bodies.push((ty, fx.finish()));
+    }
 }
