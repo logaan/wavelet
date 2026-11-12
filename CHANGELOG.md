@@ -13,6 +13,11 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- Native `build --optimize-size` and compiler APIs run Binaryen size optimisation
+  before componentisation, with an explicit `wasm-opt` dependency.
+
 ### Changed
 
 - Runtime evaluation and conformance tests execute compiled WebAssembly. The

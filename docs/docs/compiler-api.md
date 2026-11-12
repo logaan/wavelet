@@ -146,3 +146,15 @@ not add a WASI adapter. The resulting
 `docs/src/compiler/wavelet_compiler.wasm` is checked in so the documentation site
 can build with Node alone. Regenerate it whenever compiler code or its WIT
 contract changes.
+
+## Native size optimisation
+
+`compiler::native::compile_for_size(request, root)` and
+`build::build_files_for_size(paths, out_dir)` use Binaryen's `wasm-opt -Oz` before
+componentisation and require `wasm-opt` on `PATH`. Failures are diagnostics, not
+silent fallbacks. `compiler::compile_with_optimizer` accepts an
+`emit::CoreOptimizer` callback for hosts that provide their own core-Wasm
+optimiser. It receives a core module before component metadata is embedded and
+must return a semantically equivalent core module with the same ABI exports and
+imports. The normal `compile` API and the compiler component remain self-contained;
+the component protocol adds no optimiser host import.

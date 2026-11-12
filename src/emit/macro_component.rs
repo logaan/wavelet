@@ -77,30 +77,20 @@ pub(crate) fn meta_tree_wit_ty() -> WitTy {
 }
 
 pub fn emit_macro_component(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, String> {
-    let mut module = emit_macro_core_module(arena, roots)?;
-    let wit = macro_component_wit();
+    emit_macro_component_with_optimizer(arena, roots, &mut Ok)
+}
 
-    let mut resolve = wit_parser::Resolve::default();
-    let pkg = resolve
-        .push_str("wavelet-macro.wit", &wit)
-        .map_err(|e| format!("internal: macro WIT did not parse: {e:#}\n--- WIT ---\n{wit}"))?;
-    let world = resolve
-        .select_world(&[pkg], Some("macro-lib"))
-        .map_err(|e| format!("internal: macro world selection failed: {e:#}"))?;
-    wit_component::embed_component_metadata(
-        &mut module,
-        &resolve,
-        world,
-        wit_component::StringEncoding::UTF8,
+pub fn emit_macro_component_with_optimizer(
+    arena: &Arena,
+    roots: &[NodeId],
+    optimizer: &mut dyn CoreOptimizer,
+) -> Result<Vec<u8>, String> {
+    component::encode(
+        emit_macro_core_module(arena, roots)?,
+        &macro_component_wit(),
+        "macro-lib",
+        optimizer,
     )
-    .map_err(|e| format!("embedding macro component metadata failed: {e:#}"))?;
-
-    wit_component::ComponentEncoder::default()
-        .validate(true)
-        .module(&module)
-        .map_err(|e| format!("componentizing the macro library failed: {e:#}"))?
-        .encode()
-        .map_err(|e| format!("encoding the macro-library component failed: {e:#}"))
 }
 
 pub(crate) fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, String> {

@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::macros::MacroComponent;
 
+mod optimization;
+
 pub struct NativeMacroHost {
     root: PathBuf,
     libraries: HashMap<String, MacroComponent>,
@@ -67,9 +69,21 @@ impl MacroHost for NativeMacroHost {
 }
 
 pub fn compile(request: &Request, root: &Path) -> Result<Compilation, Vec<Diagnostic>> {
+    compile_with_optimizer(request, root, &mut Ok)
+}
+
+pub fn compile_for_size(request: &Request, root: &Path) -> Result<Compilation, Vec<Diagnostic>> {
+    compile_with_optimizer(request, root, &mut optimization::optimize)
+}
+
+fn compile_with_optimizer(
+    request: &Request,
+    root: &Path,
+    optimizer: &mut dyn crate::emit::CoreOptimizer,
+) -> Result<Compilation, Vec<Diagnostic>> {
     let mut host = NativeMacroHost::new(root);
     loop {
-        match super::compile(request, &mut host)? {
+        match super::compile_with_optimizer(request, &mut host, optimizer)? {
             Step::Complete(compilation) => return Ok(compilation),
             Step::NeedsMacros(requests) => {
                 for request in requests {

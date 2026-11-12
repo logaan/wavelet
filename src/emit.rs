@@ -9,6 +9,7 @@ mod boxes;
 mod builtins;
 mod call;
 mod canonical;
+mod component;
 mod core_module;
 mod deps;
 mod helpers;
@@ -25,7 +26,7 @@ mod witty;
 
 pub(crate) use deps::import_signatures;
 pub use deps::{dep_non_record_types, dep_record_types};
-pub use macro_component::emit_macro_component;
+pub use macro_component::{emit_macro_component, emit_macro_component_with_optimizer};
 pub use resources::ResourceFns;
 pub(crate) use type_scope::scope_dependency_types;
 pub use wit_synth::dep_package_wit;
@@ -196,41 +197,46 @@ impl Helpers {
     }
 }
 
+pub trait CoreOptimizer {
+    fn optimize(&mut self, module: Vec<u8>) -> Result<Vec<u8>, String>;
+}
+
+impl<F> CoreOptimizer for F
+where
+    F: FnMut(Vec<u8>) -> Result<Vec<u8>, String>,
+{
+    fn optimize(&mut self, module: Vec<u8>) -> Result<Vec<u8>, String> {
+        self(module)
+    }
+}
+
 pub fn emit_component(
     arena: &Arena,
     roots: &[NodeId],
     info: &FileInfo,
     deps: &HashMap<String, Dep>,
 ) -> Result<Vec<u8>, String> {
+    emit_component_with_optimizer(arena, roots, info, deps, &mut Ok)
+}
+
+pub fn emit_component_with_optimizer(
+    arena: &Arena,
+    roots: &[NodeId],
+    info: &FileInfo,
+    deps: &HashMap<String, Dep>,
+    optimizer: &mut dyn CoreOptimizer,
+) -> Result<Vec<u8>, String> {
     validate_dependency_versions(info, deps)?;
     let scoped = scope_dependency_types(info, deps);
     let deps = &scoped;
-    let mut module = emit_core_module(arena, roots, info, deps)?;
+    let module = emit_core_module(arena, roots, info, deps)?;
     let wit = synthesize_world_wit(arena, info, deps)?;
-
-    let mut resolve = wit_parser::Resolve::default();
-    let pkg = resolve
-        .push_str("wavelet-synthesized.wit", &wit)
-        .map_err(|e| {
-            format!("internal: synthesized WIT did not parse: {e:#}\n--- WIT ---\n{wit}")
-        })?;
-    let world = resolve
-        .select_world(&[pkg], Some(&crate::wit::names::identifier(&info.world)))
-        .map_err(|e| format!("internal: world selection failed: {e:#}"))?;
-    wit_component::embed_component_metadata(
-        &mut module,
-        &resolve,
-        world,
-        wit_component::StringEncoding::UTF8,
+    component::encode(
+        module,
+        &wit,
+        &crate::wit::names::identifier(&info.world),
+        optimizer,
     )
-    .map_err(|e| format!("embedding component metadata failed: {e:#}"))?;
-
-    wit_component::ComponentEncoder::default()
-        .validate(true)
-        .module(&module)
-        .map_err(|e| format!("componentizing failed: {e:#}"))?
-        .encode()
-        .map_err(|e| format!("component encoding failed: {e:#}"))
 }
 
 #[derive(Clone, Debug)]

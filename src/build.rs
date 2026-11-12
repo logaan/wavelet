@@ -49,13 +49,30 @@ impl PreparedUnit {
 }
 
 pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, String> {
+    build_files_with_size_optimization(paths, out_dir, false)
+}
+
+pub fn build_files_for_size(paths: &[String], out_dir: &str) -> Result<Vec<String>, String> {
+    build_files_with_size_optimization(paths, out_dir, true)
+}
+
+fn build_files_with_size_optimization(
+    paths: &[String],
+    out_dir: &str,
+    optimize_size: bool,
+) -> Result<Vec<String>, String> {
     if paths.is_empty() {
         return Err("no input files".into());
     }
     let root = project_root(paths).unwrap_or_else(|| PathBuf::from("."));
     let request = crate::compiler::native::request_from_paths(paths, &root)?;
-    let compilation = crate::compiler::native::compile(&request, &root)
-        .map_err(crate::compiler::native::display_diagnostics)?;
+    let compile = if optimize_size {
+        crate::compiler::native::compile_for_size
+    } else {
+        crate::compiler::native::compile
+    };
+    let compilation =
+        compile(&request, &root).map_err(crate::compiler::native::display_diagnostics)?;
     std::fs::create_dir_all(out_dir).map_err(|e| format!("{out_dir}: {e}"))?;
     let mut outputs = Vec::new();
     for artifact in compilation.artifacts {

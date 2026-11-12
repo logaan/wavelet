@@ -59,9 +59,10 @@ impl Unit {
     pub(super) fn compile(
         &self,
         dependencies: &HashMap<String, Dep>,
+        optimizer: &mut dyn emit::CoreOptimizer,
     ) -> Result<Artifact, Diagnostic> {
         let bytes = if self.macro_library {
-            crate::macrobuild::build_macro_component(&self.arena, &self.roots)
+            emit::emit_macro_component_with_optimizer(&self.arena, &self.roots, optimizer)
         } else {
             let dependencies = emit::scope_dependency_types(&self.info, dependencies);
             let signatures = emit::import_signatures(&self.info, &dependencies);
@@ -73,7 +74,13 @@ impl Unit {
                 &self.info.imports,
             )
             .map_err(|e| Diagnostic::new(Phase::Check, Some(&self.name), e))?;
-            emit::emit_component(&self.arena, &self.roots, &self.info, &dependencies)
+            emit::emit_component_with_optimizer(
+                &self.arena,
+                &self.roots,
+                &self.info,
+                &dependencies,
+                optimizer,
+            )
         }
         .map_err(|e| Diagnostic::new(Phase::Emit, Some(&self.name), e))?;
         Ok(Artifact {

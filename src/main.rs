@@ -35,7 +35,7 @@ fn main() -> ExitCode {
             eprintln!("       wavelet wit <file.wlt>");
             eprintln!("       wavelet new <name> [--type=cli|http]");
             eprintln!("       wavelet run <file.wlt>... [-- <args>...]");
-            eprintln!("       wavelet build <file.wlt>... [-o <dir>]");
+            eprintln!("       wavelet build <file.wlt>... [--optimize-size] [-o <dir>]");
             eprintln!("       wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]");
             eprintln!("       wavelet <file> [args...]       (run a script; also via #! shebang)");
             eprintln!("       wavelet --version");
@@ -111,8 +111,19 @@ fn split_out(rest: &[String], default: &str) -> (Vec<String>, String) {
 }
 
 fn build_cmd(rest: &[String]) -> ExitCode {
-    let (files, out_dir) = split_out(rest, "out");
-    match wavelet::build::build_files(&files, &out_dir) {
+    let optimize_size = rest.iter().any(|arg| arg == "--optimize-size");
+    let rest = rest
+        .iter()
+        .filter(|arg| *arg != "--optimize-size")
+        .cloned()
+        .collect::<Vec<_>>();
+    let (files, out_dir) = split_out(&rest, "out");
+    let build = if optimize_size {
+        wavelet::build::build_files_for_size
+    } else {
+        wavelet::build::build_files
+    };
+    match build(&files, &out_dir) {
         Ok(outputs) => {
             for o in outputs {
                 println!("{o}");

@@ -14,7 +14,7 @@ description: Create projects, inspect source, compile components, and run progra
 | `wavelet wit <file.wlt>` | Print the synthesized WIT world. |
 | `wavelet repl` | Compile and evaluate expressions interactively. |
 | `wavelet run <file.wlt>... [-- <args>...]` | Compile, compose, and execute the first file's `api.run`. |
-| `wavelet build <file.wlt>... [-o <dir>]` | Write component artifacts. |
+| `wavelet build <file.wlt>... [--optimize-size] [-o <dir>]` | Write component artifacts. |
 | `wavelet compose <entry.wasm> <plug.wasm>... [-o <file>]` | Connect prebuilt components. |
 | `wavelet <file> [args...]` | Run a source file as a script. |
 
@@ -129,6 +129,18 @@ $ wavelet build src/*.wlt -o out
 When the selected entry imports sibling source packages, the compiler also writes a composed `app.wasm`. Individual package components remain available separately. Imports not provided by siblings remain requirements for a host or a later composition step.
 
 Compilation and composition run in process. Dependency WIT must be available in the project's `wit/deps/` tree; populate it with `wavelet new` or `wkg wit fetch`. A compilation error is reported before artifact publication begins.
+
+`--optimize-size` runs Binaryen's `wasm-opt -Oz` on each core module before
+componentisation. Install Binaryen and put `wasm-opt` on `PATH`; an unavailable or
+failing optimiser fails the build rather than silently producing an unoptimised
+artifact. The optimisation preserves public component interfaces and language
+semantics. It enables the Wasm features used by Wavelet: mutable globals, sign
+extension, non-trapping float conversions, bulk memory, tail calls, reference
+types, and multi-value functions. It does not enable fast-math or assume traps
+cannot occur.
+
+The default build needs no external optimiser. The browser and compiler component
+use the portable compiler and do not invoke native executables.
 
 ## `compose`
 

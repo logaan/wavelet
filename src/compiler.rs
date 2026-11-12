@@ -14,6 +14,14 @@ use std::collections::{HashMap, HashSet};
 use unit::Unit;
 
 pub fn compile(request: &Request, host: &mut dyn MacroHost) -> Result<Step, Vec<Diagnostic>> {
+    compile_with_optimizer(request, host, &mut Ok)
+}
+
+pub fn compile_with_optimizer(
+    request: &Request,
+    host: &mut dyn MacroHost,
+    optimizer: &mut dyn crate::emit::CoreOptimizer,
+) -> Result<Step, Vec<Diagnostic>> {
     validate_request(request).map_err(|error| vec![error])?;
     let mut catalog = Catalog::new(host);
     let units = match prepare(request, &mut catalog) {
@@ -21,7 +29,7 @@ pub fn compile(request: &Request, host: &mut dyn MacroHost) -> Result<Step, Vec<
         Err(_) if !catalog.pending.is_empty() => return Ok(Step::NeedsMacros(catalog.pending)),
         Err(error) => return Err(vec![error]),
     };
-    compile_units(request, &units)
+    compile_units(request, &units, optimizer)
         .map(Step::Complete)
         .map_err(|error| vec![error])
 }
@@ -79,7 +87,11 @@ fn read(
     })
 }
 
-fn compile_units(request: &Request, units: &[Unit]) -> Result<Compilation, Diagnostic> {
+fn compile_units(
+    request: &Request,
+    units: &[Unit],
+    optimizer: &mut dyn crate::emit::CoreOptimizer,
+) -> Result<Compilation, Diagnostic> {
     let supplied = dependencies::Dependencies::parse(&request.dependencies)
         .map_err(|e| Diagnostic::new(Phase::Wit, None, e))?;
     let mut index = HashMap::new();
@@ -132,7 +144,7 @@ fn compile_units(request: &Request, units: &[Unit]) -> Result<Compilation, Diagn
             unit::resolve_dependencies(unit, units, &index, &supplied)
                 .map_err(|e| Diagnostic::new(Phase::Wit, Some(&unit.name), e))?
         };
-        artifacts.push(unit.compile(&dependencies)?);
+        artifacts.push(unit.compile(&dependencies, optimizer)?);
     }
     let entry = project::compose(request.entry.as_deref(), units, &index, &mut artifacts)
         .map_err(|e| Diagnostic::new(Phase::Compose, None, e))?;

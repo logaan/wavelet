@@ -132,7 +132,7 @@ Wavelet programs can use other compatible host contracts too.
 | `wavelet wit <file.wlt>` | Inspect the synthesized WIT world. |
 | `wavelet repl` | Compile and run expressions interactively. |
 | `wavelet run <file.wlt>...` | Compose files and call the first file's `api.run`. |
-| `wavelet build <file.wlt>... [-o <dir>]` | Write component artifacts. |
+| `wavelet build <file.wlt>... [--optimize-size] [-o <dir>]` | Write component artifacts. |
 | `wavelet compose <entry.wasm> <plug.wasm>... [-o <file>]` | Connect prebuilt components. |
 
 An executable source file can start with `#!/usr/bin/env wavelet` and provide an
