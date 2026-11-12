@@ -143,32 +143,13 @@ been checked and updated where affected:
   diagnostics, completion, and hover surface the language contracts and Wasm
   semantics, so semantic changes must be reflected there too.
 
-## Verify the README before pushing
-
-Before every authorized push, check `README.md` against the current implementation
-and the changes being pushed. Update stale descriptions, CLI commands, setup
-requirements, links, and expected output in the same change.
-
-- Build the current CLI and execute the README's language examples and application
-  commands in a temporary directory. Check exit status, displayed output, returned
-  values, and promised build artifacts; a successful command alone is insufficient.
-- Check the installation path a new reader will follow, including required tools
-  and `PATH` setup. Verify that the Homebrew formula and release links provide a
-  version that runs the documented examples. When cutting a release, update the
-  `logaan/homebrew-tap` formula to the published artifacts and verified checksums.
-- Keep the README's license, the root `LICENSE`, and first-party package metadata
-  consistent. Wavelet uses Apache-2.0; preserve third-party dependency licenses.
-- Record the verification results in the final handoff. Fix any discrepancy found
-  before pushing; if a check cannot be completed, report the blocker explicitly.
-
-These checks do not grant permission to push; the working conventions below still
-apply.
-
 ## Working conventions
 
 Work in the shared checkout; coordinate file ownership between agents. Commit
-completed changes locally. Do not push or create pull requests unless explicitly
-requested. These rules supersede historical workflow instructions in the vault.
+logical, completed changes as you work. When the requested work is complete and
+required checks pass, push the completed commits. Do not create pull requests
+unless explicitly requested. These rules supersede historical workflow
+instructions in the vault.
 
 Do not add comments to source code, tests, configuration, or scripts. Keep
 explanations in documentation and use descriptive names and small functions.
