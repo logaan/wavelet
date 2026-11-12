@@ -57,6 +57,36 @@ async function realCompiler() {
   return createCompilerRuntime(bytes, {instantiate: (component, imports) => instantiateComponent(component, imports, importModule)});
 }
 
+test('REPL returns every top-level value with its source line and shared state', async () => {
+  const runtime = await realCompiler();
+  const result = await runtime.evaluate({
+    definitions: 'Def n cell-new(0)\nDef square Fn {x: s64} mul(x x)\n',
+    source: '\n"☃"\n\nadd(\n  20 22) square(3)\ncell-set(n add(cell-get(n) 1))\ncell-get(n)\ncell-get(n)\nDef answer 42',
+    repl: true,
+  });
+  assert.deepEqual(result.results, [
+    {line: 2, value: '"☃"'},
+    {line: 4, value: '42'},
+    {line: 5, value: '9'},
+    {line: 6, value: '{}'},
+    {line: 7, value: '1'},
+    {line: 8, value: '1'},
+    {line: 9, value: '{}'},
+  ]);
+});
+
+test('REPL preserves macro call locations and handles empty or declaration-only inputs', async () => {
+  const runtime = await realCompiler();
+  const result = await runtime.evaluate({
+    source: 'DefMacro twice {x} Quasi add(Unquote(x) Unquote(x))\n\nTwice\n  21\nTwice 3',
+    repl: true,
+  });
+  assert.deepEqual(result.results, [{line: 1, value: '{}'}, {line: 3, value: '42'}, {line: 5, value: '6'}]);
+  assert.deepEqual((await runtime.evaluate({source: '', repl: true})).results, []);
+  assert.deepEqual((await runtime.evaluate({source: 'Def answer 42', repl: true})).results, [{line: 1, value: '{}'}]);
+  await assert.rejects(runtime.evaluate({source: 'Def bad div(1 0)', repl: true}));
+});
+
 test('compiler component expands a supplied macro component through owned host wrappers', async () => {
   const runtime = await realCompiler();
   const contents = await readFile(new URL('../../tests/fixtures/produced-macros.wasm', import.meta.url));

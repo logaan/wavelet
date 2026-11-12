@@ -71,12 +71,12 @@ export async function createCompilerRuntime(compilerBytes, options = {}) {
     throw new Error('Macro resolution exceeded 64 compilation passes.');
   }
 
-  async function evaluate({source, sources, entry, invocation, definitions = '', dependencies = [], macroComponents = []}, onExecuting) {
+  async function evaluate({source, sources, entry, invocation, definitions = '', dependencies = [], macroComponents = [], repl = false}, onExecuting) {
     const compilation = await compile({
       sources: sources ?? [{name: 'playground.wlt', contents: `${definitions}\n${source}`}],
       dependencies,
       entry,
-      mode: sources ? 'project' : 'snippet',
+      mode: sources ? 'project' : repl ? 'repl' : 'snippet',
     }, macroComponents);
     const artifact = compilation.artifacts.find((entry) => entry.name === compilation.entry);
     const target = sources ? invocation : compilation.invocation;
@@ -87,6 +87,11 @@ export async function createCompilerRuntime(compilerBytes, options = {}) {
     const invoke = exportedFunction(component, target);
     onExecuting?.();
     const value = invoke();
+    if (repl && !sources) {
+      const offset = definitions.split('\n').length;
+      const results = value.filter(({line}) => line > offset).map(({line, value}) => ({line: line - offset, value}));
+      return {ok: true, results, output: '', error: ''};
+    }
     if (typeof value !== 'string') throw new Error('The expression did not return its display value.');
     return {ok: true, value: sources ? JSON.stringify(value) : value, output: '', error: ''};
   }

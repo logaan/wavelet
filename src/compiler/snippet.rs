@@ -1,3 +1,4 @@
+use super::Mode;
 use crate::form::{Arena, Node, NodeId};
 use crate::printer::print;
 
@@ -24,9 +25,15 @@ pub fn is_declaration(arena: &Arena, root: NodeId) -> bool {
     )
 }
 
-pub(super) fn wrap(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
+pub(super) fn wrap(
+    arena: &Arena,
+    roots: &[NodeId],
+    source: &str,
+    mode: Mode,
+) -> Result<String, String> {
     let mut declarations = Vec::new();
     let mut expressions = Vec::new();
+    let mut results = Vec::new();
     for &root in roots {
         if matches!(
             head(arena, root),
@@ -48,6 +55,28 @@ pub(super) fn wrap(arena: &Arena, roots: &[NodeId]) -> Result<String, String> {
         } else {
             expressions.push(print(arena, root));
         }
+        if mode == Mode::Repl {
+            let line = source.as_bytes()[..arena.span(root).0 as usize]
+                .iter()
+                .filter(|&&byte| byte == b'\n')
+                .count()
+                + 1;
+            let value = if let Some(name) = value_definition_name(arena, root) {
+                format!("Do [{name} \"{{}}\"]")
+            } else if is_declaration(arena, root) {
+                "\"{}\"".into()
+            } else {
+                format!("to-string({})", print(arena, root))
+            };
+            results.push(format!("{{line: {line} value: {value}}}"));
+        }
+    }
+    if mode == Mode::Repl {
+        return Ok(format!(
+            "Package \"{PACKAGE}\"\n{}\nDefType wavelet-repl-result {{line: u32 value: string}}\nExport {{name: {FUNCTION} result: list(wavelet-repl-result)}}\nDef {FUNCTION} Fn {{}} [{}]\n",
+            declarations.join("\n"),
+            results.join("\n")
+        ));
     }
     let ends_in_expression = roots
         .last()

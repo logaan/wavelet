@@ -14,6 +14,7 @@ pub struct DependencyFile {
 pub enum Mode {
     Project,
     Snippet,
+    Repl,
 }
 
 #[derive(Clone, Debug)]

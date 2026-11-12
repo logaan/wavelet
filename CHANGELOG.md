@@ -13,8 +13,16 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Added
+
+- Browser REPL input line numbers and a result for every top-level expression,
+  labeled with its starting line. Compiler REPL mode returns these values and
+  source lines from a single execution.
+
 ### Fixed
 
+- Compiled unit results from `cell-set` and component calls display as `{}` in
+  agreement with the interpreter instead of `false`.
 - README setup instructions include the source-build `PATH`, application tool
   prerequisites, and how to inspect the composition example's returned value.
 - Compiler, language-server, browser package, and VS Code extension metadata use

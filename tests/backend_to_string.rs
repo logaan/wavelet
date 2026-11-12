@@ -41,6 +41,38 @@ Def compound Fn {x c}
 
 const IFACE: &str = "demo:app/api@0.1.0";
 
+#[test]
+fn compiled_unit_values_match_the_interpreter() {
+    use wavelet::compiler::{NoMacros, Request, Step, compile};
+
+    for source in [
+        "Let {n: cell-new(0)} cell-set(n 1)",
+        "drop(42)",
+        "Do []",
+        "[drop(1) drop(2)]",
+        "{unit: drop(1) boolean: false}",
+    ] {
+        let source = format!("to-string({source})");
+        let expected = wavelet::eval_snippet(&source);
+        assert!(expected.ok, "{}", expected.error);
+        let Step::Complete(compilation) =
+            compile(&Request::snippet(&source), &mut NoMacros).unwrap()
+        else {
+            panic!("unexpected macro request")
+        };
+        let mut component =
+            HostComponent::from_bytes(&compilation.entry_artifact().unwrap().bytes).unwrap();
+        let invocation = compilation.invocation.unwrap();
+        assert_eq!(
+            component
+                .call_instance(&invocation.interface_name, &invocation.function_name, &[])
+                .unwrap(),
+            vec![Val::String(expected.value)],
+            "{source}"
+        );
+    }
+}
+
 fn call(c: &mut HostComponent, f: &str, args: &[Val]) -> String {
     match &c
         .call_instance(IFACE, f, args)

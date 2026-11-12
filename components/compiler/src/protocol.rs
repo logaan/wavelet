@@ -23,6 +23,7 @@ pub fn request(value: api::Request) -> core::Request {
         mode: match value.mode {
             api::Mode::Project => core::Mode::Project,
             api::Mode::Snippet => core::Mode::Snippet,
+            api::Mode::Repl => core::Mode::Repl,
         },
     }
 }

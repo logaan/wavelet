@@ -20,7 +20,7 @@ A request contains:
 | `sources` | Wavelet files, each with a virtual `name` and UTF-8 `contents`. |
 | `dependencies` | Supplied WIT files, each with a virtual `name` and byte `contents`. |
 | `entry` | Optional source filename to use as the project entry. |
-| `mode` | `Project` for complete packages or `Snippet` for one interactive source. |
+| `mode` | `Project` for complete packages, `Snippet` for a final display value, or `Repl` for every top-level result. |
 
 Virtual filenames use `/` separators. Empty names, absolute paths, backslashes,
 empty path segments, `.` and `..` segments, and duplicate filenames are errors.
@@ -81,6 +81,15 @@ A snippet can define functions, macros, types, resources, and functor templates.
 The wrapper is shared by the native REPL, browser REPL, and documentation
 conformance tests. Repeated evaluation executes compiled code again. A host that
 retains earlier definitions resubmits them with the next expression.
+
+`Mode::Repl` (component mode `repl`) accepts the same single-source input and
+returns the same invocation names. Its function returns a list of records with
+`line: u32` and `value: string`, one for each top-level form in source order.
+Lines are one-based starting lines in the submitted source, measured before macro
+expansion. Values use Wavelet's printed syntax; declarations return `{}` after
+evaluating any value initializer. All forms execute within one invocation, so
+mutations carry between expressions. Empty input returns an empty list. A runtime
+failure aborts the invocation without returning partial results.
 
 ## Macro preparation
 

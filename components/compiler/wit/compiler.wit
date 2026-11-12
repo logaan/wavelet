@@ -22,7 +22,7 @@ interface compiler {
     contents: list<u8>,
   }
 
-  enum mode { project, snippet }
+  enum mode { project, snippet, repl }
 
   record request {
     sources: list<source-file>,

@@ -4,9 +4,11 @@ title: Browser REPL
 
 The [browser REPL](/repl) compiles Wavelet source into a WebAssembly component and runs that component in your browser. The runnable examples throughout this documentation use the same compiler and execution path.
 
-Put reusable `Def` forms in **Definitions** and the expression you want to evaluate in **Expression**. Choose **Compile & run**, or press Ctrl+Enter or ⌘+Enter in either editor. Results and diagnostics appear below the expression; history preserves the source and result of earlier runs.
+Put reusable `Def` forms in **Definitions** and the expressions you want to evaluate in **Expressions**. Both editors show line numbers. Choose **Compile & run**, or press Ctrl+Enter or ⌘+Enter in either editor. Results and diagnostics appear below the expressions; history preserves the source and results of earlier runs.
 
-Each run creates a fresh component instance. Definitions remain in the editor between runs, but cells and resources created during a run do not carry over to the next one. To observe several mutations together, include those operations in a single expression.
+Every top-level form in **Expressions** produces a result, prefixed with its starting line and `⇒`, such as `3 ⇒ 42`. Multiline expressions use their first line; expressions on the same line share a line number. Declarations display `{}`. The **Definitions** editor supplies reusable declarations without adding rows to the results.
+
+Each run creates a fresh component instance. Expressions execute in order and share cells and resources within that run. Definitions remain in the editor between runs, but cells and resources created during a run do not carry over to the next one.
 
 Compilation and execution happen in a browser worker. **Cancel** stops the current worker, including a component that never returns. A run also stops automatically after 30 seconds. The next run starts a new worker when necessary.
 

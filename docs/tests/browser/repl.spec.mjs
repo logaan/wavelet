@@ -20,6 +20,25 @@ test('compiled REPL runs definitions and recovers from diagnostics', async ({pag
   await expect(result).toContainText('42');
 });
 
+test('REPL numbers input lines and retains all labeled results in history', async ({page}) => {
+  await page.goto('repl');
+  const source = '\nadd(\n  20 22) square(3)\n\n"hello"\n';
+  const result = await expression(page, source);
+  await expect(result.locator('pre')).toHaveText(['2 ⇒ 42', '3 ⇒ 9', '5 ⇒ "hello"']);
+  const input = page.getByLabel('REPL expression', {exact: true});
+  const editor = input.locator('..');
+  await expect(editor.getByTestId('line-numbers')).toHaveText('1\n2\n3\n4\n5\n6');
+  await page.getByRole('region', {name: 'REPL history'}).locator('summary').click();
+  await expect(page.getByRole('region', {name: 'REPL history'}).getByTestId('wavelet-result').locator('pre')).toHaveText(['2 ⇒ 42', '3 ⇒ 9', '5 ⇒ "hello"']);
+  await input.fill(Array.from({length: 30}, (_, index) => String(index)).join('\n'));
+  await input.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); });
+  const inputScroll = await input.evaluate((element) => element.scrollTop);
+  expect(inputScroll).toBeGreaterThan(0);
+  await expect.poll(() => editor.getByTestId('line-numbers').evaluate((element) => element.scrollTop)).toBe(inputScroll);
+  await input.fill('42');
+  await expect(editor.getByTestId('line-numbers')).toHaveText('1');
+});
+
 test('cancels an infinite compiled loop without blocking the page', async ({page}) => {
   await page.goto('repl');
   await page.getByLabel('REPL definitions', {exact: true}).fill('');

@@ -473,8 +473,8 @@ impl<'a> Emitter<'a> {
         em
     }
 
-    fn unit_addr(&self) -> u32 {
-        self.false_addr
+    fn unit_addr(&mut self) -> u32 {
+        self.intern_unit_rec()
     }
 
     fn has_persist(&self) -> bool {

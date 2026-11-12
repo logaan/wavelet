@@ -31,8 +31,8 @@ fn prepare(request: &Request, catalog: &mut Catalog<'_>) -> Result<Vec<Unit>, Di
     let mut sources = Vec::new();
     for source in &request.sources {
         let (mut arena, mut roots) = read(catalog, source)?;
-        if request.mode == Mode::Snippet {
-            let wrapped = snippet::wrap(&arena, &roots)
+        if request.mode != Mode::Project {
+            let wrapped = snippet::wrap(&arena, &roots, &source.contents, request.mode)
                 .map_err(|e| Diagnostic::new(Phase::Input, Some(&source.name), e))?;
             (arena, roots) = read(
                 catalog,
@@ -136,7 +136,7 @@ fn compile_units(request: &Request, units: &[Unit]) -> Result<Compilation, Diagn
     }
     let entry = project::compose(request.entry.as_deref(), units, &index, &mut artifacts)
         .map_err(|e| Diagnostic::new(Phase::Compose, None, e))?;
-    let invocation = (request.mode == Mode::Snippet).then(|| Invocation {
+    let invocation = (request.mode != Mode::Project).then(|| Invocation {
         interface_name: snippet::INTERFACE.into(),
         function_name: snippet::FUNCTION.into(),
     });
@@ -151,11 +151,11 @@ fn validate_request(request: &Request) -> Result<(), Diagnostic> {
     if request.sources.is_empty() {
         return Err(Diagnostic::new(Phase::Input, None, "no input files"));
     }
-    if request.mode == Mode::Snippet && request.sources.len() != 1 {
+    if request.mode != Mode::Project && request.sources.len() != 1 {
         return Err(Diagnostic::new(
             Phase::Input,
             None,
-            "snippet mode requires exactly one source file",
+            "snippet and REPL modes require exactly one source file",
         ));
     }
     for names in [

@@ -7,10 +7,12 @@ import styles from './styles.module.css';
 
 registerWavelet(Prism);
 
-export default function SourceEditor({value, onChange, onRun, label = 'Editable Wavelet source', rows}) {
+export default function SourceEditor({value, onChange, onRun, label = 'Editable Wavelet source', rows, lineNumbers = false}) {
   const pre = useRef(null);
+  const gutter = useRef(null);
   const {colorMode} = useColorMode();
-  const height = rows ?? Math.max(2, Math.min(value.split('\n').length, 20));
+  const lineCount = value.split('\n').length;
+  const height = rows ?? Math.max(2, Math.min(lineCount, 20));
   function onKeyDown(event) {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
@@ -26,7 +28,10 @@ export default function SourceEditor({value, onChange, onRun, label = 'Editable 
     }
   }
   return (
-    <div className={styles.editorWrap}>
+    <div className={clsx(styles.editorWrap, lineNumbers && styles.numberedEditor)} style={lineNumbers ? {'--line-number-width': `${String(lineCount).length + 2}ch`} : undefined}>
+      {lineNumbers && <pre ref={gutter} className={clsx(styles.editor, styles.lineNumbers)} aria-hidden="true" data-testid="line-numbers">
+        {Array.from({length: lineCount}, (_, index) => index + 1).join('\n')}
+      </pre>}
       <pre ref={pre} className={clsx(styles.editor, styles.highlight)} aria-hidden="true">
         <Highlight prism={Prism} theme={colorMode === 'dark' ? themes.dracula : themes.github} code={value + '\n'} language="wavelet">
           {({tokens, getLineProps, getTokenProps}) => tokens.map((line, index) => (
@@ -40,11 +45,13 @@ export default function SourceEditor({value, onChange, onRun, label = 'Editable 
       <textarea
         className={clsx(styles.editor, styles.input)}
         spellCheck={false}
+        wrap="off"
         rows={height}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={onKeyDown}
         onScroll={(event) => {
+          if (gutter.current) gutter.current.scrollTop = event.target.scrollTop;
           if (pre.current) {
             pre.current.scrollTop = event.target.scrollTop;
             pre.current.scrollLeft = event.target.scrollLeft;
