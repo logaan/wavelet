@@ -7,7 +7,7 @@ fn examples() -> Value {
 }
 
 #[test]
-fn every_documented_example_matches_the_interpreter() {
+fn documented_interpreter_examples_match_reference_results() {
     let examples = examples();
     let map = examples
         .as_object()
@@ -17,6 +17,9 @@ fn every_documented_example_matches_the_interpreter() {
     let mut failures = Vec::new();
 
     for (id, entry) in map {
+        if entry.get("sources").is_some() || entry["compiledOnly"] == true {
+            continue;
+        }
         let code = entry["code"].as_str().unwrap_or_else(|| {
             panic!("example `{id}` has no string `code`");
         });
@@ -69,4 +72,57 @@ fn every_documented_example_matches_the_interpreter() {
         failures.len(),
         failures.join("\n\n"),
     );
+}
+
+#[test]
+fn documented_compiled_examples_execute() {
+    use wavelet::compiler::{self, Mode, Request, SourceFile};
+    use wavelet::host::{HostComponent, Val};
+
+    for (id, entry) in examples().as_object().unwrap() {
+        if entry.get("sources").is_none() && entry["compiledOnly"] != true {
+            continue;
+        }
+        let request = if let Some(sources) = entry["sources"].as_array() {
+            Request {
+                sources: sources
+                    .iter()
+                    .map(|source| SourceFile {
+                        name: source["name"].as_str().unwrap().into(),
+                        contents: source["contents"].as_str().unwrap().into(),
+                    })
+                    .collect(),
+                dependencies: vec![],
+                entry: Some(entry["entry"].as_str().unwrap().into()),
+                mode: Mode::Project,
+            }
+        } else {
+            Request::snippet(entry["code"].as_str().unwrap())
+        };
+        let compilation = compiler::native::compile(&request, std::path::Path::new("."))
+            .unwrap_or_else(|errors| panic!("{id}: {errors:?}"));
+        let mut host =
+            HostComponent::from_bytes(&compilation.entry_artifact().unwrap().bytes).unwrap();
+        let invocation = compilation
+            .invocation
+            .unwrap_or_else(|| compiler::Invocation {
+                interface_name: entry["invocation"]["interfaceName"]
+                    .as_str()
+                    .unwrap()
+                    .into(),
+                function_name: entry["invocation"]["functionName"].as_str().unwrap().into(),
+            });
+        let results = host
+            .call_instance(&invocation.interface_name, &invocation.function_name, &[])
+            .unwrap();
+        let [Val::String(value)] = results.as_slice() else {
+            panic!("{id}: unexpected result {results:?}");
+        };
+        let actual = if request.mode == Mode::Project {
+            serde_json::to_string(value).unwrap()
+        } else {
+            value.clone()
+        };
+        assert_eq!(actual, entry["value"].as_str().unwrap(), "{id}");
+    }
 }

@@ -71,23 +71,24 @@ export async function createCompilerRuntime(compilerBytes, options = {}) {
     throw new Error('Macro resolution exceeded 64 compilation passes.');
   }
 
-  async function evaluate({source, definitions = '', dependencies = [], macroComponents = []}, onExecuting) {
+  async function evaluate({source, sources, entry, invocation, definitions = '', dependencies = [], macroComponents = []}, onExecuting) {
     const compilation = await compile({
-      sources: [{name: 'playground.wlt', contents: `${definitions}\n${source}`}],
+      sources: sources ?? [{name: 'playground.wlt', contents: `${definitions}\n${source}`}],
       dependencies,
-      entry: undefined,
-      mode: 'snippet',
+      entry,
+      mode: sources ? 'project' : 'snippet',
     }, macroComponents);
     const artifact = compilation.artifacts.find((entry) => entry.name === compilation.entry);
-    if (!artifact || !compilation.invocation) {
+    const target = sources ? invocation : compilation.invocation;
+    if (!artifact || !target) {
       throw new Error('Compilation did not produce an executable expression.');
     }
     const component = await instantiate(artifact.bytes);
-    const invoke = exportedFunction(component, compilation.invocation);
+    const invoke = exportedFunction(component, target);
     onExecuting?.();
     const value = invoke();
     if (typeof value !== 'string') throw new Error('The expression did not return its display value.');
-    return {ok: true, value, output: '', error: ''};
+    return {ok: true, value: sources ? JSON.stringify(value) : value, output: '', error: ''};
   }
 
   return {compile, evaluate};

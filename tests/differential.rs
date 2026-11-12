@@ -71,7 +71,7 @@ fn run_example(id: &str, code: &str, expect_error: bool) -> Outcome {
 }
 
 #[test]
-fn every_documented_example_agrees_with_the_compiled_artifact() {
+fn documented_interpreter_examples_agree_with_compiled_artifacts() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/docs/examples.json");
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
     let examples: serde_json::Value =
@@ -87,6 +87,9 @@ fn every_documented_example_agrees_with_the_compiled_artifact() {
     let mut divergences = Vec::new();
     for id in ids {
         let entry = &map[id.as_str()];
+        if entry.get("sources").is_some() || entry["compiledOnly"] == true {
+            continue;
+        }
         let code = entry["code"]
             .as_str()
             .unwrap_or_else(|| panic!("example `{id}` has no string `code`"));

@@ -13,6 +13,11 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Changed
+
+- Every example in “Learn Wavelet in Y minutes” can be edited and run directly
+  on the page, including the two-file component example.
+
 ## [0.12.0] - 2026-11-12
 
 ### Added

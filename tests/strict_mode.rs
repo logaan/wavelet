@@ -47,12 +47,15 @@ fn runtime_storage_and_return_of_functions_are_rejected() {
 }
 
 #[test]
-fn every_documented_success_has_a_static_type() {
+fn documented_interpreter_successes_have_static_types() {
     let examples: serde_json::Value =
         serde_json::from_str(include_str!("../docs/examples.json")).unwrap();
     let mut failures = Vec::new();
     for (id, entry) in examples.as_object().unwrap() {
-        if entry.get("error").is_some() {
+        if entry.get("error").is_some()
+            || entry.get("sources").is_some()
+            || entry["compiledOnly"] == true
+        {
             continue;
         }
         let result = wavelet::eval_snippet(entry["code"].as_str().unwrap());

@@ -1,5 +1,4 @@
 import {compiledCases} from '../compiled-cases.mjs';
-import {tourBlocks, tourValues} from '../tour-examples.mjs';
 import {expect, test} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
 
@@ -32,7 +31,7 @@ test('cancels an infinite compiled loop without blocking the page', async ({page
   await expect(page.getByTestId('wavelet-result').first()).toContainText('13');
 });
 
-test('documentation examples and tour snippets execute through the compiler worker', async ({page}) => {
+test('documentation examples execute through the compiler worker', async ({page}) => {
   test.setTimeout(600_000);
   await page.goto('repl');
   const failures = await page.evaluate(async (entries) => {
@@ -50,7 +49,7 @@ test('documentation examples and tour snippets execute through the compiler work
           }
         };
         worker.onerror = (event) => { clearTimeout(timer); reject(new Error(event.message)); };
-        worker.postMessage({id: request, input: {source: example.code}});
+        worker.postMessage({id: request, input: {...example, source: example.code}});
       });
       if (example.error ? result.ok : !result.ok || result.value !== example.value || result.output !== example.output) {
         failures.push({name, expected: example, actual: result});
@@ -58,6 +57,25 @@ test('documentation examples and tour snippets execute through the compiler work
     }
     worker.terminate();
     return failures;
-  }, [...Object.entries(examples), ...compiledCases, ...tourBlocks.filter((block) => !block.name).map((block, index) => [`tour-${index + 1}`, {code: block.contents, value: tourValues[index], output: ''}])]);
+  }, [...Object.entries(examples), ...compiledCases]);
   expect(failures).toEqual([]);
+});
+
+test('the tour runs every embedded example and uses edits from both component files', async ({page}) => {
+  test.setTimeout(240_000);
+  await page.goto('learn-wavelet');
+  const runs = page.getByRole('button', {name: '▶ Run', exact: true});
+  const tour = Object.entries(examples).filter(([id]) => id.startsWith('tour-'));
+  await expect(runs).toHaveCount(tour.length);
+  await expect(page.getByRole('textbox')).toHaveCount(9);
+  for (const [index, [, example]] of tour.entries()) {
+    await runs.nth(index).click();
+    await expect(page.getByTestId('wavelet-result').nth(index)).toHaveText(`⇒ ${example.value}`);
+  }
+  const greeting = page.getByLabel('Editable greeting.wlt', {exact: true});
+  const main = page.getByLabel('Editable main.wlt', {exact: true});
+  await greeting.fill((await greeting.inputValue()).replace('Hello, ', 'Welcome, '));
+  await main.fill((await main.inputValue()).replace('"components"', '"Wavelet"'));
+  await runs.last().click();
+  await expect(page.getByTestId('wavelet-result').last()).toHaveText('⇒ "Welcome, Wavelet!"');
 });

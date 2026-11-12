@@ -237,9 +237,172 @@ E['res-counter'] = `DefResource counter {
 }
 Let {c: counter(10)} Do [counter-next(c) counter-next(c) counter-value(c)]`;
 
+E['tour-values'] = `// 1. Values, names, and calls
+// Comments start with //. Commas and newlines separate forms like spaces.
+Def answer 42
+Def label "wavelet"
+Def letter 'W'
+Def ready true
+
+// Functions use names instead of punctuation operators.
+add(answer 8)                    // 50
+"hello".upper()                   // "HELLO"; the same call as upper("hello")
+
+// Lists have one element type. Records and tuples can mix types.
+Def numbers [1, 2, 3]
+Def point {x: 3 y: 4}
+Def pair tuple2(label answer)    // Parentheses alone would mean a call.
+
+// Integer literals default to s64, floats to f64. Context can narrow them.
+The u8 200
+// The u8 300 would be a compile error. to-u8(value) checks at runtime.
+
+tuple3(ready len(numbers) pair)  // (true, 3, ("wavelet", 42))`;
+
+E['tour-functions'] = `// 2. Functions and local bindings
+// Def creates an immutable binding. Fn supplies parameters and a body.
+Def greet Fn {name: string} str-cat("Hello, " name "!")
+greet("Ada")                    // "Hello, Ada!"
+greet({name: "Ada"})            // Named arguments use a record.
+
+Def total Fn {a: s64 b: s64} add(a b)
+total(20 22)                    // Multiple positional arguments form a tuple.
+
+// Let bindings are sequential: the later ones can use earlier ones.
+Let {base: 40 extra: add(base 1)} add(extra 1)
+
+// Callbacks and captures resolve during compilation.
+// Functions cannot be stored in runtime collections or returned as closures.
+Let {offset: 10}
+  map(Fn {n} add(n offset) [1 2 3])  // [11, 12, 13]`;
+
+E['tour-branches'] = `// 3. Branches, records, and variants
+// If requires bool; both branches must have compatible result types.
+If lt(2 3) "smaller" "larger"
+
+DefType point {x: s64 y: s64}
+DefType shape [dot(point) empty]
+
+// Match checks coverage at compile time. Patterns bind their payloads.
+Def describe Fn {s: shape}
+  Match s [
+    (dot({x: x y: y}) str-cat(to-string(x) "," to-string(y)))
+    (empty "empty")
+  ]
+describe(dot({x: 3 y: 4}))        // "3,4"
+
+// Options and results make absence and failure explicit.
+Def fallback Fn {value: option(s64)}
+  Match value [(some(n) n) (none 0)]
+fallback(none)                   // 0
+Match ok(42) [(ok(n) n) (err(e) 0)]  // 42`;
+
+E['tour-collections'] = `// 4. Collections and tail recursion
+map(Fn {n} mul(n n) [1 2 3])     // [1, 4, 9]
+filter(Fn {n} gt(n 2) [1 2 3 4]) // [3, 4]
+fold(Fn {acc n} add(acc n) 0 [1 2 3 4])           // 10
+
+// Tail calls within a component reuse the stack frame.
+Def sum-to Fn {n: s64 acc: s64}
+  If eq(n 0) acc sum-to(sub(n 1) add(acc n))
+sum-to(100 0)                    // 5050`;
+
+E['tour-resources'] = `// 5. State and resources
+// Do evaluates in order and returns the final value.
+Let {c: cell-new(0)}
+  Do [cell-set(c 2) cell-get(c)]  // 2
+
+// A resource hides its state behind a handle and methods.
+DefResource counter {
+  New: Fn {start: u32} cell-new(start)
+  next: Fn {self: counter}
+    The u32 Do [cell-set(self add(cell-get(self) 1)) cell-get(self)]
+  value: Fn {self: counter} The u32 cell-get(self)
+}
+
+// A local function borrows an existing handle.
+Def peek Fn {c: borrow(counter)} The u32 counter/value(c)
+Let {c: counter(5)}
+  Do [counter/next(c) peek(c)]    // 6
+
+// At a component boundary, counter or own(counter) transfers ownership.
+// borrow(counter) lets a callee use the handle without taking ownership.
+// drop(value) discards a value; it does not call a resource destructor.`;
+
+E['tour-macros'] = `// 6. Code as data and compile-time macros
+Quote add(1 2)                  // The source form, without running the call.
+
+// Quasi builds a form. Unquote inserts a value into that form.
+Let {n: 5} Quasi add(Unquote(n) 1)
+
+// Macro parameters receive unevaluated forms.
+// Define macros before use; TitleCase syntax consumes their known arity.
+DefMacro twice {expression}
+  Quasi add(Unquote(expression) Unquote(expression))
+Twice 21                        // 42
+// This macro evaluates its expression twice. Expansion is unhygienic.`;
+
+E['tour-types'] = {
+  compiledOnly: true,
+  code: `// 7. Concrete types and compile-time specialization
+// Overloads resolve from argument types or an expected result type.
+Def describe Fn {n: s64} str-cat("number " to-string(n))
+Def describe Fn {s: string} str-cat("text " s)
+describe(7)                     // "number 7"
+
+// A functor creates concrete declarations for its type arguments.
+Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
+Let {s: ints/new()}
+  Do [ints/add(s 2) ints/add(s 2) ints/size(s)] // 1
+
+// User templates are file-local; no generic type crosses the boundary.
+DefFunctor "tour:identity" {elem} [
+  Def identity Fn {value: elem} value
+]
+Instantiate {pkg: "tour:identity" with: {elem: string} as: words}
+words-identity("concrete")      // "concrete"`,
+  value: '"concrete"',
+  output: '',
+};
+
+E['tour-components'] = {
+  sources: [
+    {name: 'greeting.wlt', contents: `// 8. One file becomes one component.
+Package "tour:greeting@0.1.0"
+
+// Export publishes a function through the default api interface.
+Export greet
+Def greet Fn {name: string} str-cat("Hello, " name "!")`},
+    {name: 'main.wlt', contents: `Package "tour:main@0.1.0"
+
+// Imports name WIT interfaces, independently of implementation language.
+Import {pkg: "tour:greeting/api" as: greeting}
+
+Export {name: run result: string}
+Def run Fn {} greeting/greet("components")
+
+// Runtime host access, including WASI, also requires explicit imports.
+// Macro components use Import {pkg: "..." macros: true from: "...wasm"}.
+// Supply their executable artifacts explicitly; WIT alone is only a contract.`},
+  ],
+  entry: 'main.wlt',
+  invocation: {interfaceName: 'tour:main/api@0.1.0', functionName: 'run'},
+  value: '"Hello, components!"',
+  output: '',
+};
+
 const out = {};
 let errCount = 0;
-for (const [id, code] of Object.entries(E)) {
+for (const [id, example] of Object.entries(E)) {
+  if (typeof example !== 'string') {
+    const compiled = await compiler.evaluate({...example, source: example.code});
+    if (compiled.value !== example.value || compiled.output !== example.output) {
+      throw new Error(`${id}: compiled example disagrees with expected result\n${JSON.stringify(compiled)}`);
+    }
+    out[id] = example;
+    continue;
+  }
+  const code = example;
   const r = JSON.parse(_eval(code));
   let compiled;
   try {

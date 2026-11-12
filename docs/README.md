@@ -27,7 +27,17 @@ the example generator, not for browser execution.
 Author playground examples in `scripts/gen-examples.mjs`. It produces
 `examples.json`, containing source and expected values or errors, and verifies
 compiled results against the reference evaluator. Pages refer to example IDs
-through the globally registered `<Playground>` component.
+through the globally registered `<Playground>` component. Snippets use `code`;
+multi-file examples use `sources`, an `entry` filename, and an `invocation`
+identifying a zero-argument export that returns a string. Each project file gets
+an editor, and Run compiles the files together before calling that export.
+Project examples declare their expected result in the generator and are checked
+through both native and browser execution.
+
+The tour's built-in set functor also requires compiled execution: the snippet
+interpreter does not resolve built-in `Instantiate` declarations. That example
+uses `compiledOnly: true` with an explicit expected result, checked by the native
+compiler and browser runtime alongside the project example.
 
 After changing the compiler or example sources, run from the repository root:
 
@@ -49,8 +59,9 @@ npm --prefix docs run test:browser
 
 Browser tests require Playwright Chromium. They execute the playground examples
 and the code tour through the actual compiler component and emitted runtime,
-and check recovery after errors and cancellation. The tour tests extract source
-from `docs/learn-wavelet.mdx`, so edits to its executable fences are checked too.
+and check recovery after errors and cancellation. The tour tests run every
+embedded example on `docs/learn-wavelet.mdx` and check that edits to both files
+of its component example affect the result.
 
 The [development guide](docs/development.mdx) describes native conformance,
 structural, duplication, coverage, and history-analysis checks.

@@ -7,42 +7,51 @@ import useCompiledRun from './useCompiledRun';
 import styles from './styles.module.css';
 
 function Editor({initial, autoRun, rows}) {
-  const [source, setSource] = useState(initial.trimEnd());
+  const [input, setInput] = useState(initial);
   const execution = useCompiledRun();
   const {run} = execution;
   useEffect(() => {
-    if (autoRun) run({source: initial});
+    if (autoRun) run(initial);
   }, [autoRun, initial, run]);
+  const files = input.sources ?? [{name: 'Wavelet', contents: input.source}];
   return (
     <div className={styles.playground} data-state={execution.status}>
       <div className={styles.toolbar}>
-        <span className={styles.label}>Wavelet</span>
+        <span className={styles.label}>{input.sources ? 'Wavelet project' : 'Wavelet'}</span>
         <div className={styles.actions}>
           {execution.pending && <button type="button" className={styles.cancelButton} onClick={execution.cancel}>Cancel</button>}
-          <button type="button" className={styles.runButton} disabled={execution.pending} onClick={() => run({source})}>
+          <button type="button" className={styles.runButton} disabled={execution.pending} onClick={() => run(input)}>
             {execution.pending ? (execution.status === 'running' ? 'Running…' : 'Compiling…') : '▶ Run'}
           </button>
         </div>
       </div>
-      <SourceEditor value={source} rows={rows} onRun={() => run({source})} onChange={(value) => {
-        execution.clear();
-        setSource(value);
-      }} />
+      {files.map((file, index) => <React.Fragment key={file.name}>
+        {input.sources && <div className={styles.toolbar}><span className={styles.label}>{file.name}</span></div>}
+        <SourceEditor value={file.contents} rows={rows} label={input.sources ? `Editable ${file.name}` : 'Editable Wavelet source'} onRun={() => run(input)} onChange={(value) => {
+          execution.clear();
+          setInput(input.sources
+            ? {...input, sources: input.sources.map((source, current) => current === index ? {...source, contents: value} : source)}
+            : {...input, source: value});
+        }} />
+      </React.Fragment>)}
       <Result result={execution.result} />
     </div>
   );
 }
 
 export default function Playground({id, code, autoRun = false, rows}) {
-  let source = code ?? '';
-  if (id) {
-    const entry = examples[id];
-    if (!entry) throw new Error(`Unknown Playground example: ${id}. Regenerate docs/examples.json after adding it.`);
-    source = entry.code;
-  }
+  const entry = id ? examples[id] : {code: code ?? ''};
+  if (!entry) throw new Error(`Unknown Playground example: ${id}. Regenerate docs/examples.json after adding it.`);
+  const initial = React.useMemo(() => entry.sources
+    ? {sources: entry.sources, entry: entry.entry, invocation: entry.invocation}
+    : {source: entry.code.trimEnd()}, [entry.sources, entry.entry, entry.invocation, entry.code]);
+  const files = initial.sources ?? [{name: 'Wavelet', contents: initial.source}];
   return (
-    <BrowserOnly fallback={<div className={styles.playground}><pre className={styles.editor}>{source.trimEnd()}</pre></div>}>
-      {() => <Editor initial={source} autoRun={autoRun} rows={rows} />}
+    <BrowserOnly fallback={<div className={styles.playground}>{files.map((file) => <React.Fragment key={file.name}>
+      {initial.sources && <div className={styles.toolbar}><span className={styles.label}>{file.name}</span></div>}
+      <pre className={styles.editor}>{file.contents}</pre>
+    </React.Fragment>)}</div>}>
+      {() => <Editor initial={initial} autoRun={autoRun} rows={rows} />}
     </BrowserOnly>
   );
 }

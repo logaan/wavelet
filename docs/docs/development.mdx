@@ -143,7 +143,11 @@ validation and deployment boundaries.
 
 The [Compiler API](./compiler-api) separates source/dependency inputs from host services. Compiler tests exercise in-memory projects, macro preparation, diagnostics, and snippet wrapping. Native and browser callers execute the returned components.
 
-Runnable examples are authored in `docs/scripts/gen-examples.mjs` and generated into `docs/examples.json`. The generator compares the compiled results with the reference evaluator. Both native tests and browser playgrounds consume that data. Regenerate it after changing the language or examples:
+Runnable examples are authored in `docs/scripts/gen-examples.mjs` and generated into `docs/examples.json`. The generator compares snippet results with the reference evaluator. Both native tests and browser playgrounds consume that data.
+
+Multi-file playgrounds supply `sources`, an `entry` filename, and an `invocation` naming a zero-argument export that returns a string. Each file has its own editor; Run compiles the files together and displays the export's result. These project examples declare their expected results explicitly and are checked through native and browser execution. The tour's built-in set example uses `compiledOnly: true` and the same checks because the snippet interpreter does not resolve built-in `Instantiate` declarations.
+
+Regenerate the examples after changing the language or examples:
 
 ```console
 ./scripts/regen-examples.sh

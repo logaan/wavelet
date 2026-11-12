@@ -427,5 +427,60 @@
     "code": "DefResource counter {\n  New: Fn {start: u32} cell-new(start)\n  next: Fn {self: counter} The u32\n    Let {value: cell-get(self)} Do [cell-set(self add(value 1)) value]\n  value: Fn {self: counter} The u32 cell-get(self)\n}\nLet {c: counter(10)} Do [counter-next(c) counter-next(c) counter-value(c)]",
     "value": "12",
     "output": ""
+  },
+  "tour-values": {
+    "code": "// 1. Values, names, and calls\n// Comments start with //. Commas and newlines separate forms like spaces.\nDef answer 42\nDef label \"wavelet\"\nDef letter 'W'\nDef ready true\n\n// Functions use names instead of punctuation operators.\nadd(answer 8)                    // 50\n\"hello\".upper()                   // \"HELLO\"; the same call as upper(\"hello\")\n\n// Lists have one element type. Records and tuples can mix types.\nDef numbers [1, 2, 3]\nDef point {x: 3 y: 4}\nDef pair tuple2(label answer)    // Parentheses alone would mean a call.\n\n// Integer literals default to s64, floats to f64. Context can narrow them.\nThe u8 200\n// The u8 300 would be a compile error. to-u8(value) checks at runtime.\n\ntuple3(ready len(numbers) pair)  // (true, 3, (\"wavelet\", 42))",
+    "value": "(true, 3, (\"wavelet\", 42))",
+    "output": ""
+  },
+  "tour-functions": {
+    "code": "// 2. Functions and local bindings\n// Def creates an immutable binding. Fn supplies parameters and a body.\nDef greet Fn {name: string} str-cat(\"Hello, \" name \"!\")\ngreet(\"Ada\")                    // \"Hello, Ada!\"\ngreet({name: \"Ada\"})            // Named arguments use a record.\n\nDef total Fn {a: s64 b: s64} add(a b)\ntotal(20 22)                    // Multiple positional arguments form a tuple.\n\n// Let bindings are sequential: the later ones can use earlier ones.\nLet {base: 40 extra: add(base 1)} add(extra 1)\n\n// Callbacks and captures resolve during compilation.\n// Functions cannot be stored in runtime collections or returned as closures.\nLet {offset: 10}\n  map(Fn {n} add(n offset) [1 2 3])  // [11, 12, 13]",
+    "value": "[11, 12, 13]",
+    "output": ""
+  },
+  "tour-branches": {
+    "code": "// 3. Branches, records, and variants\n// If requires bool; both branches must have compatible result types.\nIf lt(2 3) \"smaller\" \"larger\"\n\nDefType point {x: s64 y: s64}\nDefType shape [dot(point) empty]\n\n// Match checks coverage at compile time. Patterns bind their payloads.\nDef describe Fn {s: shape}\n  Match s [\n    (dot({x: x y: y}) str-cat(to-string(x) \",\" to-string(y)))\n    (empty \"empty\")\n  ]\ndescribe(dot({x: 3 y: 4}))        // \"3,4\"\n\n// Options and results make absence and failure explicit.\nDef fallback Fn {value: option(s64)}\n  Match value [(some(n) n) (none 0)]\nfallback(none)                   // 0\nMatch ok(42) [(ok(n) n) (err(e) 0)]  // 42",
+    "value": "42",
+    "output": ""
+  },
+  "tour-collections": {
+    "code": "// 4. Collections and tail recursion\nmap(Fn {n} mul(n n) [1 2 3])     // [1, 4, 9]\nfilter(Fn {n} gt(n 2) [1 2 3 4]) // [3, 4]\nfold(Fn {acc n} add(acc n) 0 [1 2 3 4])           // 10\n\n// Tail calls within a component reuse the stack frame.\nDef sum-to Fn {n: s64 acc: s64}\n  If eq(n 0) acc sum-to(sub(n 1) add(acc n))\nsum-to(100 0)                    // 5050",
+    "value": "5050",
+    "output": ""
+  },
+  "tour-resources": {
+    "code": "// 5. State and resources\n// Do evaluates in order and returns the final value.\nLet {c: cell-new(0)}\n  Do [cell-set(c 2) cell-get(c)]  // 2\n\n// A resource hides its state behind a handle and methods.\nDefResource counter {\n  New: Fn {start: u32} cell-new(start)\n  next: Fn {self: counter}\n    The u32 Do [cell-set(self add(cell-get(self) 1)) cell-get(self)]\n  value: Fn {self: counter} The u32 cell-get(self)\n}\n\n// A local function borrows an existing handle.\nDef peek Fn {c: borrow(counter)} The u32 counter/value(c)\nLet {c: counter(5)}\n  Do [counter/next(c) peek(c)]    // 6\n\n// At a component boundary, counter or own(counter) transfers ownership.\n// borrow(counter) lets a callee use the handle without taking ownership.\n// drop(value) discards a value; it does not call a resource destructor.",
+    "value": "6",
+    "output": ""
+  },
+  "tour-macros": {
+    "code": "// 6. Code as data and compile-time macros\nQuote add(1 2)                  // The source form, without running the call.\n\n// Quasi builds a form. Unquote inserts a value into that form.\nLet {n: 5} Quasi add(Unquote(n) 1)\n\n// Macro parameters receive unevaluated forms.\n// Define macros before use; TitleCase syntax consumes their known arity.\nDefMacro twice {expression}\n  Quasi add(Unquote(expression) Unquote(expression))\nTwice 21                        // 42\n// This macro evaluates its expression twice. Expansion is unhygienic.",
+    "value": "42",
+    "output": ""
+  },
+  "tour-types": {
+    "compiledOnly": true,
+    "code": "// 7. Concrete types and compile-time specialization\n// Overloads resolve from argument types or an expected result type.\nDef describe Fn {n: s64} str-cat(\"number \" to-string(n))\nDef describe Fn {s: string} str-cat(\"text \" s)\ndescribe(7)                     // \"number 7\"\n\n// A functor creates concrete declarations for its type arguments.\nInstantiate {pkg: \"wavelet:coll/set\" with: {elem: s32} as: ints}\nLet {s: ints/new()}\n  Do [ints/add(s 2) ints/add(s 2) ints/size(s)] // 1\n\n// User templates are file-local; no generic type crosses the boundary.\nDefFunctor \"tour:identity\" {elem} [\n  Def identity Fn {value: elem} value\n]\nInstantiate {pkg: \"tour:identity\" with: {elem: string} as: words}\nwords-identity(\"concrete\")      // \"concrete\"",
+    "value": "\"concrete\"",
+    "output": ""
+  },
+  "tour-components": {
+    "sources": [
+      {
+        "name": "greeting.wlt",
+        "contents": "// 8. One file becomes one component.\nPackage \"tour:greeting@0.1.0\"\n\n// Export publishes a function through the default api interface.\nExport greet\nDef greet Fn {name: string} str-cat(\"Hello, \" name \"!\")"
+      },
+      {
+        "name": "main.wlt",
+        "contents": "Package \"tour:main@0.1.0\"\n\n// Imports name WIT interfaces, independently of implementation language.\nImport {pkg: \"tour:greeting/api\" as: greeting}\n\nExport {name: run result: string}\nDef run Fn {} greeting/greet(\"components\")\n\n// Runtime host access, including WASI, also requires explicit imports.\n// Macro components use Import {pkg: \"...\" macros: true from: \"...wasm\"}.\n// Supply their executable artifacts explicitly; WIT alone is only a contract."
+      }
+    ],
+    "entry": "main.wlt",
+    "invocation": {
+      "interfaceName": "tour:main/api@0.1.0",
+      "functionName": "run"
+    },
+    "value": "\"Hello, components!\"",
+    "output": ""
   }
 }
