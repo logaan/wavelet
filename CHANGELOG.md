@@ -17,7 +17,8 @@ you work, and rename it to the new version when you cut a release.
 
 - Browser REPL input line numbers and a result for every top-level expression,
   labeled with its starting line. Compiler REPL mode returns these values and
-  source lines from a single execution.
+  source lines from a single execution. The Learn Wavelet tour also shows editor
+  line numbers and line-labeled results for its single-file examples.
 
 ### Fixed
 

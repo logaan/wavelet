@@ -87,10 +87,24 @@ test('the tour runs every embedded example and uses edits from both component fi
   const tour = Object.entries(examples).filter(([id]) => id.startsWith('tour-'));
   await expect(runs).toHaveCount(tour.length);
   await expect(page.getByRole('textbox')).toHaveCount(9);
+  await expect(page.getByTestId('line-numbers')).toHaveCount(9);
+  const results = page.getByTestId('wavelet-result');
+  const finalLines = [21, 15, 20, 9, 16, 11, 17];
   for (const [index, [, example]] of tour.entries()) {
     await runs.nth(index).click();
-    await expect(page.getByTestId('wavelet-result').nth(index)).toHaveText(`⇒ ${example.value}`);
+    const finalResult = results.nth(index).locator('pre').last();
+    if (example.sources) {
+      await expect(finalResult).toHaveText(`⇒ ${example.value}`);
+    } else {
+      await expect(finalResult).toHaveText(`${finalLines[index]} ⇒ ${example.value}`);
+    }
   }
+  await expect(results.nth(3).locator('pre')).toHaveText(['2 ⇒ [1, 4, 9]', '3 ⇒ [3, 4]', '4 ⇒ 10', '7 ⇒ {}', '9 ⇒ 5050']);
+  const collections = page.getByLabel('Editable Wavelet source', {exact: true}).nth(3);
+  await collections.fill('\nadd(20 22)\n\n"hello"');
+  await runs.nth(3).click();
+  await expect(collections.locator('..').getByTestId('line-numbers')).toHaveText('1\n2\n3\n4');
+  await expect(results.nth(3).locator('pre')).toHaveText(['2 ⇒ 42', '4 ⇒ "hello"']);
   const greeting = page.getByLabel('Editable greeting.wlt', {exact: true});
   const main = page.getByLabel('Editable main.wlt', {exact: true});
   await greeting.fill((await greeting.inputValue()).replace('Hello, ', 'Welcome, '));
