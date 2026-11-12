@@ -97,7 +97,7 @@ fn collect(
                                     });
                                 Some(peer.unwrap_or(Type::IntLit(None)))
                             }
-                            "upper" | "lower" | "str-cat" | "split" => Some(Type::String),
+                            "str-cat" | "split" => Some(Type::String),
                             "not" => Some(Type::Bool),
                             "eq" | "lt" | "le" | "gt" | "ge" => items[1..]
                                 .iter()

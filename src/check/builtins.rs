@@ -37,7 +37,7 @@ impl Checker<'_> {
             | "neg" | "min" | "max" | "abs" => self.check_numeric_builtin(name, &arg_tys),
             "len" | "empty" | "get" | "put" | "push" | "concat" | "head" | "tail" | "reverse"
             | "range" | "zip" => self.check_collection_builtin(name, &arg_tys),
-            "str-cat" | "upper" | "lower" | "split" | "join" | "contains" | "to-string" => {
+            "str-cat" | "split" | "join" | "contains" | "to-string" => {
                 check_text_builtin(name, &arg_tys)
             }
             "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32" | "to-s64"
@@ -62,7 +62,7 @@ impl Checker<'_> {
             | "neg" | "min" | "max" | "abs" => self.check_numeric_builtin(name, parameters),
             "len" | "empty" | "get" | "put" | "push" | "concat" | "head" | "tail" | "reverse"
             | "range" | "zip" => self.check_collection_builtin(name, parameters),
-            "str-cat" | "upper" | "lower" | "split" | "join" | "contains" | "to-string" => {
+            "str-cat" | "split" | "join" | "contains" | "to-string" => {
                 check_text_builtin(name, parameters)
             }
             "to-char" => Ok(Type::Char),
@@ -309,15 +309,6 @@ fn check_text_builtin(name: &str, arg_tys: &[Type]) -> Result<Type, String> {
             }
             Ok(Type::String)
         }
-        "upper" | "lower" => {
-            for t in arg_tys {
-                if !matches!(t, Type::String | Type::Unknown) {
-                    return Err(format!("eval error: `{name}` requires a string operand"));
-                }
-            }
-            Ok(Type::String)
-        }
-
         "split" => Ok(Type::List(Box::new(Type::String))),
         "join" | "to-string" => Ok(Type::String),
         "contains" => Ok(Type::Bool),

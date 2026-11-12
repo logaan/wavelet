@@ -368,7 +368,7 @@ fn infer_sig(
 
 fn builtin_param_type(callee: &str, pos: usize) -> Option<String> {
     match callee {
-        "upper" | "lower" | "str-cat" | "split" | "join" => Some("string".into()),
+        "str-cat" | "split" | "join" => Some("string".into()),
 
         "contains" => Some("string".into()),
         _ => {
@@ -944,9 +944,7 @@ fn infer(
                 "eq" | "lt" | "le" | "gt" | "ge" | "not" | "empty" | "contains" => {
                     Inferred::Known("bool".into())
                 }
-                "str-cat" | "upper" | "lower" | "join" | "to-string" => {
-                    Inferred::Known("string".into())
-                }
+                "str-cat" | "join" | "to-string" => Inferred::Known("string".into()),
                 "len" => Inferred::Known("s64".into()),
 
                 "reverse" | "tail" if args.len() == 1 => {

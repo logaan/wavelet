@@ -45,7 +45,7 @@ fn multi_file_import_runs_compiled() {
             "shout.wlt",
             "Package \"demo:shout@0.1.0\"\n\
              Export shout\n\
-             Def shout Fn {phrase: string}\n  str-cat(upper(phrase) \"!\")\n",
+             Def shout Fn {phrase: string}\n  str-cat(phrase \"!\")\n",
         ),
     ]);
     match wavelet::runner::run_files_compiled(&paths) {

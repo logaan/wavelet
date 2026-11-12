@@ -60,9 +60,7 @@ impl<'a> Emitter<'a> {
             "map" | "fold" | "filter" | "zip" => self.builtin_higher_order(fx, name, items),
             "get" | "put" | "push" | "concat" => self.builtin_index(fx, name, items),
             "contains" | "join" | "split" => self.builtin_search(fx, name, items),
-            "str-cat" | "to-string" | "to-char" | "upper" | "lower" => {
-                self.builtin_string(fx, name, items)
-            }
+            "str-cat" | "to-string" | "to-char" => self.builtin_string(fx, name, items),
             "some" | "ok" | "err" => self.builtin_variant(fx, name, items),
             "cell-new" | "cell-get" | "cell-set" => self.builtin_cell(fx, name, items),
             "form-kind" | "rec-key" | "rec-val" | "gensym" | "expand" => {
@@ -1684,8 +1682,6 @@ pub(crate) const BUILTINS: &[&str] = &[
     "fold",
     "filter",
     "str-cat",
-    "upper",
-    "lower",
     "to-string",
     "to-char",
     "to-u8",

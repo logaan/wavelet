@@ -71,7 +71,7 @@ A chain inserts its receiver as the first argument. The dot, following name, and
 | `x.foo(a b)` | `(foo, x, a, b)` |
 | `foo(1).bar(2)` | `(bar, (foo, 1), 2)` |
 
-Each additional call wraps the preceding result. `"hello".upper().str-cat("!")` therefore means `str-cat(upper("hello") "!")`.
+Each additional call wraps the preceding result. `"hello".str-cat(", world").str-cat("!")` therefore means `str-cat(str-cat("hello" ", world") "!")`.
 
 <Playground id="syntax-chain" />
 

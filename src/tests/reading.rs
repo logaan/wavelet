@@ -118,7 +118,7 @@ fn call_chaining() {
 
     assert_eq!(read1("1.5.to-string()"), "(to-string, 1.5)");
     assert_eq!(read1("[1 2].len()"), "(len, [1, 2])");
-    assert_eq!(read1(r#""hi".upper()"#), r#"(upper, "hi")"#);
+    assert_eq!(read1(r#""hi".str-cat()"#), r#"(str-cat, "hi")"#);
 
     assert_eq!(read1("b.kv/get(k)"), "(kv-get, b, k)");
 
@@ -149,7 +149,7 @@ fn triple_slash_is_an_ordinary_comment() {
                /// Shouts.\n\
                /// Loudly.\n\
                Export shout\n\
-               Def shout Fn {phrase: string} upper(phrase)";
+               Def shout Fn {phrase: string} str-cat(phrase)";
     let (arena, roots) = read_file(src).unwrap();
 
     assert_eq!(roots.len(), 4);

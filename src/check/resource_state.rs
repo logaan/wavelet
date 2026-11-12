@@ -195,8 +195,8 @@ impl StateChecker<'_> {
                     }
                     "cell-get" => Ok(Shape::Data),
                     "add" | "sub" | "mul" | "div" | "rem" | "neg" | "abs" | "eq" | "lt" | "le"
-                    | "gt" | "ge" | "not" | "len" | "empty" | "to-string" | "str-cat" | "upper"
-                    | "lower" | "contains" | "form-kind" => Ok(Shape::Data),
+                    | "gt" | "ge" | "not" | "len" | "empty" | "to-string" | "str-cat"
+                    | "contains" | "form-kind" => Ok(Shape::Data),
                     name if name.starts_with("to-") => Ok(Shape::Data),
                     name if crate::builtins::NAMES.contains(&name) => Ok(Self::all_data(values)),
                     _ => Ok(Shape::Unknown),

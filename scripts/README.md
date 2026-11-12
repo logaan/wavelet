@@ -79,14 +79,3 @@ constructor as `globalThis.Set`. Jco 1.41 otherwise resolves that constructor to
 an exported resource class named `Set`, which breaks set-functor components.
 The tour runtime tests exercise this case. Recheck the normalization when
 updating Jco; the component's exported names remain unchanged.
-
-## Generated Unicode casing tables
-
-Cargo runs root `build.rs` to derive Unicode casing mappings and sigma-context
-classes from the same Rust toolchain as the interpreter. The generated binary
-stays under Cargo's `OUT_DIR` and is embedded in both native and browser compiler
-builds; no download or separate regeneration command is needed. The format and
-runtime contract are documented in
-[`Development and validation`](../docs/docs/development.mdx#unicode-casing-data).
-Run `cargo test --test backend_unicode_case` to check every Unicode scalar and
-contextual sigma against Rust through dynamic compiled exports.

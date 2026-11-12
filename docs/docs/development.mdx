@@ -107,21 +107,6 @@ to decide whether a refactor is useful. Bulk refactors, recent file moves, a sma
 sample, or a reached history cap can distort the ranking. Only failure to produce
 a valid report fails the history-analysis job.
 
-## Unicode casing data
-
-The root `build.rs` derives uppercase and lowercase mappings from Rust's standard
-library during each toolchain build. It also probes lowercase sigma contexts to
-classify scalars as cased, case-ignorable, or boundaries. This keeps compiled
-`upper` and `lower` aligned with the interpreter's Rust Unicode version without
-external Unicode downloads or locale-dependent behavior.
-
-Cargo stores the generated tables under `OUT_DIR` and embeds them in the native compiler and compiler component. Emitted programs use those tables for Unicode mappings, including multi-character expansions and contextual lowercase sigma, without a runtime interpreter or external Unicode service.
-
-`cargo test --test backend_unicode_case` compares dynamic compiled calls with
-Rust for every Unicode scalar and sigma contexts on either side of every scalar,
-plus expansions, empty input, embedded NUL, and long combining sequences.
-Regenerating the compiler component also regenerates its embedded tables.
-
 ## Cross-language conformance
 
 The integration and round-trip test workflows require `wasm-tools`,

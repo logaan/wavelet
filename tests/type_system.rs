@@ -115,7 +115,7 @@ fn synthesis_infers_untyped_parameter_from_use() {
     let wit = synth(
         r#"Package "demo:shout@0.1.0"
 Export shout
-Def shout Fn {phrase} str-cat(upper(phrase) "!")"#,
+Def shout Fn {phrase} str-cat(phrase "!")"#,
     )
     .expect("a fully-inferable export should synthesize");
     assert!(
@@ -590,7 +590,7 @@ fn match_binds_variant_payload_at_declared_type() {
 DefType ttl [days(u32) forever]
 Def f Fn {t: ttl}
   Match t [
-    (days(d) upper(d))
+    (days(d) str-cat(d))
     (forever "f")]"#,
     );
     assert!(r.is_err(), "u32 payload used as a string must be rejected");
@@ -603,7 +603,7 @@ fn match_binds_record_fields_at_declared_types() {
 DefType point {x: s32 y: s32}
 Def f Fn {p: point}
   Match p [
-    ({x: a y: b} upper(a))
+    ({x: a y: b} str-cat(a))
     (other "no")]"#,
     );
     assert!(r.is_err(), "s32 field used as a string must be rejected");
@@ -883,7 +883,7 @@ fn exported_function_result_rejected_by_the_checker() {
 #[test]
 fn internal_function_result_still_accepted() {
     let wit = synth(
-        "Package \"test:ok@0.1.0\"\n\nExport shout\nDef make Fn {by: s32}\n  Fn {n: s32} add(n by)\nDef shout Fn {phrase: string} upper(phrase)",
+        "Package \"test:ok@0.1.0\"\n\nExport shout\nDef make Fn {by: s32}\n  Fn {n: s32} add(n by)\nDef shout Fn {phrase: string} str-cat(phrase)",
     )
     .expect("non-exported closures must not trip the boundary rule");
     assert!(

@@ -55,7 +55,7 @@ Package "demo:shout@0.1.0"
 
 Export shout
 Def shout Fn {phrase: string}
-  str-cat(upper(phrase) "!")
+  str-cat(phrase "!")
 ```
 
 Save the caller as `main.wlt`:
@@ -82,7 +82,7 @@ installed, inspect the compiled component's return value:
 
 ```console
 $ wasmtime run --invoke 'run()' out/app.wasm
-"COMPONENTS!"
+"components!"
 ```
 
 `build` emits the individual components and a composed `out/app.wasm` for this

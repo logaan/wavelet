@@ -17,7 +17,7 @@ Package "demo:shout@0.1.0"
 
 Export shout
 Def shout Fn {phrase: string}
-  str-cat(upper(phrase) "!")
+  str-cat(phrase "!")
 ```
 
 Inspect its interface with `wavelet wit shout.wlt`:
@@ -154,7 +154,7 @@ Import {pkg: "acme:words/picker@1.0.0" as: words}
 Export {name: pick-word result: string}
 Def pick-word Fn {}
   Match words/pick(42) [
-    (ok(word) upper(word))
+    (ok(word) str-cat(word))
     (err(message) str-cat("No word: " message))
   ]
 ```

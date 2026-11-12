@@ -5,7 +5,7 @@ fn wit_synthesis_matches_spec() {
     let src = "Package \"demo:shout@0.1.0\"\n\
                    Export shout\n\
                    Def shout Fn {phrase: string}\n\
-                     str-cat(upper(phrase) \"!\")";
+                     str-cat(phrase \"!\")";
     let (arena, roots) = read_file(src).unwrap();
     let got = wit::synthesize(&arena, &roots).unwrap();
     let want = "\
@@ -80,7 +80,7 @@ fn wit_inference_follows_calls_to_other_defs() {
                Def helper Fn {x: s64} mul(x x)\n\
                Export greet\n\
                Def greet Fn {name: string} shout(name)\n\
-               Def shout Fn {s: string} upper(s)\n\
+               Def shout Fn {s: string} str-cat(s)\n\
                Def loop-y Fn {n: s64} loop-y(n)";
     let (arena, roots) = read_file(src).unwrap();
     let got = wit::synthesize(&arena, &roots).unwrap();
@@ -98,7 +98,7 @@ Export {iface: "first" name: greet}
 Export {iface: "first" name: greet}
 Export {iface: "second" name: greet}
 Export {iface: "second" name: greet}
-Def greet Fn {name: string} upper(name)
+Def greet Fn {name: string} str-cat(name)
 "#;
     let (arena, roots) = read_file(src).unwrap();
     let got = wit::synthesize(&arena, &roots).unwrap();

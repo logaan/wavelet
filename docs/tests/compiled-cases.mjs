@@ -1,6 +1,4 @@
 export const compiledCases = [
-  ['unicode-expansion', 'upper("straße ﬃ")', '"STRASSE FFI"'],
-  ['unicode-final-sigma', 'lower("ΟΣ ΟΣΑ")', '"ος οσα"'],
   ['scalar-length', 'len("☃😀aé")', '4'],
   ['character-concatenation', 'str-cat("a" \'☃\' \'😀\')', '"a☃😀"'],
   ['tuple-index', 'get(tuple2(1 "a") 1)', '"a"'],

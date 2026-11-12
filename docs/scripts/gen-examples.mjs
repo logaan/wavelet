@@ -16,16 +16,16 @@ const compiler = await createCompilerRuntime(readFileSync(join(here, '..', 'src/
 });
 
 const E = {};
-E['hello-shout'] = `str-cat(upper("hello") ", world!")`;
+E['hello-shout'] = `str-cat("hello" ", world!")`;
 E['map-square'] = `map(Fn {x} mul(x x) [1 2 3 4 5])`;
 E['match-result-inc'] = `Match ok(42) [
   (ok(n)   add(n 1))
   (err(e)  0)
 ]`;
-E['gs-hello'] = `str-cat(upper("hello") " from wavelet")`;
+E['gs-hello'] = `str-cat("hello" " from wavelet")`;
 
 E['noffi-shout'] = `Def shout Fn {phrase: string}
-  str-cat(upper(phrase) "!")
+  str-cat(phrase "!")
 shout({phrase: "no ffi"})`;
 E['typed-byte-add-ok'] = `Def byte-add Fn {a: u8 b: u8}
   add(a b)
@@ -37,7 +37,7 @@ byte-add({a: 300 b: 1})`;
 E['syntax-commas'] = `[1 2 3]`;
 E['syntax-quote-call'] = `Quote delete-file({path: "foo.md" force: true})`;
 E['syntax-if-arity'] = `If gt(10 3) "bigger" "smaller"`;
-E['syntax-chain'] = `"hello".upper().str-cat(", world!")`;
+E['syntax-chain'] = `"hello".str-cat(", world").str-cat("!")`;
 
 E['values-atoms'] = `{s: "a string" n: 42 d: -1.5 b: true c: 'x' f: {read write}}`;
 E['values-to-u8-ok'] = `to-u8(200)`;
@@ -81,7 +81,7 @@ Def describe Fn {t: ttl}
 E['sf-fn-adder'] = `Def add5 Fn {n: s64} add(n 5)
 add5(10)`;
 E['sf-fn-shout'] = `Def shout Fn {phrase: string}
-  str-cat(upper(phrase) "!")
+  str-cat(phrase "!")
 shout("hi")`;
 E['sf-if'] = `If lt(2 3) "less" "not less"`;
 E['sf-if-nonbool'] = `If 1 "yes" "no"`;
@@ -192,7 +192,7 @@ E['std-filter'] = `filter(Fn {x} gt(x 2) [1 2 3 4 1])`;
 E['std-fold'] = `fold(Fn {acc x} add(acc x) 0 [1 2 3 4 5])`;
 E['std-zip'] = `zip(["a" "b" "c"] [1 2 3])`;
 E['std-tuple'] = `{empty: tuple0() single: tuple1("only") pair: tuple2(1 "a") nested: tuple2(true tuple2(2 3))}`;
-E['std-strcat'] = `str-cat(upper("ada") " " "Lovelace")`;
+E['std-strcat'] = `str-cat("Ada" " " "Lovelace")`;
 E['std-strings'] = `{split: split("a,b,c" ",") join: join(["x" "y" "z"] "-") contains: contains("hello" "ell")}`;
 E['std-strcat-tostring'] = `str-cat("count = " to-string(42))`;
 E['std-tostring'] = `to-string({n: 1 opt: some(2) rec: {k: "v"}})`;
@@ -246,7 +246,7 @@ Def ready true
 
 // Functions use names instead of punctuation operators.
 add(answer 8)                    // 50
-"hello".upper()                   // "HELLO"; the same call as upper("hello")
+"hello".str-cat("!")
 
 // Lists have one element type. Records and tuples can mix types.
 Def numbers [1, 2, 3]

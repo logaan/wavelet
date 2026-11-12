@@ -13,6 +13,11 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Removed
+
+- The `upper` and `lower` builtins and their Unicode case-conversion tables.
+  Unicode strings and characters remain supported.
+
 ### Added
 
 - Browser REPL input line numbers and a result for every top-level expression,

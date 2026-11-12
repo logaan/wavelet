@@ -59,7 +59,7 @@ fn build_still_succeeds_on_a_well_typed_program() {
         r#"Package "demo:good@0.1.0"
 Export shout
 Def shout Fn {phrase: string}
-  str-cat(upper(phrase) "!")
+  str-cat(phrase "!")
 "#,
     );
 
@@ -111,7 +111,7 @@ fn wit_still_succeeds_on_a_well_typed_program() {
         r#"Package "demo:good@0.1.0"
 Export shout
 Def shout Fn {phrase: string}
-  str-cat(upper(phrase) "!")
+  str-cat(phrase "!")
 "#,
     );
 
@@ -169,7 +169,7 @@ fn run_resolves_an_overloaded_call_to_the_correct_member() {
         "overload.wlt",
         r#"Package "demo:over@0.1.0"
 Def show Fn {x: s32} x
-Def show Fn {x: string} upper(x)
+Def show Fn {x: string} str-cat(x)
 Export run
 Def run Fn {} show(5)
 "#,
@@ -197,7 +197,7 @@ fn build_rejects_a_cross_component_type_error() {
         "shout.wlt",
         r#"Package "demo:shout@0.1.0"
 Export shout
-Def shout Fn {phrase: string} upper(phrase)
+Def shout Fn {phrase: string} str-cat(phrase)
 "#,
     );
 
@@ -240,7 +240,7 @@ fn build_accepts_a_well_typed_cross_component_call() {
         "shout.wlt",
         r#"Package "demo:shout@0.1.0"
 Export shout
-Def shout Fn {phrase: string} upper(phrase)
+Def shout Fn {phrase: string} str-cat(phrase)
 "#,
     );
     let consumer = write_src(

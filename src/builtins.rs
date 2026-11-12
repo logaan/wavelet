@@ -45,8 +45,6 @@ pub const NAMES: &[&str] = &[
     "fold",
     "zip",
     "str-cat",
-    "upper",
-    "lower",
     "split",
     "join",
     "contains",
@@ -254,9 +252,7 @@ pub fn call(interp: &Interp, name: &str, arg: Value, env: Option<&Env>) -> R<Val
         "len" | "empty" | "get" | "put" | "push" | "concat" | "head" | "tail" | "reverse"
         | "range" | "zip" => collections::call(name, arg),
         "map" | "filter" | "fold" => higher_order::call(interp, name, arg),
-        "str-cat" | "upper" | "lower" | "split" | "join" | "contains" | "to-string" => {
-            text::call(name, arg)
-        }
+        "str-cat" | "split" | "join" | "contains" | "to-string" => text::call(name, arg),
         "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32" | "to-s64"
         | "to-f32" | "to-f64" | "to-char" => convert::call(name, arg),
         "gensym" | "expand" | "form-kind" | "rec-key" | "rec-val" => {

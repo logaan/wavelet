@@ -1,7 +1,7 @@
 {
   "hello-shout": {
-    "code": "str-cat(upper(\"hello\") \", world!\")",
-    "value": "\"HELLO, world!\"",
+    "code": "str-cat(\"hello\" \", world!\")",
+    "value": "\"hello, world!\"",
     "output": ""
   },
   "map-square": {
@@ -15,13 +15,13 @@
     "output": ""
   },
   "gs-hello": {
-    "code": "str-cat(upper(\"hello\") \" from wavelet\")",
-    "value": "\"HELLO from wavelet\"",
+    "code": "str-cat(\"hello\" \" from wavelet\")",
+    "value": "\"hello from wavelet\"",
     "output": ""
   },
   "noffi-shout": {
-    "code": "Def shout Fn {phrase: string}\n  str-cat(upper(phrase) \"!\")\nshout({phrase: \"no ffi\"})",
-    "value": "\"NO FFI!\"",
+    "code": "Def shout Fn {phrase: string}\n  str-cat(phrase \"!\")\nshout({phrase: \"no ffi\"})",
+    "value": "\"no ffi!\"",
     "output": ""
   },
   "typed-byte-add-ok": {
@@ -49,8 +49,8 @@
     "output": ""
   },
   "syntax-chain": {
-    "code": "\"hello\".upper().str-cat(\", world!\")",
-    "value": "\"HELLO, world!\"",
+    "code": "\"hello\".str-cat(\", world\").str-cat(\"!\")",
+    "value": "\"hello, world!\"",
     "output": ""
   },
   "values-atoms": {
@@ -147,8 +147,8 @@
     "output": ""
   },
   "sf-fn-shout": {
-    "code": "Def shout Fn {phrase: string}\n  str-cat(upper(phrase) \"!\")\nshout(\"hi\")",
-    "value": "\"HI!\"",
+    "code": "Def shout Fn {phrase: string}\n  str-cat(phrase \"!\")\nshout(\"hi\")",
+    "value": "\"hi!\"",
     "output": ""
   },
   "sf-if": {
@@ -338,8 +338,8 @@
     "output": ""
   },
   "std-strcat": {
-    "code": "str-cat(upper(\"ada\") \" \" \"Lovelace\")",
-    "value": "\"ADA Lovelace\"",
+    "code": "str-cat(\"Ada\" \" \" \"Lovelace\")",
+    "value": "\"Ada Lovelace\"",
     "output": ""
   },
   "std-strings": {
@@ -429,7 +429,7 @@
     "output": ""
   },
   "tour-values": {
-    "code": "// 1. Values, names, and calls\n// Comments start with //. Commas and newlines separate forms like spaces.\nDef answer 42\nDef label \"wavelet\"\nDef letter 'W'\nDef ready true\n\n// Functions use names instead of punctuation operators.\nadd(answer 8)                    // 50\n\"hello\".upper()                   // \"HELLO\"; the same call as upper(\"hello\")\n\n// Lists have one element type. Records and tuples can mix types.\nDef numbers [1, 2, 3]\nDef point {x: 3 y: 4}\nDef pair tuple2(label answer)    // Parentheses alone would mean a call.\n\n// Integer literals default to s64, floats to f64. Context can narrow them.\nThe u8 200\n// The u8 300 would be a compile error. to-u8(value) checks at runtime.\n\ntuple3(ready len(numbers) pair)  // (true, 3, (\"wavelet\", 42))",
+    "code": "// 1. Values, names, and calls\n// Comments start with //. Commas and newlines separate forms like spaces.\nDef answer 42\nDef label \"wavelet\"\nDef letter 'W'\nDef ready true\n\n// Functions use names instead of punctuation operators.\nadd(answer 8)                    // 50\n\"hello\".str-cat(\"!\")\n\n// Lists have one element type. Records and tuples can mix types.\nDef numbers [1, 2, 3]\nDef point {x: 3 y: 4}\nDef pair tuple2(label answer)    // Parentheses alone would mean a call.\n\n// Integer literals default to s64, floats to f64. Context can narrow them.\nThe u8 200\n// The u8 300 would be a compile error. to-u8(value) checks at runtime.\n\ntuple3(ready len(numbers) pair)  // (true, 3, (\"wavelet\", 42))",
     "value": "(true, 3, (\"wavelet\", 42))",
     "output": ""
   },

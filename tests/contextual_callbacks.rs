@@ -10,7 +10,10 @@ fn callbacks_infer_parameters_from_sequences_under_strict_checking() {
         ),
         ("filter(Fn {x} gt(x 1) [1 2 3])", "[2, 3]"),
         ("fold(Fn {a x} add(a x) 0 [1 2 3])", "6"),
-        ("map(Fn {x} upper(x) [\"a\" \"b\"])", "[\"A\", \"B\"]"),
+        (
+            "map(Fn {x} str-cat(x \"!\") [\"a\" \"b\"])",
+            "[\"a!\", \"b!\"]",
+        ),
     ] {
         let outcome = eval_snippet(source);
         assert!(outcome.ok, "{source}: {}", outcome.error);
@@ -18,8 +21,8 @@ fn callbacks_infer_parameters_from_sequences_under_strict_checking() {
     }
     for source in [
         "filter(Fn {x} add(x 1) [1 2])",
-        "map(Fn {x: string} upper(x) [1 2])",
-        "fold(Fn {a x} upper(x) 0 [1 2])",
+        "map(Fn {x: string} str-cat(x) [1 2])",
+        "fold(Fn {a x} str-cat(x) 0 [1 2])",
         "map(Fn {x y} add(x y) [1 2])",
     ] {
         let outcome = eval_snippet(source);

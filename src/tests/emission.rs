@@ -173,7 +173,7 @@ fn emit_lists_across_boundaries() {
     let psrc = "Package \"demo:lists@0.1.0\"\n\
                 Export {name: first-up params: {words: list(string)} result: string}\n\
                 Def first-up Fn {words}\n\
-                  If gt(len(words) 0) upper(head(words)) \"EMPTY\"\n\
+                  If gt(len(words) 0) str-cat(head(words)) \"EMPTY\"\n\
                 Export {name: echo params: {words: list(string)} result: list(string)}\n\
                 Def echo Fn {words} words\n\
                 Export {name: sum3 params: {ns: list(s64)} result: s64}\n\

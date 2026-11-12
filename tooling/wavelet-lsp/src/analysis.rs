@@ -76,7 +76,6 @@ fn builtin_doc(name: &str) -> &'static str {
         "map" | "filter" | "fold" => "Higher-order list operation.",
         "zip" => "Pair up two lists.",
         "str-cat" => "Concatenate strings.",
-        "upper" | "lower" => "Change string case.",
         "split" | "join" => "Split a string / join a list of strings.",
         "contains" => "Substring / membership test.",
         "to-string" => "Render a value as a string.",
@@ -395,7 +394,16 @@ mod tests {
     #[test]
     fn removed_builtins_and_target_are_gone() {
         let got = labels("", None);
-        for dead in ["Target", "print", "println", "read-line", "args", "env"] {
+        for dead in [
+            "Target",
+            "print",
+            "println",
+            "read-line",
+            "args",
+            "env",
+            "upper",
+            "lower",
+        ] {
             assert!(
                 !got.iter().any(|l| l == dead),
                 "completion still offers removed `{dead}`: {got:?}"

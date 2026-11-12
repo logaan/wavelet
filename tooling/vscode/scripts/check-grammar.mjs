@@ -48,7 +48,7 @@ const CASES = [
   ["eq(b true)", "true", "constant.language.boolean.wavelet"],
   ["ok(some(x))", "some", "constant.language.wavelet"],
   ["If cond a b", "If", "keyword.control.macro.wavelet"],
-  ["upper(phrase)", "upper", "entity.name.function.wavelet"],
+  ["str-cat(phrase)", "str-cat", "entity.name.function.wavelet"],
 
   ["map(sh/shout xs)", "sh", "source.wavelet"],
   ["lib/Identity 42", "lib/Identity", "keyword.control.macro.wavelet"],

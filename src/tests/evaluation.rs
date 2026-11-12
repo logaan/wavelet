@@ -23,7 +23,7 @@ fn eval_nested_quasi_depth() {
 #[test]
 fn eval_atoms_and_calls() {
     assert_eq!(eval_str("add(1 2)"), "3");
-    assert_eq!(eval_str("str-cat(upper(\"wasm\") \"!\")"), "\"WASM!\"");
+    assert_eq!(eval_str("str-cat(\"wasm\" \"!\")"), "\"wasm!\"");
     assert_eq!(eval_str("eq(Quote (1 2) Quote (1 2))"), "true");
     assert_eq!(eval_str("If lt(1 2) \"yes\" \"no\""), "\"yes\"");
 }
@@ -44,8 +44,8 @@ fn eval_def_fn_and_payload_binding() {
 #[test]
 fn eval_typed_params() {
     assert_eq!(
-        eval_str("Def s Fn {phrase: string} upper(phrase) s(\"hi\")"),
-        "\"HI\""
+        eval_str("Def s Fn {phrase: string} str-cat(phrase) s(\"hi\")"),
+        "\"hi\""
     );
 
     let out = eval_snippet("Def s Fn {phrase: string} phrase s(42)");

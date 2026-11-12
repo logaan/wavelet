@@ -21,8 +21,6 @@ pub(super) fn call(name: &str, arg: Value) -> R<Value> {
             }
             Ok(Value::Str(out))
         }
-        "upper" => Ok(Value::Str(want_str(arg, name)?.to_uppercase())),
-        "lower" => Ok(Value::Str(want_str(arg, name)?.to_lowercase())),
         "split" => {
             let mut a = args_n(arg, 2, name)?;
             let sep = want_str(a.pop().unwrap(), name)?;

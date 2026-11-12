@@ -51,12 +51,6 @@ impl Emitter<'_> {
                 self.box_char(fx);
                 fx.op(I::End);
             }
-            "upper" | "lower" => {
-                expect_arity(name, items, 1)?;
-                self.expr(fx, items[0], false)?;
-                fx.op(I::I32Const(if name == "upper" { 1 } else { 0 }));
-                fx.op(I::Call(self.h.case_h));
-            }
             _ => unreachable!("builtin_string routed unexpected name `{name}`"),
         }
         Ok(())

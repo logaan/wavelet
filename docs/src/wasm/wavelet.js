@@ -1,6 +1,9 @@
 /* @ts-self-types="./wavelet.d.ts" */
 
-
+/**
+ * @param {string} src
+ * @returns {string}
+ */
 export function _eval(src) {
     let deferred2_0;
     let deferred2_1;

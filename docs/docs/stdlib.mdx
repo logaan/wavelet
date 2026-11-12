@@ -136,7 +136,6 @@ Each constructor takes exactly its stated number of arguments. Its result type f
 | Function | Shape | Result |
 |---|---|---|
 | `str-cat` | `str-cat(a b …)` | concatenate strings and characters, passed as arguments or as one list or tuple |
-| `upper` `lower` | `upper(s)` | Unicode uppercase or lowercase conversion |
 | `split` | `split(s sep)` | split on a separator → list of strings |
 | `join` | `join(parts sep)` | join a list of strings with a separator |
 | `contains` | `contains(s sub)` | does `s` contain `sub`? |
@@ -144,8 +143,6 @@ Each constructor takes exactly its stated number of arguments. Its result type f
 <Playground id="std-strcat" />
 
 <Playground id="std-strings" />
-
-Case conversion follows Unicode rules without a locale setting. A character can expand into several characters, as in `upper("Straße")` producing `"STRASSE"`. Lowercasing handles context-sensitive Greek sigma.
 
 `str-cat` accepts strings and characters. A single list must contain one of those element types; a tuple can mix them. Convert other data with [`to-string`](#conversion) when you want its printed representation:
 

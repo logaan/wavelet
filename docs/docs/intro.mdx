@@ -38,7 +38,7 @@ Package "demo:shout@0.1.0"
 
 Export shout
 Def shout Fn {phrase: string}
-  str-cat(upper(phrase) "!")
+  str-cat(phrase "!")
 ```
 
 `Package` identifies the component, `Def` defines a function, and `Export` makes it available to callers. Build it with:

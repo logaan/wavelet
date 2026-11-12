@@ -190,7 +190,7 @@ fn multi_component_composes_to_one() {
         src.join("shout.wlt"),
         "Package \"demo:shout@0.1.0\"\n\n\
          Export shout\n\
-         Def shout Fn {phrase: string}\n  str-cat(upper(phrase) \"!\")\n",
+         Def shout Fn {phrase: string}\n  str-cat(phrase \"!\")\n",
     )
     .unwrap();
     std::fs::write(
