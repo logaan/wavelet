@@ -13,6 +13,11 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Fixed
+
+- README setup instructions include the source-build `PATH`, application tool
+  prerequisites, and how to inspect the composition example's returned value.
+
 ## [0.12.1] - 2026-11-12
 
 ### Changed

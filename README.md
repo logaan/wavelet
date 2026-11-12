@@ -24,12 +24,15 @@ brew install logaan/tap/wavelet
 
 Prebuilt binaries and the VS Code extension are available on the
 [releases page](https://github.com/logaan/wavelet/releases/latest).
-To build from source:
+To build the CLI from a source checkout, run from the repository root:
 
 ```sh
 cargo build --release
 cargo test
+export PATH="$PWD/target/release:$PATH"
 ```
+
+The `PATH` setting makes the built CLI available as `wavelet` in this shell.
 
 ## Try the language
 
@@ -73,6 +76,15 @@ wavelet run main.wlt shout.wlt
 wavelet build main.wlt shout.wlt -o out
 ```
 
+`run` calls the exported function and discards its return value, so this example
+succeeds without printing anything. With [Wasmtime](https://docs.wasmtime.dev/cli-install.html)
+installed, inspect the compiled component's return value:
+
+```console
+$ wasmtime run --invoke 'run()' out/app.wasm
+"COMPONENTS!"
+```
+
 `build` emits the individual components and a composed `out/app.wasm` for this
 project. Imports not satisfied by sibling components remain requirements for a
 host or a later composition step. The embedded runner supplies no host interfaces.
@@ -94,13 +106,18 @@ for restrictions on runtime function values, resource state, and WIT features.
 
 ## Create an application
 
+Install [`wkg`](https://github.com/bytecodealliance/wasm-pkg-tools) and the
+[Wasmtime CLI](https://docs.wasmtime.dev/cli-install.html) on `PATH` first.
+`wavelet new` uses `wkg` to fetch the application's WIT dependencies; the generated
+scripts use `wasmtime` to run the built component with WASI interfaces.
+
 ```sh
 wavelet new hello
 cd hello
 scripts/run.sh Ada
 ```
 
-The CLI template imports standard WASI interfaces and runs on Wasmtime.
+The CLI template prints `Hello, Ada!` after building its components.
 `wavelet new my-site --type=http` creates an HTTP application with a
 `scripts/serve.sh` launcher. These are examples of ordinary WIT interfaces;
 Wavelet programs can use other compatible host contracts too.
