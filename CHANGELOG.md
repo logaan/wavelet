@@ -20,6 +20,9 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- Native builds optimise for size by default and require Binaryen on `PATH`.
+  `build --no-optimize` skips optimisation and retains metadata for debugging.
+
 - Size builds omit memory, allocator and post-return machinery for direct scalar
   interfaces when Binaryen proves the resulting module has no runtime state.
 

@@ -27,7 +27,7 @@ fn optimize(module: Vec<u8>) -> Result<Vec<u8>, String> {
         .arg("-o")
         .arg(&output)
         .output()
-        .map_err(|e| format!("size optimization requires `wasm-opt` on PATH; install Binaryen (https://github.com/WebAssembly/binaryen): {e}"))?;
+        .map_err(|e| format!("size optimization requires `wasm-opt` on PATH; install Binaryen (https://github.com/WebAssembly/binaryen), or use `wavelet build --no-optimize` for an unoptimised debugging build: {e}"))?;
     if !result.status.success() {
         return Err(format!(
             "wasm-opt failed ({}): {}",

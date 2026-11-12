@@ -14,7 +14,7 @@ description: Create projects, inspect source, compile components, and run progra
 | `wavelet wit <file.wlt>` | Print the synthesized WIT world. |
 | `wavelet repl` | Compile and evaluate expressions interactively. |
 | `wavelet run <file.wlt>... [-- <args>...]` | Compile, compose, and execute the first file's `api.run`. |
-| `wavelet build <file.wlt>... [--optimize-size] [-o <dir>]` | Write component artifacts. |
+| `wavelet build <file.wlt>... [--no-optimize] [-o <dir>]` | Write component artifacts. |
 | `wavelet compose <entry.wasm> <plug.wasm>... [--strip-metadata] [-o <file>]` | Connect prebuilt components. |
 | `wavelet <file> [args...]` | Run a source file as a script. |
 
@@ -130,7 +130,7 @@ When the selected entry imports sibling source packages, the compiler also write
 
 Compilation and composition run in process. Dependency WIT must be available in the project's `wit/deps/` tree; populate it with `wavelet new` or `wkg wit fetch`. A compilation error is reported before artifact publication begins.
 
-`--optimize-size` runs Binaryen's `wasm-opt -Oz` on each core module before
+Builds run Binaryen's `wasm-opt -Oz` on each core module by default before
 componentisation. Install Binaryen and put `wasm-opt` on `PATH`; an unavailable or
 failing optimiser fails the build rather than silently producing an unoptimised
 artifact. The optimisation preserves public component interfaces and language
@@ -139,8 +139,10 @@ extension, non-trapping float conversions, bulk memory, tail calls, reference
 types, and multi-value functions. It does not enable fast-math or assume traps
 cannot occur.
 
-The default build needs no external optimiser. The browser and compiler component
-use the portable compiler and do not invoke native executables.
+Use `--no-optimize` to skip Binaryen and retain optional metadata for debugging.
+The explicit `--optimize-size` flag remains supported and matches the default;
+combining it with `--no-optimize` is an error. The REPL, `run`, browser and
+compiler component use the portable compiler and do not invoke the optimiser.
 
 ## `compose`
 
@@ -155,6 +157,6 @@ The first argument is the entry. The default output is `app.wasm`. Remaining imp
 
 Size builds strip optional name, producer and debug metadata recursively after
 componentisation and composition. Public WIT names, types, imports and exports
-are retained, as are unknown custom sections. Normal builds retain metadata.
+are retained, as are unknown custom sections. Unoptimised builds retain metadata.
 `compose --strip-metadata` applies the same stripping policy to a composition of
 prebuilt components without running the optimiser again.

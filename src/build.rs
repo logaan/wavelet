@@ -49,11 +49,15 @@ impl PreparedUnit {
 }
 
 pub fn build_files(paths: &[String], out_dir: &str) -> Result<Vec<String>, String> {
-    build_files_with_size_optimization(paths, out_dir, false)
+    build_files_with_size_optimization(paths, out_dir, true)
 }
 
 pub fn build_files_for_size(paths: &[String], out_dir: &str) -> Result<Vec<String>, String> {
     build_files_with_size_optimization(paths, out_dir, true)
+}
+
+pub fn build_files_unoptimized(paths: &[String], out_dir: &str) -> Result<Vec<String>, String> {
+    build_files_with_size_optimization(paths, out_dir, false)
 }
 
 fn build_files_with_size_optimization(

@@ -35,7 +35,7 @@ fn main() -> ExitCode {
             eprintln!("       wavelet wit <file.wlt>");
             eprintln!("       wavelet new <name> [--type=cli|http]");
             eprintln!("       wavelet run <file.wlt>... [-- <args>...]");
-            eprintln!("       wavelet build <file.wlt>... [--optimize-size] [-o <dir>]");
+            eprintln!("       wavelet build <file.wlt>... [--no-optimize] [-o <dir>]");
             eprintln!(
                 "       wavelet compose <entry.wasm> <plug.wasm>... [--strip-metadata] [-o <app.wasm>]"
             );
@@ -113,15 +113,19 @@ fn split_out(rest: &[String], default: &str) -> (Vec<String>, String) {
 }
 
 fn build_cmd(rest: &[String]) -> ExitCode {
-    let optimize_size = rest.iter().any(|arg| arg == "--optimize-size");
+    let unoptimized = rest.iter().any(|arg| arg == "--no-optimize");
+    if unoptimized && rest.iter().any(|arg| arg == "--optimize-size") {
+        eprintln!("--no-optimize and --optimize-size cannot be used together");
+        return ExitCode::FAILURE;
+    }
     let rest = rest
         .iter()
-        .filter(|arg| *arg != "--optimize-size")
+        .filter(|arg| !matches!(arg.as_str(), "--optimize-size" | "--no-optimize"))
         .cloned()
         .collect::<Vec<_>>();
     let (files, out_dir) = split_out(&rest, "out");
-    let build = if optimize_size {
-        wavelet::build::build_files_for_size
+    let build = if unoptimized {
+        wavelet::build::build_files_unoptimized
     } else {
         wavelet::build::build_files
     };

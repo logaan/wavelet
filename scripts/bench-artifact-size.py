@@ -187,7 +187,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--baseline', type=Path)
     parser.add_argument('--compiler-commit')
-    parser.add_argument('--build-arg', action='append', default=[])
+    parser.add_argument('--build-arg', action='append', default=[],
+                        help='Forward a build argument; use --build-arg=--no-optimize for unoptimised comparisons')
     parser.add_argument('--compose-arg', action='append', default=[])
     args = parser.parse_args()
     args.wavelet = args.wavelet.resolve()

@@ -39,8 +39,9 @@ Build the compiler being measured, then run from the Wavelet checkout:
 cargo build --release
 python3 scripts/bench-artifact-size.py \
   --kb /path/to/kb.wlt \
-  --stage baseline \
-  --output benchmarks/artifact-size/results/00-baseline.json
+  --stage current-size \
+  --baseline benchmarks/artifact-size/results/00-baseline.json \
+  --output /tmp/wavelet-current-size.json
 ```
 
 For subsequent checkpoints, use the checked-in baseline to enforce unchanged
@@ -57,7 +58,10 @@ python3 scripts/bench-artifact-size.py \
 
 From the metadata-stripping checkpoint onward, also pass
 `--compose-arg=--strip-metadata` to strip the final `led-dim` composition.
-Omit both arguments for the default-build comparison. `--wavelet` selects a frozen
+Native builds now optimise for size by default. For the historical unoptimised
+comparison, pass `--build-arg=--no-optimize` and omit the compose argument.
+The checked-in checkpoint reports retain the original CLI defaults and arguments
+used at their recorded commits; do not reinterpret those historical measurements. `--wavelet` selects a frozen
 compiler executable; `--compiler-commit` records its source revision when that
 is different from the current checkout. The report also records the executable
 hash and versions of Wasmtime, wasm-tools, and Binaryen. All three tools must be

@@ -149,14 +149,18 @@ contract changes.
 
 ## Native size optimisation
 
-`compiler::native::compile_for_size(request, root)` and
-`build::build_files_for_size(paths, out_dir)` use Binaryen's `wasm-opt -Oz` before
+`build::build_files(paths, out_dir)` optimises for size by default.
+`build::build_files_unoptimized(paths, out_dir)` is the debugging opt-out.
+`compiler::native::compile_for_size(request, root)` and the explicit
+`build::build_files_for_size(paths, out_dir)` alias use the same Binaryen
+`wasm-opt -Oz` pipeline before
 componentisation and require `wasm-opt` on `PATH`. Failures are diagnostics, not
 silent fallbacks. `compiler::compile_with_optimizer` accepts an
 `emit::CoreOptimizer` callback for hosts that provide their own core-Wasm
 optimiser. It receives a core module before component metadata is embedded and
 must return a semantically equivalent core module with the same ABI exports and
-imports. The normal `compile` API and the compiler component remain self-contained;
+imports. The lower-level `compiler::native::compile` API, runtime evaluation, and the
+compiler component remain self-contained;
 the component protocol adds no optimiser host import.
 
 Native size compilation strips optional metadata from final artifacts, including

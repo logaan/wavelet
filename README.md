@@ -19,7 +19,7 @@ Read the [documentation](https://logaan.github.io/wavelet/), take the
 Install the CLI and language server from the Homebrew tap:
 
 ```sh
-brew install logaan/tap/wavelet
+brew install logaan/tap/wavelet binaryen
 ```
 
 Prebuilt binaries and the VS Code extension are available on the
@@ -33,6 +33,10 @@ export PATH="$PWD/target/release:$PATH"
 ```
 
 The `PATH` setting makes the built CLI available as `wavelet` in this shell.
+Install [Binaryen](https://github.com/WebAssembly/binaryen) and put `wasm-opt` on
+`PATH` for native builds. `wavelet build` optimises for size and strips optional
+metadata by default; use `wavelet build --no-optimize` for debugging builds.
+The REPL and `run` do not require Binaryen.
 
 ## Try the language
 
@@ -132,7 +136,7 @@ Wavelet programs can use other compatible host contracts too.
 | `wavelet wit <file.wlt>` | Inspect the synthesized WIT world. |
 | `wavelet repl` | Compile and run expressions interactively. |
 | `wavelet run <file.wlt>...` | Compose files and call the first file's `api.run`. |
-| `wavelet build <file.wlt>... [--optimize-size] [-o <dir>]` | Write component artifacts. |
+| `wavelet build <file.wlt>... [--no-optimize] [-o <dir>]` | Write component artifacts. |
 | `wavelet compose <entry.wasm> <plug.wasm>... [--strip-metadata] [-o <file>]` | Connect prebuilt components. |
 
 An executable source file can start with `#!/usr/bin/env wavelet` and provide an
