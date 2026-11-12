@@ -1785,7 +1785,7 @@ dependencies = [
 
 [[package]]
 name = "wavelet"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "console_error_panic_hook",
  "rustyline",
@@ -1802,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "wavelet-lsp"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "lsp-server",
  "lsp-types",

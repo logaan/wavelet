@@ -68,6 +68,6 @@ structural, duplication, coverage, and history-analysis checks.
 
 ## Deployment
 
-`.github/workflows/deploy-docs.yml` builds and publishes the site on pushes to
-`main`. The committed compiler artifact and examples keep that job independent
-of the Rust toolchain.
+`.github/workflows/deploy-docs.yml` builds and publishes the site on `v*` tags
+or a manual workflow dispatch. The committed compiler artifact and examples
+keep that job independent of the Rust toolchain.

@@ -13,10 +13,14 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-12
+
 ### Changed
 
 - Every example in “Learn Wavelet in Y minutes” can be edited and run directly
   on the page, including the two-file component example.
+- Compiled components omit Unicode case-conversion tables when they do not use
+  `upper` or `lower`, reducing their size.
 
 ## [0.12.0] - 2026-11-12
 
@@ -664,7 +668,8 @@ Initial release.
   artifacts.
 - Docusaurus documentation site with a live, wasm-compiled `<Playground>`.
 
-[Unreleased]: https://github.com/logaan/wavelet/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/logaan/wavelet/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/logaan/wavelet/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/logaan/wavelet/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/logaan/wavelet/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/logaan/wavelet/compare/v0.9.2...v0.10.0

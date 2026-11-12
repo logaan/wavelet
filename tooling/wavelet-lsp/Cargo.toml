@@ -2,7 +2,7 @@
 
 [package]
 name = "wavelet-lsp"
-version = "0.12.0"
+version = "0.12.1"
 edition = "2024"
 description = "A basic Language Server for the Wavelet language"
 
