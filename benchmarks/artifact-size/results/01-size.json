@@ -1,0 +1,259 @@
+{
+  "stage": "stage1-size",
+  "compiler_commit": "df55eb8",
+  "compiler_sha256": "b5a72730efb18a50a3af94c4f7f8ca463a47ec35f5f0945c78ad3b0133904bfc",
+  "build_arguments": [
+    "--optimize-size"
+  ],
+  "compose_arguments": [],
+  "tools": {
+    "wasm-tools": "wasm-tools 1.263.0",
+    "wasm-opt": "wasm-opt version 133",
+    "wasmtime": "wasmtime 50.0.1 (c307ec81d 2026-10-29)"
+  },
+  "kb_commit": "15fe3512cb943edd654f3f7aba175c731efbe584",
+  "kb_worktree": "",
+  "benchmark_bytes": {
+    "minimal": 1082,
+    "wasi-hello": 3688,
+    "collections": 4342,
+    "kb-project": 38878
+  },
+  "artifacts": {
+    "minimal": {
+      "deployed_bytes": 1082,
+      "artifact_sha256": "4290c7e1dcfeaa10ead8ebf44a025fff8a019bde2f65a3885aa1e86dcf9cdb96",
+      "interface_sha256": "e0a8db5fd53daba13191fe7bae0ddb248e6bfbb728a2e32a4835480ab5b7dd68",
+      "inputs": {
+        "src/main.wlt": "8341c20430081c578c5eb95a7982151d04c451e3808cdf9efb1e821c78379e60"
+      },
+      "emitted_units_bytes": 1082,
+      "sections": {
+        "core_modules": 1,
+        "core_bytes": 508,
+        "code_section_bytes": 90,
+        "data_section_bytes": 234,
+        "custom_section_bytes": 385
+      },
+      "checks": [
+        {
+          "invocation": "run()",
+          "stdout": "2\n",
+          "exit_status": 0
+        }
+      ],
+      "build_warnings": ""
+    },
+    "wasi-hello": {
+      "deployed_bytes": 3688,
+      "artifact_sha256": "49b0b1b5ce30a4003214ad3773b55134ecec13871cc186497c2c1dcaa8606e96",
+      "interface_sha256": "0c5b35978bd26656137f58281fa50108850a9da99205f5afa1e86d28c8256c9a",
+      "inputs": {
+        "src/main.wlt": "0b639a0a8aa6444d57920b1338e73c10f5dc3ab4dc1bd49fdf5f8449ceb60342",
+        "wit/deps/cli.wit": "65061d4a974df0025e6fd1d3ded2b6fa42275e9a73b78643453c562211e621ca",
+        "wit/deps/io.wit": "5c5e7c1bfc49e17de24ec8b624e0973d399db41fcac197291d1012f9adb9d067"
+      },
+      "emitted_units_bytes": 3688,
+      "sections": {
+        "core_modules": 3,
+        "core_bytes": 1770,
+        "code_section_bytes": 822,
+        "data_section_bytes": 367,
+        "custom_section_bytes": 1141
+      },
+      "checks": [
+        {
+          "invocation": null,
+          "stdout": "Hello, world!\n",
+          "exit_status": 0
+        }
+      ],
+      "build_warnings": "warning: could not populate wit/ via wkg: `wkg` failed (exit status: 1): warning: `wkg wit <command>` is deprecated\n   help: use `wkg <command>` instead\nError: failed to fetch dependencies for /private/var/folders/_1/kyy8k_556zb9hzdjf3wj8rrc0000gn/T/wavelet-rQjFkN/wit\n\nCaused by:\n    0: package: wasi:cli\n    1: registry error: wasi/cli: error sending request for url (https://wasi.dev/v2/): client error (Connect): dns error: failed to lookup address information: nodename nor servname provided, or not known\n    2: wasi/cli\n    3: error sending request for url (https://wasi.dev/v2/)\n    4: client error (Connect)\n    5: dns error\n    6: failed to lookup address information: nodename nor servname provided, or not known"
+    },
+    "collections": {
+      "deployed_bytes": 4342,
+      "artifact_sha256": "f36556c6c86dce85fac37067d1fd4953df03c968cb1c0c1f194f1f7c97d4db0f",
+      "interface_sha256": "b53a88b0501ce65373e1e7cc28db1f39c8a8a77b6f5c15d3030943b8f79d4ad5",
+      "inputs": {
+        "src/main.wlt": "02ea22c9c6c334f6fde6c2e1638fa01e4fa04f7c9a20b5d32f07782e0665e7c8"
+      },
+      "emitted_units_bytes": 4342,
+      "sections": {
+        "core_modules": 1,
+        "core_bytes": 3693,
+        "code_section_bytes": 3206,
+        "data_section_bytes": 255,
+        "custom_section_bytes": 413
+      },
+      "checks": [
+        {
+          "invocation": "run([1,2,3,4])",
+          "stdout": "\"1,4,9,16\"\n",
+          "exit_status": 0
+        },
+        {
+          "invocation": "run([])",
+          "stdout": "\"\"\n",
+          "exit_status": 0
+        }
+      ],
+      "build_warnings": ""
+    },
+    "braille": {
+      "deployed_bytes": 5974,
+      "artifact_sha256": "2316dcb13ae1e383ba63873b5f8e52f004f6fe1f444ed442ca0d46ae359d02bd",
+      "interface_sha256": "6d5fc3aa51456ae8093efbd59336645b7be5e4cc75fd20c57ae1a0adf3201a7b",
+      "inputs": {
+        "src/main.wlt": "f36901f5ff686261587f59420f2a4286aa80a0ba4b35f250af35ccef13cff77b",
+        "wit/deps/firmware.wit": "f8a5c9d4ca6fe60f0cff9e829e23bc0f1d8a760a8cf67083c590198136982882"
+      },
+      "emitted_units_bytes": 5974,
+      "sections": {
+        "core_modules": 1,
+        "core_bytes": 4063,
+        "code_section_bytes": 3295,
+        "data_section_bytes": 436,
+        "custom_section_bytes": 737
+      },
+      "checks": [
+        {
+          "invocation": "map-cell(46)",
+          "stdout": "542\n",
+          "exit_status": 0
+        },
+        {
+          "invocation": "map-cell(16)",
+          "stdout": "564\n",
+          "exit_status": 0
+        }
+      ],
+      "build_warnings": "warning: could not populate wit/ via wkg: `wkg` failed (exit status: 1): warning: `wkg wit <command>` is deprecated\n   help: use `wkg <command>` instead\nError: failed to fetch dependencies for /private/var/folders/_1/kyy8k_556zb9hzdjf3wj8rrc0000gn/T/wavelet-8bV9UJ/wit\n\nCaused by:\n    0: package: kb:firmware\n    1: no registry configured for namespace \"kb\""
+    },
+    "led": {
+      "deployed_bytes": 3420,
+      "artifact_sha256": "dd0eaadba03de0e5e051f1a2e26559f92f676271bcbf6b974f5f65e689937729",
+      "interface_sha256": "3e61dd4aa928de1b82008c00e74d2f29245c592367cadde0d66e8f5cb3b0a745",
+      "inputs": {
+        "src/main.wlt": "fd18b21a8efb961dea30ec249902250c79bb050546efba57dd89376ee2004d1c",
+        "wit/deps/firmware.wit": "f8a5c9d4ca6fe60f0cff9e829e23bc0f1d8a760a8cf67083c590198136982882"
+      },
+      "emitted_units_bytes": 3420,
+      "sections": {
+        "core_modules": 1,
+        "core_bytes": 1960,
+        "code_section_bytes": 1416,
+        "data_section_bytes": 317,
+        "custom_section_bytes": 574
+      },
+      "checks": [
+        {
+          "invocation": "step({phase: 0, speed: 0, last-change-ms: 0, button-was-down: false}, 0, false)",
+          "stdout": "{state: {phase: 0, speed: 0, last-change-ms: 0, button-was-down: false}, red: 255, green: 0, blue: 0}\n",
+          "exit_status": 0
+        }
+      ],
+      "build_warnings": "warning: could not populate wit/ via wkg: `wkg` failed (exit status: 1): warning: `wkg wit <command>` is deprecated\n   help: use `wkg <command>` instead\nError: failed to fetch dependencies for /private/var/folders/_1/kyy8k_556zb9hzdjf3wj8rrc0000gn/T/wavelet-FcUuO6/wit\n\nCaused by:\n    0: package: kb:firmware\n    1: no registry configured for namespace \"kb\""
+    },
+    "led-dim": {
+      "deployed_bytes": 7686,
+      "artifact_sha256": "935db27a239f4144df495e2b6c943f7c3cb158eae0c8233c83311b70b52a7537",
+      "interface_sha256": "ba99463fe2e5d07294936c5b568213a551e9347301a996ed49ce4ca85327c75f",
+      "inputs": {
+        "src/led.wlt": "fd18b21a8efb961dea30ec249902250c79bb050546efba57dd89376ee2004d1c",
+        "src/main.wlt": "a061a838beca7b40dd1b74b02c8fa19b57086939a3b2a11bc039632cea493d13",
+        "wit/deps/firmware.wit": "f8a5c9d4ca6fe60f0cff9e829e23bc0f1d8a760a8cf67083c590198136982882"
+      },
+      "emitted_units_bytes": 7502,
+      "sections": {
+        "core_modules": 4,
+        "core_bytes": 4013,
+        "code_section_bytes": 2620,
+        "data_section_bytes": 695,
+        "custom_section_bytes": 1531
+      },
+      "checks": [
+        {
+          "invocation": "step({phase: 0, speed: 0, last-change-ms: 0, button-was-down: false}, 0, false)",
+          "stdout": "{state: {phase: 0, speed: 0, last-change-ms: 0, button-was-down: false}, red: 63, green: 0, blue: 0}\n",
+          "exit_status": 0
+        }
+      ],
+      "build_warnings": "warning: could not populate wit/ via wkg: `wkg` failed (exit status: 1): warning: `wkg wit <command>` is deprecated\n   help: use `wkg <command>` instead\nError: failed to fetch dependencies for /private/var/folders/_1/kyy8k_556zb9hzdjf3wj8rrc0000gn/T/wavelet-hTT10Z/wit\n\nCaused by:\n    0: package: kb:firmware\n    1: no registry configured for namespace \"kb\""
+    },
+    "passthrough": {
+      "deployed_bytes": 6053,
+      "artifact_sha256": "60cf45a2949b04330f0b51d6e48c368c2f8fca0fb3a545f600653e6b2f597838",
+      "interface_sha256": "5544f3218415a468bea8e653882f19dcc5b447590de62188d7c2445ca52ad3a7",
+      "inputs": {
+        "src/main.wlt": "eccc2996045c2db66b504477b80af7a45e63812138fb645ceaad32bc51efa0ff",
+        "wit/deps/firmware.wit": "f8a5c9d4ca6fe60f0cff9e829e23bc0f1d8a760a8cf67083c590198136982882"
+      },
+      "emitted_units_bytes": 6053,
+      "sections": {
+        "core_modules": 1,
+        "core_bytes": 3263,
+        "code_section_bytes": 2349,
+        "data_section_bytes": 569,
+        "custom_section_bytes": 754
+      },
+      "checks": [
+        {
+          "invocation": "process([1], {events: [{position: 0, state: pressed, timestamp-ms: 10}], now-ms: 10})",
+          "stdout": "{state: [1], events: [{position: 0, state: pressed, timestamp-ms: 10}], actions: []}\n",
+          "exit_status": 0
+        }
+      ],
+      "build_warnings": "warning: could not populate wit/ via wkg: `wkg` failed (exit status: 1): warning: `wkg wit <command>` is deprecated\n   help: use `wkg <command>` instead\nError: failed to fetch dependencies for /private/var/folders/_1/kyy8k_556zb9hzdjf3wj8rrc0000gn/T/wavelet-U4c6qf/wit\n\nCaused by:\n    0: package: kb:firmware\n    1: no registry configured for namespace \"kb\""
+    },
+    "shift": {
+      "deployed_bytes": 6805,
+      "artifact_sha256": "08eb1fe58f7e39ba68077c921fa8e13f2f4813525dbc60458ee4626d483b8215",
+      "interface_sha256": "992e6f54e19de6a614210d8db152bbd773d1a44795a7e2549b6fe11923290034",
+      "inputs": {
+        "src/main.wlt": "89698671aa591cbe000761bd74f7109f9d725285c8e3a92b6bdafdb0ec6eeb4c",
+        "wit/deps/firmware.wit": "f8a5c9d4ca6fe60f0cff9e829e23bc0f1d8a760a8cf67083c590198136982882"
+      },
+      "emitted_units_bytes": 6805,
+      "sections": {
+        "core_modules": 1,
+        "core_bytes": 4053,
+        "code_section_bytes": 3112,
+        "data_section_bytes": 577,
+        "custom_section_bytes": 722
+      },
+      "checks": [
+        {
+          "invocation": "transform-output([], [press({usage: 4, modifiers: 0})])",
+          "stdout": "([], [press({usage: 4, modifiers: 2})])\n",
+          "exit_status": 0
+        }
+      ],
+      "build_warnings": "warning: could not populate wit/ via wkg: `wkg` failed (exit status: 1): warning: `wkg wit <command>` is deprecated\n   help: use `wkg <command>` instead\nError: failed to fetch dependencies for /private/var/folders/_1/kyy8k_556zb9hzdjf3wj8rrc0000gn/T/wavelet-9hJ0zS/wit\n\nCaused by:\n    0: package: kb:firmware\n    1: no registry configured for namespace \"kb\""
+    },
+    "toucan-keymap": {
+      "deployed_bytes": 8940,
+      "artifact_sha256": "b36858dfd64b1320698ff21b5a28a2c87bad661611df5b788a08873f500e0c33",
+      "interface_sha256": "81390864ff0659078527ef48599de7aadc122fa6c5d8967a008ba8a914f6c9d5",
+      "inputs": {
+        "src/main.wlt": "96275ada778e93c51f5e9c9238610eb3a44884110fb503914aaf71108450a33d",
+        "wit/deps/firmware.wit": "f8a5c9d4ca6fe60f0cff9e829e23bc0f1d8a760a8cf67083c590198136982882"
+      },
+      "emitted_units_bytes": 8940,
+      "sections": {
+        "core_modules": 1,
+        "core_bytes": 6138,
+        "code_section_bytes": 5194,
+        "data_section_bytes": 579,
+        "custom_section_bytes": 764
+      },
+      "checks": [
+        {
+          "invocation": "process([], {events: [{position: 0, state: pressed, timestamp-ms: 10}], now-ms: 10})",
+          "stdout": "{state: [43, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], events: [], actions: [press({usage: 43, modifiers: 0})]}\n",
+          "exit_status": 0
+        }
+      ],
+      "build_warnings": "warning: could not populate wit/ via wkg: `wkg` failed (exit status: 1): warning: `wkg wit <command>` is deprecated\n   help: use `wkg <command>` instead\nError: failed to fetch dependencies for /private/var/folders/_1/kyy8k_556zb9hzdjf3wj8rrc0000gn/T/wavelet-kzqO2G/wit\n\nCaused by:\n    0: package: kb:firmware\n    1: no registry configured for namespace \"kb\""
+    }
+  }
+}
