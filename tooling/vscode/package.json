@@ -4,7 +4,7 @@
   "description": "Syntax highlighting and language server support for the Wavelet language (.wlt).",
   "version": "0.2.0",
   "publisher": "wavelet",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "main": "./extension.js",
   "engines": {
     "vscode": "^1.82.0"

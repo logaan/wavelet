@@ -155,4 +155,4 @@ workflows, and [the compiler API guide](docs/docs/compiler-api.md) for embedding
 
 ## License
 
-[Apache-2.0](https://opensource.org/license/Apache-2.0)
+[Apache-2.0](LICENSE)

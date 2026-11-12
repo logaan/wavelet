@@ -49,6 +49,7 @@ editor tooling and binaries. The release also includes the compiler component as
 `wavelet-compiler.wasm`. `ci/changelog-section.sh <tag>` extracts the release body
 from `CHANGELOG.md`. Asset names are stable and unversioned so
 install instructions can point at `.../releases/latest/download/<asset>`.
+The VS Code zip and CLI/language-server tarballs include the Apache-2.0 `LICENSE`.
 
 `CHANGELOG.md` (Keep a Changelog format) is the source of truth for release
 notes. Record user-visible changes under `## [Unreleased]` as you make them, and

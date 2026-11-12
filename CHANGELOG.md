@@ -17,6 +17,8 @@ you work, and rename it to the new version when you cut a release.
 
 - README setup instructions include the source-build `PATH`, application tool
   prerequisites, and how to inspect the composition example's returned value.
+- Compiler, language-server, browser package, and VS Code extension metadata use
+  Apache-2.0 consistently with `LICENSE`. Release archives include the license.
 
 ## [0.12.1] - 2026-11-12
 
