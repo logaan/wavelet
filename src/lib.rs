@@ -23,6 +23,7 @@ pub mod macrodep;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod macros;
 pub mod meta;
+pub mod metadata;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
 #[cfg(not(target_arch = "wasm32"))]

@@ -15,7 +15,7 @@ description: Create projects, inspect source, compile components, and run progra
 | `wavelet repl` | Compile and evaluate expressions interactively. |
 | `wavelet run <file.wlt>... [-- <args>...]` | Compile, compose, and execute the first file's `api.run`. |
 | `wavelet build <file.wlt>... [--optimize-size] [-o <dir>]` | Write component artifacts. |
-| `wavelet compose <entry.wasm> <plug.wasm>... [-o <file>]` | Connect prebuilt components. |
+| `wavelet compose <entry.wasm> <plug.wasm>... [--strip-metadata] [-o <file>]` | Connect prebuilt components. |
 | `wavelet <file> [args...]` | Run a source file as a script. |
 
 Static checking is always enabled. `--strict` is accepted for compatibility and does not enable a different language mode.
@@ -152,3 +152,9 @@ app.wasm
 ```
 
 The first argument is the entry. The default output is `app.wasm`. Remaining imports are preserved for the host or a later composition. Inspect the resulting WIT contract before choosing a runtime.
+
+Size builds strip optional name, producer and debug metadata recursively after
+componentisation and composition. Public WIT names, types, imports and exports
+are retained, as are unknown custom sections. Normal builds retain metadata.
+`compose --strip-metadata` applies the same stripping policy to a composition of
+prebuilt components without running the optimiser again.

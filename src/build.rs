@@ -135,6 +135,18 @@ fn project_root(paths: &[String]) -> Option<PathBuf> {
 }
 
 pub fn compose_files(paths: &[String], out: &str) -> Result<(), String> {
+    compose_files_with_metadata(paths, out, false)
+}
+
+pub fn compose_files_stripped(paths: &[String], out: &str) -> Result<(), String> {
+    compose_files_with_metadata(paths, out, true)
+}
+
+fn compose_files_with_metadata(
+    paths: &[String],
+    out: &str,
+    strip_metadata: bool,
+) -> Result<(), String> {
     use wac_graph::{CompositionGraph, EncodeOptions, types::Package};
 
     if paths.is_empty() {
@@ -170,6 +182,11 @@ pub fn compose_files(paths: &[String], out: &str) -> Result<(), String> {
     let bytes = graph
         .encode(EncodeOptions::default())
         .map_err(|e| format!("compose: {e:#}"))?;
+    let bytes = if strip_metadata {
+        crate::metadata::strip(&bytes)?
+    } else {
+        bytes
+    };
     std::fs::write(out, bytes).map_err(|e| format!("{out}: {e}"))?;
     Ok(())
 }

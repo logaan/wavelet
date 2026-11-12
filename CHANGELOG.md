@@ -20,6 +20,9 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- Size builds strip optional name, producer and debug metadata after composition;
+  `compose --strip-metadata` applies the same policy to prebuilt components.
+
 - Runtime evaluation and conformance tests execute compiled WebAssembly. The
   interpreter is retained only as compile-time macro machinery and no longer
   defines language semantics or supplies documentation reference results.

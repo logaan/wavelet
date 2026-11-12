@@ -1466,6 +1466,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "indexmap",
  "semver",
+ "serde",
 ]
 
 [[package]]
@@ -1737,6 +1738,7 @@ dependencies = [
  "wac-graph",
  "wasm-encoder 0.251.0",
  "wasm-wave",
+ "wasmparser 0.251.0",
  "wasmtime",
  "wat",
  "wit-component 0.251.0",

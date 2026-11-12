@@ -36,7 +36,9 @@ fn main() -> ExitCode {
             eprintln!("       wavelet new <name> [--type=cli|http]");
             eprintln!("       wavelet run <file.wlt>... [-- <args>...]");
             eprintln!("       wavelet build <file.wlt>... [--optimize-size] [-o <dir>]");
-            eprintln!("       wavelet compose <entry.wasm> <plug.wasm>... [-o <app.wasm>]");
+            eprintln!(
+                "       wavelet compose <entry.wasm> <plug.wasm>... [--strip-metadata] [-o <app.wasm>]"
+            );
             eprintln!("       wavelet <file> [args...]       (run a script; also via #! shebang)");
             eprintln!("       wavelet --version");
             eprintln!(
@@ -138,12 +140,23 @@ fn build_cmd(rest: &[String]) -> ExitCode {
 }
 
 fn compose_cmd(rest: &[String]) -> ExitCode {
-    let (files, out) = split_out(rest, "app.wasm");
+    let strip_metadata = rest.iter().any(|arg| arg == "--strip-metadata");
+    let rest = rest
+        .iter()
+        .filter(|arg| *arg != "--strip-metadata")
+        .cloned()
+        .collect::<Vec<_>>();
+    let (files, out) = split_out(&rest, "app.wasm");
     if files.is_empty() {
         eprintln!("compose: no input components");
         return ExitCode::from(2);
     }
-    match wavelet::build::compose_files(&files, &out) {
+    let compose = if strip_metadata {
+        wavelet::build::compose_files_stripped
+    } else {
+        wavelet::build::compose_files
+    };
+    match compose(&files, &out) {
         Ok(()) => {
             println!("{out}");
             ExitCode::SUCCESS

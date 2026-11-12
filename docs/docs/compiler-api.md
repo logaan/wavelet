@@ -158,3 +158,9 @@ optimiser. It receives a core module before component metadata is embedded and
 must return a semantically equivalent core module with the same ABI exports and
 imports. The normal `compile` API and the compiler component remain self-contained;
 the component protocol adds no optimiser host import.
+
+Native size compilation strips optional metadata from final artifacts, including
+composed applications. `metadata::strip` provides the same recursive policy for
+existing components or core modules; it preserves unknown custom sections and
+all public interface contracts. Apply it after component metadata has been
+consumed by componentisation, not to a core module awaiting WIT embedding.
