@@ -55,7 +55,7 @@ def measure():
             print(text, file=sys.stderr)
         raise SystemExit(result.returncode)
     warnings = collections.Counter(key[0] for key in diagnostics)
-    sources = [*(ROOT / 'src').rglob('*.rs'), ROOT / 'build.rs']
+    sources = [*(ROOT / 'src').rglob('*.rs'), *ROOT.glob('build.rs')]
     sizes = {str(path.relative_to(ROOT)): len(path.read_text().splitlines())
              for path in sources}
     functions = {}

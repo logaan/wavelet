@@ -27,7 +27,7 @@ npm --prefix docs run build
 ## Structural and coverage gates
 
 The quality gate checks formatting, Clippy diagnostics, function complexity,
-and module size, including the root `build.rs` generator. A separate Lizard analyzer measures cyclomatic complexity
+and module size. A separate Lizard analyzer measures cyclomatic complexity
 and non-comment function length; its pinned dependency installs automatically
 into a private environment under `target/quality-venv`. No function may reach
 1,000 code lines. New modules have a 1,000-line limit; existing large modules
