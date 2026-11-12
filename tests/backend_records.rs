@@ -142,7 +142,7 @@ fn canonical_record_patterns_destructure_by_offset() {
 
 #[test]
 
-fn canonical_record_pattern_fallthrough_matches_the_oracle() {
+fn canonical_record_pattern_fallthrough_matches_the_compiled_result() {
     let mut c = component();
     assert_eq!(ok(&mut c, "fallthrough", &[]), Val::S64(2));
 }

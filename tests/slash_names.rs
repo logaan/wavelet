@@ -22,7 +22,10 @@ fn slash_and_hyphen_spellings_have_identical_forms() {
         };
         assert_eq!(canonical(slash), canonical(hyphen));
     }
-    assert_eq!(wavelet::eval_snippet("Quote foo/bar").value, "foo-bar");
+    assert_eq!(
+        wavelet::eval_snippet("DefMacro name {} to-string(Quote foo/bar)\nName").value,
+        "\"foo-bar\""
+    );
 }
 
 #[test]
@@ -32,9 +35,9 @@ DefType ttl [days(u32) forever]
 Def ttl-days days
 Def answer Fn {} Match ttl/days(5) [((days n) n) (forever 0)]
 "#;
-    let oracle = wavelet::eval_snippet(&format!("{body}\nanswer()"));
-    assert!(oracle.ok, "{}", oracle.error);
-    assert_eq!(oracle.value, "5");
+    let compiled_result = wavelet::eval_snippet(&format!("{body}\nanswer()"));
+    assert!(compiled_result.ok, "{}", compiled_result.error);
+    assert_eq!(compiled_result.value, "5");
     let bytes = Project::compile(&format!(
         "Package \"demo:aliases@0.1.0\"\n{body}\nExport {{name: answer result: u32}}"
     ))

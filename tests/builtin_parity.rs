@@ -1,80 +1,78 @@
 use wavelet::compiler::{Request, native};
-use wavelet::host::{HostComponent, Val};
 
-fn agrees(source: &str) {
-    let reference = wavelet::eval_snippet(source);
-    assert!(
-        reference.ok,
-        "oracle failed for {source}: {}",
-        reference.error
-    );
-    let compilation = native::compile(&Request::snippet(source), std::path::Path::new("."))
-        .unwrap_or_else(|errors| panic!("{source}: {}", native::display_diagnostics(errors)));
-    let artifact = compilation.entry_artifact().unwrap();
-    let invocation = compilation.invocation.as_ref().unwrap();
-    let mut component = HostComponent::from_bytes(&artifact.bytes).unwrap();
-    let values = component
-        .call_instance(&invocation.interface_name, &invocation.function_name, &[])
-        .unwrap_or_else(|error| panic!("{source}: {error}"));
-    let [Val::String(value)] = values.as_slice() else {
-        panic!("unexpected {values:?}")
-    };
-    assert_eq!(value, &reference.value, "{source}");
+fn evaluates(source: &str, expected: &str) {
+    let actual = wavelet::eval_snippet(source);
+    assert!(actual.ok, "{source}: {}", actual.error);
+    assert_eq!(actual.value, expected, "{source}");
 }
 
 #[test]
 fn strings_concatenate_characters_and_sequence_payloads() {
-    for source in [
-        "str-cat(\"a\" 'b')",
-        "str-cat('é' '☃' '😀' '\\n' '\\\\' '\\'')",
-        "str-cat('😀')",
-        "str-cat([\"a\" \"b\"])",
-        "str-cat(['a' '☃'])",
-        "str-cat(tuple2(\"a\" 'b'))",
-        "str-cat([])",
-        "str-cat()",
-        "Def cat Fn {a: string b: char} str-cat(a b)\ncat(\"snow\" '☃')",
+    for (source, expected) in [
+        (r#"str-cat("a" 'b')"#, r#""ab""#),
+        (r#"str-cat('é' '☃' '😀')"#, r#""é☃😀""#),
+        (r#"str-cat('😀')"#, r#""😀""#),
+        (r#"str-cat(["a" "b"])"#, r#""ab""#),
+        (r#"str-cat(['a' '☃'])"#, r#""a☃""#),
+        (r#"str-cat(tuple2("a" 'b'))"#, r#""ab""#),
+        ("str-cat([])", r#""""#),
+        ("str-cat()", r#""""#),
+        (
+            r#"Def cat Fn {a: string b: char} str-cat(a b)
+cat("snow" '☃')"#,
+            r#""snow☃""#,
+        ),
     ] {
-        agrees(source);
+        evaluates(source, expected);
     }
 }
 
 #[test]
 fn collection_length_counts_tuple_elements_and_unicode_scalars() {
-    for source in [
-        "len(tuple2(1 \"a\"))",
-        "len(tuple0())",
-        "len(\"☃😀aé\")",
-        "len(\"\")",
-        "Def count Fn {s: string} len(s)\ncount(\"café\")",
+    for (source, expected) in [
+        (r#"len(tuple2(1 "a"))"#, "2"),
+        ("len(tuple0())", "0"),
+        (r#"len("☃😀aé")"#, "4"),
+        (r#"len("")"#, "0"),
+        (
+            r#"Def count Fn {s: string} len(s)
+count("café")"#,
+            "4",
+        ),
     ] {
-        agrees(source);
+        evaluates(source, expected);
     }
 }
 
 #[test]
 fn tuple_indexing_infers_constant_and_homogeneous_dynamic_results() {
-    for source in [
-        "get(tuple2(1 2) 0)",
-        "get(tuple2(1 \"a\") 1)",
-        "Def choose Fn {index: s64} get(tuple2(10 20) index)\nchoose(1)",
+    for (source, expected) in [
+        ("get(tuple2(1 2) 0)", "1"),
+        (r#"get(tuple2(1 "a") 1)"#, r#""a""#),
+        (
+            "Def choose Fn {index: s64} get(tuple2(10 20) index)\nchoose(1)",
+            "20",
+        ),
     ] {
-        agrees(source);
+        evaluates(source, expected);
     }
 }
 
 #[test]
 fn statically_known_builtin_callbacks_are_specialized() {
-    for source in [
-        "fold(add 0 [1 2 3 4])",
-        "fold(mul 1 [2 3 4])",
-        "map(neg [1 2 3])",
-        "map(to-string [1 2])",
-        "map(len [\"a\" \"☃\"])",
-        "filter(not [true false true])",
-        "Def add Fn {a: s64 b: s64} sub(a b)\nfold(add 20 [1 2])",
+    for (source, expected) in [
+        ("fold(add 0 [1 2 3 4])", "10"),
+        ("fold(mul 1 [2 3 4])", "24"),
+        ("map(neg [1 2 3])", "[-1, -2, -3]"),
+        ("map(to-string [1 2])", r#"["1", "2"]"#),
+        (r#"map(len ["a" "☃"])"#, "[1, 1]"),
+        ("filter(not [true false true])", "[false]"),
+        (
+            "Def add Fn {a: s64 b: s64} sub(a b)\nfold(add 20 [1 2])",
+            "17",
+        ),
     ] {
-        agrees(source);
+        evaluates(source, expected);
     }
 }
 

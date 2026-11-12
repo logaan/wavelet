@@ -6,7 +6,7 @@ description: The capabilities and implementation boundaries to use when planning
 
 # Supported features and limits
 
-Wavelet compiles source to WebAssembly components. CLI execution, the native REPL, the browser REPL, and documentation playgrounds execute compiled components. The interpreter supplies reference results for tests and evaluates Wavelet macro bodies during compilation.
+Wavelet compiles source to WebAssembly components. CLI execution, the native REPL, the browser REPL, and documentation playgrounds execute compiled components. WebAssembly defines runtime semantics. The evaluator executes macro bodies only during compilation.
 
 ## Language coverage
 
@@ -20,14 +20,14 @@ Wavelet compiles source to WebAssembly components. CLI execution, the native REP
 | Components | WIT synthesis, synchronous imports and exports, composition, resource constructors, methods, statics, ownership, and borrowing. |
 | Embedding | An in-memory Rust compiler API and a compiler component with an explicit macro-host protocol. |
 
-The runnable documentation examples are checked against the reference evaluator and executed through the browser compiler component. [Development and validation](./development) describes the other conformance checks.
+The runnable documentation examples execute as compiled components in native tests and the browser. [Development and validation](./development) describes the other conformance checks.
 
 ## Restrictions to design around
 
 - **Function values:** functions cannot be stored in runtime data, returned as closures, selected dynamically for later calls, or passed across component boundaries. Use statically resolved callbacks, variant dispatch, or explicit resources.
 - **Inference:** annotations are required when expression and call-site constraints do not determine a type. Inference is not a promise that every definition can omit its signature.
 - **Resources:** local free functions and callbacks must borrow existing handles. Persisted resource state supports plain data or one outer cell containing plain data.
-- **Macros:** expansion is unhygienic, and binding keys must be literal identifiers. Executable macro artifacts are supplied by the project; automatic registry fetching is not a goal.
+- **Macros:** source forms, quoting, and form operations are compile-time-only. Expansion is unhygienic, and binding keys must be literal identifiers. Executable macro artifacts are supplied by the project; automatic registry fetching is not a goal.
 - **Derivation:** `Derive` is not implemented and is rejected during compilation. Write those operations explicitly.
 - **Templates:** user-defined templates are local to the source file that instantiates them.
 - **WIT:** async functions, futures, streams, maps, fixed-size lists, and error contexts are unsupported. Canonical memory paths reject variants or enums above 256 cases and flags above 32 members.

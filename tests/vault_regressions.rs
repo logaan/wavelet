@@ -54,11 +54,11 @@ Def boxed-negate Fn {n: s64} map(Fn {x} neg(x) [n])
         c.call_instance(iface, "shadow", &[]).unwrap(),
         vec![Val::String("not(5)zip(30)tuple2(7)".into())]
     );
-    let oracle = wavelet::eval_snippet(
+    let compiled_result = wavelet::eval_snippet(
         "DefType choice [not(u32) zip(u32) tuple2(u32) other]\nstr-cat(to-string(not(5)) str-cat(to-string(zip(30)) to-string(tuple2(7))))",
     );
-    assert!(oracle.ok, "{}", oracle.error);
-    assert_eq!(oracle.value, "\"not(5)zip(30)tuple2(7)\"");
+    assert!(compiled_result.ok, "{}", compiled_result.error);
+    assert_eq!(compiled_result.value, "\"not(5)zip(30)tuple2(7)\"");
     for name in ["negate", "absolute"] {
         assert_eq!(
             c.call_instance(iface, name, &[Val::S64(-42)]).unwrap(),

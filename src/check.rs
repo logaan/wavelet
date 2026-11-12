@@ -417,16 +417,8 @@ struct Checker<'a> {
 
 pub type NodeTypes = HashMap<NodeId, Type>;
 
-thread_local! {
-    static STRICT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
-}
-
-pub(crate) fn set_strict(on: bool) {
-    STRICT.with(|state| state.set(on));
-}
-
 pub fn strict() -> bool {
-    STRICT.with(std::cell::Cell::get)
+    true
 }
 
 pub type ImportSig = (Vec<(String, Type)>, Type);
@@ -1742,27 +1734,11 @@ impl<'a> Checker<'a> {
                 self.check_the(ty_form, &ty, expr, scope)
             }
 
-            "quote-MACRO" => Ok(Type::Tree),
-
-            "quasi-MACRO" => {
-                if let [form] = args {
-                    self.check_quasi(*form, scope, 1)?;
-                }
-                Ok(Type::Tree)
+            "quote-MACRO" | "quasi-MACRO" => {
+                Err("source forms are only available at compile time inside macro bodies".into())
             }
 
-            "defmacro-MACRO" => {
-                if let [_name_id, params_id, body] = args {
-                    let params = parse_params(self.arena, *params_id);
-                    let mark = scope.len();
-                    for (n, _t) in &params {
-                        scope.push((n.clone(), Type::Tree));
-                    }
-                    self.check(*body, None, scope)?;
-                    scope.truncate(mark);
-                }
-                Ok(Type::Unit)
-            }
+            "defmacro-MACRO" => Ok(Type::Unit),
 
             "package-MACRO" | "import-MACRO" | "instantiate-MACRO" | "export-MACRO"
             | "deftype-MACRO" => Ok(Type::Unknown),
@@ -1771,57 +1747,6 @@ impl<'a> Checker<'a> {
                 let _ = args;
                 Ok(Type::Unknown)
             }
-        }
-    }
-
-    fn check_quasi(&self, id: NodeId, scope: &mut Scope, depth: u32) -> Result<(), String> {
-        match self.arena.node(id) {
-            Node::Tup(items) => {
-                if items.len() == 2
-                    && let Node::Sym(name) = self.arena.node(items[0])
-                {
-                    let arg = items[1];
-                    match name.as_str() {
-                        "unquote-MACRO" if depth == 1 => {
-                            self.check(arg, None, scope)?;
-                            return Ok(());
-                        }
-                        "splice-MACRO" if depth == 1 => {
-                            let t = self.check(arg, None, scope)?;
-                            if !matches!(t, Type::List(_) | Type::Tree | Type::Unknown) {
-                                return Err(format!(
-                                    "eval error: Splice expects a list, got {t:?}"
-                                ));
-                            }
-                            return Ok(());
-                        }
-                        "unquote-MACRO" | "splice-MACRO" if depth > 1 => {
-                            return self.check_quasi(arg, scope, depth - 1);
-                        }
-                        "quasi-MACRO" => {
-                            return self.check_quasi(arg, scope, depth + 1);
-                        }
-                        _ => {}
-                    }
-                }
-                for &it in items {
-                    self.check_quasi(it, scope, depth)?;
-                }
-                Ok(())
-            }
-            Node::Lst(items) => {
-                for &it in items {
-                    self.check_quasi(it, scope, depth)?;
-                }
-                Ok(())
-            }
-            Node::Rec(fields) => {
-                for (_k, v) in fields {
-                    self.check_quasi(*v, scope, depth)?;
-                }
-                Ok(())
-            }
-            _ => Ok(()),
         }
     }
 

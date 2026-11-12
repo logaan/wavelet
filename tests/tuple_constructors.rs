@@ -1,7 +1,7 @@
 use wavelet::host::{HostComponent, Val};
 
 #[test]
-fn oracle_constructs_tuples() {
+fn compiled_snippet_constructs_tuples() {
     for (src, want) in [
         ("tuple0()", "()"),
         ("tuple1(5)", "(5)"),
@@ -12,7 +12,7 @@ fn oracle_constructs_tuples() {
             "(3, \"x\", (true, (5)))",
         ),
         ("Match tuple2(3 4) [((a b) add(a b)) (other 0)]", "7"),
-        ("eq(tuple2(1 2) Quote (1 2))", "true"),
+        ("eq(tuple2(1 2) tuple2(1 2))", "true"),
         ("tuple2(7 8)", "(7, 8)"),
         ("map(tuple1 [1 2 3])", "[(1), (2), (3)]"),
         (
@@ -27,7 +27,7 @@ fn oracle_constructs_tuples() {
 }
 
 #[test]
-fn oracle_rejects_wrong_arity() {
+fn compiled_snippet_rejects_wrong_arity() {
     for src in ["tuple2(1)", "tuple0(1)", "tuple1(1 2)", "tuple3(1 2)"] {
         let r = wavelet::eval_snippet(src);
         assert!(!r.ok, "{src} should be an arity error");
@@ -148,7 +148,7 @@ fn constructed_tuples_cross_the_boundary() {
 }
 
 #[test]
-fn boxed_path_agrees_with_the_oracle() {
+fn boxed_path_agrees_with_expected_values() {
     let mut c = built();
     assert_eq!(
         call(&mut c, "boxed", &[]),

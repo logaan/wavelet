@@ -41,7 +41,7 @@ Export {name: wrap params: {} result: wrapped}
 Def wrap Fn {} pt-case({x: 3 y: 4})
 
 Export {name: pair params: {} result: wrapped}
-Def pair Fn {} two(Quote (4 9))
+Def pair Fn {} two(tuple2(4 9))
 
 Export {name: opt params: {n: s32} result: option(s32)}
 Def opt Fn {n: s32} some(n)
@@ -132,7 +132,7 @@ fn variant_cases_select_by_discriminant() {
 
 #[test]
 
-fn option_cases_match_like_the_oracle() {
+fn option_cases_match_as_expected() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "get", &[Val::Bool(true)]), Val::S64(7));
     assert_eq!(ok(&mut c, "get", &[Val::Bool(false)]), Val::S64(-1));
@@ -140,7 +140,7 @@ fn option_cases_match_like_the_oracle() {
 
 #[test]
 
-fn result_cases_match_like_the_oracle() {
+fn result_cases_match_as_expected() {
     let Some(mut c) = composed() else { return };
     assert_eq!(
         ok(&mut c, "chk", &[Val::Bool(true)]),
@@ -193,7 +193,7 @@ fn option_export_takes_the_retptr_fast_path() {
 
 #[test]
 
-fn nested_nullary_field_pattern_matches_like_the_oracle() {
+fn nested_nullary_field_pattern_matches_as_expected() {
     let Some(mut c) = composed() else { return };
     assert_eq!(ok(&mut c, "unbox", &[Val::Bool(true)]), Val::S64(5));
     assert_eq!(ok(&mut c, "unbox", &[Val::Bool(false)]), Val::S64(-1));

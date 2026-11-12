@@ -15,6 +15,9 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
+- Runtime evaluation and conformance tests execute compiled WebAssembly. The
+  interpreter is retained only as compile-time macro machinery and no longer
+  defines language semantics or supplies documentation reference results.
 - Numeric operations follow core WebAssembly semantics: integer addition,
   subtraction, multiplication, negation, and absolute value wrap; signed remainder
   of the minimum integer by `-1` returns zero. Division retains Wasm traps.
@@ -23,6 +26,10 @@ you work, and rename it to the new version when you cut a release.
 
 ### Removed
 
+- Runtime source-form construction and macro operations (`Quote`, `Quasi`,
+  `gensym`, `expand`, `form-kind`, `rec-key`, and `rec-val`). These remain available
+  inside compile-time macro bodies.
+- The browser interpreter artifact and its wasm-bindgen build dependency.
 - Floating-point operands to `rem`; remainder now maps to Wasm signed integer remainder.
 
 - The `upper` and `lower` builtins and their Unicode case-conversion tables.

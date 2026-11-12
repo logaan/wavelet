@@ -3,9 +3,9 @@ use wavelet::macrodep::FileExpander;
 use wavelet::printer::print;
 use wavelet::reader::read_file;
 
-fn interp_expand(src: &str) -> String {
+fn local_expand(src: &str) -> String {
     let (arena, roots) = read_file(src).expect("read");
-    let (out, new_roots) = expand_file(arena, &roots, None).expect("interpreter expand");
+    let (out, new_roots) = expand_file(arena, &roots, None).expect("local expansion");
     new_roots
         .iter()
         .map(|&r| print(&out, r))
@@ -26,11 +26,11 @@ fn compiled_expand(src: &str) -> String {
 }
 
 fn assert_agree(src: &str) {
-    let oracle = interp_expand(src);
+    let local = local_expand(src);
     let compiled = compiled_expand(src);
     assert_eq!(
-        compiled, oracle,
-        "compiled macro expansion diverged from the interpreter oracle\n--- src ---\n{src}"
+        compiled, local,
+        "compiled macro expansion diverged from the local macro expansion\n--- src ---\n{src}"
     );
 }
 

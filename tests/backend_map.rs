@@ -95,7 +95,7 @@ fn map_over_component_exports() {
 }
 
 #[test]
-fn oracle_agrees() {
+fn compiled_snippet_matches_expected_values() {
     for (src, want) in [
         (
             "Def inc Fn {n: s32} add(n 1)\nmap(inc [1 2 3])",

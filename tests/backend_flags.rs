@@ -79,7 +79,7 @@ fn flags_literal_lowers_as_a_result() {
 }
 
 #[test]
-fn flags_eq_is_the_interpreters_value_flg_equality() {
+fn flags_eq_is_the_structural_value_equality() {
     let mut c = component();
 
     assert_eq!(

@@ -4,8 +4,8 @@ title: Compiler API
 
 Wavelet's compiler accepts source text and WIT dependencies in memory and returns
 WebAssembly components. The native CLI and browser REPL use this same compiler.
-The browser executes the emitted component. The interpreter supplies reference
-semantics for conformance testing.
+The browser executes the emitted component. Runtime semantics follow WebAssembly;
+the evaluator is used only to execute macros during compilation.
 
 ## Rust API
 

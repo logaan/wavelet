@@ -2,8 +2,8 @@ use super::*;
 use ValType::I32;
 
 pub(super) fn emit_persist_alloc(em: &mut Emitter) {
-    let floor_g = 2 + em.info.value_defs.len() as u32;
-    let persist_g = 3 + em.info.value_defs.len() as u32;
+    let floor_g = em.arena_floor_global();
+    let persist_g = em.arena_floor_global() + 1;
 
     let mut fx = FnCtx::new(1);
     let r = fx.local(I32);
@@ -35,7 +35,7 @@ pub(super) fn emit_persist_alloc(em: &mut Emitter) {
 }
 
 pub(super) fn emit_persist(em: &mut Emitter) {
-    let floor_g = 2 + em.info.value_defs.len() as u32;
+    let floor_g = em.arena_floor_global();
 
     let mut fx = FnCtx::new(1);
     let tg = fx.local(I32);

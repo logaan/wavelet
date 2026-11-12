@@ -43,8 +43,8 @@ $ wavelet repl
 ```
 
 The CLI and browser REPL compile and execute components. Compilation errors and
-runtime traps are reported directly. The interpreter serves as the reference
-for conformance tests and as the compile-time evaluator for Wavelet macros.
+runtime traps are reported directly. Runtime semantics follow WebAssembly instructions and Component Model contracts.
+The macro evaluator runs only during compilation.
 
 ## Compose two files
 

@@ -21,12 +21,11 @@ using Node. Rust is needed only when regenerating those artifacts.
 
 The playgrounds and browser REPL compile Wavelet source with
 `src/compiler/wavelet_compiler.wasm`, then instantiate and execute the emitted
-components in a worker. The reference interpreter under `src/wasm/` is used by
-the example generator, not for browser execution.
+components in a worker. The example generator uses the same compiler and runtime.
 
 Author playground examples in `scripts/gen-examples.mjs`. It produces
 `examples.json`, containing source and expected values or errors, and verifies
-compiled results against the reference evaluator. Pages refer to example IDs
+execution succeeds or fails as declared. Pages refer to example IDs
 through the globally registered `<Playground>` component. Snippets use `code`;
 multi-file examples use `sources`, an `entry` filename, and an `invocation`
 identifying a zero-argument export that returns a string. Each project file gets
@@ -34,18 +33,13 @@ an editor, and Run compiles the files together before calling that export.
 Project examples declare their expected result in the generator and are checked
 through both native and browser execution.
 
-The tour's built-in set functor also requires compiled execution: the snippet
-interpreter does not resolve built-in `Instantiate` declarations. That example
-uses `compiledOnly: true` with an explicit expected result, checked by the native
-compiler and browser runtime alongside the project example.
-
 After changing the compiler or example sources, run from the repository root:
 
 ```sh
 ./scripts/regen-examples.sh
 ```
 
-This rebuilds the reference artifact and compiler component, regenerates example
+This rebuilds the compiler component, regenerates example
 results, and runs validation. Commit the generated artifacts so the documentation
 pipeline can build with Node alone.
 

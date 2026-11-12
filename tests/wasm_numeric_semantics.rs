@@ -46,9 +46,9 @@ fn integer_operations_preserve_all_sixty_four_bits() {
             invoke(&mut c, &format!("{name}-i"), &[Val::S64(a), Val::S64(b)]),
             Val::S64(expected)
         );
-        let oracle = wavelet::eval_snippet(&format!("{name}({a} {b})"));
-        assert!(oracle.ok, "{}", oracle.error);
-        assert_eq!(oracle.value, expected.to_string());
+        let compiled_result = wavelet::eval_snippet(&format!("{name}({a} {b})"));
+        assert!(compiled_result.ok, "{}", compiled_result.error);
+        assert_eq!(compiled_result.value, expected.to_string());
     }
     for (name, a, b, expected) in [
         ("lt", i64::MAX - 1, i64::MAX, true),
@@ -61,9 +61,9 @@ fn integer_operations_preserve_all_sixty_four_bits() {
             invoke(&mut c, &format!("{name}-i"), &[Val::S64(a), Val::S64(b)]),
             Val::Bool(expected)
         );
-        let oracle = wavelet::eval_snippet(&format!("{name}({a} {b})"));
-        assert!(oracle.ok, "{}", oracle.error);
-        assert_eq!(oracle.value, expected.to_string());
+        let compiled_result = wavelet::eval_snippet(&format!("{name}({a} {b})"));
+        assert!(compiled_result.ok, "{}", compiled_result.error);
+        assert_eq!(compiled_result.value, expected.to_string());
     }
 }
 
@@ -81,9 +81,9 @@ fn floating_comparisons_and_extrema_follow_wasm() {
                 Val::Bool(false)
             );
         }
-        let oracle = wavelet::eval_snippet(&format!("{name}(nan 1.0)"));
-        assert!(oracle.ok, "{}", oracle.error);
-        assert_eq!(oracle.value, "false");
+        let compiled_result = wavelet::eval_snippet(&format!("{name}(nan 1.0)"));
+        assert!(compiled_result.ok, "{}", compiled_result.error);
+        assert_eq!(compiled_result.value, "false");
     }
     for name in ["min", "max"] {
         for (a, b) in [(f64::NAN, 1.0), (1.0, f64::NAN)] {
@@ -113,19 +113,22 @@ fn floating_comparisons_and_extrema_follow_wasm() {
                 }
             );
         }
-        let oracle = wavelet::eval_snippet(&format!("{name}(nan 1.0)"));
-        assert!(oracle.ok, "{}", oracle.error);
-        assert_eq!(oracle.value, "nan");
+        let compiled_result = wavelet::eval_snippet(&format!("{name}(nan 1.0)"));
+        assert!(compiled_result.ok, "{}", compiled_result.error);
+        assert_eq!(compiled_result.value, "nan");
         for operands in ["0.0 -0.0", "-0.0 0.0"] {
-            let oracle = wavelet::eval_snippet(&format!("div(1.0 {name}({operands}))"));
-            assert!(oracle.ok, "{}", oracle.error);
-            assert_eq!(oracle.value, if name == "min" { "-inf" } else { "inf" });
+            let compiled_result = wavelet::eval_snippet(&format!("div(1.0 {name}({operands}))"));
+            assert!(compiled_result.ok, "{}", compiled_result.error);
+            assert_eq!(
+                compiled_result.value,
+                if name == "min" { "-inf" } else { "inf" }
+            );
         }
     }
     for (source, expected) in [("min(1 2.0)", "1.0"), ("max(1.0 2)", "2.0")] {
-        let oracle = wavelet::eval_snippet(source);
-        assert!(oracle.ok, "{}", oracle.error);
-        assert_eq!(oracle.value, expected);
+        let compiled_result = wavelet::eval_snippet(source);
+        assert!(compiled_result.ok, "{}", compiled_result.error);
+        assert_eq!(compiled_result.value, expected);
     }
     assert_eq!(
         invoke(&mut c, "invert", &[Val::Bool(true)]),
@@ -140,8 +143,8 @@ fn floating_comparisons_and_extrema_follow_wasm() {
 #[test]
 fn wasm_integer_traps_remain_errors_in_both_engines() {
     for source in ["div(1 0)", "rem(1 0)", "div(-9223372036854775808 -1)"] {
-        let oracle = wavelet::eval_snippet(source);
-        assert!(!oracle.ok, "{source}");
+        let compiled_result = wavelet::eval_snippet(source);
+        assert!(!compiled_result.ok, "{source}");
         let operation = source.split('(').next().unwrap();
         let (a, b) = if source.contains("922337") {
             (i64::MIN, -1)

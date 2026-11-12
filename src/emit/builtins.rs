@@ -1456,6 +1456,11 @@ impl<'a> Emitter<'a> {
         name: &str,
         items: &[NodeId],
     ) -> Result<(), String> {
+        if self.macro_expand_idx.is_none() {
+            return Err(format!(
+                "`{name}` is only available at compile time inside macro bodies"
+            ));
+        }
         match name {
             "form-kind" => {
                 expect_arity(name, items, 1)?;

@@ -1,6 +1,10 @@
 use super::*;
 
-mod evaluation;
+mod macro_evaluation;
+#[cfg(not(target_arch = "wasm32"))]
+mod macro_functor_runtime;
+#[cfg(not(target_arch = "wasm32"))]
+mod macro_resource_lifetimes;
 mod reading;
 mod resources;
 mod wit_synthesis;

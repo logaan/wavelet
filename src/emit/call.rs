@@ -192,6 +192,9 @@ impl<'a> Emitter<'a> {
         let head_node = self.arena.node(head).clone();
         match head_node {
             Node::Sym(name) => match name.as_str() {
+                "quote-MACRO" | "quasi-MACRO" if self.macro_expand_idx.is_none() => Err(
+                    "source forms are only available at compile time inside macro bodies".into(),
+                ),
                 "let-MACRO" => self.let_form(fx, args, Repr::Boxed, tail),
                 "the-MACRO" => {
                     let [_ty, expr] = *args else {

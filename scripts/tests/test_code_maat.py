@@ -26,7 +26,7 @@ class HistoryAnalysisTests(unittest.TestCase):
             self.write('src/a.rs', 'a\n' * number)
             if number < 3:
                 self.write('src/b.rs', 'b\n' * number)
-            self.write('docs/src/wasm/generated.js', 'generated\n' * number)
+            self.write('docs/src/compiler/generated.wasm', 'generated\n' * number)
             self.git('add', '.')
             environment = dict(os.environ, GIT_AUTHOR_NAME='Fixture', GIT_COMMITTER_NAME='Fixture',
                                GIT_AUTHOR_EMAIL='fixture@example.invalid',

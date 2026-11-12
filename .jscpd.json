@@ -1,7 +1,7 @@
 {
   "path": ["src", "tooling/wavelet-lsp/src", "tooling/vscode", "docs/src", "docs/scripts"],
   "format": ["rust", "javascript", "typescript", "jsx", "tsx"],
-  "ignore": ["**/node_modules/**", "**/target/**", "**/dist/**", "**/build/**", "docs/src/wasm/**"],
+  "ignore": ["**/node_modules/**", "**/target/**", "**/dist/**", "**/build/**"],
   "gitignore": true,
   "mode": "weak",
   "minLines": 10,

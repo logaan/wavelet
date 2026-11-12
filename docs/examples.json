@@ -31,7 +31,7 @@
   },
   "typed-byte-add-bad": {
     "code": "Def byte-add Fn {a: u8 b: u8}\n  add(a b)\nbyte-add({a: 300 b: 1})",
-    "error": "eval error: parameter `a`: 300 does not conform to type `u8`"
+    "error": "playground.wlt: check: eval error: parameter `a`: 300 does not conform to type `u8`"
   },
   "syntax-commas": {
     "code": "[1 2 3]",
@@ -39,8 +39,8 @@
     "output": ""
   },
   "syntax-quote-call": {
-    "code": "Quote delete-file({path: \"foo.md\" force: true})",
-    "value": "(delete-file, {path: \"foo.md\", force: true})",
+    "code": "DefMacro inspect-call {} to-string(Quote delete-file({path: \"foo.md\" force: true}))\nInspect-call",
+    "value": "\"(delete-file, {path: \\\"foo.md\\\", force: true})\"",
     "output": ""
   },
   "syntax-if-arity": {
@@ -65,7 +65,7 @@
   },
   "values-to-u8-bad": {
     "code": "to-u8(999)",
-    "error": "eval error: `to-u8`: 999 out of range"
+    "error": "playground.wlt: check: eval error: `to-u8`: 999 out of range"
   },
   "values-record": {
     "code": "{name: \"Ada\" born: 1815 fields: [\"maths\" \"computing\"]}",
@@ -74,7 +74,7 @@
   },
   "values-heterogeneous": {
     "code": "[1 \"two\" true 'x']",
-    "error": "eval error: heterogeneous list: elements must share one type, got IntLit(Some(1)) and String"
+    "error": "playground.wlt: check: eval error: heterogeneous list: elements must share one type, got IntLit(Some(1)) and String"
   },
   "values-tuple": {
     "code": "Let {p: tuple2(\"abc\" 123)}\n  Match p [((s n) tuple3(s n true))]",
@@ -92,8 +92,8 @@
     "output": ""
   },
   "values-quote-days": {
-    "code": "Quote days(30)",
-    "value": "(days, 30)",
+    "code": "DefMacro inspect-days {} to-string(Quote days(30))\nInspect-days",
+    "value": "\"(days, 30)\"",
     "output": ""
   },
   "values-eq": {
@@ -158,7 +158,7 @@
   },
   "sf-if-nonbool": {
     "code": "If 1 \"yes\" \"no\"",
-    "error": "eval error: The: 1 does not conform to type `bool`"
+    "error": "playground.wlt: check: eval error: The: 1 does not conform to type `bool`"
   },
   "sf-let": {
     "code": "Let {radius: 10\n     area: mul(pi mul(radius radius))}\n  str-cat(\"area = \" to-string(area))",
@@ -176,22 +176,22 @@
     "output": ""
   },
   "sf-quote": {
-    "code": "Quote add(1 mul(2 3))",
-    "value": "(add, 1, (mul, 2, 3))",
+    "code": "DefMacro inspect-add {} to-string(Quote add(1 mul(2 3)))\nInspect-add",
+    "value": "\"(add, 1, (mul, 2, 3))\"",
     "output": ""
   },
   "sf-quasi": {
-    "code": "Let {x: 41}\n  Quasi add(Unquote(x) 1)",
-    "value": "(add, 41, 1)",
+    "code": "DefMacro add-one {x} Quasi add(Unquote(x) 1)\nAdd-one 41",
+    "value": "42",
     "output": ""
   },
   "sf-unquote": {
-    "code": "Let {name: Quote(ada)}\n  Quasi greeting(Unquote(name))",
-    "value": "(greeting, ada)",
+    "code": "DefMacro greet {}\n  Let {name: \"Ada\"} Quasi str-cat(\"Hello, \" Unquote(name))\nGreet",
+    "value": "\"Hello, Ada\"",
     "output": ""
   },
   "sf-splice": {
-    "code": "Let {middle: [2 3 4]}\n  Quasi [1 Splice(middle) 5]",
+    "code": "DefMacro numbers {}\n  Let {middle: [2 3 4]} Quasi [1 Splice(middle) 5]\nNumbers",
     "value": "[1, 2, 3, 4, 5]",
     "output": ""
   },
@@ -207,7 +207,7 @@
   },
   "sf-the-bad": {
     "code": "The s8 9000",
-    "error": "eval error: The: 9000 does not conform to type `s8`"
+    "error": "playground.wlt: check: eval error: The: 9000 does not conform to type `s8`"
   },
   "pm-catch-all": {
     "code": "Match 3 [\n  (1  \"one\")\n  (2  \"two\")\n  (n  str-cat(\"many: \" to-string(n)))\n]",
@@ -236,7 +236,7 @@
   },
   "pm-no-clause": {
     "code": "Match 5 [\n  (1  \"one\")\n  (2  \"two\")\n]",
-    "error": "eval error: non-exhaustive Match: no clause matches every possible value (add a catch-all clause)"
+    "error": "playground.wlt: check: eval error: non-exhaustive Match: no clause matches every possible value (add a catch-all clause)"
   },
   "macro-swap": {
     "code": "DefMacro swap {a b}\n  Quasi [Unquote(b) Unquote(a)]\nLet {x: 1 y: 2}\n  Swap x y",
@@ -249,17 +249,17 @@
     "output": ""
   },
   "macro-expand": {
-    "code": "DefMacro and {a b}\n  Quasi If Unquote(a) Unquote(b) false\nDefMacro inspect {form}\n  Quasi Quote Unquote(expand(form))\nInspect And(p q)",
-    "value": "(if-MACRO, p, q, false)",
+    "code": "DefMacro and {a b}\n  Quasi If Unquote(a) Unquote(b) false\nDefMacro inspect {form}\n  to-string(expand(form))\nInspect And(p q)",
+    "value": "\"(if-MACRO, p, q, false)\"",
     "output": ""
   },
   "macro-gensym-three": {
-    "code": "[gensym() gensym() gensym()]",
-    "value": "[g0-gen, g1-gen, g2-gen]",
+    "code": "DefMacro fresh-names {} to-string([gensym() gensym() gensym()])\nFresh-names",
+    "value": "\"[g0-gen, g1-gen, g2-gen]\"",
     "output": ""
   },
   "macro-gensym": {
-    "code": "Def fresh-pair Fn {}\n  eq(gensym() gensym())\nfresh-pair()",
+    "code": "DefMacro fresh-pair {} eq(gensym() gensym())\nFresh-pair",
     "value": "false",
     "output": ""
   },
@@ -293,9 +293,14 @@
     "value": "[5, 6, 42, 3, 2, -8, 3, 4, 9]",
     "output": ""
   },
+  "std-wrap": {
+    "code": "[add(9223372036854775807 1) sub(-9223372036854775808 1) mul(9223372036854775807 2) rem(-9223372036854775808 -1)]",
+    "value": "[-9223372036854775808, 9223372036854775807, -2, 0]",
+    "output": ""
+  },
   "std-div-zero": {
     "code": "div(1 0)",
-    "error": "eval error: `div`: integer overflow or division by zero"
+    "error": "wasm trap: integer divide by zero"
   },
   "std-div-float": {
     "code": "div(7.0 2)",
@@ -364,7 +369,7 @@
   },
   "std-conv-bad": {
     "code": "to-u8(256)",
-    "error": "eval error: `to-u8`: 256 out of range"
+    "error": "playground.wlt: check: eval error: `to-u8`: 256 out of range"
   },
   "std-char-conv": {
     "code": "{code: to-u32('a') char: to-char(98) next: to-char(add(to-u32('a') 1))}",
@@ -373,16 +378,16 @@
   },
   "std-char-conv-bad": {
     "code": "to-char(55296)",
-    "error": "eval error: `to-char`: 55296 is not a Unicode scalar value"
+    "error": "playground.wlt: check: eval error: `to-char`: 55296 is not a Unicode scalar value"
   },
   "std-form-kind": {
-    "code": "[form-kind(42)  form-kind(\"hi\")  form-kind(Quote foo)  form-kind(Quote foo(1))  form-kind(ok(1))  form-kind([1 2])]",
+    "code": "DefMacro kinds {}\n  [form-kind(42) form-kind(\"hi\") form-kind(Quote foo) form-kind(Quote foo(1)) form-kind(ok(1)) form-kind([1 2])]\nKinds",
     "value": "[\"int\", \"str\", \"sym\", \"tup\", \"call\", \"lst\"]",
     "output": ""
   },
   "std-rec-key-val": {
-    "code": "Let {b: {text: \"hello\"}}\n  {key: rec-key(b) val: rec-val(b)}",
-    "value": "{key: text, val: \"hello\"}",
+    "code": "DefMacro inspect-binding {}\n  Let {b: {text: \"hello\"}} {key: to-string(rec-key(b)) val: rec-val(b)}\nInspect-binding",
+    "value": "{key: \"text\", val: \"hello\"}",
     "output": ""
   },
   "std-constructors": {
@@ -412,11 +417,11 @@
   },
   "ty-the-range": {
     "code": "The u8 300",
-    "error": "eval error: The: 300 does not conform to type `u8`"
+    "error": "playground.wlt: check: eval error: The: 300 does not conform to type `u8`"
   },
   "ty-mixed-add": {
     "code": "Def bad Fn {x: s32} add(x \"y\")",
-    "error": "eval error: `add` requires numeric operands"
+    "error": "playground.wlt: check: eval error: `add` requires numeric operands"
   },
   "ty-user-functor": {
     "code": "DefFunctor \"demo:pair\" {left right} [\n  DefType pair tuple(left right)\n  Def make Fn {x: left y: right} The pair tuple2(x y)\n]\nInstantiate {pkg: \"demo:pair\" with: {left: s64 right: string} as: mixed}\nmixed-make(7 \"seven\")",
@@ -454,7 +459,7 @@
     "output": ""
   },
   "tour-macros": {
-    "code": "// 6. Code as data and compile-time macros\nQuote add(1 2)                  // The source form, without running the call.\n\n// Quasi builds a form. Unquote inserts a value into that form.\nLet {n: 5} Quasi add(Unquote(n) 1)\n\n// Macro parameters receive unevaluated forms.\n// Define macros before use; TitleCase syntax consumes their known arity.\nDefMacro twice {expression}\n  Quasi add(Unquote(expression) Unquote(expression))\nTwice 21                        // 42\n// This macro evaluates its expression twice. Expansion is unhygienic.",
+    "code": "// 6. Code as data and compile-time macros\nDefMacro inspect {} to-string(Quote add(1 2))\nInspect\n\n// Quote, Quasi, and form operations are available inside macro bodies.\n\n// Macro parameters receive unevaluated forms.\n// Define macros before use; TitleCase syntax consumes their known arity.\nDefMacro twice {expression}\n  Quasi add(Unquote(expression) Unquote(expression))\nTwice 21                        // 42\n// This macro evaluates its expression twice. Expansion is unhygienic.",
     "value": "42",
     "output": ""
   },

@@ -22,7 +22,7 @@ pub(super) fn emit_function_exports(
         post_returns.push((name.clone(), results));
         exports.push((name, take()));
     }
-    let arena_floor_g = 2 + info.value_defs.len() as u32;
+    let arena_floor_g = em.arena_floor_global();
     for (name, fresults) in post_returns {
         let mut fx = FnCtx::new(fresults.len() as u32);
         fx.op(I::GlobalGet(arena_floor_g));

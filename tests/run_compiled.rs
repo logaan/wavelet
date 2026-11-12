@@ -98,6 +98,6 @@ fn dispatcher_does_not_execute_an_unexported_entry() {
         "private.wlt",
         "Package \"demo:private@0.1.0\"\nDef run Fn {} 42\n",
     )]);
-    assert!(wavelet::runner::run_files(&paths).is_ok());
+    assert!(wavelet::runner::run_files(&paths).is_err());
     assert!(wavelet::runner::run(&paths).is_err());
 }

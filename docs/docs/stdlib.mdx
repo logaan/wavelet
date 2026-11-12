@@ -196,9 +196,12 @@ The application host must supply these interfaces. The browser playground and em
 
 ## Meta & reflection
 
+These operations are available only inside macro bodies during compilation. They
+are rejected in runtime functions and expressions.
+
 | Function | Shape | Result |
 |---|---|---|
-| `gensym` | `gensym()` | a new generated name within the current instance |
+| `gensym` | `gensym()` | a new generated name during compilation |
 | `expand` | `expand(form)` | inspect expansion within a macro body |
 | `form-kind` | `form-kind(v)` | the kind tag of a value-as-form |
 | `rec-key` | `rec-key(record)` | the first field's key, as a name |

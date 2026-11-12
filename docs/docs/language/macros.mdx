@@ -30,7 +30,10 @@ Inside a macro, `expand` can inspect another form's expansion. This example quot
 
 ## Hygiene and `gensym`
 
-Expansion is **unhygienic**. A name introduced by a macro can capture a caller's binding or be captured by one. `gensym()` produces a different generated name on each call within an instance:
+Source forms, `Quote`, `Quasi`, `gensym`, and form inspection operations are
+available only during macro execution at compile time.
+
+Expansion is **unhygienic**. A name introduced by a macro can capture a caller's binding or be captured by one. `gensym()` produces a different generated name on each call during compilation:
 
 <Playground id="macro-gensym-three" />
 

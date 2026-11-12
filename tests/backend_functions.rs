@@ -64,7 +64,7 @@ fn ok(c: &mut HostComponent, f: &str) -> Val {
 }
 
 #[test]
-fn known_def_bindings_apply_like_the_oracle() {
+fn known_def_bindings_apply_as_expected() {
     let mut c = built();
     assert_eq!(ok(&mut c, "direct"), Val::S64(42));
     assert_eq!(ok(&mut c, "shadow"), Val::S64(20));
@@ -75,7 +75,7 @@ fn known_def_bindings_apply_like_the_oracle() {
 }
 
 #[test]
-fn oracle_agrees() {
+fn compiled_snippet_matches_expected_values() {
     for (src, want) in [
         ("Def inc Fn {n: s32} add(n 1)\nLet {f: inc} f(41)", "42"),
         (

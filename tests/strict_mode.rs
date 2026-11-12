@@ -47,7 +47,7 @@ fn runtime_storage_and_return_of_functions_are_rejected() {
 }
 
 #[test]
-fn documented_interpreter_successes_have_static_types() {
+fn documented_compiled_successes_have_static_types() {
     let examples: serde_json::Value =
         serde_json::from_str(include_str!("../docs/examples.json")).unwrap();
     let mut failures = Vec::new();

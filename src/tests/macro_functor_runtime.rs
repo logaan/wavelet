@@ -1,6 +1,6 @@
-use wavelet::builtins;
-use wavelet::interp::Interp;
-use wavelet::value::{Value, unit};
+use crate::builtins;
+use crate::interp::Interp;
+use crate::value::{Value, unit};
 
 fn op(interp: &Interp, name: &str, args: Vec<Value>) -> Value {
     let arg = match args.len() {
@@ -110,7 +110,7 @@ fn run_source(src: &str) -> Result<(), String> {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("src.wlt");
     std::fs::write(&path, src).unwrap();
-    let res = wavelet::runner::run_files(&[path.to_string_lossy().into_owned()]);
+    let res = crate::runner::run_files(&[path.to_string_lossy().into_owned()]);
     let _ = std::fs::remove_dir_all(&dir);
     res
 }
@@ -122,7 +122,8 @@ DefType point {x: s32 y: s32}
 Def eq-point Fn {a: point b: point} eq(a b)
 Export eq-point
 Instantiate {pkg: "wavelet:coll/set" with: {elem: point} as: pts}
-Def assert Fn {cond} If cond {} head([])
+Def assert Fn {cond: bool} If cond true eq(div(1 0) 0)
+Export {name: run result: bool}
 Def run Fn {}
   Let {s: pts/new()}
     Do [ pts/add(s {x: 1 y: 2})
@@ -151,7 +152,8 @@ fn a_wrong_assertion_is_caught() {
 #[test]
 
 fn each_is_not_yet_defined() {
-    let src = r#"Def run Fn {} each([1 2 3] Fn {x} x)"#;
+    let src = r#"Export {name: run result: bool}
+Def run Fn {} each([1 2 3] Fn {x} x)"#;
     let err = run_source(src).expect_err("`each` is not defined yet");
     assert!(err.contains("each"), "unexpected error: {err}");
 }
@@ -170,7 +172,7 @@ fn build_source(src_text: &str) -> Result<Vec<u8>, String> {
     std::fs::write(&path, src_text).unwrap();
 
     let out = dir.join("out");
-    let res = wavelet::build::build_files(
+    let res = crate::build::build_files(
         &[path.to_string_lossy().into_owned()],
         &out.to_string_lossy(),
     )

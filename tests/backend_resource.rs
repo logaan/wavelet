@@ -80,7 +80,7 @@ fn value(c: &mut HostComponent, h: &Val) -> Val {
 }
 
 #[test]
-fn constructor_next_value_match_interpreter() {
+fn constructor_next_value_match_expected_values() {
     let mut c = build_component(SRC);
     let h = ctor(&mut c, 5);
     assert_eq!(next(&mut c, &h), Val::U32(5), "first next returns 5");
@@ -96,7 +96,7 @@ fn constructor_next_value_match_interpreter() {
 }
 
 #[test]
-fn static_sum_alt_constructor_matches_interpreter() {
+fn static_sum_alt_constructor_matches_expected_values() {
     let mut c = build_component(SRC);
     let h = match c
         .call_instance(
@@ -117,7 +117,7 @@ fn static_sum_alt_constructor_matches_interpreter() {
 }
 
 #[test]
-fn own_and_borrow_free_functions_match_interpreter() {
+fn own_and_borrow_free_functions_match_expected_values() {
     let mut c = build_component(SRC);
     let h = match c
         .call_instance(API, "make-counter", &[Val::U32(5)])

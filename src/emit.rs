@@ -470,6 +470,10 @@ impl<'a> Emitter<'a> {
         self.intern_unit_rec()
     }
 
+    fn arena_floor_global(&self) -> u32 {
+        1 + self.info.value_defs.len() as u32 + u32::from(self.macro_expand_idx.is_some())
+    }
+
     fn has_persist(&self) -> bool {
         !self.info.functors.is_empty() || !self.info.resources.is_empty()
     }

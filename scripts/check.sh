@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-for tool in cargo cargo-component rustup python3 node npm wasm-tools wasmtime wac wkg wasm-pack; do
+for tool in cargo cargo-component rustup python3 node npm wasm-tools wasmtime wac wkg; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Missing $tool; see docs/docs/development.mdx for installation." >&2
     exit 1

@@ -42,19 +42,20 @@ Def compound Fn {x c}
 const IFACE: &str = "demo:app/api@0.1.0";
 
 #[test]
-fn compiled_unit_values_match_the_interpreter() {
+fn compiled_unit_values_match_expected_values() {
     use wavelet::compiler::{NoMacros, Request, Step, compile};
 
-    for source in [
-        "Let {n: cell-new(0)} cell-set(n 1)",
-        "drop(42)",
-        "Do []",
-        "[drop(1) drop(2)]",
-        "{unit: drop(1) boolean: false}",
+    for (source, expected) in [
+        ("Let {n: cell-new(0)} cell-set(n 1)", r#""{}""#),
+        ("drop(42)", r#""{}""#),
+        ("Do []", r#""{}""#),
+        ("[drop(1) drop(2)]", r#""[{}, {}]""#),
+        (
+            "{unit: drop(1) boolean: false}",
+            r#""{unit: {}, boolean: false}""#,
+        ),
     ] {
         let source = format!("to-string({source})");
-        let expected = wavelet::eval_snippet(&source);
-        assert!(expected.ok, "{}", expected.error);
         let Step::Complete(compilation) =
             compile(&Request::snippet(&source), &mut NoMacros).unwrap()
         else {
@@ -67,7 +68,7 @@ fn compiled_unit_values_match_the_interpreter() {
             component
                 .call_instance(&invocation.interface_name, &invocation.function_name, &[])
                 .unwrap(),
-            vec![Val::String(expected.value)],
+            vec![Val::String(expected.into())],
             "{source}"
         );
     }
@@ -118,7 +119,7 @@ const FLOATS: &[f64] = &[
 ];
 
 #[test]
-fn compiled_float_to_string_matches_the_interpreter() {
+fn compiled_float_to_string_matches_expected_values() {
     let mut c = to_string_component();
     for &x in FLOATS {
         let expect = print_value(&Value::Dec(x));
@@ -133,7 +134,7 @@ const CHARS: &[char] = &[
 ];
 
 #[test]
-fn compiled_char_to_string_matches_the_interpreter() {
+fn compiled_char_to_string_matches_expected_values() {
     let mut c = to_string_component();
     for &ch in CHARS {
         let expect = print_value(&Value::Char(ch));

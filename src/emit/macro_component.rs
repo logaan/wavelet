@@ -146,7 +146,7 @@ pub(crate) fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<
     let deps: HashMap<String, Dep> = HashMap::new();
 
     let mut em = Emitter::new(arena, &info, &deps);
-
+    em.macro_expand_idx = Some(0);
     let mut next = 0u32;
     let mut take = || {
         let i = next;

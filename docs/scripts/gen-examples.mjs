@@ -1,15 +1,12 @@
 import {importComponentBindings as importModule} from './node-component-loader.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {createCompilerRuntime, formatError} from '../src/runtime/compilerRuntime.mjs';
 import {instantiateComponent} from '../src/runtime/componentLoader.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const WASM = join(here, '..', 'src', 'wasm');
 const OUT = join(here, '..', 'examples.json');
-const { initSync, _eval } = await import(pathToFileURL(join(WASM, 'wavelet.js')).href);
-initSync({ module: readFileSync(join(WASM, 'wavelet_bg.wasm')) });
 
 const compiler = await createCompilerRuntime(readFileSync(join(here, '..', 'src/compiler/wavelet_compiler.wasm')), {
   instantiate: (bytes, imports) => instantiateComponent(bytes, imports, importModule),
@@ -35,7 +32,8 @@ E['typed-byte-add-bad'] = `Def byte-add Fn {a: u8 b: u8}
 byte-add({a: 300 b: 1})`;
 
 E['syntax-commas'] = `[1 2 3]`;
-E['syntax-quote-call'] = `Quote delete-file({path: "foo.md" force: true})`;
+E['syntax-quote-call'] = `DefMacro inspect-call {} to-string(Quote delete-file({path: "foo.md" force: true}))
+Inspect-call`;
 E['syntax-if-arity'] = `If gt(10 3) "bigger" "smaller"`;
 E['syntax-chain'] = `"hello".str-cat(", world").str-cat("!")`;
 
@@ -51,7 +49,8 @@ E['values-options-results'] = `{options: [some(1) none] results: [ok("yes") err(
 E['values-payloadless-results'] = `Def flip Fn {v: result}
   Match v [((ok) err()) ((err) ok())]
 flip(ok())`;
-E['values-quote-days'] = `Quote days(30)`;
+E['values-quote-days'] = `DefMacro inspect-days {} to-string(Quote days(30))
+Inspect-days`;
 E['values-eq'] = `eq({a: 1 b: [2 3]} {a: 1 b: [2 3]})`;
 E['values-unit-def'] = `Def x 10`;
 
@@ -97,13 +96,16 @@ E['sf-match'] = `Match [1 2 3] [
   ([x y z]   str-cat("three, head " to-string(x)))
   (other     "something else")
 ]`;
-E['sf-quote'] = `Quote add(1 mul(2 3))`;
-E['sf-quasi'] = `Let {x: 41}
-  Quasi add(Unquote(x) 1)`;
-E['sf-unquote'] = `Let {name: Quote(ada)}
-  Quasi greeting(Unquote(name))`;
-E['sf-splice'] = `Let {middle: [2 3 4]}
-  Quasi [1 Splice(middle) 5]`;
+E['sf-quote'] = `DefMacro inspect-add {} to-string(Quote add(1 mul(2 3)))
+Inspect-add`;
+E['sf-quasi'] = `DefMacro add-one {x} Quasi add(Unquote(x) 1)
+Add-one 41`;
+E['sf-unquote'] = `DefMacro greet {}
+  Let {name: "Ada"} Quasi str-cat("Hello, " Unquote(name))
+Greet`;
+E['sf-splice'] = `DefMacro numbers {}
+  Let {middle: [2 3 4]} Quasi [1 Splice(middle) 5]
+Numbers`;
 E['sf-defmacro'] = `DefMacro unless {cond body}
   Quasi If Unquote(cond) "" Unquote(body)
 Let {x: 10}
@@ -151,12 +153,12 @@ Let {x: 5}
 E['macro-expand'] = `DefMacro and {a b}
   Quasi If Unquote(a) Unquote(b) false
 DefMacro inspect {form}
-  Quasi Quote Unquote(expand(form))
+  to-string(expand(form))
 Inspect And(p q)`;
-E['macro-gensym-three'] = `[gensym() gensym() gensym()]`;
-E['macro-gensym'] = `Def fresh-pair Fn {}
-  eq(gensym() gensym())
-fresh-pair()`;
+E['macro-gensym-three'] = `DefMacro fresh-names {} to-string([gensym() gensym() gensym()])
+Fresh-names`;
+E['macro-gensym'] = `DefMacro fresh-pair {} eq(gensym() gensym())
+Fresh-pair`;
 E['macro-trylet'] = `DefMacro try-let {binding body}
   Let {name: rec-key(binding) expr: rec-val(binding)}
     Quasi Match Unquote(expr) [
@@ -202,9 +204,12 @@ E['std-conv-bad'] = `to-u8(256)`;
 E['std-char-conv'] = `{code: to-u32('a') char: to-char(98) next: to-char(add(to-u32('a') 1))}`;
 E['std-char-conv-bad'] = `to-char(55296)`;
 
-E['std-form-kind'] = `[form-kind(42)  form-kind("hi")  form-kind(Quote foo)  form-kind(Quote foo(1))  form-kind(ok(1))  form-kind([1 2])]`;
-E['std-rec-key-val'] = `Let {b: {text: "hello"}}
-  {key: rec-key(b) val: rec-val(b)}`;
+E['std-form-kind'] = `DefMacro kinds {}
+  [form-kind(42) form-kind("hi") form-kind(Quote foo) form-kind(Quote foo(1)) form-kind(ok(1)) form-kind([1 2])]
+Kinds`;
+E['std-rec-key-val'] = `DefMacro inspect-binding {}
+  Let {b: {text: "hello"}} {key: to-string(rec-key(b)) val: rec-val(b)}
+Inspect-binding`;
 E['std-constructors'] = `{options: [some(1) none] results: [ok("yes") err("nope")]}`;
 E['std-cells'] = `Let {c: cell-new(0)}
   Do [cell-set(c 41)
@@ -331,10 +336,10 @@ Let {c: counter(5)}
 // drop(value) discards a value; it does not call a resource destructor.`;
 
 E['tour-macros'] = `// 6. Code as data and compile-time macros
-Quote add(1 2)                  // The source form, without running the call.
+DefMacro inspect {} to-string(Quote add(1 2))
+Inspect
 
-// Quasi builds a form. Unquote inserts a value into that form.
-Let {n: 5} Quasi add(Unquote(n) 1)
+// Quote, Quasi, and form operations are available inside macro bodies.
 
 // Macro parameters receive unevaluated forms.
 // Define macros before use; TitleCase syntax consumes their known arity.
@@ -392,6 +397,11 @@ Def run Fn {} greeting/greet("components")
   output: '',
 };
 
+const expectedErrors = new Set([
+  'typed-byte-add-bad', 'values-to-u8-bad', 'values-heterogeneous',
+  'sf-if-nonbool', 'sf-the-bad', 'pm-no-clause', 'std-div-zero',
+  'std-conv-bad', 'std-char-conv-bad', 'ty-the-range', 'ty-mixed-add',
+]);
 const out = {};
 let errCount = 0;
 for (const [id, example] of Object.entries(E)) {
@@ -404,20 +414,19 @@ for (const [id, example] of Object.entries(E)) {
     continue;
   }
   const code = example;
-  const r = JSON.parse(_eval(code));
   let compiled;
   try {
     compiled = await compiler.evaluate({source: code});
   } catch (error) {
     compiled = {ok: false, error: formatError(error)};
   }
-  if (compiled.ok !== r.ok || (r.ok && (compiled.value !== r.value || compiled.output !== r.output))) {
-    throw new Error(`${id}: compiled example disagrees with interpreter\n${JSON.stringify({interpreter: r, compiled})}`);
+  if (compiled.ok === expectedErrors.has(id)) {
+    throw new Error(`${id}: unexpected execution outcome\n${JSON.stringify(compiled)}`);
   }
-  if (r.ok) {
-    out[id] = { code, value: r.value, output: r.output };
+  if (compiled.ok) {
+    out[id] = { code, value: compiled.value, output: compiled.output };
   } else {
-    out[id] = { code, error: r.error };
+    out[id] = { code, error: compiled.error };
     errCount++;
   }
 }

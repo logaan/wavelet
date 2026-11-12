@@ -42,9 +42,9 @@ impl Checker<'_> {
             }
             "to-u8" | "to-u16" | "to-u32" | "to-u64" | "to-s8" | "to-s16" | "to-s32" | "to-s64"
             | "to-f32" | "to-f64" | "to-char" => self.check_conversion_builtin(name, args),
-            "gensym" | "expand" | "form-kind" | "rec-key" | "rec-val" => {
-                Ok(form_builtin_type(name, &arg_tys))
-            }
+            "gensym" | "expand" | "form-kind" | "rec-key" | "rec-val" => Err(format!(
+                "`{name}` is only available at compile time inside macro bodies"
+            )),
             "cell-new" | "cell-get" | "cell-set" | "drop" => {
                 self.check_state_builtin(name, &arg_tys)
             }
@@ -316,19 +316,6 @@ fn check_text_builtin(name: &str, arg_tys: &[Type]) -> Result<Type, String> {
         "join" | "to-string" => Ok(Type::String),
         "contains" => Ok(Type::Bool),
         _ => Ok(Type::Unknown),
-    }
-}
-
-fn form_builtin_type(name: &str, arg_tys: &[Type]) -> Type {
-    match name {
-        "form-kind" => Type::String,
-        "gensym" | "expand" | "rec-key" => Type::Tree,
-        "rec-val" => match arg_tys.first() {
-            Some(Type::Record(fields)) if !fields.is_empty() => fields[0].1.clone(),
-            Some(Type::Tree) => Type::Tree,
-            _ => Type::Unknown,
-        },
-        _ => Type::Unknown,
     }
 }
 

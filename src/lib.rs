@@ -3,7 +3,7 @@ pub mod check;
 pub mod compiler;
 pub mod expand;
 pub mod form;
-pub mod interp;
+pub(crate) mod interp;
 pub mod lexer;
 
 pub mod macrolib;
@@ -36,9 +36,6 @@ pub mod tools;
 
 pub mod wit;
 pub mod witdep;
-
-#[cfg(all(target_arch = "wasm32", feature = "playground"))]
-pub mod wasm;
 
 pub use form::{Arena, Node, NodeId};
 pub use lexer::ReadError;
@@ -87,100 +84,42 @@ pub struct EvalOutcome {
     pub error: String,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn eval_snippet(src: &str) -> EvalOutcome {
-    use std::rc::Rc;
-    use value::{Env, Value, print_value, unit};
-
-    let (arena, roots) = match read_file(src) {
-        Ok(pair) => pair,
-        Err(e) => {
-            return EvalOutcome {
-                ok: false,
-                value: String::new(),
-                output: String::new(),
-                error: e.to_string(),
-            };
-        }
-    };
-
-    let was_strict = check::strict();
-    if was_strict {
-        check::set_strict(false);
-    }
-    let resolved = check::resolve_overloads(arena, &roots);
-    if was_strict {
-        check::set_strict(true);
-    }
-    let (arena, roots) = match resolved {
-        Ok(pair) => pair,
-        Err(msg) => {
-            return EvalOutcome {
-                ok: false,
-                value: String::new(),
-                output: String::new(),
-                error: msg,
-            };
-        }
-    };
-
-    {
-        let copy = Arena {
-            nodes: arena.nodes.clone(),
-            spans: arena.spans.clone(),
-        };
-        if let Ok((xarena, xroots)) = expand::expand_file(copy, &roots, None)
-            && let Err(msg) = check::check_program(&xarena, &xroots)
-        {
-            return EvalOutcome {
-                ok: false,
-                value: String::new(),
-                output: String::new(),
-                error: msg,
-            };
-        }
-    }
-    let arena = Rc::new(arena);
-
-    let interp = interp::Interp::new();
-    let env = Env::root();
-    builtins::install(&env);
-
-    output_capture_start();
-    let mut last = unit();
-    for root in roots {
-        match interp.eval(&arena, root, &env) {
-            Ok(v) => last = v,
-            Err(e) => {
-                let _ = interp.teardown();
-                return EvalOutcome {
-                    ok: false,
-                    value: String::new(),
-                    output: output_capture_take(),
-                    error: e.to_string(),
-                };
-            }
-        }
-    }
-    if let Err(error) = interp.teardown() {
-        return EvalOutcome {
+    match evaluate_component(src) {
+        Ok(value) => EvalOutcome {
+            ok: true,
+            value,
+            output: String::new(),
+            error: String::new(),
+        },
+        Err(error) => EvalOutcome {
             ok: false,
             value: String::new(),
-            output: output_capture_take(),
-            error: error.to_string(),
-        };
+            output: String::new(),
+            error,
+        },
     }
-    let output = output_capture_take();
+}
 
-    let value = if matches!(&last, Value::Rec(f) if f.is_empty()) {
-        String::new()
-    } else {
-        print_value(&last)
-    };
-    EvalOutcome {
-        ok: true,
-        value,
-        output,
-        error: String::new(),
+#[cfg(not(target_arch = "wasm32"))]
+fn evaluate_component(src: &str) -> Result<String, String> {
+    let compilation =
+        compiler::native::compile(&compiler::Request::snippet(src), std::path::Path::new("."))
+            .map_err(compiler::native::display_diagnostics)?;
+    let artifact = compilation.entry_artifact().ok_or("no entry artifact")?;
+    let invocation = compilation
+        .invocation
+        .as_ref()
+        .ok_or("no snippet invocation")?;
+    let mut component = host::HostComponent::from_bytes(&artifact.bytes)
+        .map_err(|error| format!("instantiate: {error}"))?;
+    let values = component
+        .call_instance(&invocation.interface_name, &invocation.function_name, &[])
+        .map_err(|error| format!("call: {error}"))?;
+    match values.as_slice() {
+        [host::Val::String(value)] => Ok(value.clone()),
+        other => Err(format!("unexpected snippet result: {other:?}")),
     }
 }
 

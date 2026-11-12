@@ -2,10 +2,13 @@
 title: Development and validation
 ---
 
-Wavelet's interpreter defines the language semantics. The compiler is tested
-against it through the documented examples and an independent execution corpus
-under `tests/fixtures/execution`. The corpus covers cell aliasing and mutation
-order, recursion, compound values, bounds errors, and integer overflow.
+Core WebAssembly instructions and Component Model contracts define runtime
+semantics. Tests execute compiled components against explicit expected values and
+traps. The execution corpus under `tests/fixtures/execution` has independently
+specified expectations in `tests/fixtures/execution.json`, covering cell aliasing,
+mutation order, recursion, compound values, bounds errors, and wrapping arithmetic.
+The evaluator exists only for compile-time macro execution; it is not a runtime
+reference implementation.
 
 ```console
 ./scripts/check.sh
@@ -45,7 +48,7 @@ Increasing a baseline requires an explicit reviewed change.
 
 Copy/paste detection uses [jscpd](https://github.com/kucherenko/jscpd/blob/master/docs/rust.md)
 5.4.3, pinned with its platform binaries in `tooling/quality/package-lock.json`.
-The scan covers compiler and interpreter Rust, language-server Rust, editor
+The scan covers compiler and macro-evaluator Rust, language-server Rust, editor
 JavaScript, and the docs implementation and example generator. It supports
 TypeScript, JSX and TSX in those directories too. Generated WebAssembly
 bindings, dependencies, build outputs, and separate test/fixture trees are
@@ -115,7 +118,7 @@ The integration and round-trip test workflows require `wasm-tools`,
 
 ```console
 rustup target add wasm32-wasip1 wasm32-unknown-unknown
-cargo install --locked cargo-component wac-cli wkg wasm-tools wasmtime-cli wasm-pack
+cargo install --locked cargo-component wac-cli wkg wasm-tools wasmtime-cli
 cargo build
 WAVELET="$PWD/target/debug/wavelet" conformance/wavelet/test-matrix.sh
 ```
@@ -128,9 +131,9 @@ validation and deployment boundaries.
 
 The [Compiler API](./compiler-api) separates source/dependency inputs from host services. Compiler tests exercise in-memory projects, macro preparation, diagnostics, and snippet wrapping. Native and browser callers execute the returned components.
 
-Runnable examples are authored in `docs/scripts/gen-examples.mjs` and generated into `docs/examples.json`. The generator compares snippet results with the reference evaluator. Both native tests and browser playgrounds consume that data.
+Runnable examples are authored in `docs/scripts/gen-examples.mjs` and generated into `docs/examples.json`. The generator compiles and executes snippets, with an explicit list of expected failures. Both native tests and browser playgrounds consume that data.
 
-Multi-file playgrounds supply `sources`, an `entry` filename, and an `invocation` naming a zero-argument export that returns a string. Each file has its own editor; Run compiles the files together and displays the export's result. These project examples declare their expected results explicitly and are checked through native and browser execution. The tour's built-in set example uses `compiledOnly: true` and the same checks because the snippet interpreter does not resolve built-in `Instantiate` declarations.
+Multi-file playgrounds supply `sources`, an `entry` filename, and an `invocation` naming a zero-argument export that returns a string. Each file has its own editor; Run compiles the files together and displays the export's result. These project examples declare their expected results explicitly and are checked through native and browser execution. Examples may also declare explicit expected results directly in the generator.
 
 Regenerate the examples after changing the language or examples:
 
@@ -138,7 +141,7 @@ Regenerate the examples after changing the language or examples:
 ./scripts/regen-examples.sh
 ```
 
-The script rebuilds the reference evaluator artifact and compiler component before regenerating results. Both artifacts are committed so a documentation build requires only Node and npm dependencies.
+The script rebuilds the compiler component before regenerating results. The compiler artifact is committed so a documentation build requires only Node and npm dependencies.
 
 Browser tests run the documentation examples and the commented language tour through the compiler component and execute the emitted artifacts. They also check error recovery and cancellation of a running component:
 

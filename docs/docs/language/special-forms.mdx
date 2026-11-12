@@ -67,7 +67,8 @@ See [pattern matching](./pattern-matching) for the pattern language and [standar
 
 ### `Quote`
 
-`Quote form` preserves a source form as data without evaluating it:
+`Quote form` preserves a source form as data inside a compile-time macro body.
+Quoting forms in runtime expressions is rejected:
 
 <Playground id="sf-quote" />
 

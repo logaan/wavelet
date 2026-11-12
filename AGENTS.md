@@ -25,23 +25,26 @@ create follow the same commit and push rules that you're using for code changes.
 
 ## Compiler pipeline
 
-The compiler is **read → expand → interpret/analyze → emit → componentize**.
+The compiler is **read → expand → analyze → emit → componentize**.
 Each stage owns specific files:
 
 - **read** — `lexer.rs`, `reader.rs`, `form.rs`, `printer.rs` (WAVE tokens →
   form-tree arena; all reader sugar is resolved here).
 - **expand** — `expand.rs` (macros run to fixpoint over form trees).
-- **interpret** — `interp.rs`, `value.rs`, `builtins.rs`, `runner.rs`.
+- **compile-time evaluation** — `interp.rs`, `value.rs`, `builtins.rs` (macro bodies only).
+- **runtime execution** — `runner.rs` (compiled components).
 - **WIT synthesis** — `wit.rs` (derive the component's WIT world from its
   forms).
 - **emit** — `emit.rs`, `build.rs` (core wasm → component via `wasm-tools`).
 
-## The interpreter is the semantics oracle
+## WebAssembly defines runtime semantics
 
-`interp.rs` is a tree-walking evaluator that defines the language's reference
-semantics. The wasm backend (`emit.rs`) is validated *against* it — the two must
-agree on every program. When changing language behaviour, update the interpreter
-first; a wasm-backend change that diverges from the interpreter is a bug.
+Core WebAssembly instructions and Component Model contracts define Wavelet's
+runtime semantics. Validate emitted components against explicit expected results
+and Wasm edge cases. The evaluator in `interp.rs` is compile-time macro machinery,
+not a runtime implementation or semantics oracle. Do not use its Rust behavior to
+define runtime behavior. Macro forms and operations must not survive into runtime
+programs or add macro-only support data to emitted application components.
 
 ## docs/examples.json is a single source of truth — keep it regenerated
 
@@ -59,15 +62,13 @@ and re-lock the tests:
 ./scripts/regen-examples.sh
 ```
 
-This runs
-`wasm-pack build --target web --out-dir docs/src/wasm --out-name wavelet`, then
-`scripts/build-compiler-component.sh`, `node docs/scripts/gen-examples.mjs`,
-the browser runtime tests, and `cargo test`. The interpreter artifact under
-`docs/src/wasm` supplies reference results to the example generator. The compiler
-component under `docs/src/compiler` powers browser execution. Both are committed
-and must be regenerated when the language changes. The docs build generates the
-Worker bundle with Node only. Run `npm --prefix docs run test:browser` against a
-built docs site to check every example through the compiled browser runtime.
+This rebuilds the compiler component with `scripts/build-compiler-component.sh`,
+runs `node docs/scripts/gen-examples.mjs`, the browser runtime tests, and
+`cargo test`. The compiler component under `docs/src/compiler` powers example
+generation and browser execution. It is committed and must be regenerated when
+the language changes. The docs build generates the Worker bundle with Node only.
+Run `npm --prefix docs run test:browser` against a built docs site to check every
+example through the compiled browser runtime.
 
 ## CHANGELOG.md drives the GitHub release notes — keep it current
 
@@ -139,7 +140,7 @@ been checked and updated where affected:
       here still passes.
 
 - **The LSP server** — the editor language server (lives under `tooling/`). Its
-  diagnostics, completion, and hover surface the interpreter's reference
+  diagnostics, completion, and hover surface the language contracts and Wasm
   semantics, so semantic changes must be reflected there too.
 
 ## Verify the README before pushing

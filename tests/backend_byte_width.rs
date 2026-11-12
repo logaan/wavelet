@@ -33,7 +33,7 @@ Def s16s-ok Fn {xs}
 
 Export {name: mixed-ok params: {xs: list(tuple(u8 u16 u8))} result: bool}
 Def mixed-ok Fn {xs}
-  eq(xs [Quote (1 513 2) Quote (255 65535 0)])
+  eq(xs [tuple3(1 513 2) tuple3(255 65535 0)])
 
 Export {name: opts-ok params: {xs: list(option(u8))} result: bool}
 Def opts-ok Fn {xs}

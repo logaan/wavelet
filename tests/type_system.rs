@@ -623,7 +623,9 @@ fn quasi_unquote_holes_are_checked() {
 
 #[test]
 fn quasi_data_heads_are_not_value_checked() {
-    let r = run("Let {name: Quote(ada)} Quasi greeting(Unquote(name))");
+    let r = run(
+        "DefMacro greeting-form {} Let {name: Quote(ada)} to-string(Quasi greeting(Unquote(name)))\nGreeting-form",
+    );
     assert!(r.ok, "quasi data head wrongly value-checked: {}", r.error);
 }
 
@@ -635,7 +637,7 @@ fn defmacro_template_body_is_checked() {
 
 #[test]
 fn defmacro_params_are_trees_in_the_body() {
-    let r = run("DefMacro bad {x} add(x 1)");
+    let r = run("DefMacro bad {x} add(x 1)\nBad foo");
     assert!(
         !r.ok,
         "tree-typed macro parameter used as a number must be rejected"

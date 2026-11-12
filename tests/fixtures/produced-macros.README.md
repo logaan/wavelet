@@ -3,8 +3,8 @@
 Unlike `macros.wasm` (a hand-written Rust fixture for the *consumer* tests, Step
 3), `produced-macros.wasm` is produced by the Step 9 **producer**: it is what
 `wavelet build` emits from the Wavelet macro library `produced-macros.wlt`. It
-bundles the Wavelet interpreter and the macro source as data (strategy A — see
-`tools/macro-guest/README.md`).
+compiles the macro bodies and form-processing helpers into a separate component
+that is executed only during compilation.
 
 It exports `wavelet:meta/macros@0.1.0` and publishes the macros in
 `produced-macros.wlt`:
@@ -20,11 +20,10 @@ hermetic (no wasm toolchain needed).
 ## Regeneration
 
 Built without `wasm-tools`: `wavelet build` componentizes in-process. Refresh
-the checked-in artifact when the guest (`tools/macro-guest`) or the producer
-(`src/macrobuild.rs`) changes:
+the checked-in artifact when the macro emitter or producer
+(`src/emit/macro_component.rs` and `src/macrobuild.rs`) changes:
 
 ```console
-# needs: rustup target add wasm32-unknown-unknown
 cargo run -- build tests/fixtures/produced-macros.wlt -o /tmp/produced-out
 cp /tmp/produced-out/demo-macros.wasm tests/fixtures/produced-macros.wasm
 

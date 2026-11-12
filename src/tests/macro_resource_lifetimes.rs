@@ -10,19 +10,19 @@ Def consume Fn {c: counter} The u32 counter/value(c)
 
 #[test]
 fn borrowing_preserves_the_owner_and_teardown_drops_once() {
-    let result = wavelet::eval_snippet(&format!(
+    let result = crate::eval_snippet(&format!(
         "{COUNTER}\nLet {{c: counter(7)}} Do [inspect(c) inspect(c) counter/value(c)]"
     ));
     assert!(result.ok, "{}", result.error);
     assert_eq!(result.value, "7");
 }
 
-fn oracle(source: &str) -> (wavelet::interp::Interp, wavelet::value::Env) {
-    let (arena, roots) = wavelet::reader::read_file(source).unwrap();
+fn macro_evaluator(source: &str) -> (crate::interp::Interp, crate::value::Env) {
+    let (arena, roots) = crate::reader::read_file(source).unwrap();
     let arena = std::rc::Rc::new(arena);
-    let interp = wavelet::interp::Interp::new();
-    let env = wavelet::value::Env::root();
-    wavelet::builtins::install(&env);
+    let interp = crate::interp::Interp::new();
+    let env = crate::value::Env::root();
+    crate::builtins::install(&env);
     for root in roots {
         interp.eval(&arena, root, &env).unwrap();
     }
@@ -31,8 +31,8 @@ fn oracle(source: &str) -> (wavelet::interp::Interp, wavelet::value::Env) {
 
 #[test]
 fn boundary_ownership_transfer_invalidates_the_callers_handle() {
-    use wavelet::value::Value;
-    let (interp, env) = oracle(COUNTER);
+    use crate::value::Value;
+    let (interp, env) = macro_evaluator(COUNTER);
     let handle = interp
         .apply(&env.lookup("counter").unwrap(), Value::Int(7))
         .unwrap();
@@ -50,8 +50,8 @@ fn boundary_ownership_transfer_invalidates_the_callers_handle() {
 
 #[test]
 fn boundary_transfer_leaves_the_recipients_handle_usable() {
-    use wavelet::value::Value;
-    let (interp, env) = oracle(&format!(
+    use crate::value::Value;
+    let (interp, env) = macro_evaluator(&format!(
         "{COUNTER}\nDef transfer Fn {{c: counter}} The counter c"
     ));
     let handle = interp
@@ -70,8 +70,8 @@ fn boundary_transfer_leaves_the_recipients_handle_usable() {
 
 #[test]
 fn borrowed_boundary_handle_cannot_be_moved() {
-    use wavelet::value::Value;
-    let (interp, env) = oracle(&format!(
+    use crate::value::Value;
+    let (interp, env) = macro_evaluator(&format!(
         "{COUNTER}\nDef bad Fn {{c: borrow(counter)}} consume(c)"
     ));
     let handle = interp
@@ -94,10 +94,9 @@ fn local_ownership_transfer_and_callable_aliases_are_rejected() {
         "Let {f: Fn {c: counter} counter-value(c)} f(counter(1))",
         "map(consume [counter(1)])",
         "Def take Fn {cs: list(counter)} 0\ntake([counter(1)])",
-        "Export {name: take params: {c: counter} result: u32}\nDef take Fn {c} counter-value(c)\ntake(counter(1))",
         "DefType handle counter\nDef take Fn {c: handle} 0\ntake(counter(1))",
     ] {
-        let result = wavelet::eval_snippet(&format!("{COUNTER}\n{suffix}"));
+        let result = crate::eval_snippet(&format!("{COUNTER}\n{suffix}"));
         assert!(!result.ok, "{suffix}");
         assert!(
             result.error.contains("same-component ownership transfer"),
@@ -114,7 +113,7 @@ fn local_resource_operations_cannot_take_owned_handles() {
         "DefResource holder {New: Fn {} cell-new(0) take: Static Fn {c: counter} The u32 counter-value(c)}\nholder-take(counter(1))",
         "DefResource holder {New: Fn {} cell-new(0) take: Fn {self: holder c: counter} The u32 counter-value(c)}\nholder-take(holder() counter(1))",
     ] {
-        let result = wavelet::eval_snippet(&format!("{COUNTER}\n{suffix}"));
+        let result = crate::eval_snippet(&format!("{COUNTER}\n{suffix}"));
         assert!(!result.ok, "{suffix}");
         assert!(
             result.error.contains("same-component ownership transfer"),
@@ -131,7 +130,7 @@ fn borrowed_aliases_and_shadowed_function_names_are_allowed() {
         "Def f inspect\nf(counter(4))",
         "Let {consume: Fn {n: s64} n} consume(4)",
     ] {
-        let result = wavelet::eval_snippet(&format!("{COUNTER}\n{suffix}"));
+        let result = crate::eval_snippet(&format!("{COUNTER}\n{suffix}"));
         assert!(result.ok, "{suffix}: {}", result.error);
         assert_eq!(result.value, "4");
     }
@@ -139,11 +138,11 @@ fn borrowed_aliases_and_shadowed_function_names_are_allowed() {
 
 #[test]
 fn teardown_runs_every_destructor_once_even_when_one_fails() {
-    use std::rc::Rc;
-    use wavelet::{
+    use crate::{
         interp::Interp,
         value::{Env, Value},
     };
+    use std::rc::Rc;
     let source = r#"
 Def log cell-new(0)
 DefResource item {
@@ -152,11 +151,11 @@ DefResource item {
 }
 Let {a: item(1) b: item(2)} 42
 "#;
-    let (arena, roots) = wavelet::reader::read_file(source).unwrap();
+    let (arena, roots) = crate::reader::read_file(source).unwrap();
     let arena = Rc::new(arena);
     let interp = Interp::new();
     let env = Env::root();
-    wavelet::builtins::install(&env);
+    crate::builtins::install(&env);
     for root in roots {
         interp.eval(&arena, root, &env).unwrap();
     }
@@ -178,7 +177,7 @@ fn persistent_state_rejects_shared_nested_and_cyclic_cells() {
         "Def make Fn {} cell-new(1)\nDefResource r {New: Fn {} cell-new(make())}",
         "Def cell-get Fn {n: s64} cell-new(n)\nDefResource r {New: Fn {} cell-new(cell-get(1))}",
     ] {
-        let result = wavelet::eval_snippet(source);
+        let result = crate::eval_snippet(source);
         assert!(!result.ok, "unsafe state accepted: {source}");
         assert!(
             result.error.contains("plain data") || result.error.contains("sharing or cycles"),
@@ -190,16 +189,16 @@ fn persistent_state_rejects_shared_nested_and_cyclic_cells() {
 
 #[test]
 fn persistent_state_accepts_a_cell_of_structured_data() {
-    let source = "DefResource r {New: Fn {n: s64} cell-new({count: n values: [1 2]})}\nr(4)";
-    let result = wavelet::eval_snippet(source);
+    let source = "DefResource r {New: Fn {n: s64} cell-new({count: n values: [1 2]}) value: Fn {self: r} The s64 Match cell-get(self) [({count: n values: xs} n)]}\nr/value(r(4))";
+    let result = crate::eval_snippet(source);
     assert!(result.ok, "{}", result.error);
-    assert_eq!(result.value, "<r>");
+    assert_eq!(result.value, "4");
 }
 
 #[test]
 fn macros_can_quote_owned_function_names_without_calling_them() {
-    let result = wavelet::eval_snippet(&format!(
-        "{COUNTER}\nDefMacro show-name {{name}} Quasi Quote Unquote(name)\nShow-name consume"
+    let result = crate::eval_snippet(&format!(
+        "{COUNTER}\nDefMacro show-name {{name}} to-string(name)\nShow-name consume"
     ));
     assert!(result.ok, "{}", result.error);
 }
@@ -207,7 +206,7 @@ fn macros_can_quote_owned_function_names_without_calling_them() {
 #[test]
 fn variant_pattern_heads_do_not_hide_owned_functions() {
     let source = COUNTER.replace("Def consume Fn {c: counter} The u32 counter/value(c)", "");
-    let result = wavelet::eval_snippet(&format!(
+    let result = crate::eval_snippet(&format!(
         "{source}\nDefType tag [consume(u32) other]\nDef consume Fn {{c: counter}} The u32 counter-value(c)\nLet {{v: The tag other c: counter(1)}} Match v [(consume(x) consume(c)) (other 0)]"
     ));
     assert!(!result.ok);
@@ -232,7 +231,7 @@ fn owned_handles_cannot_hide_inside_named_aggregate_types() {
         let source = format!(
             "{COUNTER}\nDefType container {ty}\nDef take Fn {{value: container}} 0\nDef alias take"
         );
-        let result = wavelet::eval_snippet(&source);
+        let result = crate::eval_snippet(&source);
         assert!(!result.ok, "{ty}");
         assert!(
             result.error.contains("same-component ownership transfer"),
@@ -250,7 +249,7 @@ fn ownership_guard_follows_quasiquote_depth_and_container_holes() {
         "Quasi tuple2(1 Unquote(consume(counter(1))))",
         "Quasi Quasi Unquote Unquote(consume(counter(1)))",
     ] {
-        let result = wavelet::eval_snippet(&format!("{COUNTER}\n{expression}"));
+        let result = crate::eval_snippet(&format!("{COUNTER}\n{expression}"));
         assert!(!result.ok, "{expression}");
         assert!(
             result.error.contains("same-component ownership transfer"),
@@ -258,8 +257,23 @@ fn ownership_guard_follows_quasiquote_depth_and_container_holes() {
             result.error
         );
     }
-    let result = wavelet::eval_snippet(&format!(
+    let result = crate::eval_snippet(&format!(
         "{COUNTER}\nQuasi Quasi Unquote(consume(counter(1)))"
     ));
-    assert!(result.ok, "{}", result.error);
+    assert!(!result.ok);
+    assert!(result.error.contains("compile time"), "{}", result.error);
+}
+
+#[test]
+fn exported_owned_parameter_does_not_allow_local_ownership_transfer() {
+    let source = format!(
+        "Package \"test:ownership\"\n{COUNTER}\nExport {{name: take params: {{c: counter}} result: u32}}\nDef take Fn {{c}} counter-value(c)\nExport run\nDef run Fn {{}} take(counter(1))"
+    );
+    let error = crate::staging::Project::compile(&source).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("same-component ownership transfer"),
+        "{error}"
+    );
 }

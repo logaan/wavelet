@@ -35,7 +35,7 @@ fn one(c: &mut HostComponent, iface: &str, name: &str, args: &[Val]) -> Val {
 
 #[test]
 
-fn routed_record_set_size_matches_interpreter() {
+fn routed_record_set_size_matches_expected_values() {
     const SRC: &str = r#"Package "demo:geo@0.1.0"
 DefType point {x: s32 y: s32}
 Def eq-point Fn {a: point b: point} eq(a b)
@@ -59,7 +59,7 @@ Def count-distinct Fn {}
 
 #[test]
 
-fn returned_handle_methods_match_interpreter() {
+fn returned_handle_methods_match_expected_values() {
     const SRC: &str = r#"Package "demo:app@0.1.0"
 Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
 Export build-ints
@@ -101,7 +101,7 @@ Def build-ints Fn {}
 
 #[test]
 
-fn two_instantiations_in_one_world_match_interpreter() {
+fn two_instantiations_in_one_world_match_expected_values() {
     const SRC: &str = r#"Package "demo:multi@0.1.0"
 Instantiate {pkg: "wavelet:coll/set" with: {elem: s32} as: ints}
 Instantiate {pkg: "wavelet:coll/set" with: {elem: string} as: words}
@@ -152,7 +152,7 @@ Def build-words Fn {}
 
 #[test]
 
-fn compound_list_element_dedups_like_interpreter() {
+fn compound_list_element_dedups_by_value() {
     const SRC: &str = r#"Package "demo:cmp@0.1.0"
 DefType nums list(s32)
 Instantiate {pkg: "wavelet:coll/set" with: {elem: nums} as: groups}
@@ -191,7 +191,7 @@ Def count-empty Fn {}
 
 #[test]
 
-fn string_element_handle_methods_match_interpreter() {
+fn string_element_handle_methods_match_expected_values() {
     const SRC: &str = r#"Package "demo:str@0.1.0"
 Instantiate {pkg: "wavelet:coll/set" with: {elem: string} as: words}
 Export build-words

@@ -1,0 +1,13 @@
+{
+  "cell-alias": "9",
+  "effect-order": "(7, 7)",
+  "empty-list": "[]",
+  "integer-overflow-wrap": "-9223372036854775808",
+  "list-bounds-error": null,
+  "neg-overflow-wrap": "-9223372036854775808",
+  "nested-values": "(some([1, 2]), ok({name: \"value\"}), (false, \"𐐀\"))",
+  "numeric-wasm-extrema": "{minimum: 9223372036854775806, maximum: 9223372036854775807, minimum-nan: nan, maximum-nan: nan, minimum-zero: -inf, maximum-zero: inf}",
+  "numeric-wasm-order": "[true, false, true, false, false, false, false, false]",
+  "numeric-wasm-wrap": "[-9223372036854775808, 9223372036854775807, -9223372036854775808, 0]",
+  "recursion": "2001000"
+}

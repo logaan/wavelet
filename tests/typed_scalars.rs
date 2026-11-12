@@ -167,7 +167,7 @@ fn typed_comparisons_match_wasm() {
 }
 
 #[test]
-fn typed_eq_matches_the_interpreter() {
+fn typed_eq_matches_expected_values() {
     let mut c = component();
     assert_eq!(
         ok(&mut c, "eqi", &[Val::S64(7), Val::S64(7)]),
@@ -206,7 +206,7 @@ fn typed_bool_conditions_and_not() {
 }
 
 #[test]
-fn typed_numeric_conversions_match_the_interpreter() {
+fn typed_numeric_conversions_match_expected_values() {
     use std::sync::atomic::{AtomicU32, Ordering};
     static SEQ: AtomicU32 = AtomicU32::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);

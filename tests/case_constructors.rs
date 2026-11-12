@@ -102,6 +102,7 @@ fn dep_cases_bind_under_the_import_alias() {
         &main,
         "Package \"demo:app@0.1.0\"\n\
          Import {pkg: \"demo:shapes/api\" as: sh}\n\
+         Export run\n\
          Def run Fn {}\n\
            Do [to-string(sh/area(sh/circle(2.0)))\n\
                to-string(sh/area(sh/dot))]\n",
@@ -128,7 +129,6 @@ fn cases_component() -> HostComponent {
 DefType direction [north east south west]
 DefType ttl [days(u32) forever]
 
-// Rotate a direction: nullary cases constructed bare, like the interpreter.
 Export {name: rotate params: {d: direction} result: direction}
 Def rotate Fn {d}
   Match d [(north east) (east south) (south west) (west north)]

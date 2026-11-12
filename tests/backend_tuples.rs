@@ -26,13 +26,13 @@ fn composed() -> Option<HostComponent> {
 DefType point {x: s32 y: s32}
 
 Export {name: mk params: {a: s32 b: s32} result: tuple(s32 s32)}
-Def mk Fn {a: s32 b: s32} Quasi (Unquote(a) Unquote(b))
+Def mk Fn {a: s32 b: s32} tuple2(a b)
 
 Export {name: mix params: {} result: tuple(s32 string)}
-Def mix Fn {} Quote (7 "hi")
+Def mix Fn {} tuple2(7 "hi")
 
 Export {name: nested params: {} result: tuple(point s64)}
-Def nested Fn {} Quote ({x: 5 y: 7} 300)
+Def nested Fn {} tuple2({x: 5 y: 7} 300)
 "#;
 
     let main = r#"Package "demo:main@0.1.0"
@@ -49,7 +49,7 @@ Def fall Fn {}
 
 Export {name: same params: {} result: bool}
 Def same Fn {}
-  Let {t: tp/mk(1 2)} eq(t Quote (1 2))
+  Let {t: tp/mk(1 2)} eq(t tuple2(1 2))
 
 Export {name: mixed params: {} result: string}
 Def mixed Fn {}
@@ -65,7 +65,7 @@ Def fwd Fn {a: s32 b: s32} tp/mk(a b)
 Def mk2 Fn {} tp/mk(1 2)
 
 Export {name: use-internal params: {} result: bool}
-Def use-internal Fn {} eq(mk2() Quote (1 2))
+Def use-internal Fn {} eq(mk2() tuple2(1 2))
 
 Export {name: t-eq params: {a: s32 b: s32 c: s32 d: s32} result: bool}
 Def t-eq Fn {a: s32 b: s32 c: s32 d: s32} eq(tp/mk(a b) tp/mk(c d))

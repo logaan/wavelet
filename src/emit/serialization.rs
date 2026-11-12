@@ -84,14 +84,16 @@ pub(super) fn serialize_module(em: &mut Emitter<'_>, exports: &[(String, u32)]) 
         );
     }
 
-    gs.global(
-        GlobalType {
-            val_type: ValType::I64,
-            mutable: true,
-            shared: false,
-        },
-        &ConstExpr::i64_const(0),
-    );
+    if em.macro_expand_idx.is_some() {
+        gs.global(
+            GlobalType {
+                val_type: ValType::I64,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i64_const(0),
+        );
+    }
 
     gs.global(
         GlobalType {
