@@ -18,7 +18,21 @@ pub(crate) fn emit_core_module(
     info: &FileInfo,
     deps: &HashMap<String, Dep>,
 ) -> Result<Vec<u8>, String> {
+    let discovery = emit_core_module_pass(arena, roots, info, deps, None)?;
+    let live = reachability::live_functions(&discovery)?;
+    let module = emit_core_module_pass(arena, roots, info, deps, Some(live))?;
+    reachability::remove_unused(&module)
+}
+
+fn emit_core_module_pass(
+    arena: &Arena,
+    roots: &[NodeId],
+    info: &FileInfo,
+    deps: &HashMap<String, Dep>,
+    live: Option<std::collections::HashSet<u32>>,
+) -> Result<Vec<u8>, String> {
     let (mut em, user_res_forms) = initialize_emitter(arena, roots, info, deps)?;
+    em.live_helpers = live;
 
     let imports = register_imports(&mut em, &user_res_forms)?;
     let n_imports = em.imports.len() as u32;

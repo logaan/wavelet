@@ -1,4 +1,5 @@
-use super::CoreOptimizer;
+use super::macro_component::{emit_macro_core_module, macro_component_wit};
+use super::{Arena, CoreOptimizer, NodeId};
 
 pub(super) fn encode(
     module: Vec<u8>,
@@ -27,4 +28,17 @@ pub(super) fn encode(
         .map_err(|e| format!("componentizing failed: {e:#}"))?
         .encode()
         .map_err(|e| format!("component encoding failed: {e:#}"))
+}
+
+pub fn emit_macro_component_with_optimizer(
+    arena: &Arena,
+    roots: &[NodeId],
+    optimizer: &mut dyn CoreOptimizer,
+) -> Result<Vec<u8>, String> {
+    encode(
+        emit_macro_core_module(arena, roots)?,
+        &macro_component_wit(),
+        "macro-lib",
+        optimizer,
+    )
 }

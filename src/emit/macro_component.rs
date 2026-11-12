@@ -80,20 +80,18 @@ pub fn emit_macro_component(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, 
     emit_macro_component_with_optimizer(arena, roots, &mut Ok)
 }
 
-pub fn emit_macro_component_with_optimizer(
-    arena: &Arena,
-    roots: &[NodeId],
-    optimizer: &mut dyn CoreOptimizer,
-) -> Result<Vec<u8>, String> {
-    component::encode(
-        emit_macro_core_module(arena, roots)?,
-        &macro_component_wit(),
-        "macro-lib",
-        optimizer,
-    )
+pub(crate) fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, String> {
+    let discovery = emit_macro_core_module_pass(arena, roots, None)?;
+    let live = reachability::live_functions(&discovery)?;
+    let module = emit_macro_core_module_pass(arena, roots, Some(live))?;
+    reachability::remove_unused(&module)
 }
 
-pub(crate) fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, String> {
+fn emit_macro_core_module_pass(
+    arena: &Arena,
+    roots: &[NodeId],
+    live: Option<std::collections::HashSet<u32>>,
+) -> Result<Vec<u8>, String> {
     let mut macros: Vec<MacroDef> = Vec::new();
     for &root in roots {
         let Node::Tup(items) = arena.node(root) else {
@@ -137,6 +135,7 @@ pub(crate) fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<
 
     let mut em = Emitter::new(arena, &info, &deps);
     em.macro_expand_idx = Some(0);
+    em.live_helpers = live;
     let mut next = 0u32;
     let mut take = || {
         let i = next;
