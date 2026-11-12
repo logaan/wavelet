@@ -112,6 +112,11 @@ a valid report fails the history-analysis job.
 
 ## Cross-language conformance
 
+Size-build tests additionally require Binaryen (`wasm-opt`) on `PATH`. Install it
+with `brew install binaryen` on macOS or `sudo apt-get install binaryen` on Debian
+and Ubuntu. The native size benchmark records the installed Binaryen version;
+byte sizes can change between optimiser releases.
+
 The integration and round-trip test workflows require `wasm-tools`,
 `wasmtime`, `wac`, and `wkg` on `PATH`. The round-trip matrix also needs
 `cargo-component` and the `wasm32-wasip1` Rust target:

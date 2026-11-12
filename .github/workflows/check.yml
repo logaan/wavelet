@@ -22,6 +22,10 @@ jobs:
         with:
           tool: wasm-tools@1.263.0,wasmtime@50.0.1,cargo-llvm-cov@0.9.1
           fallback: none
+      - name: Install Binaryen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binaryen
       - name: Install wac and wkg
         working-directory: ${{ runner.temp }}
         run: |
