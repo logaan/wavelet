@@ -164,10 +164,3 @@ composed applications. `metadata::strip` provides the same recursive policy for
 existing components or core modules; it preserves unknown custom sections and
 all public interface contracts. Apply it after component metadata has been
 consumed by componentisation, not to a core module awaiting WIT embedding.
-
-All compiler targets perform function reachability analysis before final emission.
-Exports, start functions and function-table references remain roots. Unused
-runtime helpers do not emit their bodies or helper-owned static data, and unused
-function bodies are removed with their indices remapped. This portable pass also
-applies to macro-library artifacts and requires no external optimiser. Literal
-data emitted by unused user definitions is not yet separately reclaimed.

@@ -16,7 +16,6 @@ mod helpers;
 mod macro_component;
 mod mem;
 mod pattern;
-mod reachability;
 mod resources;
 mod scalar_numeric;
 mod scan;
@@ -25,10 +24,9 @@ mod type_scope;
 mod wit_synth;
 mod witty;
 
-pub use component::emit_macro_component_with_optimizer;
 pub(crate) use deps::import_signatures;
 pub use deps::{dep_non_record_types, dep_record_types};
-pub use macro_component::emit_macro_component;
+pub use macro_component::{emit_macro_component, emit_macro_component_with_optimizer};
 pub use resources::ResourceFns;
 pub(crate) use type_scope::scope_dependency_types;
 pub use wit_synth::dep_package_wit;
@@ -398,7 +396,6 @@ struct Emitter<'a> {
     imports: Vec<(String, String, u32)>,
     import_fn: HashMap<(String, String), u32>,
     h: Helpers,
-    live_helpers: Option<std::collections::HashSet<u32>>,
     funcs: HashMap<String, (u32, Vec<String>, FnSig)>,
     value_globals: HashMap<String, u32>,
     compiling_values: Vec<String>,
@@ -443,7 +440,6 @@ impl<'a> Emitter<'a> {
             imports: Vec::new(),
             import_fn: HashMap::new(),
             h: Helpers::default(),
-            live_helpers: None,
             funcs: HashMap::new(),
             value_globals: HashMap::new(),
             compiling_values: Vec::new(),

@@ -20,9 +20,6 @@ you work, and rename it to the new version when you cut a release.
 
 ### Changed
 
-- All compilation targets omit unreachable runtime functions and avoid emitting
-  unused helper bodies and their static data, without requiring Binaryen.
-
 - Size builds strip optional name, producer and debug metadata after composition;
   `compose --strip-metadata` applies the same policy to prebuilt components.
 

@@ -84,25 +84,4 @@ fn size_build_preserves_macro_component_exports() {
     let mut component =
         wavelet::macros::MacroComponent::from_bytes(&compiled.artifacts[0].bytes).unwrap();
     assert_eq!(component.manifest().unwrap(), vec![("identity".into(), 1)]);
-    let (arena, roots) = wavelet::read_file("identity(42)").unwrap();
-    let input = wavelet::meta::arena_to_tree(&arena, roots[0]);
-    let output = component.expand("identity", &input).unwrap();
-    assert_eq!(
-        output.nodes[output.root as usize],
-        wavelet::meta::Node::IntVal(42)
-    );
-}
-
-#[test]
-fn scalar_components_do_not_embed_unused_formatting_data() {
-    let mut optimizer = |bytes: Vec<u8>| {
-        assert!(!bytes.windows(5).any(|part| part == b"cell("));
-        let functions = wasmparser::Parser::new(0)
-            .parse_all(&bytes)
-            .filter(|payload| matches!(payload, Ok(wasmparser::Payload::CodeSectionEntry(_))))
-            .count();
-        assert!(functions < 10, "retained {functions} functions");
-        Ok(bytes)
-    };
-    compiler::compile_with_optimizer(&request(), &mut compiler::NoMacros, &mut optimizer).unwrap();
 }

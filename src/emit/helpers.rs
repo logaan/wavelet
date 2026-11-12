@@ -716,47 +716,30 @@ fn to_str_char(fx: &mut FnCtx, alloc: u32, box_str: u32, cp: u32, t: u32, buf: u
 }
 
 pub(crate) fn emit_helpers(em: &mut Emitter) -> Result<(), String> {
-    let emitters: &[fn(&mut Emitter)] = &[
-        allocation::emit_alloc,
-        allocation::emit_realloc,
-        allocation::emit_box_int,
-        allocation::emit_box_bool,
-        allocation::emit_box_dec,
-        allocation::emit_box_str,
-        allocation::emit_truthy,
-        allocation::emit_unbox_int,
-        allocation::emit_unbox_char,
-        allocation::emit_unbox_dec,
-        collections::emit_equality,
-        collections::emit_length,
-        collections::emit_head,
-        collections::emit_tail,
-        collections::emit_concat,
-        printing::emit_string,
-        collections::emit_record_get,
-        numeric::emit_as_float,
-        numeric::emit_arithmetic,
-        numeric::emit_compare,
-        numeric::emit_negate,
-        numeric::emit_integer_arithmetic,
-        numeric::emit_float_compare,
-        persistence::emit_persist_alloc,
-        persistence::emit_persist,
-    ];
-    for emit in emitters {
-        let previous = em.bodies.len();
-        let index = em.imports.len() as u32 + em.bodies.len() as u32;
-        if em
-            .live_helpers
-            .as_ref()
-            .is_none_or(|live| live.contains(&index))
-        {
-            emit(em);
-        } else {
-            let ty = em.ty_idx(vec![], vec![]);
-            em.bodies.push((ty, FnCtx::new(0).finish()));
-        }
-        debug_assert_eq!(em.bodies.len(), previous + 1);
-    }
+    allocation::emit_alloc(em);
+    allocation::emit_realloc(em);
+    allocation::emit_box_int(em);
+    allocation::emit_box_bool(em);
+    allocation::emit_box_dec(em);
+    allocation::emit_box_str(em);
+    allocation::emit_truthy(em);
+    allocation::emit_unbox_int(em);
+    allocation::emit_unbox_char(em);
+    allocation::emit_unbox_dec(em);
+    collections::emit_equality(em);
+    collections::emit_length(em);
+    collections::emit_head(em);
+    collections::emit_tail(em);
+    collections::emit_concat(em);
+    printing::emit_string(em);
+    collections::emit_record_get(em);
+    numeric::emit_as_float(em);
+    numeric::emit_arithmetic(em);
+    numeric::emit_compare(em);
+    numeric::emit_negate(em);
+    numeric::emit_integer_arithmetic(em);
+    numeric::emit_float_compare(em);
+    persistence::emit_persist_alloc(em);
+    persistence::emit_persist(em);
     Ok(())
 }
