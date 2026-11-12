@@ -20,6 +20,23 @@ struct Data {
 
 impl Data {
     fn insert(em: &mut Emitter) -> Self {
+        let used = em.arena.nodes.iter().any(
+            |node| matches!(node, Node::Sym(name) if matches!(name.as_str(), "upper" | "lower")),
+        );
+        if !used {
+            let empty = Table {
+                address: 0,
+                count: 0,
+            };
+            return Self {
+                upper: empty,
+                lower: empty,
+                context: empty,
+                blob: 0,
+                final_sigma: 0,
+                expansion: 1,
+            };
+        }
         let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/unicode-case.bin"));
         let word = |offset| i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
         em.align8();

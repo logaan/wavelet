@@ -64,3 +64,36 @@ fn every_unicode_scalar_and_sigma_context_matches_rust() {
         assert_case(&mut component, "down", &contexts, &contexts.to_lowercase());
     }
 }
+
+#[test]
+fn components_without_case_conversion_omit_unicode_tables() {
+    let bytes = wavelet::staging::Project::compile(
+        "Package \"test:small@0.1.0\" Export {name: add-one params: {n: u32} result: u32} Def add-one Fn {n: u32} add(n 1)",
+    ).unwrap();
+    assert!(bytes.len() < 16_384, "component size: {}", bytes.len());
+    let mut component = HostComponent::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        component
+            .call_instance("test:small/api@0.1.0", "add-one", &[Val::U32(41)])
+            .unwrap(),
+        vec![Val::U32(42)]
+    );
+}
+
+#[test]
+fn aliases_to_case_conversion_keep_unicode_tables() {
+    let bytes = wavelet::staging::Project::compile(
+        "Package \"test:alias@0.1.0\" Export {name: convert params: {text: string} result: string} Def convert Fn {text: string} Let {operation: Fn {value: string} upper(value)} operation(text)",
+    ).unwrap();
+    let mut component = HostComponent::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        component
+            .call_instance(
+                "test:alias/api@0.1.0",
+                "convert",
+                &[Val::String("Straße".into())]
+            )
+            .unwrap(),
+        vec![Val::String("STRASSE".into())]
+    );
+}
