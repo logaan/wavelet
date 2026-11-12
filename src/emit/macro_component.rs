@@ -104,8 +104,6 @@ pub fn emit_macro_component(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, 
 }
 
 pub(crate) fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<Vec<u8>, String> {
-    use ValType::I32;
-
     let mut macros: Vec<MacroDef> = Vec::new();
     for &root in roots {
         let Node::Tup(items) = arena.node(root) else {
@@ -147,46 +145,7 @@ pub(crate) fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<
     };
     let deps: HashMap<String, Dep> = HashMap::new();
 
-    let mut em = Emitter {
-        arena,
-        info: &info,
-        deps: &deps,
-        type_env: TypeEnv::default(),
-        local_cases: HashMap::new(),
-        data: Vec::new(),
-        str_cache: HashMap::new(),
-        types: Vec::new(),
-        imports: Vec::new(),
-        import_fn: HashMap::new(),
-        h: Helpers::default(),
-        funcs: HashMap::new(),
-        value_globals: HashMap::new(),
-        compiling_values: Vec::new(),
-        bodies: Vec::new(),
-        closure_bodies: Vec::new(),
-        known_fn_names: Vec::new(),
-        known_lambdas: Vec::new(),
-        lambda_reserved: HashMap::new(),
-        lambda_order: Vec::new(),
-        lambda_stash: HashMap::new(),
-        fn_wrappers: HashMap::new(),
-        fn_box_cache: HashMap::new(),
-        var_box_cache: HashMap::new(),
-        false_addr: 0,
-        true_addr: 0,
-        macro_expand_idx: None,
-        functor_fns: HashMap::new(),
-        user_res: HashMap::new(),
-        node_types: Default::default(),
-        mem_tys: Vec::new(),
-    };
-
-    em.false_addr = DATA_BASE;
-    em.put_i32(TAG_BOOL);
-    em.put_i32(0);
-    em.true_addr = DATA_BASE + 8;
-    em.put_i32(TAG_BOOL);
-    em.put_i32(1);
+    let mut em = Emitter::new(arena, &info, &deps);
 
     let mut next = 0u32;
     let mut take = || {
@@ -244,127 +203,7 @@ pub(crate) fn emit_macro_core_module(arena: &Arena, roots: &[NodeId]) -> Result<
         ("wavelet:meta/macros@0.1.0#expand".to_string(), expand_idx),
     ];
 
-    let heap_base = {
-        em.align8();
-        DATA_BASE + em.data.len() as u32
-    };
-    let pages = (heap_base as u64 >> 16) + 1;
-    let closure_base = em.bodies.len() as u32;
-
-    let mut module = Module::new();
-    let mut ts = TypeSection::new();
-    for (p, r) in &em.types {
-        ts.ty().function(p.iter().copied(), r.iter().copied());
-    }
-    module.section(&ts);
-
-    let mut fs = FunctionSection::new();
-    for (t, _) in &em.bodies {
-        fs.function(*t);
-    }
-    for (t, _) in &em.closure_bodies {
-        fs.function(*t);
-    }
-    module.section(&fs);
-
-    if !em.closure_bodies.is_empty() {
-        let mut tbl = TableSection::new();
-        tbl.table(TableType {
-            element_type: RefType::FUNCREF,
-            minimum: em.closure_bodies.len() as u64,
-            maximum: Some(em.closure_bodies.len() as u64),
-            table64: false,
-            shared: false,
-        });
-        module.section(&tbl);
-    }
-
-    let mut ms = MemorySection::new();
-    ms.memory(MemoryType {
-        minimum: pages,
-        maximum: None,
-        memory64: false,
-        shared: false,
-        page_size_log2: None,
-    });
-    module.section(&ms);
-
-    let mut gs = GlobalSection::new();
-    gs.global(
-        GlobalType {
-            val_type: I32,
-            mutable: true,
-            shared: false,
-        },
-        &ConstExpr::i32_const(heap_base as i32),
-    );
-
-    gs.global(
-        GlobalType {
-            val_type: ValType::I64,
-            mutable: true,
-            shared: false,
-        },
-        &ConstExpr::i64_const(0),
-    );
-
-    gs.global(
-        GlobalType {
-            val_type: I32,
-            mutable: false,
-            shared: false,
-        },
-        &ConstExpr::i32_const(heap_base as i32),
-    );
-    gs.global(
-        GlobalType {
-            val_type: I32,
-            mutable: true,
-            shared: false,
-        },
-        &ConstExpr::i32_const(heap_base as i32),
-    );
-    module.section(&gs);
-
-    let mut es = ExportSection::new();
-    es.export("memory", ExportKind::Memory, 0);
-    es.export("cabi_realloc", ExportKind::Func, em.h.realloc);
-    for (name, idx) in &exports {
-        es.export(name, ExportKind::Func, *idx);
-    }
-    module.section(&es);
-
-    if !em.closure_bodies.is_empty() {
-        let idxs: Vec<u32> = (0..em.closure_bodies.len() as u32)
-            .map(|k| closure_base + k)
-            .collect();
-        let mut els = ElementSection::new();
-        els.active(
-            Some(0),
-            &ConstExpr::i32_const(0),
-            Elements::Functions(idxs.into()),
-        );
-        module.section(&els);
-    }
-
-    let mut cs = CodeSection::new();
-    for (_, f) in &em.bodies {
-        cs.function(f);
-    }
-    for (_, f) in &em.closure_bodies {
-        cs.function(f);
-    }
-    module.section(&cs);
-
-    let mut ds = DataSection::new();
-    ds.active(
-        0,
-        &ConstExpr::i32_const(DATA_BASE as i32),
-        em.data.iter().copied(),
-    );
-    module.section(&ds);
-
-    Ok(module.finish())
+    Ok(serialize_module(&mut em, &exports))
 }
 
 pub(crate) fn mc_macro_body(em: &mut Emitter, m: &MacroDef) -> Result<(u32, Function), String> {

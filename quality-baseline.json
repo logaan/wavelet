@@ -1,43 +1,39 @@
 {
   "function_lines": {
-    "src/emit/builtins.rs::builtin_higher_order": 358,
-    "src/emit/builtins.rs::builtin_index": 256,
-    "src/emit/builtins.rs::builtin_seq": 238,
+    "src/emit/builtins.rs::builtin_higher_order": 348,
+    "src/emit/builtins.rs::builtin_index": 246,
+    "src/emit/builtins.rs::builtin_seq": 228,
     "src/emit/builtins.rs::builtin_split": 256,
     "src/emit/helpers.rs::to_str_dec": 383,
     "src/emit/helpers/collections.rs::emit_equality": 278,
     "src/emit/helpers/printing.rs::emit_string": 499,
-    "src/emit/macro_component.rs::emit_macro_core_module": 241,
     "src/emit/macro_component.rs::mc_fill": 389,
     "src/emit/macro_component.rs::mc_tree_to_form": 319,
-    "src/emit/mem.rs::scalar_op": 206,
-    "src/wit.rs::collect": 226
+    "src/emit/mem.rs::scalar_op": 206
   },
   "cyclomatic_complexity": {
     "src/check.rs::collect": 44,
     "src/check.rs::infer_special": 45,
     "src/check.rs::unify": 47,
     "src/check/resource_state.rs::expr": 48,
-    "src/emit/builtins.rs::builtin_numeric": 41,
     "src/emit/call.rs::dep_call": 48,
     "src/emit/mem.rs::scalar_op": 74,
     "src/emit/witty.rs::wit_ty": 45,
     "src/interp.rs::special_form": 66,
     "src/lexer.rs::lex": 43,
-    "src/wit.rs::collect": 67,
     "src/wit.rs::infer": 42
   },
   "warnings": {
     "clippy::needless_range_loop": 4,
     "clippy::too_many_arguments": 2,
-    "clippy::too_many_lines": 11,
+    "clippy::too_many_lines": 9,
     "clippy::type_complexity": 3
   },
   "large_modules": {
-    "src/check.rs": 2746,
-    "src/emit/builtins.rs": 1873,
-    "src/emit/macro_component.rs": 1758,
+    "src/check.rs": 2644,
+    "src/emit/builtins.rs": 1729,
+    "src/emit/macro_component.rs": 1597,
     "src/emit/mem.rs": 1458,
-    "src/wit.rs": 1532
+    "src/wit.rs": 1143
   }
 }

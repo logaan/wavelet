@@ -1,4 +1,9 @@
-use super::*;
+use super::{DATA_BASE, Emitter, PERSIST_RESERVE};
+use wasm_encoder::{
+    CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType, ExportKind,
+    ExportSection, FunctionSection, GlobalSection, GlobalType, ImportSection, MemorySection,
+    MemoryType, Module, RefType, TableSection, TableType, TypeSection, ValType,
+};
 
 pub(super) fn serialize_module(em: &mut Emitter<'_>, exports: &[(String, u32)]) -> Vec<u8> {
     use ValType::I32;
@@ -8,8 +13,7 @@ pub(super) fn serialize_module(em: &mut Emitter<'_>, exports: &[(String, u32)]) 
         DATA_BASE + em.data.len() as u32
     };
 
-    let has_persist = !info.functors.is_empty() || !info.resources.is_empty();
-    let persist_reserve = if has_persist { PERSIST_RESERVE } else { 0 };
+    let persist_reserve = if em.has_persist() { PERSIST_RESERVE } else { 0 };
     let arena_floor = heap_base + persist_reserve;
     let pages = (arena_floor as u64 >> 16) + 1;
 

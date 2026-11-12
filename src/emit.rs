@@ -1,11 +1,6 @@
 use std::collections::HashMap;
 
-use wasm_encoder::{
-    BlockType, CodeSection, ConstExpr, DataSection, ElementSection, Elements, EntityType,
-    ExportKind, ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
-    Instruction as I, MemArg, MemorySection, MemoryType, Module, RefType, TableSection, TableType,
-    TypeSection, ValType,
-};
+use wasm_encoder::{BlockType, Function, Instruction as I, MemArg, ValType};
 
 use crate::form::{Arena, Node, NodeId};
 use crate::wit::{FileInfo, FuncSig, type_decl};
@@ -22,6 +17,7 @@ mod mem;
 mod pattern;
 mod resources;
 mod scan;
+mod serialization;
 mod type_scope;
 mod wit_synth;
 mod witty;
@@ -40,6 +36,7 @@ use deps::*;
 use helpers::*;
 use resources::*;
 use scan::*;
+use serialization::serialize_module;
 use wit_synth::*;
 use witty::*;
 
@@ -431,6 +428,51 @@ struct Emitter<'a> {
 }
 
 impl<'a> Emitter<'a> {
+    fn new(arena: &'a Arena, info: &'a FileInfo, deps: &'a HashMap<String, Dep>) -> Self {
+        let mut em = Self {
+            arena,
+            info,
+            deps,
+            type_env: TypeEnv::default(),
+            local_cases: HashMap::new(),
+            data: Vec::new(),
+            str_cache: HashMap::new(),
+            types: Vec::new(),
+            imports: Vec::new(),
+            import_fn: HashMap::new(),
+            h: Helpers::default(),
+            funcs: HashMap::new(),
+            value_globals: HashMap::new(),
+            compiling_values: Vec::new(),
+            bodies: Vec::new(),
+            closure_bodies: Vec::new(),
+            known_fn_names: Vec::new(),
+            known_lambdas: Vec::new(),
+            lambda_reserved: HashMap::new(),
+            lambda_order: Vec::new(),
+            lambda_stash: HashMap::new(),
+            fn_wrappers: HashMap::new(),
+            fn_box_cache: HashMap::new(),
+            var_box_cache: HashMap::new(),
+            false_addr: 0,
+            true_addr: 0,
+            macro_expand_idx: None,
+            functor_fns: HashMap::new(),
+            user_res: HashMap::new(),
+            node_types: Default::default(),
+            mem_tys: Vec::new(),
+        };
+
+        em.false_addr = DATA_BASE;
+        em.put_i32(TAG_BOOL);
+        em.put_i32(0);
+        em.true_addr = DATA_BASE + 8;
+        em.put_i32(TAG_BOOL);
+        em.put_i32(1);
+
+        em
+    }
+
     fn unit_addr(&self) -> u32 {
         self.false_addr
     }

@@ -132,3 +132,17 @@ fn try_let_from_spec_agrees() {
          Try-let {h: half(n)} ok(h)\n",
     );
 }
+
+#[test]
+fn capturing_callbacks_in_macros_agree() {
+    assert_agree(
+        r#"Package "demo:m@0.1.0"
+DefMacro wrap {items}
+  Let {prefix: Quote before}
+    map(Fn {item} Quasi [Unquote(prefix) Unquote(item)] items)
+Wrap [1 2]
+Wrap []
+Wrap ["last"]
+"#,
+    );
+}

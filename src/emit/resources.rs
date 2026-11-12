@@ -368,7 +368,12 @@ world app {
             package_path: "demo:app".to_string(),
             world: "app".to_string(),
             imports: Vec::new(),
-            functors: Vec::new(),
+            functors: vec![FunctorInst {
+                kind: FunctorKind::Set,
+                alias: "xs".to_string(),
+                elem: "s32".to_string(),
+                iface: "s32-set".to_string(),
+            }],
             exports: Vec::new(),
             types: Vec::new(),
             defs: HashMap::new(),
@@ -379,46 +384,7 @@ world app {
         };
         let deps: HashMap<String, Dep> = HashMap::new();
 
-        let mut em = Emitter {
-            arena: &arena,
-            info: &info,
-            deps: &deps,
-            type_env: TypeEnv::default(),
-            local_cases: HashMap::new(),
-            data: Vec::new(),
-            str_cache: HashMap::new(),
-            types: Vec::new(),
-            imports: Vec::new(),
-            import_fn: HashMap::new(),
-            h: Helpers::default(),
-            funcs: HashMap::new(),
-            value_globals: HashMap::new(),
-            compiling_values: Vec::new(),
-            bodies: Vec::new(),
-            closure_bodies: Vec::new(),
-            known_fn_names: Vec::new(),
-            known_lambdas: Vec::new(),
-            lambda_reserved: HashMap::new(),
-            lambda_order: Vec::new(),
-            lambda_stash: HashMap::new(),
-            fn_wrappers: HashMap::new(),
-            fn_box_cache: HashMap::new(),
-            var_box_cache: HashMap::new(),
-            false_addr: 0,
-            true_addr: 0,
-            macro_expand_idx: None,
-            functor_fns: HashMap::new(),
-            user_res: HashMap::new(),
-            node_types: Default::default(),
-            mem_tys: Vec::new(),
-        };
-
-        em.false_addr = DATA_BASE;
-        em.put_i32(TAG_BOOL);
-        em.put_i32(0);
-        em.true_addr = DATA_BASE + 8;
-        em.put_i32(TAG_BOOL);
-        em.put_i32(1);
+        let mut em = Emitter::new(&arena, &info, &deps);
 
         let mut n_imports = 0u32;
         let mut add_import = |em: &mut Emitter, field: &str, p: Vec<ValType>, r: Vec<ValType>| {
@@ -446,127 +412,15 @@ world app {
 
         emit_helpers(&mut em)?;
 
-        let inst = FunctorInst {
-            kind: FunctorKind::Set,
-            alias: "xs".to_string(),
-            elem: "s32".to_string(),
-            iface: "s32-set".to_string(),
-        };
-        let fns = emit_set_resource(&mut em, &inst, elem, new_i, rep_i, drop_i)?;
-
-        let heap_base = {
-            em.align8();
-            DATA_BASE + em.data.len() as u32
-        };
-
-        let arena_floor = heap_base + PERSIST_RESERVE;
-        let pages = (arena_floor as u64 >> 16) + 1;
-
-        let mut module = Module::new();
-        let mut ts = TypeSection::new();
-        for (p, r) in &em.types {
-            ts.ty().function(p.iter().copied(), r.iter().copied());
-        }
-        module.section(&ts);
-
-        let mut is = ImportSection::new();
-        for (m, f, t) in &em.imports {
-            is.import(m, f, EntityType::Function(*t));
-        }
-        module.section(&is);
-
-        let mut fs = FunctionSection::new();
-        for (t, _) in &em.bodies {
-            fs.function(*t);
-        }
-        module.section(&fs);
-
-        let mut ms = MemorySection::new();
-        ms.memory(MemoryType {
-            minimum: pages,
-            maximum: None,
-            memory64: false,
-            shared: false,
-            page_size_log2: None,
-        });
-        module.section(&ms);
-
-        let mut gs = GlobalSection::new();
-        gs.global(
-            GlobalType {
-                val_type: I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(arena_floor as i32),
-        );
-        gs.global(
-            GlobalType {
-                val_type: ValType::I64,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i64_const(0),
-        );
-        gs.global(
-            GlobalType {
-                val_type: I32,
-                mutable: false,
-                shared: false,
-            },
-            &ConstExpr::i32_const(arena_floor as i32),
-        );
-        gs.global(
-            GlobalType {
-                val_type: I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(heap_base as i32),
-        );
-        module.section(&gs);
-
-        let mut es = ExportSection::new();
-        es.export("memory", ExportKind::Memory, 0);
-        es.export("cabi_realloc", ExportKind::Func, em.h.realloc);
-        es.export(
-            &format!("{IFACE}#[constructor]set"),
-            ExportKind::Func,
-            fns.ctor,
-        );
-        es.export(
-            &format!("{IFACE}#[method]set.add"),
-            ExportKind::Func,
-            fns.add,
-        );
-        es.export(
-            &format!("{IFACE}#[method]set.contains"),
-            ExportKind::Func,
-            fns.contains,
-        );
-        es.export(
-            &format!("{IFACE}#[method]set.size"),
-            ExportKind::Func,
-            fns.size,
-        );
-        es.export(&format!("{IFACE}#[dtor]set"), ExportKind::Func, fns.dtor);
-        module.section(&es);
-
-        let mut cs = CodeSection::new();
-        for (_, f) in &em.bodies {
-            cs.function(f);
-        }
-        module.section(&cs);
-
-        let mut ds = DataSection::new();
-        ds.active(
-            0,
-            &ConstExpr::i32_const(DATA_BASE as i32),
-            em.data.iter().copied(),
-        );
-        module.section(&ds);
-
-        Ok(module.finish())
+        let fns = emit_set_resource(&mut em, &info.functors[0], elem, new_i, rep_i, drop_i)?;
+        let exports = [
+            (format!("{IFACE}#[constructor]set"), fns.ctor),
+            (format!("{IFACE}#[method]set.add"), fns.add),
+            (format!("{IFACE}#[method]set.contains"), fns.contains),
+            (format!("{IFACE}#[method]set.size"), fns.size),
+            (format!("{IFACE}#[dtor]set"), fns.dtor),
+        ];
+        Ok(serialize_module(&mut em, &exports))
     }
 
     fn componentize(elem: &WitTy) -> Result<Vec<u8>, String> {

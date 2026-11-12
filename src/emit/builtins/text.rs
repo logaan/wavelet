@@ -7,25 +7,15 @@ impl Emitter<'_> {
         name: &str,
         items: &[NodeId],
     ) -> Result<(), String> {
-        let nargs = |want: usize| -> Result<(), String> {
-            if items.len() == want {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{name}` expects {want} argument(s), got {}",
-                    items.len()
-                ))
-            }
-        };
         match name {
             "str-cat" => self.concatenate_strings(fx, items)?,
             "to-string" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.to_str));
             }
             "to-char" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 self.expr(fx, items[0], false)?;
                 let b = fx.local(ValType::I32);
                 fx.op(I::LocalSet(b));
@@ -62,7 +52,7 @@ impl Emitter<'_> {
                 fx.op(I::End);
             }
             "upper" | "lower" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 self.expr(fx, items[0], false)?;
                 fx.op(I::I32Const(if name == "upper" { 1 } else { 0 }));
                 fx.op(I::Call(self.h.case_h));

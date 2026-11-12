@@ -90,3 +90,35 @@ fn wit_inference_follows_calls_to_other_defs() {
         "{got}"
     );
 }
+
+#[test]
+fn wit_deduplicates_exports_within_each_interface() {
+    let src = r#"Package "demo:grouped@0.1.0"
+Export {iface: "first" name: greet}
+Export {iface: "first" name: greet}
+Export {iface: "second" name: greet}
+Export {iface: "second" name: greet}
+Def greet Fn {name: string} upper(name)
+"#;
+    let (arena, roots) = read_file(src).unwrap();
+    let got = wit::synthesize(&arena, &roots).unwrap();
+    assert_eq!(
+        got,
+        "\
+package demo:grouped@0.1.0;
+
+interface first {
+  greet: func(name: string) -> string;
+}
+
+interface second {
+  greet: func(name: string) -> string;
+}
+
+world grouped {
+  export first;
+  export second;
+}
+"
+    );
+}

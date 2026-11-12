@@ -2,6 +2,17 @@ use super::*;
 
 mod text;
 
+fn expect_arity(name: &str, items: &[NodeId], expected: usize) -> Result<(), String> {
+    if items.len() == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{name}` expects {expected} argument(s), got {}",
+            items.len()
+        ))
+    }
+}
+
 impl<'a> Emitter<'a> {
     pub(crate) fn builtin(
         &mut self,
@@ -73,12 +84,7 @@ impl<'a> Emitter<'a> {
         items: &[NodeId],
     ) -> Result<(), String> {
         let n = crate::builtins::tuple_ctor_arity(name).expect("routed by tuple_ctor_arity");
-        if items.len() != n {
-            return Err(format!(
-                "`{name}` expects {n} argument(s), got {}",
-                items.len()
-            ));
-        }
+        expect_arity(name, items, n)?;
         self.seq_box(fx, items, TAG_TUP)
     }
 
@@ -88,19 +94,9 @@ impl<'a> Emitter<'a> {
         name: &str,
         items: &[NodeId],
     ) -> Result<(), String> {
-        let nargs = |want: usize| -> Result<(), String> {
-            if items.len() == want {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{name}` expects {want} argument(s), got {}",
-                    items.len()
-                ))
-            }
-        };
         match name {
             "eq" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
 
                 if let (Some(ta), Some(tb)) =
                     (self.node_mem(fx, items[0]), self.node_mem(fx, items[1]))
@@ -125,14 +121,14 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.box_bool));
             }
             "not" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.truthy));
                 fx.op(I::I32Eqz);
                 fx.op(I::Call(self.h.box_bool));
             }
             "lt" | "le" | "gt" | "ge" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 self.expr(fx, items[0], false)?;
                 self.expr(fx, items[1], false)?;
                 fx.op(I::Call(self.h.cmp_raw));
@@ -146,7 +142,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.box_bool));
             }
             "add" | "sub" | "mul" | "div" | "rem" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 self.expr(fx, items[0], false)?;
                 self.expr(fx, items[1], false)?;
                 fx.op(I::I32Const(match name {
@@ -159,12 +155,12 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.arith_raw));
             }
             "neg" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.neg_raw));
             }
             "abs" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 let b = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(b));
@@ -204,7 +200,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::End);
             }
             "min" | "max" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let av = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(av));
@@ -233,19 +229,9 @@ impl<'a> Emitter<'a> {
         name: &str,
         items: &[NodeId],
     ) -> Result<(), String> {
-        let nargs = |want: usize| -> Result<(), String> {
-            if items.len() == want {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{name}` expects {want} argument(s), got {}",
-                    items.len()
-                ))
-            }
-        };
         match name {
             "len" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
 
                 if let Some(mt) = self.node_mem(fx, items[0])
                     && matches!(self.mem_tys[mt as usize], WitTy::List(_))
@@ -262,7 +248,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.box_int));
             }
             "head" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
 
                 if let Some(mt) = self.node_mem(fx, items[0])
                     && let WitTy::List(elem) = self.mem_tys[mt as usize].clone()
@@ -288,12 +274,12 @@ impl<'a> Emitter<'a> {
                 fx.op(I::Call(self.h.head_h));
             }
             "tail" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.tail_h));
             }
             "reverse" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 let lst = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(lst));
@@ -361,7 +347,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(out));
             }
             "range" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let lo = fx.local(ValType::I64);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::Call(self.h.unbox_int));
@@ -429,7 +415,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(out));
             }
             "empty" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 let b = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(b));
@@ -475,19 +461,9 @@ impl<'a> Emitter<'a> {
         name: &str,
         items: &[NodeId],
     ) -> Result<(), String> {
-        let nargs = |want: usize| -> Result<(), String> {
-            if items.len() == want {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{name}` expects {want} argument(s), got {}",
-                    items.len()
-                ))
-            }
-        };
         match name {
             "map" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let fp = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(fp));
@@ -561,7 +537,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(out));
             }
             "fold" => {
-                nargs(3)?;
+                expect_arity(name, items, 3)?;
                 let fp = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(fp));
@@ -629,7 +605,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(acc));
             }
             "filter" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let fp = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(fp));
@@ -727,7 +703,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(out));
             }
             "zip" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let a = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(a));
@@ -850,19 +826,9 @@ impl<'a> Emitter<'a> {
         name: &str,
         items: &[NodeId],
     ) -> Result<(), String> {
-        let nargs = |want: usize| -> Result<(), String> {
-            if items.len() == want {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{name}` expects {want} argument(s), got {}",
-                    items.len()
-                ))
-            }
-        };
         match name {
             "get" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let lst = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(lst));
@@ -902,7 +868,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Load(ma(0, 2)));
             }
             "put" => {
-                nargs(3)?;
+                expect_arity(name, items, 3)?;
                 let lst = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(lst));
@@ -961,7 +927,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(out));
             }
             "push" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let lst = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(lst));
@@ -1017,7 +983,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(out));
             }
             "concat" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let a = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(a));
@@ -1107,19 +1073,9 @@ impl<'a> Emitter<'a> {
         name: &str,
         items: &[NodeId],
     ) -> Result<(), String> {
-        let nargs = |want: usize| -> Result<(), String> {
-            if items.len() == want {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{name}` expects {want} argument(s), got {}",
-                    items.len()
-                ))
-            }
-        };
         match name {
             "join" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let parts = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(parts));
@@ -1186,7 +1142,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(acc));
             }
             "contains" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let s = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(s));
@@ -1577,19 +1533,9 @@ impl<'a> Emitter<'a> {
         name: &str,
         items: &[NodeId],
     ) -> Result<(), String> {
-        let nargs = |want: usize| -> Result<(), String> {
-            if items.len() == want {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{name}` expects {want} argument(s), got {}",
-                    items.len()
-                ))
-            }
-        };
         match name {
             "cell-new" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 let persist = self.has_persist();
                 let v = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
@@ -1614,12 +1560,12 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(p));
             }
             "cell-get" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 self.expr(fx, items[0], false)?;
                 fx.op(I::I32Load(ma(4, 2)));
             }
             "cell-set" => {
-                nargs(2)?;
+                expect_arity(name, items, 2)?;
                 let persist = self.has_persist();
                 let c = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
@@ -1643,23 +1589,13 @@ impl<'a> Emitter<'a> {
         name: &str,
         items: &[NodeId],
     ) -> Result<(), String> {
-        let nargs = |want: usize| -> Result<(), String> {
-            if items.len() == want {
-                Ok(())
-            } else {
-                Err(format!(
-                    "`{name}` expects {want} argument(s), got {}",
-                    items.len()
-                ))
-            }
-        };
         match name {
             "form-kind" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 return self.form_kind(fx, items[0]);
             }
             "rec-key" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 let rp = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(rp));
@@ -1681,7 +1617,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::LocalGet(p));
             }
             "rec-val" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 let rp = fx.local(ValType::I32);
                 self.expr(fx, items[0], false)?;
                 fx.op(I::LocalSet(rp));
@@ -1690,11 +1626,11 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Load(ma(12, 2)));
             }
             "gensym" => {
-                nargs(0)?;
+                expect_arity(name, items, 0)?;
                 return self.gensym(fx);
             }
             "expand" => {
-                nargs(1)?;
+                expect_arity(name, items, 1)?;
                 match self.macro_expand_idx {
                     Some(idx) => {
                         self.expr(fx, items[0], false)?;

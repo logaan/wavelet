@@ -5,14 +5,12 @@ mod function_exports;
 mod functions;
 mod imports;
 mod resource_exports;
-mod serialization;
 
 use environment::initialize_emitter;
 use function_exports::emit_function_exports;
 use functions::{emit_function_bodies, reserve_functions};
 use imports::{ResourceImports, register_imports};
 use resource_exports::emit_resource_exports;
-use serialization::serialize_module;
 
 pub(crate) fn emit_core_module(
     arena: &Arena,
