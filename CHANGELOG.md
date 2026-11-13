@@ -13,6 +13,11 @@ you work, and rename it to the new version when you cut a release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Neovim highlights chained-call dots as punctuation; the plugin now includes
+  regression checks for current syntax and documents language-server updates.
+
 ### Added
 
 - Native `build --optimize-size` and compiler APIs run Binaryen size optimisation
