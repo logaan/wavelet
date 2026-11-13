@@ -20,6 +20,9 @@ you work, and rename it to the new version when you cut a release.
 
 ### Added
 
+- Documentation audit of WIT authoring, import, and execution coverage, with
+  regression tests for nested values, aliases, ABI limits, and resource gaps.
+
 - Native `build --optimize-size` and compiler APIs run Binaryen size optimisation
   before componentisation, with an explicit `wasm-opt` dependency.
 

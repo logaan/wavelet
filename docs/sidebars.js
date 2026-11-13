@@ -26,6 +26,7 @@ const sidebars = {
     },
     'stdlib',
     'components',
+    'wit-coverage',
     'compiler-api',
     'web-apps',
     'cli',

@@ -78,7 +78,7 @@ Export {iface: "wasi:cli/run" name: run result: result}
 
 An HTTP component exports `wasi:http/incoming-handler`. Other synchronous interfaces use the same mechanism. A resource-only external interface can export a matching resource declaration with a form such as `Export {iface: "acme:counter/api@1.0.0" name: counter}`.
 
-The compiler supports synchronous primitive and compound WIT values, aliases, and resources. Async functions, futures, streams, maps, fixed-size lists, and error contexts are unsupported. Canonical memory paths reject variants or enums above 256 cases and flags above 32 members.
+See the [WIT coverage audit](./wit-coverage) for authoring, import, and execution support, including known resource-compound failures. The compiler supports synchronous primitive and compound WIT values, aliases, and resources. Async functions, futures, streams, maps, fixed-size lists, and error contexts are unsupported. Canonical memory paths reject variants or enums above 256 cases and flags above 32 members.
 
 ## Resources
 
