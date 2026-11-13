@@ -15,36 +15,36 @@ Audited on **13 November 2026**, against Wavelet **0.12.1**, `wit-parser` / `wit
 
 This table covers the baseline synchronous type system and interface structure. The Component Model itself remains under standardization; “core” here means the established WIT baseline, not Core WebAssembly instructions. See the upstream [WIT reference](https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md).
 
-| Feature | Author | Import | Caller → Wavelet | Wavelet → import | Qualification |
+| Feature | Author | Import | Caller → Wavelet | Wavelet → import | Limitations |
 |---|---|---|---|---|---|
 | `bool` | Yes | Yes | Yes | Yes | |
 | `s8`, `s16`, `s32`, `s64` | Yes | Yes | Yes | Yes | |
 | `u8`, `u16`, `u32`, `u64` | Yes | Yes | Yes | Yes | |
-| `f32`, `f64` | Yes | Yes | Yes | Yes | Numeric support does not promise preservation of NaN payload bits. |
-| `char`, `string` | Yes | Yes | Yes | Yes | Unicode scalars and UTF-8 strings. |
-| Variable-length lists | Yes | Yes | Yes | Yes | Includes empty lists and nested lists. |
-| Records | Yes | Yes | Yes | Yes | Includes mixed alignment and nested fields. |
-| Nonempty tuples | Yes | Yes | Yes | Yes | Includes mixed and nested elements. |
-| Options | Yes | Yes | Yes | Yes | Includes distinct `none`, `some(none)`, and `some(some(value))`. |
-| Results | Yes | Yes | Yes | Yes | Both payloads, either payload absent, or both absent. |
-| Enums, up to 256 cases | Yes | Yes | Yes | Yes | Last case tested through list storage at 256. |
-| Variants, up to 256 cases | Yes | Yes | Yes | Yes | Last payload-bearing case tested through list storage at 256. |
-| Flags, 1–32 members | Yes | Yes | Yes | Yes | Storage transitions tested at 8/9 and 16/17, including bit 31. |
-| Nested non-resource compounds | Yes | Yes | Yes | Yes | Includes lists of records containing variants with strings. |
-| Primitive aliases and aliases of aliases | Yes | Yes | Yes | Yes | Alias spelling need not survive WIT synthesis; underlying value contracts do. |
-| Compound aliases | Yes | Yes | Yes | Partial | Existing bridge and tuple/list coverage; not every alias chain executed. |
-| Cross-interface `use`, renamed types, transitive types | Partial | Yes | Partial | Partial | Nominal identity and layouts tested; not every re-export arrangement. |
-| Resource declarations | Yes | Yes | Yes | Yes | Opaque handles, not exposed resource state. |
-| Resource constructors, methods, statics | Yes | Yes | Yes | Partial | Full imported member set compiles; imported execution is not exhaustively retested. |
-| Owned resource parameters and results | Yes | Yes | Yes | Yes | Transfer across boundaries; same-component owned calls have additional restrictions. |
-| Borrowed resource parameters | Yes | Yes | Yes | Partial | Exported methods/free functions execute; imported forms compile. |
-| Owned resources inside lists, records, variants, options | Yes | Yes | **No** | Yes | Creating handles inside exported compounds traps; imported compounds can be received and transferred back. |
-| Zero parameters, no result | Yes | Yes | Yes | Yes | No result is distinct from an empty tuple result. |
-| Multiple parameters; compound results | Yes | Yes | Yes | Yes | Tuple or record represents multiple returned values. |
-| Named interfaces and multiple export interfaces | Yes | Yes | Yes | Yes | `Export` defaults to `api`; `iface` selects another interface. |
-| Implementing an external interface | Yes | Yes | Yes | Yes | Includes resource-only exports. |
+| `f32`, `f64` | Yes | Yes | Yes | Yes | |
+| `char`, `string` | Yes | Yes | Yes | Yes | |
+| Variable-length lists | Yes | Yes | Yes | Yes | |
+| Records | Yes | Yes | Yes | Yes | |
+| Nonempty tuples | Yes | Yes | Yes | Yes | |
+| Options | Yes | Yes | Yes | Yes | |
+| Results | Yes | Yes | Yes | Yes | |
+| Enums, up to 256 cases | Yes | Yes | Yes | Yes | |
+| Variants, up to 256 cases | Yes | Yes | Yes | Yes | |
+| Flags, 1–32 members | Yes | Yes | Yes | Yes | |
+| Nested non-resource compounds | Yes | Yes | Yes | Yes | |
+| Primitive aliases and aliases of aliases | Yes | Yes | Yes | Yes | Alias names may change in generated WIT. |
+| Compound aliases | Yes | Yes | Yes | Partial | Not all imported alias chains verified. |
+| Cross-interface `use`, renamed types, transitive types | Partial | Yes | Partial | Partial | Not all re-export arrangements verified. |
+| Resource declarations | Yes | Yes | Yes | Yes | |
+| Resource constructors, methods, statics | Yes | Yes | Yes | Partial | Imported execution not fully verified. |
+| Owned resource parameters and results | Yes | Yes | Yes | Yes | Owned handles cannot be passed to local functions. |
+| Borrowed resource parameters | Yes | Yes | Yes | Partial | Imported execution not fully verified. |
+| Owned resources inside lists, records, variants, options | Yes | Yes | **No** | Yes | Creating handles inside exported compounds traps. |
+| Zero parameters, no result | Yes | Yes | Yes | Yes | |
+| Multiple parameters; compound results | Yes | Yes | Yes | Yes | |
+| Named interfaces and multiple export interfaces | Yes | Yes | Yes | Yes | |
+| Implementing an external interface | Yes | Yes | Yes | Yes | |
 | Packages, versions, escaped WIT identifiers | Yes | Yes | Yes | Yes | Dependencies must resolve to one version per package in a build. |
-| Arbitrary world adoption (`include`, `with`, world-level functions, inline interfaces) | No | Partial | Unverified | Unverified | Wavelet synthesizes its world from interface imports/exports; parsing a dependency world is not implementing it. |
+| Arbitrary world adoption (`include`, `with`, world-level functions, inline interfaces) | No | Partial | Unverified | Unverified | Only interface imports and exports determine the generated world. |
 
 ### Boundaries and ownership
 
@@ -84,12 +84,12 @@ The dependency resolver explicitly rejects async functions, futures, streams, ma
 
 The upstream [gated-feature list](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#gated-features) and WIT grammar also describe extensions beyond those released groups. Their presence in a parser or design document is not evidence that Wavelet supports them.
 
-| Feature | Author | Import | Execute | Qualification |
-|---|---|---|---|---|
-| Fixed-length `list<T, N>` | No | No | No | Explicit dependency-resolver rejection. |
-| Resource getters and setters | No | Unverified | Unverified | Gated WIT resource syntax. |
-| Cooperative threads / shared-everything concurrency | No | No | No | No Wavelet language/runtime contract. |
-| Optional exports | No | Unverified | Unverified | Discussed as future world behavior in the WIT reference. |
+| Feature | Author | Import | Execute |
+|---|---|---|---|
+| Fixed-length `list<T, N>` | No | No | No |
+| Resource getters and setters | No | Unverified | Unverified |
+| Cooperative threads / shared-everything concurrency | No | No | No |
+| Optional exports | No | Unverified | Unverified |
 
 This is not an inventory of every Core Wasm proposal; SIMD, memory64, and other core instruction extensions are separate from WIT coverage.
 
