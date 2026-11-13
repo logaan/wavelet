@@ -378,13 +378,13 @@ pub fn format_dec(f: f64) -> String {
     let push_digit = |out: &mut String, d: u8| out.push((b'0' + d) as char);
     if (-4..=5).contains(&e) {
         if e >= 0 {
-            for k in 0..=e as usize {
-                push_digit(&mut out, d[k]);
+            for &digit in &d[..=e as usize] {
+                push_digit(&mut out, digit);
             }
             out.push('.');
             if last > e as usize {
-                for k in (e as usize + 1)..=last {
-                    push_digit(&mut out, d[k]);
+                for &digit in &d[(e as usize + 1)..=last] {
+                    push_digit(&mut out, digit);
                 }
             } else {
                 out.push('0');
@@ -394,16 +394,16 @@ pub fn format_dec(f: f64) -> String {
             for _ in 0..(-e - 1) {
                 out.push('0');
             }
-            for k in 0..=last {
-                push_digit(&mut out, d[k]);
+            for &digit in &d[..=last] {
+                push_digit(&mut out, digit);
             }
         }
     } else {
         push_digit(&mut out, d[0]);
         if last > 0 {
             out.push('.');
-            for k in 1..=last {
-                push_digit(&mut out, d[k]);
+            for &digit in &d[1..=last] {
+                push_digit(&mut out, digit);
             }
         }
         out.push('e');

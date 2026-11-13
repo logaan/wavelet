@@ -56,6 +56,12 @@ fn classify_resource(imports: &ResourceImports, t: &str) -> Option<(String, bool
     None
 }
 
+struct LiftedParameter {
+    ty: WitTy,
+    base: u32,
+    resource: Option<(String, bool)>,
+}
+
 fn prepare_export_call(
     em: &mut Emitter<'_>,
     sig: &FuncSig,
@@ -68,11 +74,15 @@ fn prepare_export_call(
         .cloned()
         .ok_or(format!("export `{}` has no Def Fn", sig.name))?;
     let mut fparams = Vec::new();
-    let mut lifted: Vec<(WitTy, u32, Option<(String, bool)>)> = Vec::new();
+    let mut lifted = Vec::new();
     for (_, t) in &sig.params {
         let ty = wit_ty(t, &em.type_env)?;
         let res = classify_resource(imports, t);
-        lifted.push((ty.clone(), fparams.len() as u32, res));
+        lifted.push(LiftedParameter {
+            ty: ty.clone(),
+            base: fparams.len() as u32,
+            resource: res,
+        });
         fparams.extend_from_slice(&flat_checked(&ty)?);
     }
     if fparams.len() > 16 {
@@ -86,8 +96,8 @@ fn prepare_export_call(
     let mut fx = FnCtx::new(fparams.len() as u32);
 
     let typed_ok = fsig.params.len() == lifted.len();
-    for (i, (ty, base, res)) in lifted.iter().enumerate() {
-        if let Some((rname, is_borrow)) = res {
+    for (i, LiftedParameter { ty, base, resource }) in lifted.iter().enumerate() {
+        if let Some((rname, is_borrow)) = resource {
             fx.op(I::LocalGet(*base));
             if !is_borrow {
                 let (_n, rep_i, _d) = user_res_intrinsics[rname];

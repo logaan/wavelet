@@ -42,6 +42,9 @@ use serialization::serialize_module;
 use wit_synth::*;
 use witty::*;
 
+pub type TypeDefinitions = Vec<(String, TypeDef)>;
+pub type TypeAliases = Vec<(String, String)>;
+
 pub struct Dep {
     pub package: String,
     pub funcs: Vec<FuncSig>,
@@ -50,9 +53,9 @@ pub struct Dep {
 
     pub types: Vec<(String, Vec<(String, String)>)>,
 
-    pub type_defs: Vec<(String, TypeDef)>,
+    pub type_defs: TypeDefinitions,
 
-    pub aliases: Vec<(String, String)>,
+    pub aliases: TypeAliases,
 
     pub type_ifaces: Vec<(String, String, String)>,
 }

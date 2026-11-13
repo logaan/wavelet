@@ -716,10 +716,10 @@ impl<'a> Emitter<'a> {
         src: u32,
         disc: i32,
         pay: Option<&WitTy>,
-        dst: u32,
-        off: u64,
+        destination: (u32, u64),
         poff: u64,
     ) -> Result<(), String> {
+        let (dst, off) = destination;
         fx.op(I::LocalGet(dst));
         fx.op(I::I32Const(disc));
         fx.op(I::I32Store8(ma(off, 0)));
@@ -745,7 +745,14 @@ impl<'a> Emitter<'a> {
         i: usize,
     ) -> Result<(), String> {
         if i + 1 == cases.len() {
-            return self.store_variant_case(fx, src, i as i32, cases[i].1.as_ref(), dst, off, poff);
+            return self.store_variant_case(
+                fx,
+                src,
+                i as i32,
+                cases[i].1.as_ref(),
+                (dst, off),
+                poff,
+            );
         }
         let naddr = self.intern_str(&cases[i].0);
         fx.op(I::LocalGet(src));
@@ -753,7 +760,7 @@ impl<'a> Emitter<'a> {
         fx.op(I::I32Const(naddr as i32));
         fx.op(I::Call(self.h.eq_raw));
         fx.op(I::If(BlockType::Empty));
-        self.store_variant_case(fx, src, i as i32, cases[i].1.as_ref(), dst, off, poff)?;
+        self.store_variant_case(fx, src, i as i32, cases[i].1.as_ref(), (dst, off), poff)?;
         fx.op(I::Else);
         self.store_variant_chain(fx, src, cases, dst, off, poff, i + 1)?;
         fx.op(I::End);

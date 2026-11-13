@@ -122,7 +122,7 @@ impl<'a> Emitter<'a> {
                 fx.op(I::I32Eq);
                 fx.op(I::If(BlockType::Result(ValType::I32)));
 
-                self.emit_variant_payload_eq(fx, &cases, da, a, b, poff, 0)?;
+                self.emit_variant_payload_eq(fx, &cases, da, (a, b), poff, 0)?;
                 fx.op(I::Else);
                 fx.op(I::I32Const(0));
                 fx.op(I::End);
@@ -185,11 +185,11 @@ impl<'a> Emitter<'a> {
         fx: &mut FnCtx,
         cases: &[(String, Option<WitTy>)],
         d: u32,
-        a: u32,
-        b: u32,
+        operands: (u32, u32),
         payload_off: u64,
         i: usize,
     ) -> Result<(), String> {
+        let (a, b) = operands;
         if i + 1 == cases.len() {
             return match cases[i].1.as_ref() {
                 Some(pt) => self.emit_mem_eq(fx, &pt.clone(), a, b, payload_off),
@@ -208,7 +208,7 @@ impl<'a> Emitter<'a> {
             None => fx.op(I::I32Const(1)),
         }
         fx.op(I::Else);
-        self.emit_variant_payload_eq(fx, cases, d, a, b, payload_off, i + 1)?;
+        self.emit_variant_payload_eq(fx, cases, d, (a, b), payload_off, i + 1)?;
         fx.op(I::End);
         Ok(())
     }

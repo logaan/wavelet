@@ -30,17 +30,14 @@ pub fn dep_record_types(arena: &Arena, info: &FileInfo) -> Vec<(String, Vec<(Str
     record_types(arena, &info.types)
 }
 
-pub fn dep_non_record_types(
-    arena: &Arena,
-    info: &FileInfo,
-) -> (Vec<(String, TypeDef)>, Vec<(String, String)>) {
+pub fn dep_non_record_types(arena: &Arena, info: &FileInfo) -> (TypeDefinitions, TypeAliases) {
     local_non_record_types(arena, &info.types)
 }
 
 pub(crate) fn local_non_record_types(
     arena: &Arena,
     types: &[(String, NodeId)],
-) -> (Vec<(String, TypeDef)>, Vec<(String, String)>) {
+) -> (TypeDefinitions, TypeAliases) {
     let mut defs = Vec::new();
     let mut aliases = Vec::new();
     for (name, node) in types {
