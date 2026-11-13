@@ -28,8 +28,22 @@ case "${1:-}" in
     echo "lcov report: $out_dir/lcov.info"
     ;;
   --check)
-    minimum=$(python3 -c 'import json; print(json.load(open("quality-coverage.json"))["minimum_line_percent"])')
-    cargo llvm-cov --json --summary-only --output-path "$out_dir/summary.json" --fail-under-lines "$minimum"
+    cargo llvm-cov --no-report
+    cargo llvm-cov report --json --summary-only --output-path "$out_dir/summary.json"
+    python3 - <<'PY'
+import json
+import sys
+
+with open("quality-coverage.json") as config:
+    minimum = json.load(config)["minimum_line_percent"]
+with open("target/coverage/summary.json") as report:
+    lines = json.load(report)["data"][0]["totals"]["lines"]
+percent = lines["percent"]
+print(f"Line coverage: {percent:.4f}% ({lines['covered']}/{lines['count']}); required: {minimum}%", flush=True)
+if percent < minimum:
+    print("Coverage check failed: line coverage is below the required minimum.", file=sys.stderr)
+    sys.exit(1)
+PY
     ;;
   "")
     echo "==> Running tests under coverage; printing summary"
